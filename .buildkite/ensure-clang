@@ -1,14 +1,34 @@
-#!/usr/bin/env bash
+#!/usr/bin/env -S ruby --disable-gems
+# frozen_string_literal: true
+#
 # Install clang inside the `ruby` container for the Linux/clang track. The ruby
 # image (Debian) ships gcc but not clang, and the container runs as root, so apt
 # needs no sudo. Baking clang into a custom agent image would remove this
 # per-job install — worth doing if the clang track's startup gets noticeable.
-set -euo pipefail
+#
+# Shebang: `-S` is required so /usr/bin/env splits "ruby --disable-gems" into
+# program + arg. GNU env (the Debian image) refuses a bare multi-arg shebang;
+# BSD env (macOS) accepts the -S form too. --disable-gems skips RubyGems for a
+# faster start — this script pulls in no gems.
 
-if command -v clang >/dev/null 2>&1; then
-  clang --version | head -1
+# Return clang's version banner's first line, or nil if clang isn't installed.
+# Reading the whole (tiny) banner before taking line 1 avoids handing clang a
+# SIGPIPE from an early stdout close.
+def clang_version_line
+  IO.popen(["clang", "--version"], err: File::NULL, &:read).lines.first&.chomp
+rescue Errno::ENOENT
+  nil
+end
+
+if (line = clang_version_line)
+  puts line
   exit 0
-fi
+end
 
-apt-get update -qq && apt-get install -y -qq clang
-clang --version | head -1
+# Not installed: apt as root, no sudo. abort on failure mirrors `set -e` while
+# keeping apt's own diagnostics as the visible error (no Ruby backtrace noise).
+system("apt-get", "update", "-qq") or abort("ensure-clang: apt-get update failed")
+system("apt-get", "install", "-y", "-qq", "clang") or
+  abort("ensure-clang: apt-get install clang failed")
+
+puts(clang_version_line || abort("ensure-clang: clang missing after install"))

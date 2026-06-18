@@ -1,4 +1,6 @@
-#!/usr/bin/env bash
+#!/usr/bin/env -S ruby --disable-gems
+# frozen_string_literal: true
+#
 # run-tests — run a subset of the test/*.rb golden-diff fixtures against an
 # already-built compiler, then tally just that subset.
 #
@@ -17,75 +19,100 @@
 # `make -o` flags below mark those two as assume-old so make uses them as-is
 # and never descends into the toolchain build — a test node therefore needs no
 # vendored prism/rbs sources, only the checkout + the two artifacts + cc + ruby.
-set -uo pipefail
+#
+# Ruby (not bash) so the slice/tally runs in-process: no ls|sort|awk, no
+# per-target basename/cat/rm/head subprocesses — just the one `make`. See
+# ensure-clang for why the shebang needs `-S`.
 
-SPINEL=bin/spinel
-RT_LIB=lib/libspinel_rt.a
-OPT=${OPT:--O1}   # -O1 compiles each generated test ~3x faster than -O0; see Makefile.
+SPINEL = "bin/spinel"
+RT_LIB = "lib/libspinel_rt.a"
 
-die() { echo "run-tests: $*" >&2; exit 2; }
+# -O1 compiles each generated test ~3x faster than -O0; see Makefile.
+OPT = (opt = ENV["OPT"]).nil? || opt.empty? ? "-O1" : opt
 
-[ "$#" -ge 1 ] || die "usage: $0 (--slice | test/a.rb [test/b.rb ...])"
+def die(msg)
+  warn "run-tests: #{msg}"
+  exit 2
+end
+
+die("usage: #{File.basename($PROGRAM_NAME)} (--slice | test/a.rb [test/b.rb ...])") if ARGV.empty?
 
 # Resolve --slice into an explicit fixture list before anything else.
-if [ "$1" = "--slice" ]; then
-  : "${BUILDKITE_PARALLEL_JOB_COUNT:?--slice needs BUILDKITE_PARALLEL_JOB_COUNT (set parallelism: N on the step)}"
-  : "${BUILDKITE_PARALLEL_JOB:?--slice needs BUILDKITE_PARALLEL_JOB (set parallelism: N on the step)}"
-  # BUILDKITE_PARALLEL_JOB is 0-indexed; (NR-1) % count == index gives a stable,
-  # disjoint partition that covers every file exactly once across all jobs.
-  slice=$(ls test/*.rb | sort | awk \
-    -v n="$BUILDKITE_PARALLEL_JOB_COUNT" -v i="$BUILDKITE_PARALLEL_JOB" \
-    '(NR - 1) % n == i')
-  set -f                 # fixture names have no glob chars, but be safe
-  set -- $slice
-  set +f
-  echo "run-tests: shard $((BUILDKITE_PARALLEL_JOB + 1))/$BUILDKITE_PARALLEL_JOB_COUNT — $# fixtures"
-fi
+if ARGV[0] == "--slice"
+  count = ENV["BUILDKITE_PARALLEL_JOB_COUNT"]
+  index = ENV["BUILDKITE_PARALLEL_JOB"]
+  die("--slice needs BUILDKITE_PARALLEL_JOB_COUNT (set parallelism: N on the step)") if count.nil? || count.empty?
+  die("--slice needs BUILDKITE_PARALLEL_JOB (set parallelism: N on the step)") if index.nil? || index.empty?
+  count = count.to_i
+  index = index.to_i
+  # BUILDKITE_PARALLEL_JOB is 0-indexed; position % count == index gives a
+  # stable, disjoint partition covering every file exactly once across all jobs.
+  fixtures = Dir.glob("test/*.rb").sort
+  ARGV.replace(fixtures.select.with_index { |_, pos| pos % count == index })
+  puts "run-tests: shard #{index + 1}/#{count} — #{ARGV.size} fixtures"
+end
 
-for f in "$SPINEL" "$RT_LIB"; do
-  [ -e "$f" ] || die "missing prebuilt $f — run 'make all' or download the build artifact first"
-done
+[SPINEL, RT_LIB].each do |f|
+  die("missing prebuilt #{f} — run 'make all' or download the build artifact first") unless File.exist?(f)
+end
 
 # Map each test/X.rb -> build/test-results/X.ok, wiping any stale stamp so the
 # tally only reflects this run. (`make test` always runs fresh for the same
 # reason — a stale PASS stamp was a known foot-gun; see Makefile.)
-targets=()
-n_in=0
-for f in "$@"; do
-  case "$f" in
-    test/*.rb) ;;
-    *) echo "run-tests: skipping non-fixture arg '$f'" >&2; continue ;;
-  esac
-  n_in=$((n_in + 1))
-  ok="build/test-results/${f#test/}"
-  ok="${ok%.rb}.ok"
-  rm -f "$ok" "$ok.diff"
-  targets+=("$ok")
-done
+targets = []
+n_in = 0
+ARGV.each do |f|
+  unless File.fnmatch?("test/*.rb", f, File::FNM_PATHNAME)
+    warn "run-tests: skipping non-fixture arg '#{f}'"
+    next
+  end
+  n_in += 1
+  ok = "build/test-results/#{f.delete_prefix("test/").delete_suffix(".rb")}.ok"
+  File.delete(ok) if File.exist?(ok)
+  File.delete("#{ok}.diff") if File.exist?("#{ok}.diff")
+  targets << ok
+end
 
-[ "${#targets[@]}" -gt 0 ] || die "no fixtures to run (matched $n_in args)"
+die("no fixtures to run (matched #{n_in} args)") if targets.empty?
 
 # Build only the requested .ok targets. -o on the two prebuilt artifacts keeps
 # make from rebuilding the toolchain. Each recipe returns 0 even on a failing
 # fixture (status goes into the .ok file), so we tally afterward rather than
 # relying on make's exit code; surface a hard make failure separately.
-if ! make ${JOBS:+-j"$JOBS"} -o "$RT_LIB" -o "$SPINEL" OPT="$OPT" "${targets[@]}"; then
-  echo "run-tests: make exited non-zero (see output above)" >&2
-fi
+make = ["make"]
+make << "-j#{ENV["JOBS"]}" unless (jobs = ENV["JOBS"]).nil? || jobs.empty?
+make.push("-o", RT_LIB, "-o", SPINEL, "OPT=#{OPT}", *targets)
+warn "run-tests: make exited non-zero (see output above)" unless system(*make)
 
-pass=0; fail=0; err=0; rc=0
-for ok in "${targets[@]}"; do
-  bn=$(basename "$ok" .ok)
-  if [ ! -f "$ok" ]; then
-    echo "ERR:  $bn (no result stamp — make did not build it)"; err=$((err + 1)); rc=1; continue
-  fi
-  case "$(cat "$ok")" in
-    PASS) pass=$((pass + 1)) ;;
-    FAIL) echo "FAIL: $bn"; [ -f "$ok.diff" ] && head -40 "$ok.diff"; fail=$((fail + 1)); rc=1 ;;
-    ERR)  echo "ERR:  $bn (compile/link failed)"; err=$((err + 1)); rc=1 ;;
-    *)    echo "ERR:  $bn (unrecognized status '$(cat "$ok")')"; err=$((err + 1)); rc=1 ;;
-  esac
-done
+pass = fail = err = 0
+rc = 0
+targets.each do |ok|
+  bn = File.basename(ok, ".ok")
+  unless File.file?(ok)
+    puts "ERR:  #{bn} (no result stamp — make did not build it)"
+    err += 1
+    rc = 1
+    next
+  end
+  case (status = File.read(ok).strip)
+  when "PASS"
+    pass += 1
+  when "FAIL"
+    puts "FAIL: #{bn}"
+    # head -40 of the diff, read lazily so a huge diff isn't slurped whole.
+    File.foreach("#{ok}.diff").first(40).each { |l| print l } if File.file?("#{ok}.diff")
+    fail += 1
+    rc = 1
+  when "ERR"
+    puts "ERR:  #{bn} (compile/link failed)"
+    err += 1
+    rc = 1
+  else
+    puts "ERR:  #{bn} (unrecognized status '#{status}')"
+    err += 1
+    rc = 1
+  end
+end
 
-echo "Tests: $pass pass, $fail fail, $err error (of ${#targets[@]})"
-exit $rc
+puts "Tests: #{pass} pass, #{fail} fail, #{err} error (of #{targets.size})"
+exit rc
