@@ -5,28 +5,29 @@
 #   • macOS / clang  — build + suite                      (queue=macos, 6 vCPU)
 #   • Linux / gcc    — build + suite + optcarrot + bench  (queue=linux, 4 vCPU)
 #
-# Clang coverage comes from the macOS track. A Linux/clang track is deferred:
-# clang isn't on the Linux hosted image (only gcc), so it'd need a custom agent
-# image. bench rides the gcc job here — its output is deterministic across
-# compilers (ci.yml only put it on clang to balance the two Ubuntu jobs).
+# Linux steps run inside the public `ruby` container image (`image: ruby`),
+# following buildkite/rspec-buildkite. That image is buildpack-deps-based, so it
+# bundles Ruby + gcc + make + curl — everything the Linux jobs need, with no
+# runtime install. macOS runs natively (its hosted image ships Ruby). Clang
+# coverage comes from the macOS track; a Linux/clang track is deferred (the ruby
+# image has gcc, not clang — that'd need a custom agent image).
 #
-# Explicit keyed build steps (not a build matrix): a matrix can't set per-combo
-# keys, which means downstream steps can only depend on the whole matrix — in
-# build #9 one failed compiler dragged down the tracks that had already passed.
-# Keyed builds let each track's tests depend on just their own build and scope
-# the artifact download with --step (all builds publish the same two filenames).
+# Explicit keyed builds (not a build matrix): a matrix can't set per-combo keys,
+# so downstream steps could only depend on the whole matrix — in build #9 one
+# failed compiler dragged down tracks that had already passed. Keyed builds let
+# each track's tests depend on just their own build and scope the artifact
+# download with --step (all builds publish the same two filenames).
 #
-# The two tracks run concurrently on separate queues, so wall-clock ≈ the slower
-# track, not the sum. The remaining tax is hosted cold-start (~10s to provision
-# a fresh VM per phase); set a minimum warm-agent count on each queue to beat
-# GHA reliably.
+# Tracks run concurrently on separate queues, so wall-clock ≈ the slower track,
+# not the sum. The remaining tax is hosted cold-start (~10s/phase to provision a
+# fresh VM); set a minimum warm-agent count on each queue to beat GHA reliably.
 #
 # OPT is intentionally NOT set globally: run-tests defaults to -O1 (compiles the
 # sp_runtime.h-heavy per-test C ~3x faster), while bench/optcarrot inherit the
 # Makefile default -O2 — exactly like ci.yml, which sets OPT=-O1 only on tests.
 
 steps:
-  # ===================== macOS / clang =====================
+  # ===================== macOS / clang (native Ruby) =======================
   - label: ":mac: build"
     key: "build-macos"
     agents:
@@ -49,12 +50,12 @@ steps:
       - "buildkite-agent artifact download bin/spinel . --step build-macos"
       - "buildkite-agent artifact download lib/libspinel_rt.a . --step build-macos"
       - "chmod +x bin/spinel"
-      - ".buildkite/ensure-ruby"
       - ".buildkite/run-tests --slice"
 
-  # ===================== Linux / gcc (carries optcarrot + bench) ===========
+  # ===================== Linux / gcc (image: ruby) =========================
   - label: ":linux: build (gcc)"
     key: "build-linux-gcc"
+    image: "ruby"
     agents:
       queue: "linux"
     env:
@@ -70,6 +71,7 @@ steps:
   - label: ":linux: tests gcc %n"
     key: "tests-linux-gcc"
     depends_on: "build-linux-gcc"
+    image: "ruby"
     agents:
       queue: "linux"
     env:
@@ -79,12 +81,12 @@ steps:
       - "buildkite-agent artifact download bin/spinel . --step build-linux-gcc"
       - "buildkite-agent artifact download lib/libspinel_rt.a . --step build-linux-gcc"
       - "chmod +x bin/spinel"
-      - ".buildkite/ensure-ruby"
       - ".buildkite/run-tests --slice"
 
   - label: ":linux: optcarrot (gcc)"
     key: "optcarrot"
     depends_on: "build-linux-gcc"
+    image: "ruby"
     agents:
       queue: "linux"
     env:
@@ -93,12 +95,12 @@ steps:
       - "buildkite-agent artifact download bin/spinel . --step build-linux-gcc"
       - "buildkite-agent artifact download lib/libspinel_rt.a . --step build-linux-gcc"
       - "chmod +x bin/spinel"
-      - ".buildkite/ensure-ruby"
       - "make -o bin/spinel -o lib/libspinel_rt.a optcarrot"
 
   - label: ":linux: bench (gcc)"
     key: "bench"
     depends_on: "build-linux-gcc"
+    image: "ruby"
     agents:
       queue: "linux"
     env:
@@ -107,5 +109,4 @@ steps:
       - "buildkite-agent artifact download bin/spinel . --step build-linux-gcc"
       - "buildkite-agent artifact download lib/libspinel_rt.a . --step build-linux-gcc"
       - "chmod +x bin/spinel"
-      - ".buildkite/ensure-ruby"
       - "make -o bin/spinel -o lib/libspinel_rt.a bench"
