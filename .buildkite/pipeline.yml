@@ -1,18 +1,24 @@
 # Buildkite pipeline for spinel — https://buildkite.com/kyoto/spinel
 #
-# Mirrors .github/workflows/ci.yml on Buildkite hosted agents, but fans the
-# 950-fixture suite out across parallel shards so it finishes faster than GHA:
-#   • macOS / clang  — build + suite              (queue=macos, 6 vCPU)
-#   • Linux / gcc    — build + suite + optcarrot  (queue=linux, 4 vCPU)
-#   • Linux / clang  — build + suite + bench      (queue=linux, 4 vCPU)
-# Running the suite under both gcc and clang is real coverage — clang -Werror
-# trips on discarded statement-exprs gcc ignores (Makefile's TEST_WARN_SUPPRESS).
-# optcarrot rides the gcc job, bench the clang job — matching ci.yml:82,92.
+# Mirrors .github/workflows/ci.yml on Buildkite hosted agents, fanning the
+# 950-fixture suite across parallel shards so it finishes faster than GHA:
+#   • macOS / clang  — build + suite                      (queue=macos, 6 vCPU)
+#   • Linux / gcc    — build + suite + optcarrot + bench  (queue=linux, 4 vCPU)
 #
-# The three tracks run concurrently (separate queues, depends_on not a global
-# wait), so wall-clock ≈ the slowest single track, not their sum — same as GHA.
-# The remaining tax is hosted cold-start (~10s to provision a fresh VM per
-# phase); set a minimum warm-agent count on the macos + linux queues to beat
+# Clang coverage comes from the macOS track. A Linux/clang track is deferred:
+# clang isn't on the Linux hosted image (only gcc), so it'd need a custom agent
+# image. bench rides the gcc job here — its output is deterministic across
+# compilers (ci.yml only put it on clang to balance the two Ubuntu jobs).
+#
+# Explicit keyed build steps (not a build matrix): a matrix can't set per-combo
+# keys, which means downstream steps can only depend on the whole matrix — in
+# build #9 one failed compiler dragged down the tracks that had already passed.
+# Keyed builds let each track's tests depend on just their own build and scope
+# the artifact download with --step (all builds publish the same two filenames).
+#
+# The two tracks run concurrently on separate queues, so wall-clock ≈ the slower
+# track, not the sum. The remaining tax is hosted cold-start (~10s to provision
+# a fresh VM per phase); set a minimum warm-agent count on each queue to beat
 # GHA reliably.
 #
 # OPT is intentionally NOT set globally: run-tests defaults to -O1 (compiles the
@@ -20,105 +26,84 @@
 # Makefile default -O2 — exactly like ci.yml, which sets OPT=-O1 only on tests.
 
 steps:
-  # === Build the compiler once per (os, cc) ================================
-  # A build matrix: macos/clang, linux/gcc, linux/clang (macos/gcc skipped).
-  # Matrix steps can't set per-combo keys, so `--step` download scoping isn't
-  # available — instead each build stashes its two identically-named binaries
-  # under dist/<os>-<cc>/ so the three compilers don't collide on download.
-  - label: ":hammer_and_wrench: build {{matrix.os}}/{{matrix.cc}}"
-    key: "build"
+  # ===================== macOS / clang =====================
+  - label: ":mac: build"
+    key: "build-macos"
     agents:
-      queue: "{{matrix.os}}"
-    env:
-      CC: "{{matrix.cc}}"
-    matrix:
-      setup:
-        os: ["macos", "linux"]
-        cc: ["gcc", "clang"]
-      adjustments:
-        - with: { os: "macos", cc: "gcc" }
-          skip: true
+      queue: "macos"
     command:
       - "make deps"
       - "make -j\"$$(getconf _NPROCESSORS_ONLN)\" LTO=0 all"
       - "make rbs-test rbs-seed-test"
-      - "mkdir -p dist/{{matrix.os}}-{{matrix.cc}}"
-      - "cp bin/spinel lib/libspinel_rt.a dist/{{matrix.os}}-{{matrix.cc}}/"
-      - "buildkite-agent artifact upload \"dist/{{matrix.os}}-{{matrix.cc}}/*\""
+    artifact_paths:
+      - "bin/spinel"
+      - "lib/libspinel_rt.a"
 
-  # === macOS / clang — suite ===============================================
   - label: ":mac: tests %n"
     key: "tests-macos"
-    depends_on: "build"
+    depends_on: "build-macos"
     agents:
       queue: "macos"
     parallelism: 8
     command:
-      - "buildkite-agent artifact download \"dist/macos-clang/*\" ."
-      - "mkdir -p bin lib"
-      - "cp dist/macos-clang/spinel bin/spinel && chmod +x bin/spinel"
-      - "cp dist/macos-clang/libspinel_rt.a lib/libspinel_rt.a"
+      - "buildkite-agent artifact download bin/spinel . --step build-macos"
+      - "buildkite-agent artifact download lib/libspinel_rt.a . --step build-macos"
+      - "chmod +x bin/spinel"
       - "ruby -v"
       - ".buildkite/run-tests --slice"
 
-  # === Linux / gcc — suite + optcarrot =====================================
+  # ===================== Linux / gcc (carries optcarrot + bench) ===========
+  - label: ":linux: build (gcc)"
+    key: "build-linux-gcc"
+    agents:
+      queue: "linux"
+    env:
+      CC: "gcc"
+    command:
+      - "make deps"
+      - "make -j\"$$(getconf _NPROCESSORS_ONLN)\" LTO=0 all"
+      - "make rbs-test rbs-seed-test"
+    artifact_paths:
+      - "bin/spinel"
+      - "lib/libspinel_rt.a"
+
   - label: ":linux: tests gcc %n"
     key: "tests-linux-gcc"
-    depends_on: "build"
+    depends_on: "build-linux-gcc"
     agents:
       queue: "linux"
     env:
       CC: "gcc"
     parallelism: 8
     command:
-      - "buildkite-agent artifact download \"dist/linux-gcc/*\" ."
-      - "mkdir -p bin lib"
-      - "cp dist/linux-gcc/spinel bin/spinel && chmod +x bin/spinel"
-      - "cp dist/linux-gcc/libspinel_rt.a lib/libspinel_rt.a"
+      - "buildkite-agent artifact download bin/spinel . --step build-linux-gcc"
+      - "buildkite-agent artifact download lib/libspinel_rt.a . --step build-linux-gcc"
+      - "chmod +x bin/spinel"
       - "ruby -v"
       - ".buildkite/run-tests --slice"
 
   - label: ":linux: optcarrot (gcc)"
     key: "optcarrot"
-    depends_on: "build"
+    depends_on: "build-linux-gcc"
     agents:
       queue: "linux"
     env:
       CC: "gcc"
     command:
-      - "buildkite-agent artifact download \"dist/linux-gcc/*\" ."
-      - "mkdir -p bin lib"
-      - "cp dist/linux-gcc/spinel bin/spinel && chmod +x bin/spinel"
-      - "cp dist/linux-gcc/libspinel_rt.a lib/libspinel_rt.a"
+      - "buildkite-agent artifact download bin/spinel . --step build-linux-gcc"
+      - "buildkite-agent artifact download lib/libspinel_rt.a . --step build-linux-gcc"
+      - "chmod +x bin/spinel"
       - "make -o bin/spinel -o lib/libspinel_rt.a optcarrot"
 
-  # === Linux / clang — suite + bench =======================================
-  - label: ":linux: tests clang %n"
-    key: "tests-linux-clang"
-    depends_on: "build"
-    agents:
-      queue: "linux"
-    env:
-      CC: "clang"
-    parallelism: 8
-    command:
-      - "buildkite-agent artifact download \"dist/linux-clang/*\" ."
-      - "mkdir -p bin lib"
-      - "cp dist/linux-clang/spinel bin/spinel && chmod +x bin/spinel"
-      - "cp dist/linux-clang/libspinel_rt.a lib/libspinel_rt.a"
-      - "ruby -v"
-      - ".buildkite/run-tests --slice"
-
-  - label: ":linux: bench (clang)"
+  - label: ":linux: bench (gcc)"
     key: "bench"
-    depends_on: "build"
+    depends_on: "build-linux-gcc"
     agents:
       queue: "linux"
     env:
-      CC: "clang"
+      CC: "gcc"
     command:
-      - "buildkite-agent artifact download \"dist/linux-clang/*\" ."
-      - "mkdir -p bin lib"
-      - "cp dist/linux-clang/spinel bin/spinel && chmod +x bin/spinel"
-      - "cp dist/linux-clang/libspinel_rt.a lib/libspinel_rt.a"
+      - "buildkite-agent artifact download bin/spinel . --step build-linux-gcc"
+      - "buildkite-agent artifact download lib/libspinel_rt.a . --step build-linux-gcc"
+      - "chmod +x bin/spinel"
       - "make -o bin/spinel -o lib/libspinel_rt.a bench"
