@@ -28,11 +28,21 @@ env:
 steps:
   - label: ":hammer_and_wrench: build compiler"
     key: "build"
+    env:
+      # Wrap cc with sccache so the toolchain build (prism/rbs objects,
+      # src/*.o, sp_*.o, regexp — identical across builds) hits a cache.
+      # common.mk uses `CC ?= cc`, so this env value wins. Scoped to THIS
+      # step on purpose: the test shards compile a unique generated .c per
+      # fixture, which never caches and would only add sccache overhead.
+      # Requires `brew install sccache` on the agent host; the first build
+      # after enabling is a full miss that populates the local disk cache.
+      CC: "sccache cc"
     command:
       - "make deps"
       - "make -j\"$$(getconf _NPROCESSORS_ONLN)\" LTO=0 all"
       # Cheap C-only golden checks — run once here rather than on every shard.
       - "make rbs-test rbs-seed-test"
+      - "sccache --show-stats || true"
     artifact_paths:
       - "bin/spinel"
       - "lib/libspinel_rt.a"
