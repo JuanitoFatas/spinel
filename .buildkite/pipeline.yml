@@ -21,8 +21,12 @@
 # download with --step (all builds publish the same two filenames).
 #
 # Tracks run concurrently on separate queues, so wall-clock ≈ the slowest track,
-# not the sum. The remaining tax is hosted cold-start (~10s/phase to provision a
-# fresh VM); set a minimum warm-agent count on each queue to beat GHA reliably.
+# not the sum. The binding constraint is hosted agent CONCURRENCY: build #13
+# showed the linux queue serving ~10 jobs at once and macos ~5, the rest queuing
+# 25-46s. Past that cap, more shards only add provisioning waves — so parallelism
+# here is right-sized to land every shard in ONE wave (linux test phase: 3 gcc +
+# 3 clang + 2 bench + optcarrot ≈ 9; macos: 5). Raise the queue's concurrency
+# limit and these can go back up for shorter shards.
 #
 # OPT is intentionally NOT set globally: run-tests defaults to -O1 (compiles the
 # sp_runtime.h-heavy per-test C ~3x faster), while bench/optcarrot inherit the
@@ -47,7 +51,8 @@ steps:
     depends_on: "build-macos"
     agents:
       queue: "macos"
-    parallelism: 8
+    # ~5 = the macos queue's observed first-wave capacity (build #13).
+    parallelism: 5
     command:
       - "buildkite-agent artifact download bin/spinel . --step build-macos"
       - "buildkite-agent artifact download lib/libspinel_rt.a . --step build-macos"
@@ -78,7 +83,8 @@ steps:
       queue: "linux"
     env:
       CC: "gcc"
-    parallelism: 8
+    # Right-sized so gcc + clang + bench + optcarrot fit one linux wave (~10).
+    parallelism: 3
     command:
       - "buildkite-agent artifact download bin/spinel . --step build-linux-gcc"
       - "buildkite-agent artifact download lib/libspinel_rt.a . --step build-linux-gcc"
@@ -124,7 +130,8 @@ steps:
       queue: "linux"
     env:
       CC: "clang"
-    parallelism: 8
+    # Right-sized so gcc + clang + bench + optcarrot fit one linux wave (~10).
+    parallelism: 3
     command:
       - "buildkite-agent artifact download bin/spinel . --step build-linux-clang"
       - "buildkite-agent artifact download lib/libspinel_rt.a . --step build-linux-clang"
@@ -141,8 +148,9 @@ steps:
     env:
       CC: "clang"
     # 57 benchmarks run serially took ~64s and was the build's long pole;
-    # shard them so the slowest track stops being gated by bench.
-    parallelism: 4
+    # 2 shards (~28 each, ~32s) balances the ~32s gcc/clang test shards without
+    # stealing more than one linux concurrency slot.
+    parallelism: 2
     command:
       - "buildkite-agent artifact download bin/spinel . --step build-linux-clang"
       - "buildkite-agent artifact download lib/libspinel_rt.a . --step build-linux-clang"
