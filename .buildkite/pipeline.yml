@@ -1,0 +1,52 @@
+# Buildkite pipeline for spinel — https://buildkite.com/kyoto/spinel
+#
+# Shape: build the compiler once, then run the ~950 test/*.rb golden-diff
+# fixtures split across N parallel jobs. This mirrors the macOS/clang job in
+# .github/workflows/ci.yml (deps -> all -> test), but distributes the
+# per-fixture compile+run work that dominates `make test`.
+#
+# SINGLE-LAPTOP NOTE: distributing only speeds things up when jobs run on
+# different machines/cores at the same time. One `buildkite-agent` process
+# runs the parallel jobs one after another (no speedup). To actually run
+# them concurrently on your laptop, start several agents:
+#     buildkite-agent start --spawn 4
+# and even then they share the same cores, so expect the win to be modest
+# versus `make -j test`, which already uses every core on one machine. The
+# real payoff is fanning these jobs out across multiple agents/hosts.
+
+# agents:
+#   # Uncomment + match a tag your local agent advertises if it isn't the
+#   # default queue. A freshly-started `buildkite-agent` registers as
+#   # queue=default, which matches with no constraint at all.
+#   queue: "default"
+
+env:
+  # -O1 compiles each generated test ~3x faster than -O0 (see Makefile); the
+  # wrapper reads this and passes it through to `make`.
+  OPT: "-O1"
+
+steps:
+  - label: ":hammer_and_wrench: build compiler"
+    key: "build"
+    command:
+      - "make deps"
+      - "make -j\"$$(getconf _NPROCESSORS_ONLN)\" LTO=0 all"
+      # Cheap C-only golden checks — run once here rather than on every shard.
+      - "make rbs-test rbs-seed-test"
+    artifact_paths:
+      - "bin/spinel"
+      - "lib/libspinel_rt.a"
+
+  - wait: ~
+
+  - label: ":test_tube: tests %n"
+    key: "tests"
+    depends_on: "build"
+    # Tune to taste. You need at least this many agents running concurrently
+    # for the jobs to actually overlap (see SINGLE-LAPTOP NOTE above).
+    parallelism: 4
+    command:
+      - "buildkite-agent artifact download bin/spinel ."
+      - "buildkite-agent artifact download lib/libspinel_rt.a ."
+      - "chmod +x bin/spinel"
+      - ".buildkite/run-tests --slice"
