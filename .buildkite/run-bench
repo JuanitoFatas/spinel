@@ -1,0 +1,28 @@
+#!/usr/bin/env bash
+# run-bench --slice — run this parallel job's modulo slice of the benchmarks
+# against an already-built compiler. Mirrors run-tests --slice: a stable
+# (NR-1) % count == index partition over benchmark/*.rb, so each shard runs a
+# disjoint share. The Makefile's `bench` target does the actual compile/run/diff
+# and tally; we just hand it BENCHES= and let it exit non-zero on failure.
+#
+# Expects bin/spinel + lib/libspinel_rt.a to already exist (downloaded as
+# artifacts); `make -o` marks them assume-old so the toolchain isn't rebuilt.
+set -uo pipefail
+
+[ "${1:-}" = "--slice" ] || { echo "usage: $0 --slice" >&2; exit 2; }
+: "${BUILDKITE_PARALLEL_JOB_COUNT:?--slice needs BUILDKITE_PARALLEL_JOB_COUNT}"
+: "${BUILDKITE_PARALLEL_JOB:?--slice needs BUILDKITE_PARALLEL_JOB}"
+
+slice=$(ls benchmark/*.rb | sort | awk \
+  -v n="$BUILDKITE_PARALLEL_JOB_COUNT" -v i="$BUILDKITE_PARALLEL_JOB" \
+  '(NR - 1) % n == i')
+set -f; set -- $slice; set +f
+
+if [ "$#" -eq 0 ]; then
+  echo "run-bench: shard $((BUILDKITE_PARALLEL_JOB + 1))/$BUILDKITE_PARALLEL_JOB_COUNT — no benchmarks in slice"
+  exit 0
+fi
+echo "run-bench: shard $((BUILDKITE_PARALLEL_JOB + 1))/$BUILDKITE_PARALLEL_JOB_COUNT — $# benchmarks"
+
+# No OPT override: bench keeps the Makefile default -O2, matching ci.yml.
+exec make -o bin/spinel -o lib/libspinel_rt.a BENCHES="$*" bench
