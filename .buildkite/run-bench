@@ -1,28 +1,38 @@
-#!/usr/bin/env bash
+#!/usr/bin/env -S ruby --disable-gems
+# frozen_string_literal: true
+#
 # run-bench --slice — run this parallel job's modulo slice of the benchmarks
 # against an already-built compiler. Mirrors run-tests --slice: a stable
-# (NR-1) % count == index partition over benchmark/*.rb, so each shard runs a
+# position % count == index partition over benchmark/*.rb, so each shard runs a
 # disjoint share. The Makefile's `bench` target does the actual compile/run/diff
 # and tally; we just hand it BENCHES= and let it exit non-zero on failure.
 #
 # Expects bin/spinel + lib/libspinel_rt.a to already exist (downloaded as
 # artifacts); `make -o` marks them assume-old so the toolchain isn't rebuilt.
-set -uo pipefail
+# See ensure-clang for why the shebang needs `-S`.
 
-[ "${1:-}" = "--slice" ] || { echo "usage: $0 --slice" >&2; exit 2; }
-: "${BUILDKITE_PARALLEL_JOB_COUNT:?--slice needs BUILDKITE_PARALLEL_JOB_COUNT}"
-: "${BUILDKITE_PARALLEL_JOB:?--slice needs BUILDKITE_PARALLEL_JOB}"
+unless ARGV[0] == "--slice"
+  warn "usage: #{File.basename($PROGRAM_NAME)} --slice"
+  exit 2
+end
 
-slice=$(ls benchmark/*.rb | sort | awk \
-  -v n="$BUILDKITE_PARALLEL_JOB_COUNT" -v i="$BUILDKITE_PARALLEL_JOB" \
-  '(NR - 1) % n == i')
-set -f; set -- $slice; set +f
+count = ENV["BUILDKITE_PARALLEL_JOB_COUNT"]
+index = ENV["BUILDKITE_PARALLEL_JOB"]
+(warn "run-bench: --slice needs BUILDKITE_PARALLEL_JOB_COUNT"; exit 1) if count.nil? || count.empty?
+(warn "run-bench: --slice needs BUILDKITE_PARALLEL_JOB"; exit 1) if index.nil? || index.empty?
+count = count.to_i
+index = index.to_i
 
-if [ "$#" -eq 0 ]; then
-  echo "run-bench: shard $((BUILDKITE_PARALLEL_JOB + 1))/$BUILDKITE_PARALLEL_JOB_COUNT — no benchmarks in slice"
+slice = Dir.glob("benchmark/*.rb").sort.select.with_index { |_, pos| pos % count == index }
+shard = "#{index + 1}/#{count}"
+
+if slice.empty?
+  puts "run-bench: shard #{shard} — no benchmarks in slice"
   exit 0
-fi
-echo "run-bench: shard $((BUILDKITE_PARALLEL_JOB + 1))/$BUILDKITE_PARALLEL_JOB_COUNT — $# benchmarks"
+end
+puts "run-bench: shard #{shard} — #{slice.size} benchmarks"
 
-# No OPT override: bench keeps the Makefile default -O2, matching ci.yml.
-exec make -o bin/spinel -o lib/libspinel_rt.a BENCHES="$*" bench
+# No OPT override: bench keeps the Makefile default -O2, matching ci.yml. BENCHES
+# is one space-joined argv element, exactly like `make bench BENCHES="a.rb b.rb"`;
+# make word-splits the value into the benchmark list. exec hands make our exit code.
+exec("make", "-o", "bin/spinel", "-o", "lib/libspinel_rt.a", "BENCHES=#{slice.join(" ")}", "bench")
