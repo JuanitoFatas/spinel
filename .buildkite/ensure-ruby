@@ -1,0 +1,26 @@
+#!/usr/bin/env bash
+# Ensure a CRuby is on PATH. The suite compares ~101 fixtures (those without a
+# committed .expected) against `ruby`, and bench/optcarrot drive it directly.
+# macOS hosted agents ship Ruby; the Linux hosted image does not. This installs
+# it at runtime as a stopgap — the proper fix is a custom Linux agent image with
+# Ruby (and clang) baked in, after which this helper can go away.
+set -euo pipefail
+
+if command -v ruby >/dev/null 2>&1; then
+  ruby -v
+  exit 0
+fi
+
+echo "ensure-ruby: ruby not found — installing…" >&2
+if ! command -v apt-get >/dev/null 2>&1; then
+  echo "ensure-ruby: no apt-get on this image; bake Ruby into a custom agent image instead" >&2
+  exit 1
+fi
+
+if [ "$(id -u)" = 0 ]; then
+  apt-get update -qq && apt-get install -y -qq ruby
+else
+  sudo apt-get update -qq && sudo apt-get install -y -qq ruby
+fi
+
+ruby -v

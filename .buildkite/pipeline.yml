@@ -49,7 +49,7 @@ steps:
       - "buildkite-agent artifact download bin/spinel . --step build-macos"
       - "buildkite-agent artifact download lib/libspinel_rt.a . --step build-macos"
       - "chmod +x bin/spinel"
-      - "ruby -v"
+      - ".buildkite/ensure-ruby"
       - ".buildkite/run-tests --slice"
 
   # ===================== Linux / gcc (carries optcarrot + bench) ===========
@@ -79,7 +79,7 @@ steps:
       - "buildkite-agent artifact download bin/spinel . --step build-linux-gcc"
       - "buildkite-agent artifact download lib/libspinel_rt.a . --step build-linux-gcc"
       - "chmod +x bin/spinel"
-      - "ruby -v"
+      - ".buildkite/ensure-ruby"
       - ".buildkite/run-tests --slice"
 
   - label: ":linux: optcarrot (gcc)"
@@ -93,6 +93,7 @@ steps:
       - "buildkite-agent artifact download bin/spinel . --step build-linux-gcc"
       - "buildkite-agent artifact download lib/libspinel_rt.a . --step build-linux-gcc"
       - "chmod +x bin/spinel"
+      - ".buildkite/ensure-ruby"
       - "make -o bin/spinel -o lib/libspinel_rt.a optcarrot"
 
   - label: ":linux: bench (gcc)"
@@ -106,4 +107,5 @@ steps:
       - "buildkite-agent artifact download bin/spinel . --step build-linux-gcc"
       - "buildkite-agent artifact download lib/libspinel_rt.a . --step build-linux-gcc"
       - "chmod +x bin/spinel"
+      - ".buildkite/ensure-ruby"
       - "make -o bin/spinel -o lib/libspinel_rt.a bench"
