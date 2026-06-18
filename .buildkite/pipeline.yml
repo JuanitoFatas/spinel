@@ -132,7 +132,7 @@ steps:
       - ".buildkite/ensure-clang"
       - ".buildkite/run-tests --slice"
 
-  - label: ":linux: bench (clang)"
+  - label: ":linux: bench (clang) %n"
     key: "bench"
     depends_on: "build-linux-clang"
     image: "ruby"
@@ -140,9 +140,12 @@ steps:
       queue: "linux"
     env:
       CC: "clang"
+    # 57 benchmarks run serially took ~64s and was the build's long pole;
+    # shard them so the slowest track stops being gated by bench.
+    parallelism: 4
     command:
       - "buildkite-agent artifact download bin/spinel . --step build-linux-clang"
       - "buildkite-agent artifact download lib/libspinel_rt.a . --step build-linux-clang"
       - "chmod +x bin/spinel"
       - ".buildkite/ensure-clang"
-      - "make -o bin/spinel -o lib/libspinel_rt.a bench"
+      - ".buildkite/run-bench --slice"

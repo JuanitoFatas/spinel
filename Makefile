@@ -1053,6 +1053,11 @@ test/%.rb.expected: test/%.rb
 test/%.rb.err.expected: test/%.rb
 	$(call regen-snapshot,2>$@.tmp >/dev/null)
 
+# The set of benchmark programs to run. Defaults to all of them; override to
+# run a subset (e.g. CI shards a slice across parallel agents:
+# `make bench BENCHES="benchmark/a.rb benchmark/b.rb"`).
+BENCHES := $(sort $(wildcard benchmark/*.rb))
+
 # Each benchmark is independent: compile it, run it, diff against CRuby (or its
 # .expected), and drop a one-word verdict file. `xargs -P` runs them across the
 # cores (serial under a jobserver -- see BENCH_PJOBS). Scratch paths are keyed by
@@ -1063,7 +1068,7 @@ test/%.rb.err.expected: test/%.rb
 bench: $(SPINEL) $(SP_RT_LIB)
 	@if [ -z "$(TIMEOUT_BIN)" ]; then echo "Note: no 'timeout' command found; running without time limits."; fi
 	@rm -rf build/bench-results; mkdir -p build/bench-results
-	@ls benchmark/*.rb | xargs -P $(BENCH_PJOBS) -n 1 sh -c '\
+	@echo $(BENCHES) | tr ' ' '\n' | xargs -P $(BENCH_PJOBS) -n 1 sh -c '\
 	  f="$$1"; bn=$$(basename "$$f" .rb); d=build/bench-results; res="$$d/$$bn.res"; \
 	  c="$$d/$$bn.c"; o="$$d/$$bn.o"; bin="$$d/$$bn.bin"; exp="$$d/$$bn.exp"; act="$$d/$$bn.act"; \
 	  if $(TIMEOUT10) $(SPINEL) "$$f" -c --no-line-map -o "$$c" 2>/dev/null \
