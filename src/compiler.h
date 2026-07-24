@@ -453,6 +453,16 @@ int        class_var_static_ci(Compiler *c, int node);  /* local holding one cla
 int        anon_struct_ci_for_value(Compiler *c, int val);  /* k = Struct.new(...) value node */
 const char *struct_call_dup_member(Compiler *c, int callnode);  /* first duplicate member sym name, or NULL */
 const char *sym_static_value(Compiler *c, int node);  /* SymbolNode or sole-symbol local */
+/* The String in-place mutators, as one table with a per-site mask (see
+   sp_str_mutator in analyze_util.c). The demand analysis and the codegen
+   re-routes used to keep four near-identical copies of this list; a mutator
+   added to one and missed in another is exactly how #3307 / #3333 arrived. */
+#define SP_MUT_LOCAL     1u  /* seeds local-slot promotion: every mutator */
+#define SP_MUT_CONTAINER 2u  /* container-read mutation: no `[]=` */
+#define SP_MUT_IVAR      4u  /* ivar slot (no rename): also no insert/slice!/setbyte */
+#define SP_MUT_NARROW    8u  /* guard-narrowed poly re-route: also no append_as_bytes */
+/* 1 iff `nm` is a String in-place mutator serviceable at every site in `want`. */
+int sp_str_mutator(const char *nm, unsigned want);
 int chain_is_lazy_valued(Compiler *c, int node);      /* CallNode chain evaluating to a Lazy */
 int lazy_alias_chain(Compiler *c, int var_read);      /* local holding a lazy chain -> chain node, else -1 */
 int        hash_new_default_arg(Compiler *c, int recv); /* Hash.new(d) literal: d node or -1 */

@@ -211,6 +211,36 @@ const char *sym_static_value(Compiler *c, int node) {
    receiver spine, and a lazy-producing transform -- not a forcing terminal --
    on top). Such a value has no runtime representation in spinel; it is only
    ever fused at a forcing site. (#2932) */
+/* See compiler.h for the masks. Every name carries SP_MUT_LOCAL; the
+   narrower sites drop the mutators their storage shape cannot serve:
+     `[]=`                      rebinds through an index write, no container arm
+     insert / slice! / setbyte  need the rename+shadow shim, impossible on an ivar
+     append_as_bytes            has no guard-narrowed re-route arm
+   The masks reproduce the four lists this table replaced, name for name. */
+int sp_str_mutator(const char *nm, unsigned want) {
+  static const struct { const char *nm; unsigned mask; } M[] = {
+    { "[]=",             SP_MUT_LOCAL },
+    { "insert",          SP_MUT_LOCAL | SP_MUT_CONTAINER },
+    { "slice!",          SP_MUT_LOCAL | SP_MUT_CONTAINER },
+    { "setbyte",         SP_MUT_LOCAL | SP_MUT_CONTAINER },
+    { "append_as_bytes", SP_MUT_LOCAL | SP_MUT_CONTAINER | SP_MUT_IVAR },
+    { "<<",              15u }, { "concat",         15u }, { "prepend",    15u },
+    { "replace",         15u }, { "clear",          15u }, { "bytesplice", 15u },
+    { "gsub!",           15u }, { "sub!",           15u }, { "upcase!",    15u },
+    { "downcase!",       15u }, { "capitalize!",    15u }, { "swapcase!",  15u },
+    { "strip!",          15u }, { "lstrip!",        15u }, { "rstrip!",    15u },
+    { "chomp!",          15u }, { "chop!",          15u }, { "squeeze!",   15u },
+    { "tr!",             15u }, { "delete!",        15u }, { "tr_s!",      15u },
+    { "delete_prefix!",  15u }, { "delete_suffix!", 15u }, { "reverse!",   15u },
+    { "succ!",           15u }, { "next!",          15u },
+    { NULL, 0 }
+  };
+  if (!nm) return 0;
+  for (int i = 0; M[i].nm; i++)
+    if (sp_streq(nm, M[i].nm)) return (M[i].mask & want) == want;
+  return 0;
+}
+
 int chain_is_lazy_valued(Compiler *c, int node) {
   const NodeTable *nt = c->nt;
   if (node < 0 || !nt_type(nt, node) || !sp_streq(nt_type(nt, node), "CallNode")) return 0;

@@ -8298,16 +8298,7 @@ int emit_array_mutate_stmt(Compiler *c, int id, Buf *b, int indent) {
      (or misread a strbuf box). Re-route through the poly mutator emission
      by restoring the node's poly type for this call. */
   if (rt == TY_STRING && nt_kind(nt, recv) == NK_LocalVariableReadNode) {
-    static const char *const NARROW_MUT[] = {
-      "<<", "concat", "prepend", "replace", "clear", "bytesplice",
-      "gsub!", "sub!", "upcase!", "downcase!", "capitalize!", "swapcase!",
-      "strip!", "lstrip!", "rstrip!", "chomp!", "chop!", "squeeze!",
-      "tr!", "delete!", "tr_s!", "delete_prefix!", "delete_suffix!",
-      "reverse!", "succ!", "next!", NULL };
-    int is_nm = 0;
-    for (int q = 0; NARROW_MUT[q]; q++)
-      if (sp_streq(name, NARROW_MUT[q])) { is_nm = 1; break; }
-    if (is_nm) {
+    if (sp_str_mutator(name, SP_MUT_NARROW)) {
       const char *rnN = nt_str(nt, recv, "name");
       Scope *rsN = rnN ? comp_scope_of(c, recv) : NULL;
       LocalVar *rlN = rsN ? scope_local(rsN, rnN) : NULL;

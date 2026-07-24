@@ -6259,14 +6259,6 @@ static int ctor_writes_ivar(Compiler *c, int ci, const char *ivname) {
    1 = mutated via a handle-capable mutator, -1 = disqualified (a mutator
    codegen cannot yet run in place on the handle), 0 = not mutated. */
 static int strbuf_mut_kind(Compiler *c, const char *vn, Scope *vs) {
-  static const char *const INPLACE_MUT2[] = {
-    "<<", "concat", "prepend", "replace",
-    "insert", "clear", "slice!", "[]=", "setbyte",
-    "bytesplice", "append_as_bytes",
-    "gsub!", "sub!", "upcase!", "downcase!", "capitalize!", "swapcase!",
-    "strip!", "lstrip!", "rstrip!", "chomp!", "chop!", "squeeze!",
-    "tr!", "delete!", "tr_s!", "delete_prefix!", "delete_suffix!",
-    "reverse!", "succ!", "next!", NULL };
   const NodeTable *nt = c->nt;
   int mutated = 0;
   for (int u = 0; u < nt->count; u++) {
@@ -6280,10 +6272,7 @@ static int strbuf_mut_kind(Compiler *c, const char *vn, Scope *vs) {
     const char *un = nt_str(nt, u, "name");
     if (!un) continue;
     size_t ul = strlen(un);
-    int inplace = 0;
-    for (int q = 0; INPLACE_MUT2[q]; q++)
-      if (sp_streq(un, INPLACE_MUT2[q])) { inplace = 1; break; }
-    if (inplace) mutated = 1;
+    if (sp_str_mutator(un, SP_MUT_LOCAL)) mutated = 1;
     else if (ul > 0 && un[ul - 1] == '!')
       return -1;
   }
@@ -6293,13 +6282,6 @@ static int strbuf_mut_kind(Compiler *c, const char *vn, Scope *vs) {
    strbuf_mut_kind). The supported set is narrower: the shadow-copy shim
    cannot rename an ivar, so []=/insert/slice!/setbyte disqualify. */
 static int strbuf_ivar_mut_kind(Compiler *c, int cid, const char *nm) {
-  static const char *const IV_MUT[] = {
-    "<<", "concat", "prepend", "replace", "clear",
-    "bytesplice", "append_as_bytes",
-    "gsub!", "sub!", "upcase!", "downcase!", "capitalize!", "swapcase!",
-    "strip!", "lstrip!", "rstrip!", "chomp!", "chop!", "squeeze!",
-    "tr!", "delete!", "tr_s!", "delete_prefix!", "delete_suffix!",
-    "reverse!", "succ!", "next!", NULL };
   const NodeTable *nt = c->nt;
   int mutated = 0;
   for (int u = 0; u < nt->count; u++) {
@@ -6316,10 +6298,7 @@ static int strbuf_ivar_mut_kind(Compiler *c, int cid, const char *nm) {
     const char *un = nt_str(nt, u, "name");
     if (!un) continue;
     size_t ul = strlen(un);
-    int inplace = 0;
-    for (int q = 0; IV_MUT[q]; q++)
-      if (sp_streq(un, IV_MUT[q])) { inplace = 1; break; }
-    if (inplace) mutated = 1;
+    if (sp_str_mutator(un, SP_MUT_IVAR)) mutated = 1;
     else if (sp_streq(un, "insert") || sp_streq(un, "slice!") ||
              sp_streq(un, "[]=") || sp_streq(un, "setbyte") ||
              (ul > 0 && un[ul - 1] == '!'))
@@ -6665,17 +6644,7 @@ static int promote_shared_stored_strings(Compiler *c) {
     if (!mun) continue;
     {
       /* mutator name check (same handle-capable set) */
-      static const char *const MUT3[] = {
-        "<<", "concat", "prepend", "replace",
-        "insert", "clear", "slice!", "setbyte",
-        "bytesplice", "append_as_bytes",
-        "gsub!", "sub!", "upcase!", "downcase!", "capitalize!", "swapcase!",
-        "strip!", "lstrip!", "rstrip!", "chomp!", "chop!", "squeeze!",
-        "tr!", "delete!", "tr_s!", "delete_prefix!", "delete_suffix!",
-        "reverse!", "succ!", "next!", NULL };
-      int is_mut = 0;
-      for (int q = 0; MUT3[q]; q++) if (sp_streq(mun, MUT3[q])) { is_mut = 1; break; }
-      if (!is_mut) continue;
+      if (!sp_str_mutator(mun, SP_MUT_CONTAINER)) continue;
     }
     int mrecv = nt_ref(nt, mu, "receiver");
     if (mrecv < 0 || nt_kind(nt, mrecv) != NK_CallNode) continue;
@@ -6702,16 +6671,7 @@ static int promote_shared_stored_strings(Compiler *c) {
     const char *mun = nt_str(nt, mu, "name");
     if (!mun) continue;
     {
-      static const char *const MUT4[] = {
-        "<<", "concat", "prepend", "replace", "clear",
-        "bytesplice", "append_as_bytes",
-        "gsub!", "sub!", "upcase!", "downcase!", "capitalize!", "swapcase!",
-        "strip!", "lstrip!", "rstrip!", "chomp!", "chop!", "squeeze!",
-        "tr!", "delete!", "tr_s!", "delete_prefix!", "delete_suffix!",
-        "reverse!", "succ!", "next!", NULL };
-      int is_mut4 = 0;
-      for (int q = 0; MUT4[q]; q++) if (sp_streq(mun, MUT4[q])) { is_mut4 = 1; break; }
-      if (!is_mut4) continue;
+      if (!sp_str_mutator(mun, SP_MUT_IVAR)) continue;
     }
     int mrecv = nt_ref(nt, mu, "receiver");
     if (mrecv < 0 || nt_kind(nt, mrecv) != NK_CallNode) continue;
