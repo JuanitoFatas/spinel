@@ -10336,7 +10336,9 @@ void emit_call(Compiler *c, int id, Buf *b) {
         /* read(len, buffer): rebind the buffer local to the bytes read (#2811) */
         const char *bnm = nt_str(nt, argv[1], "name");
         int trd = ++g_tmp;
-        buf_printf(b, "({ const char *_t%d = sp_File_read_n(%s, ", trd, r);
+        /* CRuby raises FrozenError on the output buffer BEFORE reading (#3335) */
+        buf_puts(b, "({ sp_str_check_mutable("); emit_expr(c, argv[1], b); buf_puts(b, "); ");
+        buf_printf(b, "const char *_t%d = sp_File_read_n(%s, ", trd, r);
         emit_int_expr(c, argv[0], b);
         buf_printf(b, "); lv_%s = _t%d; _t%d; })", bnm ? rename_local(bnm) : "?", trd, trd);
       }
@@ -10419,7 +10421,11 @@ void emit_call(Compiler *c, int id, Buf *b) {
           sp_streq(nt_type(nt, argv[2]), "LocalVariableReadNode"))
         bufn = nt_str(nt, argv[2], "name");
       int tpr = ++g_tmp;
-      if (bufn) buf_printf(b, "({ const char *_t%d = ", tpr);
+      if (bufn) {
+        /* the output buffer must be mutable, checked before the read (#3335) */
+        buf_puts(b, "({ sp_str_check_mutable("); emit_expr(c, argv[2], b); buf_puts(b, "); ");
+        buf_printf(b, "const char *_t%d = ", tpr);
+      }
       buf_printf(b, "sp_File_pread(%s, ", r); emit_int_expr(c, argv[0], b); buf_puts(b, ", ");
       if (argc >= 2) emit_int_expr(c, argv[1], b); else buf_puts(b, "0");
       buf_puts(b, ")");
@@ -10474,7 +10480,23 @@ void emit_call(Compiler *c, int id, Buf *b) {
       free(rb.p); return;
     }
     if ((sp_streq(name, "readpartial") || sp_streq(name, "sysread")) && argc >= 1) {
+      /* (len, outbuf): CRuby fills the buffer and RETURNS it; when the buffer
+         is a plain local, rebind it to the bytes read so the caller sees them
+         and `r.equal?(b)` holds (#3336). A frozen buffer raises first. */
+      const char *sbn = NULL;
+      if (argc >= 2 && nt_type(nt, argv[1]) &&
+          sp_streq(nt_type(nt, argv[1]), "LocalVariableReadNode"))
+        sbn = nt_str(nt, argv[1], "name");
+      int tsr = ++g_tmp;
+      if (argc >= 2) {
+        buf_puts(b, "({ sp_str_check_mutable("); emit_expr(c, argv[1], b); buf_puts(b, "); ");
+        buf_printf(b, "const char *_t%d = ", tsr);
+      }
       buf_printf(b, "sp_File_readpartial(%s, ", r); emit_int_expr(c, argv[0], b); buf_puts(b, ")");
+      if (argc >= 2) {
+        if (sbn) buf_printf(b, "; lv_%s = _t%d", rename_local(sbn), tsr);
+        buf_printf(b, "; _t%d; })", tsr);
+      }
       free(rb.p); return;
     }
     if (sp_streq(name, "sysseek") && argc >= 1) {

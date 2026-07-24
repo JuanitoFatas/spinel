@@ -21,7 +21,7 @@ fd = IO.sysopen("/tmp/sp_io4.txt")
 p fd.class
 open("/tmp/sp_io4.txt") { |f| p f.read }
 File.open("/tmp/sp_io4.txt") do |f|
-  b001 = ""
+  b001 = +""
   f.read(5, b001)
   p b001
 end
