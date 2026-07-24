@@ -241,18 +241,30 @@ int sp_str_mutator(const char *nm, unsigned want) {
   return 0;
 }
 
+int lazy_stage_name(const char *nm) {
+  static const char *const ST[] = {
+    /* re-lazy on an already-lazy chain is transparent */
+    "lazy",
+    /* block stages (LAZY_BLOCK_STAGE in codegen_call.c) */
+    "map", "collect", "select", "filter", "find_all", "reject",
+    "take_while", "drop_while", "filter_map", "flat_map", "collect_concat",
+    /* blockless counter / grouping stages (LAZY_COUNTER_STAGE) */
+    "take", "drop", "each_slice", "each_cons", NULL };
+  if (!nm) return 0;
+  for (int i = 0; ST[i]; i++) if (sp_streq(nm, ST[i])) return 1;
+  return 0;
+}
+
 int chain_is_lazy_valued(Compiler *c, int node) {
   const NodeTable *nt = c->nt;
   if (node < 0 || !nt_type(nt, node) || !sp_streq(nt_type(nt, node), "CallNode")) return 0;
   const char *top = nt_str(nt, node, "name");
   if (!top) return 0;
-  static const char *const transforms[] = {
-    "lazy", "map", "collect", "select", "filter", "find_all", "reject",
-    "filter_map", "flat_map", "collect_concat", "take", "drop", "take_while",
-    "drop_while", "each_slice", "each_cons", "with_index", "zip", NULL };
-  int ok = 0;
-  for (int i = 0; transforms[i]; i++) if (sp_streq(top, transforms[i])) { ok = 1; break; }
-  if (!ok) return 0;
+  /* with_index / zip keep the VALUE lazy (so a chain ending in them is still
+     a Lazy for recognition purposes) but the pipeline cannot fuse them, so
+     they are not stages -- the write-suppression walk must not accept them. */
+  if (!lazy_stage_name(top) && !sp_streq(top, "with_index") && !sp_streq(top, "zip"))
+    return 0;
   int hops = 0;
   for (int cur = node; cur >= 0; ) {
     /* part of the chain may be held in a variable

@@ -1200,6 +1200,31 @@ static void emit_poly_eq_ordered(Compiler *c, int recv, int arg, int eq, Buf *b)
   }
   buf_puts(b, eq ? "" : ")");
 }
+/* The lazy stages emit_lazy_pipeline_expr fuses, as tables. lazy_stage_name
+   (analyze_util.c) is the shared NAME authority -- these tables give each
+   name its op kind; `adj_only` marks a stage that only works adjacent to the
+   terminal (ops collect terminal-first, so that is nops == 0). */
+enum { OP_MAP, OP_FILTER, OP_TAKEWHILE, OP_DROPWHILE, OP_FILTERMAP, OP_FLATMAP,
+       OP_TAKE, OP_DROP, OP_EACHSLICE, OP_EACHCONS };
+static const struct { const char *nm; int kind; int negate; int adj_only; }
+LAZY_BLOCK_STAGE[] = {
+  { "map",            OP_MAP,       0, 0 }, { "collect",        OP_MAP,       0, 0 },
+  { "select",         OP_FILTER,    0, 0 }, { "filter",         OP_FILTER,    0, 0 },
+  { "find_all",       OP_FILTER,    0, 0 }, { "reject",         OP_FILTER,    1, 0 },
+  { "take_while",     OP_TAKEWHILE, 0, 0 }, { "drop_while",     OP_DROPWHILE, 0, 0 },
+  { "filter_map",     OP_FILTERMAP, 0, 0 },
+  /* flat_map splices its block result into the stream: only where the splice
+     can go straight into the result, i.e. adjacent to the terminal. */
+  { "flat_map",       OP_FLATMAP,   0, 1 }, { "collect_concat", OP_FLATMAP,   0, 1 },
+  { NULL, 0, 0, 0 }
+};
+static const struct { const char *nm; int kind; int adj_only; }
+LAZY_COUNTER_STAGE[] = {
+  { "take",       OP_TAKE,      0 }, { "drop",       OP_DROP,      0 },
+  { "each_slice", OP_EACHSLICE, 1 }, { "each_cons",  OP_EACHCONS,  0 },
+  { NULL, 0, 0 }
+};
+
 int lazy_alias_write_suppressible(Compiler *c, int write) {
   const NodeTable *nt = c->nt;
   if (nt_kind(nt, write) != NK_LocalVariableWriteNode) return 0;
@@ -1226,10 +1251,6 @@ int lazy_alias_write_suppressible(Compiler *c, int write) {
     /* Walk outward from the read: further lazy transforms keep the chain
        lazy (`c = arr.lazy; c.map { }.to_a`), so follow them and demand that
        the OUTERMOST call is a fusion-capable terminal (#3012). */
-    static const char *const lazy_xf[] = {
-      "map", "collect", "select", "filter", "find_all", "reject",
-      "filter_map", "flat_map", "collect_concat", "take", "drop",
-      "take_while", "drop_while", "each_slice", "each_cons", "lazy", NULL };
     int forced = 0, node = r;
     for (int depth = 0; depth < 16; depth++) {
       int call = -1;
@@ -1243,9 +1264,7 @@ int lazy_alias_write_suppressible(Compiler *c, int write) {
       if ((sp_streq(cn, "first") && ac == 1) || sp_streq(cn, "to_a") || sp_streq(cn, "force")) {
         forced = 1; break;
       }
-      int is_xf = 0;
-      for (int i = 0; lazy_xf[i]; i++) if (sp_streq(cn, lazy_xf[i])) { is_xf = 1; break; }
-      if (!is_xf) break;
+      if (!lazy_stage_name(cn)) break;
       node = call;
     }
     if (!forced) return 0;
@@ -1387,7 +1406,6 @@ int emit_lazy_pipeline_expr(Compiler *c, int id, Buf *b) {
     else if (ac != 0) return 0;
   }
 
-  enum { OP_MAP, OP_FILTER, OP_TAKEWHILE, OP_DROPWHILE, OP_FILTERMAP, OP_FLATMAP, OP_TAKE, OP_DROP, OP_EACHSLICE, OP_EACHCONS };
   /* arg/cnt/lim are used only by the blockless counter stages (take/drop):
      arg is the count AST node, lim a prelude temp holding its value, cnt a
      prelude counter initialised to 0. */
@@ -1414,16 +1432,15 @@ int emit_lazy_pipeline_expr(Compiler *c, int id, Buf *b) {
     /* Blockless counter stages: `take(n)` limits the stream to n elements
        (break once reached), `drop(n)` skips the first n. Both stay lazy in
        CRuby, fusing straight into the loop. */
-    if ((sp_streq(nm, "take") || sp_streq(nm, "drop") ||
-         (sp_streq(nm, "each_slice") && nops == 0) ||
-         sp_streq(nm, "each_cons")) &&
-        nt_ref(nt, cur, "block") < 0) {
+    int cs = -1;
+    for (int i = 0; LAZY_COUNTER_STAGE[i].nm; i++)
+      if (sp_streq(nm, LAZY_COUNTER_STAGE[i].nm) &&
+          (!LAZY_COUNTER_STAGE[i].adj_only || nops == 0)) { cs = i; break; }
+    if (cs >= 0 && nt_ref(nt, cur, "block") < 0) {
       int ar = nt_ref(nt, cur, "arguments");
       int ac = 0; const int *av = ar >= 0 ? nt_arr(nt, ar, "arguments", &ac) : NULL;
       if (ac != 1 || !av || nops >= 16) return 0;
-      ops[nops].kind = sp_streq(nm, "take") ? OP_TAKE :
-                       sp_streq(nm, "drop") ? OP_DROP :
-                       sp_streq(nm, "each_slice") ? OP_EACHSLICE : OP_EACHCONS;
+      ops[nops].kind = LAZY_COUNTER_STAGE[cs].kind;
       ops[nops].block = -1; ops[nops].negate = 0; ops[nops].arg = av[0];
       ops[nops].cnt = -1; ops[nops].lim = -1;
       nops++;
@@ -1438,19 +1455,13 @@ int emit_lazy_pipeline_expr(Compiler *c, int id, Buf *b) {
     }
     int blk = nt_ref(nt, cur, "block");
     if (blk < 0 || nops >= 16) return 0;
-    if (sp_streq(nm, "map") || sp_streq(nm, "collect")) ops[nops].kind = OP_MAP, ops[nops].negate = 0;
-    else if (sp_streq(nm, "select") || sp_streq(nm, "filter") ||
-             sp_streq(nm, "find_all")) ops[nops].kind = OP_FILTER, ops[nops].negate = 0;
-    else if (sp_streq(nm, "reject")) ops[nops].kind = OP_FILTER, ops[nops].negate = 1;
-    else if (sp_streq(nm, "take_while")) ops[nops].kind = OP_TAKEWHILE, ops[nops].negate = 0;
-    else if (sp_streq(nm, "drop_while")) ops[nops].kind = OP_DROPWHILE, ops[nops].negate = 0;
-    else if (sp_streq(nm, "filter_map")) ops[nops].kind = OP_FILTERMAP, ops[nops].negate = 0;
-    /* flat_map splices its block result into the stream; supported as the
-       stage adjacent to the terminal (nops == 0 here: ops collect
-       terminal-first), where the splice happens straight into the result. */
-    else if ((sp_streq(nm, "flat_map") || sp_streq(nm, "collect_concat")) && nops == 0)
-      ops[nops].kind = OP_FLATMAP, ops[nops].negate = 0;
-    else return 0;
+    int bs = -1;
+    for (int i = 0; LAZY_BLOCK_STAGE[i].nm; i++)
+      if (sp_streq(nm, LAZY_BLOCK_STAGE[i].nm) &&
+          (!LAZY_BLOCK_STAGE[i].adj_only || nops == 0)) { bs = i; break; }
+    if (bs < 0) return 0;
+    ops[nops].kind = LAZY_BLOCK_STAGE[bs].kind;
+    ops[nops].negate = LAZY_BLOCK_STAGE[bs].negate;
     ops[nops].block = blk;
     ops[nops].arg = -1; ops[nops].cnt = -1; ops[nops].lim = -1;
     nops++;

@@ -463,6 +463,11 @@ const char *sym_static_value(Compiler *c, int node);  /* SymbolNode or sole-symb
 #define SP_MUT_NARROW    8u  /* guard-narrowed poly re-route: also no append_as_bytes */
 /* 1 iff `nm` is a String in-place mutator serviceable at every site in `want`. */
 int sp_str_mutator(const char *nm, unsigned want);
+/* 1 iff `nm` is a stage that keeps a lazy chain lazy -- the set
+   emit_lazy_pipeline_expr can fuse, plus a re-lazy. The recognizer, the
+   write-suppression walk and the pipeline walker must agree on it: #3318,
+   #3323 and #3324 were each one list updated and another missed. */
+int lazy_stage_name(const char *nm);
 int chain_is_lazy_valued(Compiler *c, int node);      /* CallNode chain evaluating to a Lazy */
 int lazy_alias_chain(Compiler *c, int var_read);      /* local holding a lazy chain -> chain node, else -1 */
 int        hash_new_default_arg(Compiler *c, int recv); /* Hash.new(d) literal: d node or -1 */
