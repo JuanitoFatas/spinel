@@ -356,10 +356,18 @@ void emit_boxed(Compiler *c, int node, Buf *b) {
       if (bt == TY_POLY) { emit_expr(c, node, b); return; }
       Buf yb; memset(&yb, 0, sizeof yb);
       emit_expr(c, node, &yb);
+      const char *yt = yb.p ? yb.p : "0";
+      /* The splice may already have boxed the block's value (the invoke
+         emitter boxes an object tail into a poly slot): re-boxing would
+         cast an sp_RbVal struct through (void *) (#3329). */
+      int pre_boxed = strstr(yt, "sp_box_") != NULL &&
+                      (strncmp(yt, "({ sp_box_", 10) == 0 || strncmp(yt, "sp_box_", 7) == 0);
       if (bt == TY_NIL || bt == TY_VOID)
-        buf_printf(b, "({ %s; sp_box_nil(); })", yb.p ? yb.p : "0");
+        buf_printf(b, "({ %s; sp_box_nil(); })", yt);
+      else if (pre_boxed)
+        buf_puts(b, yt);
       else
-        emit_boxed_text(c, bt, yb.p ? yb.p : "0", b);
+        emit_boxed_text(c, bt, yt, b);
       free(yb.p);
       return;
     }
