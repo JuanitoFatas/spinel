@@ -5659,8 +5659,12 @@ static void mark_empty_array_receivers(Compiler *c) {
       if (an >= 0) nt_arr(nt, an, "arguments", &ac);
       count_form = (ac == 1);
     }
-    if (!has_block && !(nm && sp_streq(nm, "product")) && !count_form) continue;
-    if (!nm || (!empty_arr_iter_ok(nm) && !sp_streq(nm, "product") && !count_form)) continue;
+    /* blockless zip pairs elementwise into a PolyArray of PolyArrays: an
+       untyped empty literal receiver had no array kind, so the call fell
+       through to the set-op arm and emitted sp_<T>Array_difference (#3332) */
+    int zip_form = nm && sp_streq(nm, "zip") && !has_block;
+    if (!has_block && !(nm && sp_streq(nm, "product")) && !count_form && !zip_form) continue;
+    if (!nm || (!empty_arr_iter_ok(nm) && !sp_streq(nm, "product") && !count_form && !zip_form)) continue;
     int recv = nt_ref(nt, id, "receiver");
     if (recv < 0 || recv >= c->node_cap) continue;
     const char *rty = nt_type(nt, recv);
