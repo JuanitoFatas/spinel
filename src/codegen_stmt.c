@@ -1020,17 +1020,9 @@ void emit_assign(Compiler *c, int id, Buf *b, int indent) {
     buf_printf(b, "sp_StrPolyHash_from_%s(", comp_ntype(c, v) == TY_STR_STR_HASH ? "str_str_hash" : "str_int_hash");
     emit_expr(c, v, b); buf_puts(b, ")");
   }
-  else if (lv && (lv->type == TY_INT || lv->type == TY_BOOL) && comp_ntype(c, v) == TY_POLY) {
-    /* scalar slot, poly RHS (e.g. `x = (a + b) * 2` with poly a/b): coerce. */
-    buf_puts(b, "sp_poly_to_i("); emit_expr(c, v, b); buf_puts(b, ")");
-  }
-  else if (lv && lv->type == TY_FLOAT && comp_ntype(c, v) == TY_POLY) {
-    buf_puts(b, "sp_poly_to_f("); emit_expr(c, v, b); buf_puts(b, ")");
-  }
-  else if (lv && lv->type == TY_STRING && comp_ntype(c, v) == TY_POLY) {
-    /* string slot, poly RHS (holds a string at runtime): coerce */
-    buf_puts(b, "sp_poly_to_s("); emit_expr(c, v, b); buf_puts(b, ")");
-  }
+  /* scalar/string slot with a poly RHS (`x = (a + b) * 2` over poly a/b, a
+     string local read back from a poly call): unbox into the slot. */
+  else if (lv && emit_poly_rhs_coerced(c, lv->type, v, b)) { }
   else if (lv && lv->type != TY_POLY && lv->type != TY_UNKNOWN &&
            comp_ntype(c, v) == TY_UNKNOWN) {
     /* a typed local assigned an unresolved call (the gate's raise-all token):

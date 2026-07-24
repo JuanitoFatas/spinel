@@ -923,17 +923,9 @@ void emit_expr(Compiler *c, int id, Buf *b) {
       /* `if (x = obj.unresolved(...)) ...`: the gate's raise-all token into a
          typed slot, coerced (mirrors the statement-form emit_assign). */
       emit_unresolved_coerced(c, v, lv->type, b);
-    else if (lv && (lv->type == TY_INT || lv->type == TY_BOOL) &&
-             comp_ntype(c, v) == TY_POLY) {
-      /* scalar slot, poly RHS: coerce (mirrors emit_assign) */
-      buf_puts(b, "sp_poly_to_i("); emit_expr(c, v, b); buf_puts(b, ")");
-    }
-    else if (lv && lv->type == TY_FLOAT && comp_ntype(c, v) == TY_POLY) {
-      buf_puts(b, "sp_poly_to_f("); emit_expr(c, v, b); buf_puts(b, ")");
-    }
-    else if (lv && lv->type == TY_STRING && comp_ntype(c, v) == TY_POLY) {
-      buf_puts(b, "sp_poly_to_s("); emit_expr(c, v, b); buf_puts(b, ")");
-    }
+    /* poly RHS into a scalar/string slot: the same unbox the statement form
+       applies (emit_poly_rhs_coerced) */
+    else if (lv && emit_poly_rhs_coerced(c, lv->type, v, b)) { }
     else emit_expr(c, v, b);
     buf_puts(b, "; "); emit_local_ref(c, id, nm, b); buf_puts(b, "; })");
     return;

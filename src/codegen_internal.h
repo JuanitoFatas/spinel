@@ -519,6 +519,10 @@ void emit_box_close(Compiler *c, TyKind t, Buf *b);
 const char *array_kind(TyKind t);
 void emit_c_escaped_n(Buf *b, const char *s, size_t len);
 void emit_c_escaped(Buf *b, const char *s);
+/* A poly RHS assigned into a scalar slot needs an unbox. The statement form
+   (emit_assign) and the expression form (`x = v` in value position) share the
+   rule; #3303 was the expression form missing it. Returns 1 when it emitted. */
+int emit_poly_rhs_coerced(Compiler *c, TyKind slot, int v, Buf *b);
 int emit_frozen_literal_open(Buf *b, size_t raw_len);
 void emit_frozen_literal_close(Buf *b, int id);
 void emit_str_literal_n(Buf *b, const char *content, size_t len, int frozen);
