@@ -662,7 +662,8 @@ int emit_array_call(Compiler *c, int id, Buf *b) {
     int lvw9 = rvt9 && (sp_streq(rvt9, "LocalVariableReadNode") ||
                         sp_streq(rvt9, "InstanceVariableReadNode"));
     int tr9 = ++g_tmp, tn9 = ++g_tmp;
-    buf_printf(b, "({ sp_Range _t%d = ", tr9); emit_expr(c, argv[0], b);
+    buf_puts(b, "({ sp_str_check_mutable("); emit_expr(c, recv, b); buf_puts(b, "); ");
+    buf_printf(b, "sp_Range _t%d = ", tr9); emit_expr(c, argv[0], b);
     buf_printf(b, "; const char *_t%d = sp_str_bytesplice(", tn9);
     emit_expr(c, recv, b);
     buf_printf(b, ", _t%d.first, _t%d.last - _t%d.first + (_t%d.excl ? 0 : 1), ", tr9, tr9, tr9, tr9);
@@ -691,8 +692,10 @@ int emit_array_call(Compiler *c, int id, Buf *b) {
                         sp_streq(rvt9, "InstanceVariableReadNode"));
     int tn9 = ++g_tmp;
     /* append_as_bytes accepts String AND Integer arguments; an Integer is the
-       raw byte value (100 -> "d"), materialized via sp_int_chr (#2463). */
-    buf_printf(b, "({ const char *_t%d = sp_str_concat(", tn9);  /* reassigned per extra arg: keep non-const? const char* variable is reassignable (the POINTEE is const) */
+       raw byte value (100 -> "d"), materialized via sp_int_chr (#2463). A
+       frozen receiver raises first, like every other in-place append (#3333). */
+    buf_puts(b, "({ sp_str_check_mutable("); emit_expr(c, recv, b); buf_puts(b, "); ");
+    buf_printf(b, "const char *_t%d = sp_str_concat(", tn9);  /* reassigned per extra arg: keep non-const? const char* variable is reassignable (the POINTEE is const) */
     emit_expr(c, recv, b); buf_puts(b, ", ");
     if (comp_ntype(c, argv[0]) == TY_INT) { buf_puts(b, "sp_int_chr("); emit_int_expr(c, argv[0], b); buf_puts(b, ")"); }
     else emit_str_expr(c, argv[0], b);
@@ -725,7 +728,9 @@ int emit_array_call(Compiler *c, int id, Buf *b) {
     int lvw = rvt2 && (sp_streq(rvt2, "LocalVariableReadNode") ||
                        sp_streq(rvt2, "InstanceVariableReadNode"));
     int tn2 = ++g_tmp;
-    buf_printf(b, "({ const char *_t%d = sp_str_bytesplice(", tn2);
+    /* in-place mutator: a frozen receiver raises before the splice (#3333) */
+    buf_puts(b, "({ sp_str_check_mutable("); emit_expr(c, recv, b); buf_puts(b, "); ");
+    buf_printf(b, "const char *_t%d = sp_str_bytesplice(", tn2);
     emit_expr(c, recv, b);
     buf_puts(b, ", "); emit_int_expr(c, argv[0], b);
     buf_puts(b, ", "); emit_int_expr(c, argv[1], b);
@@ -5560,8 +5565,11 @@ int emit_scalar_call(Compiler *c, int id, Buf *b) {
       }
       else if (sp_streq(name, "rindex") && argc == 2) { buf_printf(b, "sp_str_rindex_from(%s, ", r); emit_expr(c, argv[0], b); buf_puts(b, ", "); emit_expr(c, argv[1], b); buf_puts(b, ")"); }
       else if (sp_streq(name, "crypt") && argc == 1) { buf_printf(b, "sp_str_crypt(%s, ", r); emit_expr(c, argv[0], b); buf_puts(b, ")"); }
-      else if ((sp_streq(name, "scrub") || sp_streq(name, "scrub!")) && argc == 0) buf_printf(b, "sp_str_scrub(%s, 0)", r);
-      else if ((sp_streq(name, "scrub") || sp_streq(name, "scrub!")) && argc == 1) { buf_printf(b, "sp_str_scrub(%s, ", r); emit_expr(c, argv[0], b); buf_puts(b, ")"); }
+      /* the bang form mutates in place: a frozen receiver raises first (#3333) */
+      else if (sp_streq(name, "scrub!") && argc == 0) buf_printf(b, "(sp_str_check_mutable(%s), sp_str_scrub(%s, 0))", r, r);
+      else if (sp_streq(name, "scrub!") && argc == 1) { buf_printf(b, "(sp_str_check_mutable(%s), sp_str_scrub(%s, ", r, r); emit_expr(c, argv[0], b); buf_puts(b, "))"); }
+      else if (sp_streq(name, "scrub") && argc == 0) buf_printf(b, "sp_str_scrub(%s, 0)", r);
+      else if (sp_streq(name, "scrub") && argc == 1) { buf_printf(b, "sp_str_scrub(%s, ", r); emit_expr(c, argv[0], b); buf_puts(b, ")"); }
       else if ((sp_streq(name, "[]") || sp_streq(name, "slice")) && argc == 1 && re_lit_index(c, argv[0]) >= 0) {
         /* s[/re/] -> the matched substring, or nil (NULL) on no match */
         buf_printf(b, "(sp_re_match(sp_re_pat_%d, %s) >= 0 ? sp_re_match_str : NULL)", re_lit_index(c, argv[0]), r);
@@ -5660,7 +5668,12 @@ int emit_scalar_call(Compiler *c, int id, Buf *b) {
       else if (sp_streq(name, "hex") && argc == 0) buf_printf(b, "sp_str_to_i_base(%s, 16)", r);
       else if (sp_streq(name, "to_r") && argc == 0) buf_printf(b, "sp_str_to_r(%s)", r);
       else if (sp_streq(name, "ord") && argc == 0) buf_printf(b, "sp_str_ord(%s)", r);
-      else if ((sp_streq(name, "force_encoding") || sp_streq(name, "b") || sp_streq(name, "encode") || sp_streq(name, "encode!")) && argc <= 2) buf_printf(b, "(%s)", r);
+      /* force_encoding / encode! set state ON the receiver: CRuby raises on a
+         frozen string whether or not the call would change anything (#3334).
+         `b` and non-bang `encode` return a NEW string, so they never raise. */
+      else if ((sp_streq(name, "force_encoding") || sp_streq(name, "encode!")) && argc <= 2)
+        buf_printf(b, "(sp_str_check_mutable(%s), (%s))", r, r);
+      else if ((sp_streq(name, "b") || sp_streq(name, "encode")) && argc <= 2) buf_printf(b, "(%s)", r);
       else if (sp_streq(name, "encoding") && argc == 0) buf_printf(b, "((void)(%s), sp_box_encoding(sp_encoding_utf8()))", r);
       else if (sp_streq(name, "dump") && argc == 0) buf_printf(b, "sp_str_dump(%s)", r);
       else if (sp_streq(name, "undump") && argc == 0) buf_printf(b, "sp_str_undump(%s)", r);

@@ -21,6 +21,6 @@ def to_binary(s)
   s.b
 end
 
-puts normalize("hello")
+puts normalize(+"hello")
 puts utf8_to_bin("world")
 puts to_binary("bytes")

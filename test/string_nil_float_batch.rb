@@ -3,15 +3,15 @@
 # on a receiver that widened to poly.
 
 # bytesplice: integer start/length and Range forms
-s = "hello"
+s = +"hello"
 s.bytesplice(0, 2, "HE")
 p s
-s = "hello"
+s = +"hello"
 s.bytesplice(1..3, "___")
 p s
 
 # append_as_bytes
-s = "abc"
+s = +"abc"
 s.append_as_bytes("de")
 p s
 
