@@ -363,11 +363,10 @@ void emit_boxed(Compiler *c, int node, Buf *b) {
       Buf yb; memset(&yb, 0, sizeof yb);
       emit_expr(c, node, &yb);
       const char *yt = yb.p ? yb.p : "0";
-      /* The splice may already have boxed the block's value (the invoke
-         emitter boxes an object tail into a poly slot): re-boxing would
-         cast an sp_RbVal struct through (void *) (#3329). */
-      int pre_boxed = strstr(yt, "sp_box_") != NULL &&
-                      (strncmp(yt, "({ sp_box_", 10) == 0 || strncmp(yt, "sp_box_", 7) == 0);
+      /* The invoke emitter boxes an object tail into a poly slot, so for that
+         shape the splice above already yielded an sp_RbVal -- re-boxing would
+         cast a struct through (void *) (#3329). */
+      int pre_boxed = (t == TY_POLY && ty_is_object(bt));
       if (bt == TY_NIL || bt == TY_VOID)
         buf_printf(b, "({ %s; sp_box_nil(); })", yt);
       else if (pre_boxed)
@@ -379,23 +378,6 @@ void emit_boxed(Compiler *c, int node, Buf *b) {
     }
   }
   if (t == TY_POLY) {
-    /* A poly-typed CALL whose emitter yields a concrete C value (the poly
-       to_sym arm returns a raw sp_sym) must still box: emitting it raw
-       lands a scalar in an sp_RbVal slot (#3331). */
-    const char *pnm = nt_kind(c->nt, node) == NK_CallNode ? nt_str(c->nt, node, "name") : NULL;
-    if (pnm && (sp_streq(pnm, "to_sym") || sp_streq(pnm, "intern"))) {
-      Buf sb; memset(&sb, 0, sizeof sb);
-      emit_expr(c, node, &sb);
-      const char *st = sb.p ? sb.p : "0";
-      if (strstr(st, "sp_sym_intern(") && !strstr(st, "sp_box_")) {
-        buf_printf(b, "sp_box_sym(%s)", st);
-        free(sb.p);
-        return;
-      }
-      buf_puts(b, st);
-      free(sb.p);
-      return;
-    }
     emit_expr(c, node, b);
     return;
   }

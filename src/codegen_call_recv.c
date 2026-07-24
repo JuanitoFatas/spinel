@@ -9014,6 +9014,12 @@ int emit_poly_call(Compiler *c, int id, Buf *b) {
         if (comp_method_in_chain(c, kk, name, NULL) >= 0) has_user = 1;
       if (!has_user) {
         int t = ++g_tmp;
+        /* The arm yields a raw sp_sym. When the call's own slot is poly (a
+           case-result carrier, a boxed argument) it must be boxed HERE -- the
+           generic boxed-value emitter passes a poly-typed node through
+           untouched, so a raw scalar would land in an sp_RbVal slot (#3331). */
+        int box_sym = comp_ntype(c, id) == TY_POLY;
+        if (box_sym) buf_puts(b, "sp_box_sym(");
         /* Root the boxed receiver: sp_sym_intern reads through the String's
            data pointer and allocates, so a GC mid-intern could otherwise free
            an unrooted temporary String out from under it. */
@@ -9022,6 +9028,7 @@ int emit_poly_call(Compiler *c, int id, Buf *b) {
                       " : (_t%d.tag == SP_TAG_SYM ? (sp_sym)_t%d.v.i"
                       " : (sp_raise_poly_nomethod(\"to_sym\", _t%d), (sp_sym)0)); })",
                    t, t, t, t, t, t);
+        if (box_sym) buf_puts(b, ")");
         return 1;
       }
     }
