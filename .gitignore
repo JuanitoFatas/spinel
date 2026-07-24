@@ -3,57 +3,35 @@
 *.swo
 .DS_Store
 *.o
-*.pbm
-
-# Compiled outputs
-*.c.out
-/mandelbrot
 
 # Build artifacts
 /build/
 /bin/
 /vendor/
-# Dev convenience symlink to bin/spinel (created by `make`)
-/spinel
-
-# Temp files
-/tmp/
-/perf.data
-/perf.data.old
 /lib/regexp/libspre.a
 lib/libspinel_rt.a
 lib/libspinel_rt_mt.a
 lib/libspinel_rt_mt_tsan.a
 lib/libspbi.a
-HANDOFF.md
+packages/*/build/
+# Dev convenience symlink to bin/spinel (created by `make`)
+/spinel
 
-# Local Claude config
+# Temp / profiling output
+/tmp/
+/perf.data
+/perf.data.old
+
+# Local config and machine-local Makefile overrides
 .claude/
 CLAUDE.local.md
-file_write_poly_arg
+/local.mk
 
-# Scratch design notes and downloaded gems (not for commit)
-/BIGINT.md
-/EXCEPTIONS.md
-/SETJMP.md
-/OPTIMIZATION.md
-/ISSUE_TRIAGE.md
-/PR908.md
-/POLY-AS-SET.md
-# Analyze-only emit artifacts (--emit-types / --emit-symbol-map dev scratch).
+# Analyze-only emit artifacts (--emit-types / --emit-symbol-map, and the
+# symbol map --profile writes beside the binary).
 # Not *.rbs: test/rbs/ and test/rbs-seed/ carry tracked .rbs fixtures.
 *.types.json
 *.symbols.json
+
+# Downloaded gems
 *.gem
-
-# Test binaries accidentally produced in repo root
-/hash_shorthand
-/pattern_pin
-/method_dispatch_poly_array
-/const_init_defers_for_main_local
-/array_new_block_typed_container
-/sp_split0
-
-# Machine-local Makefile overrides
-/local.mk
-packages/*/build/
