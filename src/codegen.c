@@ -378,7 +378,27 @@ void emit_boxed(Compiler *c, int node, Buf *b) {
       return;
     }
   }
-  if (t == TY_POLY) { emit_expr(c, node, b); return; }
+  if (t == TY_POLY) {
+    /* A poly-typed CALL whose emitter yields a concrete C value (the poly
+       to_sym arm returns a raw sp_sym) must still box: emitting it raw
+       lands a scalar in an sp_RbVal slot (#3331). */
+    const char *pnm = nt_kind(c->nt, node) == NK_CallNode ? nt_str(c->nt, node, "name") : NULL;
+    if (pnm && (sp_streq(pnm, "to_sym") || sp_streq(pnm, "intern"))) {
+      Buf sb; memset(&sb, 0, sizeof sb);
+      emit_expr(c, node, &sb);
+      const char *st = sb.p ? sb.p : "0";
+      if (strstr(st, "sp_sym_intern(") && !strstr(st, "sp_box_")) {
+        buf_printf(b, "sp_box_sym(%s)", st);
+        free(sb.p);
+        return;
+      }
+      buf_puts(b, st);
+      free(sb.p);
+      return;
+    }
+    emit_expr(c, node, b);
+    return;
+  }
   /* Reference-backed builtins (IO/Fiber/Thread/Queue/Mutex/ConditionVariable/
      Enumerator/Exception/Proc/Method) are nilable C pointers -- box NULL as nil
      via sp_box_nullable_obj, not a truthy SP_TAG_OBJ over NULL. */

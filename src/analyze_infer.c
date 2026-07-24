@@ -1068,6 +1068,13 @@ TyKind infer_call(Compiler *c, int id) {
       if (comp_reader_in_chain(c, k9, name, NULL)) has_reader9 = 1;
     if (!has_reader9) return TY_INT;
   }
+  /* to_sym on a poly value: the codegen arm interns a STR tag / passes a SYM
+     through and raises otherwise, so the non-raising result is a Symbol
+     (typing it poly made the raw sp_sym land in an sp_RbVal slot, #3331). */
+  if (recv >= 0 && rt == TY_POLY && argc == 0 && nt_ref(nt, id, "block") < 0 &&
+      !an_user_defines_method(c, name) &&
+      (sp_streq(name, "to_sym") || sp_streq(name, "intern")))
+    return TY_SYMBOL;
   /* reduce/inject on a poly value (an array read out of a container): the
      fold runs over boxed elements, so the result is boxed. */
   if (recv >= 0 && rt == TY_POLY && argc <= 1 && nt_ref(nt, id, "block") >= 0 &&
