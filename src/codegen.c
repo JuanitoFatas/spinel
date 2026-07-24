@@ -129,7 +129,13 @@ void emit_unbox_text(Compiler *c, TyKind t, const char *expr, Buf *b) {
    code, the raise fires first. Text-matched on the gate's own token, like
    emit_str_expr's sp_raise_nomethod coerce (the node stays TY_UNKNOWN). */
 static int coerce_const_raise(const char *txt, const char *zero, Buf *b) {
-  if (strncmp(txt, "(sp_raise_cls(", 14) != 0 || !strstr(txt, "(sp_Class)")) return 0;
+  /* the vcall NameError gate yields a BOXED nil after the raise
+     ((sp_raise_cls(...), sp_box_nil())): an sp_RbVal in a scalar slot fails
+     the same way the sp_Class shape does (#3330) */
+  int cls_shape = strncmp(txt, "(sp_raise_cls(", 14) == 0 && strstr(txt, "(sp_Class)") != NULL;
+  int boxed_shape = strncmp(txt, "(sp_raise_cls(", 14) == 0 &&
+                    strstr(txt, "sp_box_nil())") != NULL;
+  if (!cls_shape && !boxed_shape) return 0;
   buf_printf(b, "((void)%s, %s)", txt, zero);
   return 1;
 }

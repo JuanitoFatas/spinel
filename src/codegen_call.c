@@ -14859,7 +14859,20 @@ else { memcpy(dir, sf, n); dir[n] = 0; } }
             if (at == TY_POLY) {
               buf_puts(&call_buf, "("); emit_expr(c, argv[ai], &call_buf); buf_puts(&call_buf, ").v.s");
             }
-            else emit_expr(c, argv[ai], &call_buf);
+            else {
+              /* An UNKNOWN argument lowers to the gate's raise token, an
+                 sp_RbVal -- it cannot land raw in a const char* slot
+                 (#3330). The raise diverges first, so coerce the dead
+                 value to keep the C well-typed. */
+              Buf fb; memset(&fb, 0, sizeof fb);
+              emit_expr(c, argv[ai], &fb);
+              const char *ft = fb.p ? fb.p : "";
+              if (strncmp(ft, "sp_raise_nomethod(", 18) == 0 ||
+                  strncmp(ft, "(sp_raise_cls(", 14) == 0)
+                buf_printf(&call_buf, "((void)(%s), (const char *)0)", ft);
+              else buf_puts(&call_buf, ft);
+              free(fb.p);
+            }
           }
           else if (sp_streq(spec, "ptr")) {
             if (at == TY_POLY) {
