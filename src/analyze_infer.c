@@ -661,6 +661,7 @@ int reduce_tail_from_acc(Compiler *c, int tail, const char *accp) {
 }
 
 TyKind infer_call(Compiler *c, int id) {
+
   /* the redirect recorded that this call yields its original receiver (#2981) */
   {
     int sr = nt_int(c->nt, id, "enum_self_result", -1);
@@ -982,6 +983,10 @@ TyKind infer_call(Compiler *c, int id) {
   /* Range#to_a on a poly value: its element array. */
   if (recv >= 0 && rt == TY_POLY && argc == 0 && nt_ref(nt, id, "block") < 0 &&
       !an_user_defines_method(c, name) && sp_streq(name, "to_a"))
+    return TY_POLY_ARRAY;
+  /* uniq on a poly value that is an array at runtime: a poly array (#3341). */
+  if (recv >= 0 && rt == TY_POLY && argc == 0 && nt_ref(nt, id, "block") < 0 &&
+      !an_user_defines_method(c, name) && sp_streq(name, "uniq"))
     return TY_POLY_ARRAY;
   /* String#split on a poly value (a string param widened to poly): a string
      array, so a following `.map` / multiple assignment narrows (#3186/#3164). */

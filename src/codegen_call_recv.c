@@ -804,6 +804,13 @@ int emit_array_call(Compiler *c, int id, Buf *b) {
     buf_puts(b, "sp_poly_sort("); emit_expr(c, recv, b); buf_puts(b, ")");
     return 1;
   }
+  /* uniq on a bare poly value that is an array at runtime (an ivar assigned a
+     caller-splat rest array widens to poly): the distinct elements (#3341). */
+  if (recv >= 0 && rt == TY_POLY && sp_streq(name, "uniq") && argc == 0 &&
+      nt_ref(nt, id, "block") < 0 && !diag_user_defines(c, name)) {
+    buf_puts(b, "sp_poly_uniq("); emit_expr(c, recv, b); buf_puts(b, ")");
+    return 1;
+  }
   /* `enum.drop(n)` / `enum.reject|select|filter { }` on an each_with_index-style
      Enumerator: materialize its pairs to a poly array and re-dispatch as the
      array form (drop returns a slice; the block forms run the block over each

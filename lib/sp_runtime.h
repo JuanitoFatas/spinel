@@ -6589,6 +6589,17 @@ static sp_PolyArray *sp_poly_sort(sp_RbVal v) {
     return sp_PolyArray_sort_pairs(sp_poly_to_a_arr(v));
   return sp_PolyArray_sort(sp_poly_arr_recv(v, "sort"));
 }
+/* Enumerable#uniq on a boxed value (an array read out of a poly container or
+   an ivar that widened): the distinct elements, in first-seen order. Any
+   non-array tag is CRuby's NoMethodError, through sp_poly_arr_recv. */
+static sp_PolyArray *sp_poly_uniq(sp_RbVal v) {
+  sp_PolyArray *src = sp_poly_arr_recv(v, "uniq");
+  SP_GC_ROOT(src);
+  sp_PolyArray *out = sp_PolyArray_dup(src);
+  SP_GC_ROOT(out);
+  sp_PolyArray_uniq_bang(out);
+  return out;
+}
 void sp_Enumerator_scan(void *p);
 /* Blockless Hash#each_value / #each_key: an external Enumerator over the
    hash's values / keys (each pair from the generic walker, second/first
