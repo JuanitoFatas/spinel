@@ -4256,9 +4256,16 @@ static mrb_int sp_rbval_hash_key(sp_RbVal v) {
          hash alike to collide in a Hash, so hash each element through
          sp_rbval_hash_key rather than the raw IntArray words (#2911). */
       if (sp_poly_is_array_kind(v.cls_id)) {
-        mrb_int n = sp_poly_length(v), h = 0;
-        for (mrb_int i = 0; i < n; i++) h = (h * 31) + sp_rbval_hash_key(sp_poly_arr_get(v, i));
-        return h;
+        /* unsigned accumulator: the rolling h*31+x is meant to wrap, but on a
+           signed type that is UB rather than wraparound -- and this is a
+           static inline shared between the archive and every generated TU, so
+           two copies compiled under different flags could disagree and a Hash
+           lookup would silently miss. Same rule as the Rational key below. */
+        mrb_int n = sp_poly_length(v);
+        uint64_t h = 0;
+        for (mrb_int i = 0; i < n; i++)
+          h = (h * 31) + (uint64_t)sp_rbval_hash_key(sp_poly_arr_get(v, i));
+        return (mrb_int)h;
       }
       if (v.cls_id == SP_BUILTIN_METHOD) {
         /* Method keys hash/eql by (bound self, fn ptr, name), so two

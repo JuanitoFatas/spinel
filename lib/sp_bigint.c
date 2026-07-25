@@ -5464,12 +5464,18 @@ int64_t sp_bigint_to_int(sp_Bigint *b) {
   if (b == NULL) return 0;
   mpz_t *z = &b->mpz;
   if (z->sz == 0) return 0;
-  int64_t v = 0;
+  /* Assemble in UNSIGNED. A limb is 32 bits and DIG_SIZE is 32, so the second
+     limb's top bit shifts into bit 63 -- undefined for a signed left shift, and
+     the ordinary `x & 0xFFFFFFFFFFFFFFFF` mask idiom reaches it. Negating is
+     the same story: -INT64_MIN overflows. Both are well defined on uint64_t,
+     and the final conversion back is the wrap every caller already expects. */
+  uint64_t v = 0;
   size_t n = z->sz < 2 ? z->sz : 2;
   for (size_t i = 0; i < n; i++) {
-    v |= ((int64_t)z->p[i]) << (i * DIG_SIZE);
+    v |= ((uint64_t)z->p[i]) << (i * DIG_SIZE);
   }
-  return z->sn < 0 ? -v : v;
+  if (z->sn < 0) v = (uint64_t)0 - v;
+  return (int64_t)v;
 }
 
 /* Convert a bigint to the nearest double. Unlike sp_bigint_to_int, which keeps
