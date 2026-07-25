@@ -4767,17 +4767,25 @@ void emit_rescue(Compiler *c, int id, Buf *b, int indent, int fr, const char *re
           if (qbuf[0]) snprintf(qbuf + o, sizeof qbuf - o, "%s", ename);
         }
       }
+      /* strcmp rather than sp_str_eq for the name compares: sp_str_eq confirms
+         a strcmp hit by comparing byte lengths, and taking the length of a bare
+         C literal reads its s[-1] marker -- out of bounds, and whatever byte
+         precedes it in rodata. Land on a marker value there and it reads the
+         bytes BEFORE the literal as an sp_str_hdr and answers false for two
+         equal names, with the rodata layout (so the optimizer) deciding. A
+         class or module name carries no NUL, and _rcls_N is never NULL, so
+         strcmp is the right comparison here anyway. */
       if (is_exc_cls)
         buf_printf(b, "sp_exc_cls_matches(_rcls_%d, \"%s\")", rc, ename);
       else if (qbuf[0])
-        buf_printf(b, "(sp_str_eq(_rcls_%d, \"%s\") || sp_str_eq(_rcls_%d, \"%s\"))",
+        buf_printf(b, "(strcmp(_rcls_%d, \"%s\") == 0 || strcmp(_rcls_%d, \"%s\") == 0)",
                    rc, ename, rc, qbuf);
       else {
         /* `rescue M` where M is an included module: an exception matches when
            its class (or an ancestor) includes M, so expand to the exception
            classes carrying the module. A module nobody includes keeps the
            plain name compare (which, like CRuby, never matches a class). */
-        buf_printf(b, "(sp_str_eq(_rcls_%d, \"%s\")", rc, ename);
+        buf_printf(b, "(strcmp(_rcls_%d, \"%s\") == 0", rc, ename);
         if (uci >= 0) {
           for (int k = 0; k < c->nclasses; k++) {
             if (!class_is_exc_subclass(c, k)) continue;
@@ -4985,7 +4993,11 @@ void emit_begin(Compiler *c, int id, Buf *b, int indent, const char *resultvar) 
          ensure + re-raise path (FiberKillSignal must match lib/sp_fiber.c) so
          this begin's ensure still runs, then it propagates toward the fiber. */
       emit_indent(b, indent + 2);
-      buf_printf(b, "if (sp_str_eq((const char *)sp_last_exc_cls, \"FiberKillSignal\")) { _excf%d = 1; _excmsg%d = sp_exc_msg[sp_exc_top]; _exccls%d = sp_exc_cls[sp_exc_top]; }\n",
+      /* strcmp, not sp_str_eq: the latter checks byte lengths on a hit, and
+         reading a bare C literal's length means reading its out-of-bounds
+         s[-1] marker. sp_last_exc_cls is never NULL (it starts at
+         sp_str_empty) and a class name carries no NUL. */
+      buf_printf(b, "if (strcmp((const char *)sp_last_exc_cls, \"FiberKillSignal\") == 0) { _excf%d = 1; _excmsg%d = sp_exc_msg[sp_exc_top]; _exccls%d = sp_exc_cls[sp_exc_top]; }\n",
                  eid, eid, eid);
       emit_indent(b, indent + 2); buf_puts(b, "else {\n");
       emit_rescue(c, rescue, b, indent + 3, fr, resultvar);
@@ -5129,7 +5141,7 @@ void emit_begin(Compiler *c, int id, Buf *b, int indent, const char *resultvar) 
        to run first, so re-raise it straight away (FiberKillSignal must match
        lib/sp_fiber.c); it propagates toward the fiber's terminating trampoline. */
     emit_indent(b, indent + 2);
-    buf_puts(b, "if (sp_str_eq((const char *)sp_last_exc_cls, \"FiberKillSignal\")) sp_raise_cls(\"FiberKillSignal\", sp_exc_msg[sp_exc_top]);\n");
+    buf_puts(b, "if (strcmp((const char *)sp_last_exc_cls, \"FiberKillSignal\") == 0) sp_raise_cls(\"FiberKillSignal\", sp_exc_msg[sp_exc_top]);\n");
     emit_indent(b, indent + 2); buf_puts(b, "else {\n");
     emit_rescue(c, rescue, b, indent + 3, fr, resultvar);
     emit_indent(b, indent + 2); buf_puts(b, "}\n");

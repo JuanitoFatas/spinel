@@ -10355,17 +10355,25 @@ void emit_call(Compiler *c, int id, Buf *b) {
     if (sp_streq(name, "ip_port")) { buf_printf(b, "(%s)->port", ar); free(ab.p); return; }
     if (sp_streq(name, "socktype")) { buf_printf(b, "(%s)->socktype", ar); free(ab.p); return; }
     if (sp_streq(name, "protocol")) { buf_printf(b, "(%s)->protocol", ar); free(ab.p); return; }
+    /* strcmp, not sp_str_eq: sp_str_eq confirms a strcmp hit by comparing
+       byte lengths, and reading the length of a bare C literal means reading
+       its s[-1] marker -- out of bounds, and whatever byte happens to precede
+       it in rodata. Land on 0xfe/0xfc/0xfd/0xf1 there and it takes the bytes
+       BEFORE the literal as an sp_str_hdr, reads a garbage length, and the
+       predicate answers false for two equal strings. The layout decides, so
+       the answer changes with the optimizer. afname is NUL-free, so plain
+       strcmp is both correct and what sp_addrinfo_inspect already uses. */
     if (sp_streq(name, "ipv4?")) {
-      buf_printf(b, "(sp_str_eq((%s)->afname, \"AF_INET\"))", ar); free(ab.p); return;
+      buf_printf(b, "((%s)->afname && strcmp((%s)->afname, \"AF_INET\") == 0)", ar, ar); free(ab.p); return;
     }
     if (sp_streq(name, "ipv6?")) {
-      buf_printf(b, "(sp_str_eq((%s)->afname, \"AF_INET6\"))", ar); free(ab.p); return;
+      buf_printf(b, "((%s)->afname && strcmp((%s)->afname, \"AF_INET6\") == 0)", ar, ar); free(ab.p); return;
     }
     if (sp_streq(name, "unix?")) {
-      buf_printf(b, "(sp_str_eq((%s)->afname, \"AF_UNIX\"))", ar); free(ab.p); return;
+      buf_printf(b, "((%s)->afname && strcmp((%s)->afname, \"AF_UNIX\") == 0)", ar, ar); free(ab.p); return;
     }
     if (sp_streq(name, "ip?")) {
-      buf_printf(b, "(!sp_str_eq((%s)->afname, \"AF_UNIX\"))", ar); free(ab.p); return;
+      buf_printf(b, "(!((%s)->afname && strcmp((%s)->afname, \"AF_UNIX\") == 0))", ar, ar); free(ab.p); return;
     }
     if (sp_streq(name, "inspect") || sp_streq(name, "to_s")) {
       buf_printf(b, "sp_addrinfo_inspect(%s)", ar); free(ab.p); return;
