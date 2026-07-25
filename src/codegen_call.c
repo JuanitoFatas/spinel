@@ -16081,8 +16081,41 @@ else { memcpy(dir, sf, n); dir[n] = 0; } }
                  tv, are, tv, tv);
       return;
     }
+    /* Poly receiver for `poly !~ /re/`: String#!~ when it holds a string,
+       true when it holds nil (NilClass#=~ is nil, so !~ negates to true), and
+       NoMethodError for any other tag -- Object#=~ was removed, so Object#!~
+       has nothing to call. The =~ arm above is the same shape; without this,
+       emit_expr handed an sp_RbVal to sp_re_match_p's const char * slot and
+       the generated C did not compile (#3374). Self-contained so it can sit
+       in a condition where a g_pre prelude would not be flushed. */
+    if (are >= 0 && sp_streq(name, "!~") && rt == TY_POLY) {
+      int tv = ++g_tmp;
+      buf_printf(b, "({ sp_RbVal _t%d = ", tv); emit_expr(c, recv, b);
+      buf_printf(b, "; (mrb_bool)(_t%d.tag == SP_TAG_STR ? !sp_re_match_p(sp_re_pat_%d, _t%d.v.s)"
+                    " : _t%d.tag == SP_TAG_NIL ? 1"
+                    " : (sp_raise_nomethod(sp_sprintf(\"undefined method '!~' for an instance of %%s\","
+                    " sp_poly_class_name(_t%d))), 0)); })",
+                 tv, are, tv, tv, tv);
+      return;
+    }
     if (are >= 0 && sp_streq(name, "!~")) {
       buf_printf(b, "(!sp_re_match_p(sp_re_pat_%d, ", are); emit_expr(c, recv, b); buf_puts(b, "))");
+      return;
+    }
+    /* Poly receiver for `poly.match?(/re/)`: String#match? when it holds a
+       string. NilClass has no match?, so nil raises here rather than answering
+       false the way `nil !~` answers true. */
+    if (are >= 0 && sp_streq(name, "match?") && rt == TY_POLY) {
+      int tv = ++g_tmp;
+      buf_printf(b, "({ sp_RbVal _t%d = ", tv); emit_expr(c, recv, b);
+      buf_printf(b, "; (mrb_bool)(_t%d.tag == SP_TAG_STR ? ", tv);
+      if (argc == 1) buf_printf(b, "sp_re_match_p(sp_re_pat_%d, _t%d.v.s)", are, tv);
+      else {
+        buf_printf(b, "sp_str_re_match_p_at(sp_re_pat_%d, _t%d.v.s, ", are, tv);
+        emit_expr(c, argv[1], b); buf_puts(b, ")");
+      }
+      buf_printf(b, " : (sp_raise_nomethod(sp_sprintf(\"undefined method 'match?' for an instance of %%s\","
+                    " sp_poly_class_name(_t%d))), 0)); })", tv);
       return;
     }
     if (are >= 0 && sp_streq(name, "match?")) {
