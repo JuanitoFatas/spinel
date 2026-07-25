@@ -7,6 +7,14 @@
 #include <ctype.h>
 #include <errno.h>
 #include <locale.h>
+/* macOS keeps the *_l / locale_t surface in <xlocale.h>; glibc exposes it from
+   <locale.h> under POSIX.1-2008. Guarded so a platform with neither is not a
+   build error either. (#3370) */
+#if defined(__has_include)
+#  if __has_include(<xlocale.h>)
+#    include <xlocale.h>
+#  endif
+#endif
 
 /* Must match sp_types.h: mrb_int is pointer-width (int64 on 64-bit,
    int32 on 32-bit) so this TU's helper ABI agrees with the generated TU. */
