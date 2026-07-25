@@ -6355,6 +6355,8 @@ TyKind infer_uncached(Compiler *c, int id) {
       }
       e = ty_unify(e, et);
     }
+    /* ty_array_of holds an all-unknown element type at bottom while the
+       fixpoint runs; see its TY_UNKNOWN case. */
     return ty_array_of(e);
   }
   if (nk == NK_HashNode || nk == NK_KeywordHashNode) {

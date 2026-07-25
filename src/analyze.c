@@ -7,6 +7,17 @@ int g_promote_mode = 0;
    parameter that stayed UNKNOWN through the fixpoint (see bind_call_params);
    applied only after convergence so any concrete kind wins first. */
 int g_final_bind_pass = 0;
+/* Set while the type fixpoint iterates: a pass that would otherwise GUESS a
+   type from ambiguous or not-yet-arrived evidence must instead leave the slot
+   at UNKNOWN (bottom) and wait. "Not yet known" is not "could be anything",
+   but the monotonic passes cannot tell the difference after the fact --
+   parameter and return types only ever widen, so a guess made on the first
+   iteration, when nothing has a type yet, is permanent. It then cascades: the
+   caller's slot unifies int-array with the guess and lands on the scalar poly,
+   the callee's element reads go poly, and every arithmetic helper downstream
+   boxes. Cleared once the fixpoint converges and iteration continues, so a
+   slot whose evidence really never arrives still takes the pessimistic type. */
+int g_infer_optimistic = 0;
 
 /* Defined in codegen.c (linked into the same binary). Used to specialize a
    `rescue <UserExc> => e` binding to the exception subclass's object type. */
@@ -7679,6 +7690,7 @@ void analyze_program(Compiler *c) {
      hottest (called per node, every fixpoint iteration). */
   comp_scope_index_set_frozen(1);
 
+  g_infer_optimistic = 1;
   for (int iter = 0; iter < 128; iter++) {
     int ch = 0;
     sp_narrow_memo_bump();  /* invalidate per-iteration narrow-helper memo */
@@ -7757,6 +7769,12 @@ void analyze_program(Compiler *c) {
     ch |= infer_return_types(c);
     ch |= backprop_hash_return_types(c);
     if (!ch) {
+      /* Converged with the ambiguous guesses held at bottom. Clear the flag
+         and keep going: a slot whose evidence never arrived is genuinely
+         untypable, so it now takes the pessimistic type and the slots it
+         feeds settle on that. Everything resolvable has already settled
+         concretely, so this second stage widens only what really is open. */
+      if (g_infer_optimistic) { g_infer_optimistic = 0; continue; }
       /* Converged: one backstop bind pass lets an empty array-literal arg
          fill a still-UNKNOWN parameter as an (empty) poly array. If it fills
          anything, keep iterating so dependent return types resolve. */
@@ -7770,6 +7788,7 @@ void analyze_program(Compiler *c) {
       if (!ch) break;
     }
   }
+  g_infer_optimistic = 0;
 
   /* Optimistic re-narrow: the monotonic fixpoint locks a slot to poly the
      first time it sees a transient poly (a value read before its type settled,

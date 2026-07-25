@@ -103,6 +103,14 @@ TyKind ty_array_of(TyKind elem) {
     case TY_INT:    return TY_INT_ARRAY;
     case TY_FLOAT:  return TY_FLOAT_ARRAY;
     case TY_STRING: return TY_STR_ARRAY;
+    /* An element type that is not yet known is not the same as an element
+       type that is anything: while the fixpoint runs, keep the array at
+       bottom so the slots it flows into wait for the real element type
+       instead of locking onto the poly array. Producers reach this from
+       every direction -- a literal whose elements are calls not yet typed,
+       a `map` whose block return is not yet typed -- so the rule belongs
+       here rather than at each of them. See g_infer_optimistic. */
+    case TY_UNKNOWN: return g_infer_optimistic ? TY_UNKNOWN : TY_POLY_ARRAY;
     default:        return TY_POLY_ARRAY;
   }
 }
