@@ -17,7 +17,7 @@ usage: spin <command> [args]
   lock | fetch | vendor  resolve deps / warm the cache / copy into vendor/
   build [target..]     build bin/ executables into build/bin/
                        (--debug / -g: debuggable -O0 build for lldb/gdb;
-                        also SPIN_DEBUG=1 — applies to build/run/test)
+                        also SPIN_DEBUG=1; applies to build/run/test)
   run [target] [-- a]  build, then run one executable
   test [file..]        build and run test/*.rb against expectations
   trust <name>         always allow <name>'s declared native build steps
@@ -905,7 +905,7 @@ def compile_cmd(prj, entry, out, extra)
   cmd += " #{extra}" if extra != ""
   # `spin build --debug` / `-g` (or SPIN_DEBUG=1) forwards the compiler's
   # debug build (#line + -g -O0) so the emitted binary is steppable in
-  # lldb/gdb — otherwise there is no way to get a debuggable build through
+  # lldb/gdb; without it there is no way to get a debuggable build through
   # spin (it always compiles release).
   cmd += " --debug" if ENV["SPIN_DEBUG"].to_s != ""
   cmd += " -o #{out}"
@@ -939,12 +939,22 @@ def cmd_build(prj, targets, extra)
   targets.each do |t|
     spin_die("no such executable: bin/#{t}.rb") unless bins.include?(t)
     out = File.join(bindir, t)
-    if File.exist?(out) && File.mtime(out).to_i > need && extra == ""
+    # The freshness check has to know which KIND of binary is sitting there.
+    # `--debug` rides an env var rather than `extra`, so without this a debug
+    # build right after a release one reports "up to date" and hands back the
+    # release binary -- silently, which is the one outcome a debug flag must
+    # never produce. A stamp beside the binary records the mode and a mismatch
+    # forces a rebuild in either direction.
+    mode = ENV["SPIN_DEBUG"].to_s != "" ? "debug" : "release"
+    stamp = File.join(bindir, ".#{t}.mode")
+    had = File.exist?(stamp) ? File.read(stamp).strip : "release"
+    if File.exist?(out) && File.mtime(out).to_i > need && extra == "" && had == mode
       puts "build #{t} (up to date)"
       next
     end
     puts "build #{t}"
     compile(prj, File.join(prj.root, "bin/#{t}.rb"), out, extra)
+    File.write(stamp, mode)
   end
 end
 
@@ -1567,9 +1577,15 @@ when "build", "run", "test", "clean"
     ENV["SPIN_ALLOW_NATIVE_BUILD"] = "1"
     rest = rest.reject { |a| a == "--allow-native-build" }
   end
-  if rest.include?("--debug") || rest.include?("-g")
+  # Only args BEFORE a `--` are spin's; everything after belongs to the target
+  # program. `-g` is a plausible flag for a program to want, and `spin run app
+  # -- -g` must pass it through rather than turn into a debug build.
+  dd = rest.index("--")
+  spin_args = dd ? rest[0, dd] : rest
+  if spin_args.include?("--debug") || spin_args.include?("-g")
     ENV["SPIN_DEBUG"] = "1"
-    rest = rest.reject { |a| a == "--debug" || a == "-g" }
+    tail = dd ? rest[dd..] : []
+    rest = spin_args.reject { |a| a == "--debug" || a == "-g" } + tail
   end
   prj = Project.new(root)
   case cmd
