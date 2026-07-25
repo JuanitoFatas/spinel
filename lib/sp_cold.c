@@ -32,7 +32,7 @@
 #include "sp_string.h"
 #include "sp_system.h" /* sp_last_status for backtick */
 #include "sp_format.h" /* sp_float_to_rational for sp_float_denominator/numerator */
-#include <poll.h>      /* IO.select and the IO#wait_* readiness family */
+#include <sys/select.h>  /* IO.select and the IO#wait_* readiness family */
 
 /* execinfo.h (backtrace_symbols) is a glibc/Apple extension; not all libc
    implementations ship it. Detect availability by the toolchain macros so we
@@ -2635,25 +2635,34 @@ sp_File *sp_io_for_fd(mrb_int fd, const char *mode, mrb_bool autoclose) {
   return f;
 }
 
-/* The readiness family. `kind` is 0 read / 1 write / 2 priority / 3 both, kept
-   numeric so the generated TU does not have to pull in poll.h for the poll(2)
-   flags. A negative timeout blocks. Each answers the handle itself when ready
-   and nil on timeout, like CRuby. */
+/* The readiness family and IO.select both run on select(2), which is what
+   CRuby's IO.select is: its exceptfds set is the only portable spelling of
+   "priority". poll(2)'s POLLPRI is not -- macOS raises it for ordinary readable
+   data on a pipe, so a pipe carrying "x" reported itself priority-readable.
+   `kind` is 0 read / 1 write / 2 priority / 3 read|write, kept numeric so the
+   generated TU does not have to pull in the flag headers. A negative timeout
+   blocks. Each answers the handle itself when ready and nil on timeout. */
+static void sp_io_sel_timeout(double timeout, struct timeval *tv, struct timeval **tvp) {
+  if (timeout < 0) { *tvp = NULL; return; }
+  tv->tv_sec = (time_t)timeout;
+  tv->tv_usec = (suseconds_t)((timeout - (double)tv->tv_sec) * 1000000.0);
+  *tvp = tv;
+}
 sp_File *sp_io_wait_events(sp_File *f, double timeout, mrb_int kind) {
   if (!f || !f->fp) sp_raise_cls("IOError", "closed stream");
-  struct pollfd pfd;
-  pfd.fd = fileno(f->fp);
-  pfd.events = kind == 1 ? POLLOUT : kind == 2 ? POLLPRI
-             : kind == 3 ? (short)(POLLIN | POLLOUT) : POLLIN;
-  pfd.revents = 0;
-  int ms = timeout < 0 ? -1 : (int)(timeout * 1000.0);
+  int fd = fileno(f->fp);
+  if (fd < 0 || fd >= FD_SETSIZE) sp_raise_cls("IOError", "file descriptor out of range");
+  fd_set rs, ws, es;
+  FD_ZERO(&rs); FD_ZERO(&ws); FD_ZERO(&es);
+  if (kind == 0 || kind == 3) FD_SET(fd, &rs);
+  if (kind == 1 || kind == 3) FD_SET(fd, &ws);
+  if (kind == 2) FD_SET(fd, &es);
+  struct timeval tv, *tvp;
+  sp_io_sel_timeout(timeout, &tv, &tvp);
   int n;
-  do { n = poll(&pfd, 1, ms); } while (n < 0 && errno == EINTR);
-  if (n < 0) sp_raise_cls("IOError", "poll failed");
-  /* Only the REQUESTED bits mean ready. POLLERR / POLLHUP / POLLNVAL are
-     output-only and poll sets them whatever was asked for, so `n > 0` alone
-     reported a pipe as priority-readable on macOS. */
-  return (n > 0 && (pfd.revents & pfd.events)) ? f : NULL;
+  do { n = select(fd + 1, &rs, &ws, &es, tvp); } while (n < 0 && errno == EINTR);
+  if (n < 0) sp_raise_cls("IOError", "select failed");
+  return n > 0 ? f : NULL;
 }
 
 /* IO.select(read, write, error, timeout) -> [ready_read, ready_write,
@@ -2665,43 +2674,38 @@ static sp_File *sp_select_io_of(sp_RbVal v) {
   return NULL;
 }
 sp_RbVal sp_io_select(sp_PolyArray *rd, sp_PolyArray *wr, sp_PolyArray *er, double timeout) {
-  mrb_int nr = rd ? rd->len : 0, nw = wr ? wr->len : 0, ne = er ? er->len : 0;
-  mrb_int total = nr + nw + ne;
-  struct pollfd stackfds[16];
-  struct pollfd *fds = total <= 16 ? stackfds : (struct pollfd *)malloc(sizeof(struct pollfd) * (size_t)(total > 0 ? total : 1));
-  if (!fds) sp_raise_cls("NoMemoryError", "IO.select");
-  mrb_int k = 0;
-  for (mrb_int i = 0; i < nr; i++, k++) {
-    sp_File *f = sp_select_io_of(rd->data[i]);
-    fds[k].fd = f && f->fp ? fileno(f->fp) : -1; fds[k].events = POLLIN; fds[k].revents = 0;
+  sp_PolyArray *src[3] = { rd, wr, er };
+  fd_set sets[3];
+  int maxfd = -1;
+  for (int g = 0; g < 3; g++) {
+    FD_ZERO(&sets[g]);
+    mrb_int n = src[g] ? src[g]->len : 0;
+    for (mrb_int i = 0; i < n; i++) {
+      sp_File *f = sp_select_io_of(src[g]->data[i]);
+      int fd = (f && f->fp) ? fileno(f->fp) : -1;
+      if (fd < 0 || fd >= FD_SETSIZE) sp_raise_cls("IOError", "file descriptor out of range");
+      FD_SET(fd, &sets[g]);
+      if (fd > maxfd) maxfd = fd;
+    }
   }
-  for (mrb_int i = 0; i < nw; i++, k++) {
-    sp_File *f = sp_select_io_of(wr->data[i]);
-    fds[k].fd = f && f->fp ? fileno(f->fp) : -1; fds[k].events = POLLOUT; fds[k].revents = 0;
-  }
-  for (mrb_int i = 0; i < ne; i++, k++) {
-    sp_File *f = sp_select_io_of(er->data[i]);
-    fds[k].fd = f && f->fp ? fileno(f->fp) : -1; fds[k].events = POLLPRI; fds[k].revents = 0;
-  }
-  int ms = timeout < 0 ? -1 : (int)(timeout * 1000.0);
+  struct timeval tv, *tvp;
+  sp_io_sel_timeout(timeout, &tv, &tvp);
   int n;
-  do { n = poll(fds, (nfds_t)total, ms); } while (n < 0 && errno == EINTR);
-  if (n < 0) { if (fds != stackfds) free(fds); sp_raise_cls("IOError", "select failed"); }
-  if (n == 0) { if (fds != stackfds) free(fds); return sp_box_nil(); }
+  do { n = select(maxfd + 1, &sets[0], &sets[1], &sets[2], tvp); } while (n < 0 && errno == EINTR);
+  if (n < 0) sp_raise_cls("IOError", "select failed");
+  if (n == 0) return sp_box_nil();
   sp_PolyArray *out = sp_PolyArray_new();
   SP_GC_ROOT(out);
-  sp_PolyArray *src[3] = { rd, wr, er };
-  mrb_int cnt[3] = { nr, nw, ne };
-  mrb_int base = 0;
   for (int g = 0; g < 3; g++) {
     sp_PolyArray *part = sp_PolyArray_new();
-    for (mrb_int i = 0; i < cnt[g]; i++)
-      if (fds[base + i].revents & fds[base + i].events)
+    mrb_int cnt = src[g] ? src[g]->len : 0;
+    for (mrb_int i = 0; i < cnt; i++) {
+      sp_File *f = sp_select_io_of(src[g]->data[i]);
+      if (f && f->fp && FD_ISSET(fileno(f->fp), &sets[g]))
         sp_PolyArray_push(part, src[g]->data[i]);
-    base += cnt[g];
+    }
     sp_PolyArray_push(out, sp_box_poly_array(part));
   }
-  if (fds != stackfds) free(fds);
   return sp_box_poly_array(out);
 }
 
