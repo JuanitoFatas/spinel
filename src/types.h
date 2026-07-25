@@ -70,6 +70,8 @@ typedef enum {
   TY_CONDVAR,      /* a ConditionVariable (sp_condvar *) */
   TY_RANDOM,       /* a per-instance PRNG (sp_Random *) */
   TY_DIR,          /* an open directory handle (sp_Dir *) */
+  TY_ADDRINFO,     /* one resolved endpoint (sp_Addrinfo *) */
+  TY_SOCKOPT,      /* Socket::Option (sp_SockOpt *) */
   TY_TMS,          /* Process.times -> Process::Tms (sp_Tms, four Floats) */
   TY_OPENSTRUCT,   /* OpenStruct: dynamic symbol->value members (#3135) */
   TY_METHOD,       /* a bound Method object (sp_BoundMethod *) */

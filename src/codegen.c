@@ -21,6 +21,8 @@ const char *ty_nullable_builtin_id(TyKind t) {
     case TY_PROC:       return "SP_BUILTIN_PROC";
     case TY_METHOD:     return "SP_BUILTIN_METHOD";
     case TY_DIR:        return "SP_BUILTIN_DIR";
+    case TY_ADDRINFO:   return "SP_BUILTIN_ADDRINFO";
+    case TY_SOCKOPT:    return "SP_BUILTIN_SOCKOPT";
     case TY_OPENSTRUCT: return "SP_BUILTIN_OPENSTRUCT";
     /* TY_TMS is an unboxed VALUE type: it boxes by heap copy (sp_box_tms),
        never as a nullable pointer (#3132) */
@@ -1455,7 +1457,7 @@ int fiber_cap_needs_root(TyKind t) {
          t == TY_EXCEPTION ||
          /* every other heap-backed handle: an unmarked capture is a GC UAF
             (a TCPServer captured into a Thread block was collected, #2922) */
-         t == TY_IO || t == TY_DIR || t == TY_ENUMERATOR || t == TY_METHOD || t == TY_OPENSTRUCT ||
+         t == TY_IO || t == TY_DIR || t == TY_ADDRINFO || t == TY_SOCKOPT || t == TY_ENUMERATOR || t == TY_METHOD || t == TY_OPENSTRUCT ||
          t == TY_RANDOM || t == TY_CURRY || t == TY_STRBUF ||
          t == TY_MATCHDATA || t == TY_REGEX || t == TY_TIME;
 }
@@ -4687,6 +4689,8 @@ static void ty_to_rbs_into(Compiler *c, TyKind t, Buf *b) {
     case TY_CONDVAR:               buf_puts(b, "Thread::ConditionVariable"); break;
     case TY_RANDOM:                buf_puts(b, "Random"); break;
     case TY_DIR:                   buf_puts(b, "Dir"); break;
+    case TY_ADDRINFO:              buf_puts(b, "Addrinfo"); break;
+    case TY_SOCKOPT:               buf_puts(b, "Socket::Option"); break;
     case TY_TMS:                   buf_puts(b, "Process::Tms"); break;
     case TY_METHOD:                buf_puts(b, "Method"); break;
     case TY_IO:                    buf_puts(b, "IO"); break;

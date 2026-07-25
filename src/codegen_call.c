@@ -10326,6 +10326,52 @@ void emit_call(Compiler *c, int id, Buf *b) {
     }
   }
 
+  /* Socket::Option readers. Spinel carries the integer-valued options only,
+     so #data / #unpack answer through the same int the option holds. */
+  if (recv >= 0 && comp_ntype(c, recv) == TY_SOCKOPT && argc <= 1) {
+    Buf ob; memset(&ob, 0, sizeof ob); emit_expr(c, recv, &ob);
+    const char *orr = ob.p ? ob.p : "NULL";
+    if (argc == 0 && sp_streq(name, "int"))     { buf_printf(b, "(%s)->value", orr); free(ob.p); return; }
+    if (argc == 0 && sp_streq(name, "bool"))    { buf_printf(b, "((%s)->value != 0)", orr); free(ob.p); return; }
+    if (argc == 0 && sp_streq(name, "level"))   { buf_printf(b, "(%s)->level", orr); free(ob.p); return; }
+    if (argc == 0 && sp_streq(name, "optname")) { buf_printf(b, "(%s)->optname", orr); free(ob.p); return; }
+    if (argc == 0 && sp_streq(name, "family"))  { buf_printf(b, "(%s)->family", orr); free(ob.p); return; }
+    if (argc == 0 && (sp_streq(name, "inspect") || sp_streq(name, "to_s"))) {
+      buf_printf(b, "sp_sockopt_inspect(%s)", orr); free(ob.p); return;
+    }
+    free(ob.p);
+  }
+  /* Addrinfo readers: the value is immutable, so each is a field read. */
+  if (recv >= 0 && comp_ntype(c, recv) == TY_ADDRINFO && argc == 0) {
+    Buf ab; memset(&ab, 0, sizeof ab); emit_expr(c, recv, &ab);
+    const char *ar = ab.p ? ab.p : "NULL";
+    if (sp_streq(name, "ip_address") || sp_streq(name, "unix_path")) {
+      buf_printf(b, "(%s)->ip", ar); free(ab.p); return;
+    }
+    if (sp_streq(name, "afamily") || sp_streq(name, "pfamily")) {
+      buf_printf(b, "(%s)->afamily", ar); free(ab.p); return;
+    }
+    if (sp_streq(name, "afamily_name")) { buf_printf(b, "(%s)->afname", ar); free(ab.p); return; }
+    if (sp_streq(name, "ip_port")) { buf_printf(b, "(%s)->port", ar); free(ab.p); return; }
+    if (sp_streq(name, "socktype")) { buf_printf(b, "(%s)->socktype", ar); free(ab.p); return; }
+    if (sp_streq(name, "protocol")) { buf_printf(b, "(%s)->protocol", ar); free(ab.p); return; }
+    if (sp_streq(name, "ipv4?")) {
+      buf_printf(b, "(sp_str_eq((%s)->afname, \"AF_INET\"))", ar); free(ab.p); return;
+    }
+    if (sp_streq(name, "ipv6?")) {
+      buf_printf(b, "(sp_str_eq((%s)->afname, \"AF_INET6\"))", ar); free(ab.p); return;
+    }
+    if (sp_streq(name, "unix?")) {
+      buf_printf(b, "(sp_str_eq((%s)->afname, \"AF_UNIX\"))", ar); free(ab.p); return;
+    }
+    if (sp_streq(name, "ip?")) {
+      buf_printf(b, "(!sp_str_eq((%s)->afname, \"AF_UNIX\"))", ar); free(ab.p); return;
+    }
+    if (sp_streq(name, "inspect") || sp_streq(name, "to_s")) {
+      buf_printf(b, "sp_addrinfo_inspect(%s)", ar); free(ab.p); return;
+    }
+    free(ab.p);
+  }
   /* TY_IO (File/IO handle) instance methods */
   /* Dir handle instance methods (#2821) */
   if (recv >= 0 && comp_ntype(c, recv) == TY_DIR) {
@@ -10481,6 +10527,11 @@ void emit_call(Compiler *c, int id, Buf *b) {
     if (sp_feature_required("socket") && argc == 0 &&
         (sp_streq(name, "addr") || sp_streq(name, "peeraddr"))) {
       buf_printf(b, "sp_sock_addr(%s, %d)", r, sp_streq(name, "peeraddr") ? 1 : 0);
+      free(rb.p); return;
+    }
+    if (sp_feature_required("socket") && argc == 0 &&
+        (sp_streq(name, "local_address") || sp_streq(name, "remote_address"))) {
+      buf_printf(b, "sp_sock_address(%s, %d)", r, sp_streq(name, "remote_address") ? 1 : 0);
       free(rb.p); return;
     }
     if (sp_feature_required("socket")) {
@@ -12530,6 +12581,8 @@ else { memcpy(dir, sf, n); dir[n] = 0; } }
       return;
     }
     else if (rt == TY_DIR) cn = "Dir";
+    else if (rt == TY_ADDRINFO) cn = "Addrinfo";
+    else if (rt == TY_SOCKOPT) cn = "Socket::Option";
     else if (rt == TY_OPENSTRUCT) cn = "OpenStruct";
     else if (rt == TY_TMS) cn = "Process::Tms";
     else if (rt == TY_THREAD) cn = "Thread";
@@ -14068,6 +14121,25 @@ else { memcpy(dir, sf, n); dir[n] = 0; } }
       }
       if (sp_streq(name, "to_tty?") && argc == 0) {
         buf_puts(b, "(isatty(2) != 0)"); return;
+      }
+    }
+    /* Addrinfo.tcp(host, port) / .udp(host, port) / .ip(host) / .unix(path) */
+    if (tcn && sp_streq(tcn, "Addrinfo") && sp_feature_required("socket")) {
+      int is_unix = sp_streq(name, "unix");
+      if ((sp_streq(name, "tcp") || sp_streq(name, "udp")) && argc == 2) {
+        buf_puts(b, "sp_addrinfo_new("); emit_str_expr(c, argv[0], b); buf_puts(b, ", ");
+        emit_int_expr(c, argv[1], b);
+        buf_printf(b, ", sp_sock_const(\"%s\"), 0)", sp_streq(name, "udp") ? "SOCK_DGRAM" : "SOCK_STREAM");
+        return;
+      }
+      if (sp_streq(name, "ip") && argc == 1) {
+        buf_puts(b, "sp_addrinfo_new("); emit_str_expr(c, argv[0], b); buf_puts(b, ", 0, 0, 0)");
+        return;
+      }
+      if (is_unix && argc == 1) {
+        buf_puts(b, "sp_addrinfo_new("); emit_str_expr(c, argv[0], b);
+        buf_puts(b, ", 0, sp_sock_const(\"SOCK_STREAM\"), 1)");
+        return;
       }
     }
     /* Socket class methods (#2922) */

@@ -33,6 +33,7 @@
 #include "sp_system.h" /* sp_last_status for backtick */
 #include "sp_format.h" /* sp_float_to_rational for sp_float_denominator/numerator */
 #include <sys/select.h>  /* IO.select and the IO#wait_* readiness family */
+#include <sys/socket.h> /* SOCK_STREAM / SOCK_DGRAM for Addrinfo */
 
 /* execinfo.h (backtrace_symbols) is a glibc/Apple extension; not all libc
    implementations ship it. Detect availability by the toolchain macros so we
@@ -1191,6 +1192,10 @@ mrb_bool sp_file_readable_real(const char *path);
 mrb_bool sp_file_writable_real(const char *path);
 mrb_bool sp_file_executable_real(const char *path);
 const char *sp_file_realdirpath(const char *path);
+sp_Addrinfo *sp_addrinfo_new(const char *ip, mrb_int port, mrb_int stype, mrb_int is_unix);
+const char *sp_addrinfo_inspect(sp_Addrinfo *a);
+sp_SockOpt *sp_sockopt_new(mrb_int family, mrb_int level, mrb_int optname, mrb_int value);
+const char *sp_sockopt_inspect(sp_SockOpt *o);
 sp_File *sp_io_for_fd(mrb_int fd, const char *mode, mrb_bool autoclose);
 sp_File *sp_io_wait_events(sp_File *f, double timeout, mrb_int kind);
 sp_RbVal sp_io_select(sp_PolyArray *rd, sp_PolyArray *wr, sp_PolyArray *er, double timeout);
@@ -2765,6 +2770,47 @@ sp_RbVal sp_box_brat(sp_Bigint *num, sp_Bigint *den) {
 }
 /* Lift a bignum (or an int) to a big Rational num/1. */
 sp_RbVal sp_brat_from_bigint(sp_Bigint *n) { return sp_box_brat(n, sp_bigint_new_int(1)); }
+void sp_addrinfo_scan(void *p) {
+  sp_Addrinfo *a = (sp_Addrinfo *)p;
+  if (a->ip) sp_mark_string((void *)a->ip);
+  if (a->afname) sp_mark_string((void *)a->afname);
+}
+sp_RbVal sp_box_addrinfo(sp_Addrinfo *v) { return sp_box_obj(v, SP_BUILTIN_ADDRINFO); }
+sp_RbVal sp_box_sockopt(sp_SockOpt *v) { return sp_box_obj(v, SP_BUILTIN_SOCKOPT); }
+sp_SockOpt *sp_sockopt_new(mrb_int family, mrb_int level, mrb_int optname, mrb_int value) {
+  sp_SockOpt *o = (sp_SockOpt *)sp_gc_alloc(sizeof(sp_SockOpt), NULL, NULL);
+  o->family = family; o->level = level; o->optname = optname; o->value = value;
+  return o;
+}
+const char *sp_sockopt_inspect(sp_SockOpt *o) {
+  if (!o) return sp_sprintf("nil");
+  return sp_sprintf("#<Socket::Option: INET %lld %lld %lld>",
+                    (long long)o->level, (long long)o->optname, (long long)o->value);
+}
+/* Addrinfo.tcp / .udp / .ip / .unix, and the endpoint behind #local_address /
+   #remote_address. `stype` is SOCK_STREAM / SOCK_DGRAM, 0 for a bare address. */
+sp_Addrinfo *sp_addrinfo_new(const char *ip, mrb_int port, mrb_int stype, mrb_int is_unix) {
+  sp_Addrinfo *a = (sp_Addrinfo *)sp_gc_alloc(sizeof(sp_Addrinfo), NULL, sp_addrinfo_scan);
+  a->ip = NULL; a->afname = NULL;
+  SP_GC_ROOT(a);
+  a->ip = sp_sprintf("%s", ip ? ip : "");
+  int v6 = !is_unix && ip && strchr(ip, ':') != NULL;
+  a->afname = sp_sprintf("%s", is_unix ? "AF_UNIX" : v6 ? "AF_INET6" : "AF_INET");
+  a->afamily = is_unix ? AF_UNIX : v6 ? AF_INET6 : AF_INET;
+  a->port = port;
+  a->socktype = stype;
+  a->protocol = 0;
+  return a;
+}
+const char *sp_addrinfo_inspect(sp_Addrinfo *a) {
+  if (!a) return sp_sprintf("nil");
+  if (strcmp(a->afname, "AF_UNIX") == 0) return sp_sprintf("#<Addrinfo: %s SOCK_STREAM>", a->ip);
+  const char *st = a->socktype == SOCK_DGRAM ? " UDP"
+                 : a->socktype == SOCK_STREAM ? " TCP" : "";
+  if (strcmp(a->afname, "AF_INET6") == 0)
+    return sp_sprintf("#<Addrinfo: [%s]:%lld%s>", a->ip, (long long)a->port, st);
+  return sp_sprintf("#<Addrinfo: %s:%lld%s>", a->ip, (long long)a->port, st);
+}
 const char *sp_brat_to_s(sp_BigRational *r) {
   const char *ns = sp_bigint_to_s(r->num), *ds = sp_bigint_to_s(r->den);
   return sp_str_concat(sp_str_concat(ns, "/"), ds);

@@ -2454,6 +2454,12 @@ else {
       }
     }
     if (rty && sp_streq(rty, "ConstantReadNode") && nt_str(nt, recv, "name") &&
+        sp_streq(nt_str(nt, recv, "name"), "Addrinfo") && sp_feature_required("socket")) {
+      if (((sp_streq(name, "tcp") || sp_streq(name, "udp")) && argc == 2) ||
+          ((sp_streq(name, "ip") || sp_streq(name, "unix")) && argc == 1))
+        return TY_ADDRINFO;
+    }
+    if (rty && sp_streq(rty, "ConstantReadNode") && nt_str(nt, recv, "name") &&
         sp_streq(nt_str(nt, recv, "name"), "Socket") && sp_feature_required("socket")) {
       if (sp_streq(name, "gethostname") && argc == 0) return TY_STRING;
       if ((sp_streq(name, "pair") || sp_streq(name, "socketpair")) && argc >= 2) return TY_POLY_ARRAY;
@@ -2745,6 +2751,24 @@ else {
   }
 
   /* TY_IO (File/IO handle) instance methods */
+  if (recv >= 0 && rt == TY_SOCKOPT && argc == 0) {
+    if (sp_streq(name, "int") || sp_streq(name, "level") ||
+        sp_streq(name, "optname") || sp_streq(name, "family")) return TY_INT;
+    if (sp_streq(name, "bool")) return TY_BOOL;
+    if (sp_streq(name, "inspect") || sp_streq(name, "to_s")) return TY_STRING;
+    if (sp_streq(name, "class")) return TY_CLASS;
+  }
+  if (recv >= 0 && rt == TY_ADDRINFO && argc == 0) {
+    if (sp_streq(name, "ip_address") || sp_streq(name, "unix_path") ||
+        sp_streq(name, "afamily_name") ||
+        sp_streq(name, "inspect") || sp_streq(name, "to_s")) return TY_STRING;
+    if (sp_streq(name, "ip_port") || sp_streq(name, "socktype") ||
+        sp_streq(name, "protocol") ||
+        sp_streq(name, "afamily") || sp_streq(name, "pfamily")) return TY_INT;
+    if (sp_streq(name, "class")) return TY_CLASS;
+    if (sp_streq(name, "ipv4?") || sp_streq(name, "ipv6?") ||
+        sp_streq(name, "unix?") || sp_streq(name, "ip?")) return TY_BOOL;
+  }
   if (recv >= 0 && rt == TY_IO) {
     if (sp_streq(name, "read") || sp_streq(name, "gets") || sp_streq(name, "readline") ||
         sp_streq(name, "path") || sp_streq(name, "to_path")) return TY_STRING;
@@ -2785,15 +2809,17 @@ else {
       if (sp_streq(name, "accept") && argc == 0) return TY_IO;
       if ((sp_streq(name, "addr") || sp_streq(name, "peeraddr")) && argc == 0)
         return TY_POLY_ARRAY;
+      if ((sp_streq(name, "local_address") || sp_streq(name, "remote_address")) && argc == 0)
+        return TY_ADDRINFO;
       if (sp_streq(name, "recv") && argc == 1) return TY_STRING;
       if (sp_streq(name, "recvfrom") && argc == 1) return TY_POLY_ARRAY;
       if (((sp_streq(name, "bind") || sp_streq(name, "connect")) && argc == 2) ||
           (sp_streq(name, "send") && (argc == 2 || argc == 4)) ||
           (sp_streq(name, "shutdown") && argc <= 1) ||
           (sp_streq(name, "listen") && argc == 1) ||
-          (sp_streq(name, "setsockopt") && argc == 3) ||
-          (sp_streq(name, "getsockopt") && argc == 2))
+          (sp_streq(name, "setsockopt") && argc == 3))
         return TY_INT;
+      if (sp_streq(name, "getsockopt") && argc == 2) return TY_SOCKOPT;
     }
     /* fd-backed IO instance methods (#3038) */
     if (sp_streq(name, "readbyte") || sp_streq(name, "fcntl") ||

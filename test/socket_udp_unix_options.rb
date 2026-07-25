@@ -48,6 +48,6 @@ p Socket::AF_INET
 p Socket::SOCK_DGRAM
 srv2 = TCPServer.new("127.0.0.1", 0)
 p srv2.setsockopt(Socket::SOL_SOCKET, Socket::SO_KEEPALIVE, 1)
-p srv2.getsockopt(Socket::SOL_SOCKET, Socket::SO_KEEPALIVE) != 0
+p srv2.getsockopt(Socket::SOL_SOCKET, Socket::SO_KEEPALIVE).int != 0
 srv2.close
 r = (Socket::BOGUS_XYZ rescue $!.class); p r

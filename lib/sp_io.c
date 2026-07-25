@@ -360,6 +360,31 @@ sp_PolyArray *sp_sock_getaddrinfo(const char *host, mrb_int port) {
   return out;
 }
 
+/* #local_address / #remote_address -> Addrinfo for this end / the peer. */
+sp_Addrinfo *sp_sock_address(sp_File *f, mrb_int peer) {
+  extern sp_Addrinfo *sp_addrinfo_new(const char *ip, mrb_int port, mrb_int stype, mrb_int is_unix);
+  extern int sp_net_sock_ip(int fd, int peer, char *ipbuf, int cap);
+  extern int sp_net_unix_path(int fd, int peer, char *buf, int cap);
+  if (!f || !f->is_sock)
+    sp_raise_cls("NoMethodError",
+                 sp_sprintf("undefined method '%s' for an instance of %s",
+                            peer ? "remote_address" : "local_address", sp_io_kind_name(f)));
+  if (!f->fp) sp_raise_cls("IOError", "closed stream");
+  int fd = fileno(f->fp);
+  const char *k = sp_io_kind_name(f);
+  int is_unix = (strcmp(k, "UNIXSocket") == 0 || strcmp(k, "UNIXServer") == 0);
+  char buf[256];
+  buf[0] = '\0';
+  if (is_unix) {
+    sp_net_unix_path(fd, (int)peer, buf, (int)sizeof buf);
+    return sp_addrinfo_new(buf, 0, SOCK_STREAM, 1);
+  }
+  int port = sp_net_sock_ip(fd, (int)peer, buf, (int)sizeof buf);
+  if (port < 0) { buf[0] = '\0'; port = 0; }
+  int stype = (strcmp(k, "UDPSocket") == 0) ? SOCK_DGRAM : SOCK_STREAM;
+  return sp_addrinfo_new(buf, (mrb_int)port, stype, 0);
+}
+
 /* Only a socket answers the socket-specific methods; say which class the
    receiver actually is when it does not. */
 static void sp_sock_require(sp_File *f, const char *m) {
@@ -433,10 +458,13 @@ mrb_int sp_sock_setsockopt(sp_File *f, mrb_int level, mrb_int opt, mrb_int value
     sp_file_raise_errno("setsockopt", "");
   return 0;
 }
-mrb_int sp_sock_getsockopt(sp_File *f, mrb_int level, mrb_int opt) {
+sp_SockOpt *sp_sock_getsockopt(sp_File *f, mrb_int level, mrb_int opt) {
   extern int sp_net_getsockopt_int(int fd, int level, int optname);
+  extern sp_SockOpt *sp_sockopt_new(mrb_int family, mrb_int level, mrb_int optname, mrb_int value);
+  extern int sp_net_fd_family(int fd);
   sp_sock_require(f, "getsockopt");
-  return (mrb_int)sp_net_getsockopt_int(fileno(f->fp), (int)level, (int)opt);
+  int v = sp_net_getsockopt_int(fileno(f->fp), (int)level, (int)opt);
+  return sp_sockopt_new((mrb_int)sp_net_fd_family(fileno(f->fp)), level, opt, (mrb_int)v);
 }
 mrb_int sp_sock_listen(sp_File *f, mrb_int backlog) {
   sp_sock_require(f, "listen");

@@ -316,6 +316,8 @@ const char *sp_float_to_s(mrb_float f);
                                            buffer, identity is the handle */
 #define SP_BUILTIN_DIR           (-38)  /* an open directory handle (sp_Dir *) */
 #define SP_BUILTIN_TMS           (-39)  /* Process.times -> Process::Tms */
+#define SP_BUILTIN_ADDRINFO      (-40)  /* Addrinfo (sp_Addrinfo *) */
+#define SP_BUILTIN_SOCKOPT       (-41)  /* Socket::Option (sp_SockOpt *) */
 
 static inline sp_RbVal sp_box_int(mrb_int v)    { sp_RbVal r; r.tag = SP_TAG_INT;  r.cls_id = 0; r.v.i = v; return r; }
 /* A NULL char* IS Ruby nil throughout the string paths (the nullable-string
@@ -507,6 +509,18 @@ mrb_int sp_float_to_i_checked(mrb_float f);
 typedef struct sp_Bigint sp_Bigint;               /* full def: sp_runtime.h bigint block */
 typedef struct sp_OpenStruct_s sp_OpenStruct;      /* full def: sp_runtime.h (SymPolyHash-backed) */
 typedef struct { mrb_float utime, stime, cutime, cstime; } sp_Tms;
+/* Addrinfo: one resolved endpoint. Immutable; the strings are GC-managed. */
+typedef struct {
+  const char *ip;        /* numeric address, or the path for AF_UNIX */
+  const char *afname;    /* "AF_INET" / "AF_INET6" / "AF_UNIX", for #inspect */
+  mrb_int afamily;       /* the AF_* value, which is what #afamily answers */
+  mrb_int port;
+  mrb_int socktype;      /* SOCK_STREAM / SOCK_DGRAM */
+  mrb_int protocol;
+} sp_Addrinfo;
+/* Socket::Option: what #getsockopt answers. Spinel carries the integer-valued
+   options only, so the payload is the int itself rather than a byte string. */
+typedef struct { mrb_int family, level, optname, value; } sp_SockOpt;
 
 /* ---- Box/Encoding helpers relocated from sp_runtime.h: hot-ish ones
    (sp_box_class 7x / sp_box_nullable_obj 64x / sp_box_int_array 24x /
@@ -561,6 +575,9 @@ sp_RbVal sp_box_complex(sp_Complex v);
 sp_RbVal sp_box_rational(sp_Rational v);
 sp_RbVal sp_box_time(sp_Time v);
 sp_RbVal sp_box_tms(sp_Tms v);
+sp_RbVal sp_box_addrinfo(sp_Addrinfo *v);
+sp_RbVal sp_box_sockopt(sp_SockOpt *v);
+void sp_addrinfo_scan(void *p);
 sp_RbVal sp_box_openstruct(sp_OpenStruct *o);
 
 /* ---- class-frozen bitmap (Class#freeze / #frozen?): state stays
