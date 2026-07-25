@@ -660,6 +660,22 @@ int reduce_tail_from_acc(Compiler *c, int tail, const char *accp) {
   return 0;
 }
 
+/* Zero-argument builtin methods the poly dispatch already serves with a real
+   arm. `require "ostruct"` turns any other bare name on a poly receiver into
+   a possible OpenStruct member read (#3197); these must NOT be swallowed by
+   that catch-all, or the member lookup replaces the builtin and returns nil
+   (#3341: `switches.uniq` became an OpenStruct member fetch). */
+int poly_builtin_zero_arg_name(const char *m) {
+  static const char *const B[] = {
+    "to_s", "inspect", "length", "size", "count",
+    "uniq", "sort", "reverse", "flatten", "compact", "to_a", "to_h", "to_i",
+    "to_f", "to_sym", "keys", "values", "first", "last", "min", "max", "sum",
+    "pop", "shift", "clear", "dup", "clone", "freeze", "chars", "bytes",
+    "strip", "chomp", "chop", "upcase", "downcase", "capitalize", "swapcase",
+    "succ", "next", "abs", "round", "floor", "ceil", "arity", "call", NULL };
+  for (int i = 0; B[i]; i++) if (sp_streq(m, B[i])) return 1;
+  return 0;
+}
 TyKind infer_call(Compiler *c, int id) {
 
   /* the redirect recorded that this call yields its original receiver (#2981) */
@@ -1011,8 +1027,7 @@ TyKind infer_call(Compiler *c, int id) {
   if (recv >= 0 && rt == TY_POLY && argc == 0 && nt_ref(nt, id, "block") < 0 &&
       !an_user_defines_method(c, name) && sp_feature_required("ostruct") &&
       name[0] && name[strlen(name) - 1] != '?' && name[strlen(name) - 1] != '!' &&
-      !sp_streq(name, "to_s") && !sp_streq(name, "inspect") &&
-      !sp_streq(name, "length") && !sp_streq(name, "size") && !sp_streq(name, "count"))
+      !poly_builtin_zero_arg_name(name))
     return TY_POLY;
   /* Integer#gcd / #lcm on a poly value (destructured pair): int. */
   if (recv >= 0 && rt == TY_POLY && argc == 1 && nt_ref(nt, id, "block") < 0 &&

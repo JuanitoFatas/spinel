@@ -3475,9 +3475,12 @@ static int emit_poly_method_dispatch(Compiler *c, int id, Buf *b) {
        user-class arm and coexists with them: a poly value that unions an
        OpenStruct with user objects (OpenStruct|nil return) still reads the
        member when a user class happens to define the same name (#3264). */
+    /* An OpenStruct answers ANY reader with a member; but a name the poly
+       dispatch already serves with a real builtin arm must keep that arm, or
+       the member fetch replaces it and returns nil (#3341). */
     int is_ostruct = argc == 0 && nt_ref(nt, id, "block") < 0 &&
                      !is_lengthlike && !is_empty && !is_pred &&
-                     !sp_streq(name, "to_s") && !sp_streq(name, "inspect") &&
+                     !poly_builtin_zero_arg_name(name) &&
                      sp_feature_required("ostruct");
     /* `rewind` on a poly stream (a param unioning StringIO and IO, #3257):
        both are builtins/native classes with no user arm, so without this

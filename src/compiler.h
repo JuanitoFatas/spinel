@@ -468,6 +468,9 @@ int sp_str_mutator(const char *nm, unsigned want);
    write-suppression walk and the pipeline walker must agree on it: #3318,
    #3323 and #3324 were each one list updated and another missed. */
 int lazy_stage_name(const char *nm);
+/* Zero-argument builtin methods the poly dispatch serves with a real arm --
+   the `require "ostruct"` member-read catch-all must not swallow them. */
+int poly_builtin_zero_arg_name(const char *m);
 int chain_is_lazy_valued(Compiler *c, int node);      /* CallNode chain evaluating to a Lazy */
 int lazy_alias_chain(Compiler *c, int var_read);      /* local holding a lazy chain -> chain node, else -1 */
 int        hash_new_default_arg(Compiler *c, int recv); /* Hash.new(d) literal: d node or -1 */
