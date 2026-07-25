@@ -140,11 +140,28 @@ static mrb_int sp_sock_write(sp_File *f, const char *s, size_t n) {
   return (mrb_int)n;
 }
 
-mrb_int sp_File_write(sp_File *f, const char *s) {
-  if (!f || !f->fp || !s) return 0;
-  size_t n = strlen(s);
+/* Shared write core: `n` is the operand byte length (strlen for the
+   bare-literal-safe entry, sp_str_byte_len for the binary one). */
+static mrb_int sp_File_write_len(sp_File *f, const char *s, size_t n) {
   if (f->is_sock) return sp_sock_write(f, s, n);
   return (mrb_int)fwrite(s, 1, n, f->fp);
+}
+
+mrb_int sp_File_write(sp_File *f, const char *s) {
+  if (!f || !f->fp || !s) return 0;
+  return sp_File_write_len(f, s, strlen(s));
+}
+
+/* Binary-safe write: sizes the operand with the header length, so an embedded
+   NUL reaches the descriptor instead of truncating the write (IO#read and
+   File.read already return such bytes; only the write side dropped them).
+   Reads s[-1], so it is for CODEGEN-emitted String values only -- the same
+   value class String#<< / #replace already size this way. Runtime-internal
+   callers and codegen's synthesized "" / "\n" literals are bare C literals
+   with no marker byte and must use the plain entry above. */
+mrb_int sp_File_write_bin(sp_File *f, const char *s) {
+  if (!f || !f->fp || !s) return 0;
+  return sp_File_write_len(f, s, sp_str_byte_len(s));
 }
 
 mrb_bool sp_File_tty_p(sp_File *f) {
@@ -567,10 +584,12 @@ const char *sp_sock_read_nb(sp_File *f, mrb_int len, mrb_bool exc, mrb_bool is_r
   }
   sp_file_raise_errno("read", "");
 }
-/* write_nonblock -> the byte count, or SP_INT_NIL when it would block. */
-mrb_int sp_sock_write_nb(sp_File *f, const char *data, mrb_bool exc) {
-  if (!f || !f->fp) sp_raise_cls("IOError", "closed stream");
-  size_t len = data ? strlen(data) : 0;
+/* write_nonblock -> the byte count, or SP_INT_NIL when it would block.
+   Paired like sp_File_write: the _bin entry sizes with the header length and
+   is emitted only for a String value; this one stays strlen for bare
+   literals (a poly operand reaches it through sp_poly_to_s, which answers
+   static class/symbol names with no marker byte). */
+static mrb_int sp_sock_write_nb_len(sp_File *f, const char *data, size_t len, mrb_bool exc) {
   ssize_t n;
   int saved = sp_io_nb_begin(f);
   do { n = write(fileno(f->fp), data ? data : "", len); } while (n < 0 && errno == EINTR);
@@ -583,6 +602,14 @@ mrb_int sp_sock_write_nb(sp_File *f, const char *data, mrb_bool exc) {
     sp_sock_raise_wait(1, "write");
   }
   sp_file_raise_errno("write", "");
+}
+mrb_int sp_sock_write_nb(sp_File *f, const char *data, mrb_bool exc) {
+  if (!f || !f->fp) sp_raise_cls("IOError", "closed stream");
+  return sp_sock_write_nb_len(f, data, data ? strlen(data) : 0, exc);
+}
+mrb_int sp_sock_write_nb_bin(sp_File *f, const char *data, mrb_bool exc) {
+  if (!f || !f->fp) sp_raise_cls("IOError", "closed stream");
+  return sp_sock_write_nb_len(f, data, data ? sp_str_byte_len(data) : 0, exc);
 }
 /* connect_nonblock: an in-flight connect is IO::EINPROGRESSWaitWritable. */
 mrb_int sp_sock_connect_nb(sp_File *f, const char *host, mrb_int port, mrb_bool exc) {
