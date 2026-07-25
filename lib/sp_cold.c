@@ -1183,8 +1183,13 @@ mrb_int sp_File_flock(sp_File *f, mrb_int op);
 mrb_int sp_File_fsync(sp_File *f);
 sp_RbVal sp_File_putc(sp_File *f, sp_RbVal v);
 const char *sp_file_ftype(const char *path);
+mrb_bool sp_file_readable(const char *path);
 mrb_bool sp_file_writable(const char *path);
 mrb_bool sp_file_executable(const char *path);
+mrb_bool sp_file_readable_real(const char *path);
+mrb_bool sp_file_writable_real(const char *path);
+mrb_bool sp_file_executable_real(const char *path);
+const char *sp_file_realdirpath(const char *path);
 mrb_int sp_file_size_q(const char *path);
 mrb_bool sp_file_pipe(const char *path);
 mrb_bool sp_file_identical(const char *a, const char *b);
@@ -1364,8 +1369,19 @@ const char *sp_file_ftype(const char *path) {
 #endif
   return (&("\xff" "unknown")[1]);
 }
-mrb_bool sp_file_writable(const char *path) { return access(path ? path : "", W_OK) == 0; }
-mrb_bool sp_file_executable(const char *path) { return access(path ? path : "", X_OK) == 0; }
+/* The `_real?` predicates test the real uid/gid, which is exactly what
+   access(2) does; their plain counterparts test the effective ids, which needs
+   AT_EACCESS. Routing both through access() would make File.readable? answer
+   for the wrong identity in a setuid program. */
+static mrb_bool sp_file_access_eff(const char *path, int mode) {
+  return faccessat(AT_FDCWD, path ? path : "", mode, AT_EACCESS) == 0;
+}
+mrb_bool sp_file_readable(const char *path)   { return sp_file_access_eff(path, R_OK); }
+mrb_bool sp_file_writable(const char *path)   { return sp_file_access_eff(path, W_OK); }
+mrb_bool sp_file_executable(const char *path) { return sp_file_access_eff(path, X_OK); }
+mrb_bool sp_file_readable_real(const char *path)   { return access(path ? path : "", R_OK) == 0; }
+mrb_bool sp_file_writable_real(const char *path)   { return access(path ? path : "", W_OK) == 0; }
+mrb_bool sp_file_executable_real(const char *path) { return access(path ? path : "", X_OK) == 0; }
 mrb_int sp_file_size_q(const char *path) {   /* Integer size, or nil for missing/empty */
   struct stat st;
   if (stat(path ? path : "", &st) != 0 || st.st_size == 0) return SP_INT_NIL;
@@ -1386,6 +1402,25 @@ const char *sp_file_realpath(const char *path) {
     sp_raise_cls("Errno::ENOENT",
                  sp_sprintf("No such file or directory @ realpath_rec - %s", path ? path : ""));
   return sp_sprintf("%s", buf);
+}
+/* realdirpath resolves every component but the last, so it answers for a name
+   that does not exist yet -- where realpath raises Errno::ENOENT. */
+const char *sp_file_realdirpath(const char *path) {
+  const char *p = path ? path : "";
+  char buf[4096];
+  if (realpath(p, buf)) return sp_sprintf("%s", buf);
+  const char *slash = strrchr(p, '/');
+  const char *base = slash ? slash + 1 : p;
+  char dir[4096];
+  if (!slash) snprintf(dir, sizeof dir, ".");
+  else if (slash == p) snprintf(dir, sizeof dir, "/");
+  else snprintf(dir, sizeof dir, "%.*s", (int)(slash - p), p);
+  if (!realpath(dir, buf))
+    sp_raise_cls("Errno::ENOENT",
+                 sp_sprintf("No such file or directory @ realpath_rec - %s", dir));
+  if (!*base || strcmp(base, ".") == 0) return sp_sprintf("%s", buf);
+  if (strcmp(buf, "/") == 0) return sp_sprintf("/%s", base);
+  return sp_sprintf("%s/%s", buf, base);
 }
 mrb_bool sp_file_absolute_path_p(const char *path) { return path && path[0] == '/'; }  /* (#2988) */
 mrb_int sp_file_chown(const char *path, mrb_int uid, mrb_int gid) {  /* -1 leaves that id unchanged; returns the path count (#2987) */

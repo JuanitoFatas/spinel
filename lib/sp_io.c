@@ -196,6 +196,16 @@ mrb_bool sp_File_closed_p(sp_File *f) {
   return !f || !f->fp;
 }
 
+/* `#<File:/etc/passwd>` for a path-backed handle, `#<IO:<STDOUT>>` for a
+   standard stream. The path is what tells the two apart, the same way #class
+   renders them (a stream's path is bracketed). */
+const char *sp_File_inspect(sp_File *f) {
+  const char *p = f && f->path ? f->path : "";
+  const char *cls = (p[0] && p[0] != '<') ? "File" : "IO";
+  if (!f || !f->fp) return sp_sprintf("#<%s:%s (closed)>", cls, p);
+  return sp_sprintf("#<%s:%s>", cls, p);
+}
+
 void sp_File_puts(sp_File *f, const char *s) {
   if (!f || !f->fp || !s) return;
   size_t n = strlen(s);

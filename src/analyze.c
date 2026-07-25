@@ -3796,7 +3796,8 @@ static int name_is_math_fn(const char *nm) {
   static const char *const fns[] = {
     "sin", "cos", "tan", "asin", "acos", "atan", "atan2", "sinh", "cosh",
     "tanh", "asinh", "acosh", "atanh", "exp", "log", "log2", "log10", "sqrt",
-    "cbrt", "hypot", "ldexp", "erf", "erfc", "gamma", "lgamma", "frexp", NULL };
+    "cbrt", "hypot", "ldexp", "erf", "erfc", "gamma", "lgamma", "frexp",
+    "expm1", "log1p", NULL };
   for (int i = 0; fns[i]; i++) if (sp_streq(nm, fns[i])) return 1;
   return 0;
 }

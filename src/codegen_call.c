@@ -4723,6 +4723,20 @@ static int emit_class_new_call(Compiler *c, int id, Buf *b) {
     buf_puts(b, "((void)("); emit_expr(c, argv[0], b); buf_puts(b, "), sp_box_nil())");
     return 1;
   }
+  /* String.try_convert(x) / IO.try_convert(x): the value when it already is
+     one, else nil. Neither builtin calls #to_str / #to_io on a user object --
+     a user class reaching here is simply not convertible. */
+  if (recv >= 0 && argc == 1 && sp_streq(name, "try_convert") &&
+      nt_type(nt, recv) && sp_streq(nt_type(nt, recv), "ConstantReadNode") &&
+      nt_str(nt, recv, "name") &&
+      (sp_streq(nt_str(nt, recv, "name"), "String") || sp_streq(nt_str(nt, recv, "name"), "IO"))) {
+    int want_str = sp_streq(nt_str(nt, recv, "name"), "String");
+    TyKind at = comp_ntype(c, argv[0]);
+    int ok = want_str ? (at == TY_STRING || at == TY_STRBUF) : (at == TY_IO);
+    if (ok) { emit_boxed(c, argv[0], b); return 1; }
+    buf_puts(b, "((void)("); emit_expr(c, argv[0], b); buf_puts(b, "), sp_box_nil())");
+    return 1;
+  }
   if (recv >= 0 && (sp_streq(name, "new") || sp_streq(name, "__hash_new_default"))) {
     const char *rty = nt_type(nt, recv);
     /* a local statically holding one class constant dispatches like the
@@ -10297,6 +10311,10 @@ void emit_call(Compiler *c, int id, Buf *b) {
       buf_puts(b, "), (mrb_int)0)");
       free(rb.p); return;
     }
+    if (sp_streq(name, "inspect") && argc == 0) {
+      buf_printf(b, "sp_File_inspect(%s)", r);
+      free(rb.p); return;
+    }
     /* size/ftype read the HANDLE so an lstat handle describes the link
        itself rather than its target (#2986) */
     if (argc == 0 && (sp_streq(name, "size") || sp_streq(name, "ftype"))) {
@@ -14127,6 +14145,10 @@ else { memcpy(dir, sf, n); dir[n] = 0; } }
     else if (sp_streq(name, "exp"))   cfn = "exp";
     else if (sp_streq(name, "sqrt"))  cfn = "sp_math_sqrt";
     else if (sp_streq(name, "cbrt"))  cfn = "cbrt";
+    /* expm1/log1p keep their precision near zero, where exp(x)-1 and log(1+x)
+       cancel away most of the significant digits */
+    else if (sp_streq(name, "expm1")) cfn = "expm1";
+    else if (sp_streq(name, "log1p")) cfn = "log1p";
     else if (sp_streq(name, "erf"))   cfn = "erf";
     else if (sp_streq(name, "erfc"))  cfn = "erfc";
     else if (sp_streq(name, "gamma")) cfn = "sp_math_gamma";
@@ -14287,6 +14309,15 @@ else { memcpy(dir, sf, n); dir[n] = 0; } }
     if (sp_streq(name, "realpath") && argc == 1) {
       buf_puts(b, "sp_file_realpath("); emit_expr(c, argv[0], b); buf_puts(b, ")"); return;
     }
+    if (sp_streq(name, "realdirpath") && (argc == 1 || argc == 2)) {
+      buf_puts(b, "sp_file_realdirpath(");
+      /* the two-argument form resolves a relative name against a base dir */
+      if (argc == 2) buf_puts(b, "sp_file_join((const char *[]){");
+      if (argc == 2) { emit_expr(c, argv[1], b); buf_puts(b, ", "); }
+      emit_expr(c, argv[0], b);
+      if (argc == 2) buf_puts(b, "}, 2)");
+      buf_puts(b, ")"); return;
+    }
     if (sp_streq(name, "stat") && argc == 1) {
       buf_puts(b, "sp_file_stat_handle("); emit_expr(c, argv[0], b); buf_puts(b, ")"); return;
     }
@@ -14374,8 +14405,16 @@ else { memcpy(dir, sf, n); dir[n] = 0; } }
       buf_puts(b, "); sp_raise_cls(\"NoMethodError\", \"undefined method 'exists?' for class File\"); (mrb_bool)0; })");
       return;
     }
-    if ((sp_streq(name, "exist?") || sp_streq(name, "readable?")) && argc == 1) {
+    if (sp_streq(name, "exist?") && argc == 1) {
       buf_puts(b, "sp_file_exist("); emit_expr(c, argv[0], b); buf_puts(b, ")"); return;
+    }
+    if (sp_streq(name, "readable?") && argc == 1) {
+      buf_puts(b, "sp_file_readable("); emit_expr(c, argv[0], b); buf_puts(b, ")"); return;
+    }
+    if ((sp_streq(name, "readable_real?") || sp_streq(name, "writable_real?") ||
+         sp_streq(name, "executable_real?")) && argc == 1) {
+      buf_printf(b, "sp_file_%.*s_real(", (int)(strlen(name) - 6), name);
+      emit_expr(c, argv[0], b); buf_puts(b, ")"); return;
     }
     if (sp_streq(name, "directory?") && argc == 1) {
       buf_puts(b, "sp_file_directory("); emit_expr(c, argv[0], b); buf_puts(b, ")"); return;

@@ -6259,8 +6259,13 @@ mrb_int sp_process_getpriority(mrb_int which, mrb_int who);
 sp_IntArray *sp_process_groups(void);
 /* ---- the File stat/predicate and IO-op surface (#2774-#2778, #2782) ---- */
 const char *sp_file_ftype(const char *path);
+mrb_bool sp_file_readable(const char *path);
 mrb_bool sp_file_writable(const char *path);
 mrb_bool sp_file_executable(const char *path);
+mrb_bool sp_file_readable_real(const char *path);
+mrb_bool sp_file_writable_real(const char *path);
+mrb_bool sp_file_executable_real(const char *path);
+const char *sp_file_realdirpath(const char *path);
 mrb_int sp_file_size_q(const char *path);
 mrb_bool sp_file_pipe(const char *path);
 mrb_bool sp_file_identical(const char *a, const char *b);

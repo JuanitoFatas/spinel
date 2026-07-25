@@ -1655,11 +1655,13 @@ TyKind infer_call(Compiler *c, int id) {
       nt_type(nt, recv) && sp_streq(nt_type(nt, recv), "ConstantReadNode") &&
       nt_str(nt, recv, "name") && sp_streq(nt_str(nt, recv, "name"), "Hash"))
     return TY_STR_POLY_HASH;
-  /* Array/Integer.try_convert(x) -> the value or nil (poly) (#2325, #2585) */
+  /* Array/Integer/String/IO.try_convert(x) -> the value or nil (poly)
+     (#2325, #2585) */
   if (recv >= 0 && name && sp_streq(name, "try_convert") && argc == 1 &&
       nt_type(nt, recv) && sp_streq(nt_type(nt, recv), "ConstantReadNode") &&
       nt_str(nt, recv, "name") &&
-      (sp_streq(nt_str(nt, recv, "name"), "Array") || sp_streq(nt_str(nt, recv, "name"), "Integer")))
+      (sp_streq(nt_str(nt, recv, "name"), "Array") || sp_streq(nt_str(nt, recv, "name"), "Integer") ||
+       sp_streq(nt_str(nt, recv, "name"), "String") || sp_streq(nt_str(nt, recv, "name"), "IO")))
     return TY_POLY;
   if (recv >= 0 && name && argc == 1 &&
       nt_type(nt, recv) && sp_streq(nt_type(nt, recv), "ConstantReadNode") &&
@@ -2367,6 +2369,7 @@ else {
          sp_streq(name, "atanh") || sp_streq(name, "exp") || sp_streq(name, "log") ||
          sp_streq(name, "log2") || sp_streq(name, "log10") || sp_streq(name, "sqrt") ||
          sp_streq(name, "cbrt") || sp_streq(name, "hypot") ||
+         sp_streq(name, "expm1") || sp_streq(name, "log1p") ||
          sp_streq(name, "ldexp") || sp_streq(name, "erf") || sp_streq(name, "erfc") ||
          sp_streq(name, "gamma")))
       return TY_FLOAT;
@@ -2394,7 +2397,8 @@ else {
          sp_streq(nt_str(nt, recv, "name"), "FileTest"))) {
       if (sp_streq(name, "basename") || sp_streq(name, "dirname") || sp_streq(name, "extname") ||
           sp_streq(name, "read") || sp_streq(name, "binread") || sp_streq(name, "expand_path") ||
-          sp_streq(name, "join") || sp_streq(name, "realpath") || sp_streq(name, "ftype") ||
+          sp_streq(name, "join") || sp_streq(name, "realpath") ||
+          sp_streq(name, "realdirpath") || sp_streq(name, "ftype") ||
           sp_streq(name, "path") || sp_streq(name, "absolute_path"))
         return TY_STRING;
       if (sp_streq(name, "exist?") || sp_streq(name, "exists?"))
@@ -2411,6 +2415,8 @@ else {
       if (sp_streq(name, "readable?") || sp_streq(name, "directory?") || sp_streq(name, "file?") ||
           sp_streq(name, "zero?") || sp_streq(name, "empty?") || sp_streq(name, "symlink?") ||
           sp_streq(name, "writable?") || sp_streq(name, "executable?") || sp_streq(name, "pipe?") ||
+          sp_streq(name, "readable_real?") || sp_streq(name, "writable_real?") ||
+          sp_streq(name, "executable_real?") ||
           sp_streq(name, "identical?") || sp_streq(name, "fnmatch") || sp_streq(name, "fnmatch?") ||
           sp_streq(name, "owned?") || sp_streq(name, "grpowned?") || sp_streq(name, "setuid?") ||
           sp_streq(name, "setgid?") || sp_streq(name, "sticky?") || sp_streq(name, "socket?") ||
@@ -2742,6 +2748,7 @@ else {
       return TY_INT;
     if (sp_streq(name, "getc") || sp_streq(name, "readchar") || sp_streq(name, "readpartial") ||
         sp_streq(name, "sysread") || sp_streq(name, "ftype")) return TY_STRING;
+    if (sp_streq(name, "inspect") && argc == 0) return TY_STRING;
     /* socket methods on the IO handle (#2922) */
     if (sp_feature_required("socket")) {
       if (sp_streq(name, "accept") && argc == 0) return TY_IO;

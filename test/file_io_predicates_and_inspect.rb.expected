@@ -1,0 +1,17 @@
+true
+false
+false
+false
+true
+false
+"/etc"
+"/etc/definitely_missing_name_xyz"
+"/etc/passwd"
+"#<File:/etc/passwd>"
+"#<File:/etc/passwd (closed)>"
+"#<IO:<STDIN>>"
+"abc"
+nil
+5
+0.0
+0.0
