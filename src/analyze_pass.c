@@ -8292,6 +8292,19 @@ int infer_return_types(Compiler *c) {
           if (infinite && (lbody < 0 || !block_has_top_break(c, lbody)))
             tail_unreachable = 1;
         }
+        /* A trailing `raise` is unreachable-fall-through for the same reason:
+           the method never returns through it, so its (void) value must not
+           be unified with the explicit returns. Unifying void with Integer
+           has no rule and lands on poly, which then boxes the return of a
+           `return x if cond; raise` guard method and everything downstream
+           of its callers. Same rule the branch arms got for raise. */
+        else if (lk == NK_CallNode && nt_ref(nt, last, "receiver") < 0) {
+          const char *lnm = nt_str(nt, last, "name");
+          if (lnm && (sp_streq(lnm, "raise") || sp_streq(lnm, "fail") ||
+                      sp_streq(lnm, "throw") || sp_streq(lnm, "exit") ||
+                      sp_streq(lnm, "abort") || sp_streq(lnm, "exit!")))
+            tail_unreachable = 1;
+        }
       }
     }
     TyKind r = empty_body ? TY_POLY
