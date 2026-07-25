@@ -10808,15 +10808,20 @@ void emit_call(Compiler *c, int id, Buf *b) {
         }
       }
       else {
+        /* String operand -> the _bin entry (header length, so an embedded NUL
+           is written); anything else reaches sp_poly_to_s, whose static
+           class/symbol names carry no marker byte. See sp_File_write above. */
+        int skw = comp_ntype(c, argv[0]) == TY_STRING;
+        const char *wfn = skw ? "sp_sock_write_nb_bin" : "sp_sock_write_nb";
         if (no_exc8) {
           int tw = ++g_tmp;
-          buf_printf(b, "({ mrb_int _t%d = sp_sock_write_nb(%s, ", tw, r);
+          buf_printf(b, "({ mrb_int _t%d = %s(%s, ", tw, wfn, r);
           emit_str_expr(c, argv[0], b);
           buf_printf(b, ", 0); _t%d == SP_INT_NIL"
                         " ? sp_box_sym(sp_sym_intern(\"wait_writable\")) : sp_box_int(_t%d); })", tw, tw);
         }
         else {
-          buf_printf(b, "sp_sock_write_nb(%s, ", r); emit_str_expr(c, argv[0], b);
+          buf_printf(b, "%s(%s, ", wfn, r); emit_str_expr(c, argv[0], b);
           buf_puts(b, ", 1)");
         }
       }
@@ -10955,9 +10960,15 @@ void emit_call(Compiler *c, int id, Buf *b) {
     }
     if (sp_streq(name, "write") || sp_streq(name, "syswrite")) {
       /* every argument writes in order; the return is the total byte count (#2814) */
+      /* A String operand goes to the _bin entry, which sizes it with the
+         header length so an embedded NUL is written rather than truncating
+         the write. The sp_poly_to_s arm keeps the plain entry: it can answer
+         a static class/symbol name with no marker byte, which _bin would read
+         out of bounds at s[-1]. */
       if (argc == 1) {
-        buf_printf(b, "sp_File_write(%s, ", r);
-        if (comp_ntype(c, argv[0]) == TY_STRING) emit_expr(c, argv[0], b);
+        int sk = comp_ntype(c, argv[0]) == TY_STRING;
+        buf_printf(b, "%s(%s, ", sk ? "sp_File_write_bin" : "sp_File_write", r);
+        if (sk) emit_expr(c, argv[0], b);
         else { buf_puts(b, "sp_poly_to_s("); emit_boxed(c, argv[0], b); buf_puts(b, ")"); }
         buf_puts(b, ")");
       }
@@ -10965,8 +10976,9 @@ void emit_call(Compiler *c, int id, Buf *b) {
         int tw = ++g_tmp;
         buf_printf(b, "({ mrb_int _t%d = 0;", tw);
         for (int k = 0; k < argc; k++) {
-          buf_printf(b, " _t%d += sp_File_write(%s, ", tw, r);
-          if (comp_ntype(c, argv[k]) == TY_STRING) emit_expr(c, argv[k], b);
+          int sk = comp_ntype(c, argv[k]) == TY_STRING;
+          buf_printf(b, " _t%d += %s(%s, ", tw, sk ? "sp_File_write_bin" : "sp_File_write", r);
+          if (sk) emit_expr(c, argv[k], b);
           else { buf_puts(b, "sp_poly_to_s("); emit_boxed(c, argv[k], b); buf_puts(b, ")"); }
           buf_puts(b, ");");
         }
@@ -10979,8 +10991,10 @@ void emit_call(Compiler *c, int id, Buf *b) {
       /* IO#<< writes the (stringified) operand and returns self, so it chains
          (`io << a << b`). Hold the handle in a temp, write, yield the handle. */
       int t = ++g_tmp;
-      buf_printf(b, "({ sp_File *_t%d = %s; sp_File_write(_t%d, ", t, r, t);
-      if (comp_ntype(c, argv[0]) == TY_STRING) emit_expr(c, argv[0], b);
+      int sk = comp_ntype(c, argv[0]) == TY_STRING;
+      buf_printf(b, "({ sp_File *_t%d = %s; %s(_t%d, ", t, r,
+                 sk ? "sp_File_write_bin" : "sp_File_write", t);
+      if (sk) emit_expr(c, argv[0], b);
       else { buf_puts(b, "sp_poly_to_s("); emit_boxed(c, argv[0], b); buf_puts(b, ")"); }
       buf_printf(b, "); _t%d; })", t);
       free(rb.p); return;
