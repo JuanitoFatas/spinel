@@ -74,6 +74,9 @@ typedef struct {
   int is_cmethod;   /* `def self.foo`: a class (singleton) method, no instance self */
   int is_transplanted_source; /* method was copied into another class via include/prepend */
   int is_lowered_yield; /* self-recursive yield method lowered to &block (sp_Proc) form */
+  int lowered_lifted_yield; /* lowered because a yield sits in a Thread/Fiber
+                               body: the method's value is its own tail, not
+                               the block's, unlike the self-recursive form */
   char *blk_param;  /* name of the `&block` parameter, or NULL (anon -> "") */
 
   /* Compile-time `define_method` unrolling: a method synthesized from

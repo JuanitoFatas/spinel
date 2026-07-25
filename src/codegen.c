@@ -1228,6 +1228,13 @@ void proc_collect_used(Compiler *c, int id, NameSet *out) {
       sp_streq(ty, "LocalVariableTargetNode") || sp_streq(ty, "LocalVariableOperatorWriteNode") ||
       sp_streq(ty, "LocalVariableOrWriteNode") || sp_streq(ty, "LocalVariableAndWriteNode"))
     nameset_add(out, nt_str(c->nt, id, "name"));
+  /* a yield in a lowered method calls the forwarded block, so a lifted body
+     containing one captures that block even though no variable read says so */
+  if (sp_streq(ty, "YieldNode")) {
+    Scope *ys = comp_scope_of(c, id);
+    if (ys && ys->is_lowered_yield && ys->blk_param && ys->blk_param[0])
+      nameset_add(out, ys->blk_param);
+  }
   int nr = nt_num_refs(c->nt, id);
   for (int i = 0; i < nr; i++) { int ch = nt_ref_at(c->nt, id, i); if (ch >= 0) proc_collect_used(c, ch, out); }
   int na = nt_num_arrs(c->nt, id);
@@ -1743,6 +1750,14 @@ void emit_fiber_new(Compiler *c, int id, Buf *b, int as_gen, int size_node) {
      generator (as_gen) yields imperatively via `y << v` mid-body, but its final
      body value still lands in yielded_value: that is the value read on the
      terminating resume, which sp_enum_gen_pull surfaces as StopIteration#result. */
+  /* A yield in this body reaches the lowered method's block through the cell
+     the frame carries, not a local (#3355). */
+  int sv_yblkc = g_yblk_celled;
+  {
+    const char *ybn = (g_lowered_blk_name && g_lowered_blk_name[0]) ? g_lowered_blk_name : "__yblk__";
+    LocalVar *yblv = encl ? scope_local(encl, ybn) : NULL;
+    if (yblv && yblv->is_cell && nameset_has(&caps, ybn)) g_yblk_celled = 1;
+  }
   if (body >= 0) {
     int bn = 0; const int *bb = nt_arr(nt, body, "body", &bn);
     for (int k = 0; k < bn - 1; k++) emit_stmt(c, bb[k], pb, 1);
@@ -1866,6 +1881,7 @@ void emit_fiber_new(Compiler *c, int id, Buf *b, int as_gen, int size_node) {
   else {
     buf_printf(b, "sp_Fiber_new(%s)", fname);
   }
+  g_yblk_celled = sv_yblkc;
   free(caps.v);
 }
 

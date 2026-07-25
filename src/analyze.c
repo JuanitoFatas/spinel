@@ -382,6 +382,14 @@ void a_collect_used(Compiler *c, int id, ANameSet *out) {
   const char *ty = nt_type(c->nt, id);
   if (!ty) return;
   if (a_is_local_node(ty)) aname_add(out, nt_str(c->nt, id, "name"));
+  /* A yield in a lowered method reads the forwarded block, but through a
+     YieldNode rather than a variable read, so the capture scan walked past it
+     and a lifted body calling the block had nothing to capture (#3355). */
+  if (sp_streq(ty, "YieldNode")) {
+    Scope *ys = comp_scope_of(c, id);
+    if (ys && ys->is_lowered_yield && ys->blk_param && ys->blk_param[0])
+      aname_add(out, ys->blk_param);
+  }
   int nr = nt_num_refs(c->nt, id);
   for (int i = 0; i < nr; i++) { int ch = nt_ref_at(c->nt, id, i); if (ch >= 0) a_collect_used(c, ch, out); }
   int na = nt_num_arrs(c->nt, id);
@@ -614,7 +622,11 @@ void mark_proc_captures(Compiler *c) {
            in the body reaches the enclosing scope. In-place mutation of a
            non-reassigned capture stays by pointer (the var isn't `owned`, so it
            never reaches here). Value-type objects have no stable pointer. */
+        /* an sp_Proc* is a heap pointer with a stable identity, so a fiber or
+           thread body can hold it in a typed cell -- which is what a lowered
+           method's forwarded block needs to reach a yield inside such a body */
         int heap_ptr = (lv->type == TY_STRING || lv->type == TY_STRBUF ||
+                        lv->type == TY_PROC ||
                         ty_is_array(lv->type) ||
                         ty_is_hash(lv->type) || ty_is_object(lv->type)) &&
                        !comp_ty_value_obj(c, lv->type);
@@ -7155,6 +7167,39 @@ static int convert_byref_handle_params(Compiler *c) {
   return changed;
 }
 
+/* True if `blk`'s subtree contains a YieldNode. */
+static int subtree_has_yield_node(Compiler *c, int node, int depth) {
+  const NodeTable *nt = c->nt;
+  if (node < 0 || depth > 64) return 0;
+  if (nt_kind(nt, node) == NK_YieldNode) return 1;
+  int nr = nt_num_refs(nt, node);
+  for (int i = 0; i < nr; i++)
+    if (subtree_has_yield_node(c, nt_ref_at(nt, node, i), depth + 1)) return 1;
+  int na = nt_num_arrs(nt, node);
+  for (int i = 0; i < na; i++) {
+    int n = 0; const int *ids = nt_arr_at(nt, node, i, &n);
+    for (int j = 0; j < n; j++)
+      if (subtree_has_yield_node(c, ids[j], depth + 1)) return 1;
+  }
+  return 0;
+}
+/* A Thread.new / Fiber.new block in this method whose body yields. Such a body
+   is emitted as its own function, so the yield-splice has no block to inline. */
+static int scope_yields_inside_lifted_body(Compiler *c, int mi) {
+  const NodeTable *nt = c->nt;
+  for (int id = 0; id < nt->count; id++) {
+    if (c->nscope[id] != mi || nt_kind(nt, id) != NK_CallNode) continue;
+    const char *nm = nt_str(nt, id, "name");
+    if (!nm || !sp_streq(nm, "new")) continue;
+    int r = nt_ref(nt, id, "receiver");
+    const char *rn = (r >= 0 && nt_kind(nt, r) == NK_ConstantReadNode) ? nt_str(nt, r, "name") : NULL;
+    if (!rn || (!sp_streq(rn, "Thread") && !sp_streq(rn, "Fiber"))) continue;
+    int blk = nt_ref(nt, id, "block");
+    if (blk >= 0 && subtree_has_yield_node(c, blk, 0)) return 1;
+  }
+  return 0;
+}
+
 void analyze_program(Compiler *c) {
   comp_scope_index_set_frozen(0);  /* scope shape changes during the passes below */
   /* scope 0 = top level */
@@ -8320,10 +8365,17 @@ void analyze_program(Compiler *c) {
       if (ty && sp_streq(ty, "YieldNode")) has_yld = 1;
     }
     if (!has_yld) continue;
-    if (!scope_calls_itself(c, mi)) continue;
+    /* A yield inside a Thread/Fiber body cannot be spliced: that body is
+       lifted to its own C function, where the caller's block is not in scope,
+       so the splice emitted a LocalJumpError raise and the surrounding
+       expression was then ill-typed. Lowering forwards the block as a proc the
+       lifted body can call (#3355). */
+    int thread_yld = scope_yields_inside_lifted_body(c, mi);
+    if (!scope_calls_itself(c, mi) && !thread_yld) continue;
     m->is_lowered_yield = 1;
+    m->lowered_lifted_yield = thread_yld;
     m->yields = 0;
-    m->ret = TY_INT;
+    if (!thread_yld) m->ret = TY_INT;
     if (!m->blk_param) m->blk_param = strdup("__yblk__");
     LocalVar *yblk = scope_local_intern(m, m->blk_param);
     if (yblk) {

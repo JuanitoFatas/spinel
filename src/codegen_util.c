@@ -227,6 +227,9 @@ int g_current_scope_is_lowered = 0;
    declared &block name, or "__yblk__" when the lowering synthesized one);
    NULL outside a lowered-method emission. Read by emit_yblk_ref. */
 const char *g_lowered_blk_name = NULL;
+/* Set while emitting a lifted Thread/Fiber body that reaches the lowered
+   method's block: the block lives in a cell the frame carries. */
+int g_yblk_celled = 0;
 /* The enclosing lowered context parked across an inline: an inlined callee's
    own yields splice the call-site block, so emit_inline_call_x clears the
    lowered pair for the callee body and parks it here; emit_block_invoke
@@ -493,6 +496,11 @@ void emit_yblk_ref(Buf *b) {
       (g_lowered_blk_name && g_lowered_blk_name[0]) ? g_lowered_blk_name : "__yblk__";
   if (g_cap_struct && g_cap_names && nameset_has(g_cap_names, nm)) {
     buf_printf(b, "(sp_Proc *)(uintptr_t)(*(((%s *)_cap)->%s))", g_cap_struct, nm);
+  }
+  /* A yield inside a lifted Thread/Fiber body reaches the forwarded block
+     through the shared cell the body's frame carries, not a local (#3355). */
+  else if (g_yblk_celled) {
+    buf_printf(b, "(sp_Proc *)(uintptr_t)(*_cell_%s)", nm);
   }
   else {
     buf_printf(b, "lv_%s", nm);

@@ -216,6 +216,7 @@ extern TyKind g_fn_ret_type;
    param (g_lowered_blk_name, or the synthetic __yblk__). */
 extern int g_current_scope_is_lowered;
 extern const char *g_lowered_blk_name;
+extern int g_yblk_celled;
 extern int g_yield_lowered_fallback;
 extern const char *g_yield_lowered_blk_fallback;
 extern const char *g_yield_proc_ref;

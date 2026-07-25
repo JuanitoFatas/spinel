@@ -911,6 +911,9 @@ TyKind method_call_ret(Compiler *c, int mi, int call_id) {
      below is only for the value-carrying (self-recursive) lowering. */
   if (c->scopes[mi].is_lowered_yield && ty_is_object(c->scopes[mi].ret))
     return c->scopes[mi].ret;
+  /* Lowered because a yield sits in a lifted Thread/Fiber body: the method's
+     value is its own tail (`t.value`), not the block's (#3355). */
+  if (c->scopes[mi].lowered_lifted_yield) return c->scopes[mi].ret;
   /* Lowered yield methods (self-recursive + yield) carry the block's return value:
      return the per-call-site block body type so puts/assign use the right type. */
   if (c->scopes[mi].is_lowered_yield || is_yield || is_blk_param_call(c, last, mi)) {
