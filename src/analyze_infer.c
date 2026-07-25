@@ -5699,6 +5699,32 @@ else {
 
 /* ---- core inference ---- */
 
+/* A branch whose last statement is a bare raise / throw / exit never produces
+   a value, so unifying its type into the surrounding case or if widens the
+   result for nothing: `case o when Integer then 7 when String then 12 else
+   raise end` is an Integer, not a poly. The BeginNode arm has applied the same
+   rule to a diverging body since #2739; this generalizes it to the branch
+   forms. */
+static int stmts_diverge(Compiler *c, int st) {
+  const NodeTable *nt = c->nt;
+  if (st < 0) return 0;
+  int n = 0; const int *b = nt_arr(nt, st, "body", &n);
+  if (n <= 0 || !b) return 0;
+  int last = b[n - 1];
+  if (nt_kind(nt, last) != NK_CallNode || nt_ref(nt, last, "receiver") >= 0) return 0;
+  const char *nm = nt_str(nt, last, "name");
+  return nm && (sp_streq(nm, "raise") || sp_streq(nm, "fail") || sp_streq(nm, "throw") ||
+                sp_streq(nm, "exit") || sp_streq(nm, "abort") || sp_streq(nm, "exit!"));
+}
+/* The statements a branch node carries, for the divergence test above. */
+static int branch_stmts(Compiler *c, int b) {
+  if (b < 0) return -1;
+  NodeKind k = nt_kind(c->nt, b);
+  if (k == NK_ElseNode || k == NK_IfNode || k == NK_UnlessNode)
+    return nt_ref(c->nt, b, "statements");
+  return k == NK_StatementsNode ? b : -1;
+}
+
 TyKind infer_uncached(Compiler *c, int id) {
   const NodeTable *nt = c->nt;
   const char *ty = nt_type(nt, id);
@@ -6109,9 +6135,13 @@ TyKind infer_uncached(Compiler *c, int id) {
     TyKind r = TY_UNKNOWN;
     for (int w = 0; w < nw; w++) {
       int st = nt_ref(nt, whens[w], "statements");
+      if (stmts_diverge(c, st)) continue;
       r = ty_unify(r, st >= 0 ? infer_type(c, st) : TY_NIL);
     }
-    if (else_c >= 0) { int st = nt_ref(nt, else_c, "statements"); r = ty_unify(r, st >= 0 ? infer_type(c, st) : TY_NIL); }
+    if (else_c >= 0) {
+      int st = nt_ref(nt, else_c, "statements");
+      if (!stmts_diverge(c, st)) r = ty_unify(r, st >= 0 ? infer_type(c, st) : TY_NIL);
+    }
     else r = ty_unify(r, TY_NIL);
     return r;
   }
@@ -6122,9 +6152,13 @@ TyKind infer_uncached(Compiler *c, int id) {
     TyKind r = TY_UNKNOWN;
     for (int w = 0; w < nw; w++) {
       int st = nt_ref(nt, conds[w], "statements");
+      if (stmts_diverge(c, st)) continue;
       r = ty_unify(r, st >= 0 ? infer_type(c, st) : TY_NIL);
     }
-    if (else_c >= 0) { int st = nt_ref(nt, else_c, "statements"); r = ty_unify(r, st >= 0 ? infer_type(c, st) : TY_NIL); }
+    if (else_c >= 0) {
+      int st = nt_ref(nt, else_c, "statements");
+      if (!stmts_diverge(c, st)) r = ty_unify(r, st >= 0 ? infer_type(c, st) : TY_NIL);
+    }
     return r;
   }
   if (nk == NK_IfNode || nk == NK_UnlessNode) {
@@ -6141,6 +6175,12 @@ TyKind infer_uncached(Compiler *c, int id) {
       if (take_then) return then_b >= 0 ? infer_type(c, then_b) : TY_NIL;
       return else_b >= 0 ? infer_type(c, else_b) : TY_NIL;
     }
+    int tdiv = stmts_diverge(c, branch_stmts(c, then_b));
+    int ediv = stmts_diverge(c, branch_stmts(c, else_b));
+    /* both arms diverging leaves nothing to type: fall through to the plain
+       unify rather than answering UNKNOWN out of nowhere */
+    if (tdiv && !ediv) return else_b >= 0 ? infer_type(c, else_b) : TY_NIL;
+    if (ediv && !tdiv) return then_b >= 0 ? infer_type(c, then_b) : TY_NIL;
     TyKind tt = then_b >= 0 ? infer_type(c, then_b) : TY_NIL;
     TyKind et = else_b >= 0 ? infer_type(c, else_b) : TY_NIL;
     return ty_unify(tt, et);
