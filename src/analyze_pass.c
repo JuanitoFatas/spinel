@@ -5923,13 +5923,24 @@ int desugar_lazy_method_call(Compiler *c) {
     if (clone < 0) continue;
     nt_node_set_ref(nt, id, "receiver", clone);
     /* the cloned stages carry block parameters that were interned in the
-       CALLEE's scope; re-intern them here or their locals are never declared */
+       CALLEE's scope; re-intern them here or their locals are never declared.
+       Locals ASSIGNED inside a cloned block body need it too -- a block that
+       writes a temp before using it emitted an undeclared identifier (#3367). */
     for (int j = base; j < nt->count; j++) {
-      if (nt_kind(nt, j) != NK_BlockNode) continue;
-      for (int k = 0; k < 4; k++) {
-        const char *bp = block_param_name(c, j, k);
-        if (!bp) break;
-        scope_local_intern(&c->scopes[encl], bp);
+      NodeKind jk = nt_kind(nt, j);
+      if (jk == NK_BlockNode) {
+        for (int k = 0; k < 4; k++) {
+          const char *bp = block_param_name(c, j, k);
+          if (!bp) break;
+          scope_local_intern(&c->scopes[encl], bp);
+        }
+        continue;
+      }
+      if (jk == NK_LocalVariableWriteNode || jk == NK_LocalVariableTargetNode ||
+          jk == NK_LocalVariableOperatorWriteNode || jk == NK_LocalVariableOrWriteNode ||
+          jk == NK_LocalVariableAndWriteNode) {
+        const char *wn = nt_str(nt, j, "name");
+        if (wn) scope_local_intern(&c->scopes[encl], wn);
       }
     }
     changed = 1;
