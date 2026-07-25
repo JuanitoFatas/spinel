@@ -5872,6 +5872,24 @@ SP_NORETURN SP_COLD static void sp_raise_poly(sp_RbVal v) {
   if (v.tag == SP_TAG_STR && v.v.s) sp_raise(v.v.s);
   if (v.tag == SP_TAG_OBJ && v.cls_id == SP_BUILTIN_EXCEPTION && v.v.p)
     sp_raise_exc((volatile sp_Exception *)v.v.p);
+  /* A Class VALUE naming an exception class raises that class, exactly as the
+     constant does: `k = App::Failed; raise k` and `[A, B].each { |k| raise k }`
+     are the same raise as `raise App::Failed`. Only the literal-constant form
+     was recognized, so reaching the class through a variable answered TypeError.
+     The empty message is what the literal form emits too; sp_raise_cls fills in
+     the class name, which is what CRuby uses as the message. */
+  if (v.tag == SP_TAG_CLASS) {
+    const char *cn = sp_class_val_name(v);
+    /* Must be a KNOWN exception class. sp_exc_cls_matches(x, "Exception") is
+       not the test: a name with no recorded parent is assumed to be a user
+       exception rooted at Exception (the open-namespace rule Errno:: relies
+       on), so it would answer yes for String and raise it. Ask for a parent
+       instead, which only a registered exception class has. */
+    if (cn && *cn && (!strcmp(cn, "Exception") ||
+                      (sp_user_exc_parent_fn && sp_user_exc_parent_fn(cn)) ||
+                      sp_exc_parent_of_name(cn)))
+      sp_raise_cls(cn, sp_str_empty);
+  }
   sp_raise_cls("TypeError", "exception class/object expected");
 }
 /* Raise StopIteration carrying the iteration's return value as #result. Built as

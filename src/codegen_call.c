@@ -11894,9 +11894,10 @@ else { memcpy(dir, sf, n); dir[n] = 0; } }
         /* `raise "msg"` raises RuntimeError with the message */
         buf_puts(b, "sp_raise("); emit_expr(c, av[0], b); buf_puts(b, ")");
       }
-      else if (at == TY_POLY) {
-        /* the runtime value may be a string, an exception object, or a
-           non-exception (TypeError) -- dispatch on the tag */
+      else if (at == TY_POLY || at == TY_CLASS) {
+        /* the runtime value may be a string, an exception object, an exception
+           CLASS reached through a variable, or a non-exception (TypeError) --
+           dispatch on the tag */
         buf_puts(b, "sp_raise_poly("); emit_boxed(c, av[0], b); buf_puts(b, ")");
       }
       else {
