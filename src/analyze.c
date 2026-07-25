@@ -8460,6 +8460,25 @@ void analyze_program(Compiler *c) {
       if (blv->type == TY_NIL && !blv->rbs_seeded) blv->type = TY_POLY;
     }
 
+  /* A method whose body tail is one of the locals just declared poly still
+     carries an UNKNOWN return, which emits a `void` C function -- the value
+     is then dropped at every call site (#3337: `def txn; r = yield; r; end`
+     called with a block whose own tail is a local read; `r` only settles in
+     the backstop above, after the last return pass). Lift ONLY returns that
+     are still UNKNOWN: widening an established return here is what
+     g_ret_no_new_poly deliberately prevents. Iterated so a caller whose tail
+     is such a call picks the type up too. */
+  for (int iter = 0; iter < 8; iter++) {
+    int lifted = 0;
+    for (int s = 0; s < c->nscopes; s++) {
+      Scope *sc = &c->scopes[s];
+      if (sc->ret != TY_UNKNOWN || sc->body < 0) continue;
+      TyKind rl = infer_type(c, sc->body);
+      if (rl != TY_UNKNOWN && rl != TY_VOID) { sc->ret = rl; lifted = 1; }
+    }
+    if (!lifted) break;
+  }
+
   /* Re-merge inherited ivar NAMES into subclasses now that the fixpoint has
      registered every ivar -- including ones a parent only gained from an
      included module's transplanted methods (`module M; def m; @x = ...; end`
@@ -9274,5 +9293,6 @@ void analyze_program(Compiler *c) {
       }
     }
   }
+
 }
 
