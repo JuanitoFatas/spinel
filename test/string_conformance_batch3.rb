@@ -1,6 +1,6 @@
 # String#+ non-String -> TypeError; concat no-args -> self; match non-match
 # .class -> NilClass; frozen in-place bang -> FrozenError.
-p("ab".concat)
+p((+"ab").concat)
 begin; "a" + 1; rescue TypeError => e; puts e.message; end
 begin; "a" + nil; rescue TypeError => e; puts e.message; end
 begin; "a" + true; rescue TypeError => e; puts e.message; end

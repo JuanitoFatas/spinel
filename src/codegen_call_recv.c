@@ -58,6 +58,25 @@ static void emit_filter_bang_result(const char *name, int trecv, int torig,
 }
 
 int emit_array_call(Compiler *c, int id, Buf *b) {
+  /* The variadic Array mutators accept zero elements and return the receiver
+     unchanged; every arm below is written for argc >= 1, so a no-argument call
+     fell through to the unsupported-call refusal (#3340). */
+  {
+    const NodeTable *ntZ = c->nt;
+    const char *nmZ = nt_str(ntZ, id, "name");
+    int recvZ = nt_ref(ntZ, id, "receiver");
+    int aZ = nt_ref(ntZ, id, "arguments"); int acZ = 0;
+    if (aZ >= 0) nt_arr(ntZ, aZ, "arguments", &acZ);
+    if (nmZ && recvZ >= 0 && acZ == 0 && nt_ref(ntZ, id, "block") < 0 &&
+        ty_is_array(comp_ntype(c, recvZ)) &&
+        (sp_streq(nmZ, "push") || sp_streq(nmZ, "append") ||
+         sp_streq(nmZ, "concat") || sp_streq(nmZ, "unshift") ||
+         sp_streq(nmZ, "prepend"))) {
+      emit_expr(c, recvZ, b);
+      return 1;
+    }
+  }
+
   /* Shared-mutable shim, value position (#3227): same shadow-copy re-entry
      as emit_array_mutate_stmt's -- the existing arm computes the value and
      reassigns the shadow, then the handle's buffer swaps in place. */
@@ -5565,9 +5584,14 @@ int emit_scalar_call(Compiler *c, int id, Buf *b) {
       }
       else if (sp_streq(name, "rindex") && argc == 2) { buf_printf(b, "sp_str_rindex_from(%s, ", r); emit_expr(c, argv[0], b); buf_puts(b, ", "); emit_expr(c, argv[1], b); buf_puts(b, ")"); }
       else if (sp_streq(name, "crypt") && argc == 1) { buf_printf(b, "sp_str_crypt(%s, ", r); emit_expr(c, argv[0], b); buf_puts(b, ")"); }
-      /* the bang form mutates in place: a frozen receiver raises first (#3333) */
-      else if (sp_streq(name, "scrub!") && argc == 0) buf_printf(b, "(sp_str_check_mutable(%s), sp_str_scrub(%s, 0))", r, r);
-      else if (sp_streq(name, "scrub!") && argc == 1) { buf_printf(b, "(sp_str_check_mutable(%s), sp_str_scrub(%s, ", r, r); emit_expr(c, argv[0], b); buf_puts(b, "))"); }
+      /* scrub! mutates in place, so a frozen receiver raises -- but only when
+         it would actually replace something: CRuby returns a frozen string
+         with no invalid bytes unchanged (#3333, #3338). */
+      else if (sp_streq(name, "scrub!") && argc == 0)
+        buf_printf(b, "sp_str_scrub_bang(%s, 0)", r);
+      else if (sp_streq(name, "scrub!") && argc == 1) {
+        buf_printf(b, "sp_str_scrub_bang(%s, ", r); emit_expr(c, argv[0], b); buf_puts(b, ")");
+      }
       else if (sp_streq(name, "scrub") && argc == 0) buf_printf(b, "sp_str_scrub(%s, 0)", r);
       else if (sp_streq(name, "scrub") && argc == 1) { buf_printf(b, "sp_str_scrub(%s, ", r); emit_expr(c, argv[0], b); buf_puts(b, ")"); }
       else if ((sp_streq(name, "[]") || sp_streq(name, "slice")) && argc == 1 && re_lit_index(c, argv[0]) >= 0) {
@@ -5671,6 +5695,10 @@ int emit_scalar_call(Compiler *c, int id, Buf *b) {
       /* force_encoding / encode! set state ON the receiver: CRuby raises on a
          frozen string whether or not the call would change anything (#3334).
          `b` and non-bang `encode` return a NEW string, so they never raise. */
+      /* zero-argument concat / prepend return the receiver; a frozen one still
+         raises, as CRuby checks before the (empty) append (#3339). */
+      else if ((sp_streq(name, "concat") || sp_streq(name, "prepend")) && argc == 0)
+        buf_printf(b, "(sp_str_check_mutable(%s), (%s))", r, r);
       else if ((sp_streq(name, "force_encoding") || sp_streq(name, "encode!")) && argc <= 2)
         buf_printf(b, "(sp_str_check_mutable(%s), (%s))", r, r);
       else if ((sp_streq(name, "b") || sp_streq(name, "encode")) && argc <= 2) buf_printf(b, "(%s)", r);

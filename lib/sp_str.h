@@ -147,6 +147,7 @@ const char*sp_str_squeeze_chars(const char*s,const char*cs);
 const char*sp_str_delete_n(const char*s,const char**chars,mrb_int n);
 const char*sp_str_squeeze_n(const char*s,const char**chars,mrb_int n);
 const char *sp_str_scrub(const char *s, const char *repl);
+const char *sp_str_scrub_bang(const char *s, const char *repl);
 const char*sp_str_ljust(const char*s,mrb_int w);
 const char*sp_str_rjust(const char*s,mrb_int w);
 const char*sp_str_center(const char*s,mrb_int w);

@@ -16356,7 +16356,11 @@ else { memcpy(dir, sf, n); dir[n] = 0; } }
 
   /* String#concat with no arguments returns the receiver unchanged (#2309) */
   if (recv >= 0 && rt == TY_STRING && sp_streq(name, "concat") && argc == 0) {
-    emit_expr(c, recv, b); return;
+    /* zero-argument concat returns the receiver, but CRuby checks frozen
+       first -- the empty append is still a mutation attempt (#3339) */
+    buf_puts(b, "(sp_str_check_mutable("); emit_expr(c, recv, b); buf_puts(b, "), ");
+    emit_expr(c, recv, b); buf_puts(b, ")");
+    return;
   }
   /* String#clear consumed as a value: empty the assignable receiver in place
      and yield the now-empty string (#2332) */
