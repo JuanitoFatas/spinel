@@ -993,8 +993,9 @@ int infer_write_types(Compiler *c) {
         if (!tnm) continue;
         LocalVar *tlv = scope_local(comp_scope_of(c, tv[ti]), tnm);
         if (tlv && !tlv->is_param && !tlv->is_block_param) {
-          TyKind m = ty_unify(tlv->type, TY_STRING);
-          if (m != tlv->type) { tlv->type = m; changed = 1; }
+          /* see the note at the multi-write arm below: no `changed` for a
+             plain local this pass reset. */
+          tlv->type = ty_unify(tlv->type, TY_STRING);
         }
       }
       continue;
@@ -1045,8 +1046,9 @@ int infer_write_types(Compiler *c) {
     if (!lv || lv->is_param || lv->is_block_param) continue;
     TyKind newt = infer_type(c, val_id);
     if (newt == TY_NIL) newt = TY_POLY;
-    TyKind m2 = ty_unify(lv->type, newt);
-    if (m2 != lv->type) { lv->type = m2; changed = 1; }
+    /* see the note at the multi-write arm below: no `changed` for a plain
+       local this pass reset. */
+    lv->type = ty_unify(lv->type, newt);
   }
 
   /* Multiple assignment `a, b = e0, e1`: each target gets its element's
@@ -1088,8 +1090,12 @@ int infer_write_types(Compiler *c) {
             const char *lnm = nt_str(nt, lefts[i], "name");
             LocalVar *lv = lnm ? scope_local(ms_mr, lnm) : NULL;
             if (!lv || lv->is_param || lv->is_block_param) continue;
-            TyKind mg = ty_unify(lv->type, elems[i]);
-            if (mg != lv->type) { lv->type = mg; changed = 1; }
+            /* No `changed` here: this pass reset every plain local to UNKNOWN at
+   the top, so re-deriving one is not news -- reporting it would make
+   the enclosing fixpoint see a change on every single iteration and
+   never converge. The stash comparison at the end of this function is
+   the change detector for these slots (same rule as slot_reset). */
+            lv->type = ty_unify(lv->type, elems[i]);
           }
           else if (sp_streq(lty_mr, "InstanceVariableTargetNode") &&
                    ms_mr && ms_mr->class_id >= 0) {
