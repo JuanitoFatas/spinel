@@ -355,6 +355,7 @@ int nt_clone_subtree(NodeTable *nt, int root) {
   }
   int newroot = map[root];
   nt->count = base + sn;
+  nt->version++;
   nt->node_cap = nt->count;  /* realloc above sized the array exactly */
   free(list); free(map);
   return newroot;
@@ -372,6 +373,7 @@ int nt_new_node(NodeTable *nt, const char *type) {
     nt->node_cap = nc;
   }
   int id = nt->count++;
+  nt->version++;
   SpNode *nd = &nt->nodes[id];
   memset(nd, 0, sizeof(SpNode));
   if (type) node_set_type(nd, type, strlen(type));
@@ -381,6 +383,7 @@ int nt_new_node(NodeTable *nt, const char *type) {
 void nt_node_set_str(NodeTable *nt, int id, const char *key, const char *val) {
   SpNode *nd = (SpNode *)node_at(nt, id);
   if (!nd) return;
+  nt->version++;
   size_t klen = strlen(key), vlen = strlen(val);
   for (int j = 0; j < nd->ns; j++)
     if (sp_streq(nd->s[j].key, key)) {
@@ -524,6 +527,7 @@ const int *nt_nodes_of_kind(const NodeTable *nt, NodeKind k, int *count) {
 int nt_set_str(NodeTable *nt, int id, const char *key, const char *val) {
   SpNode *nd = (SpNode *)node_at(nt, id);
   if (!nd) return 0;
+  nt->version++;
   size_t vlen = strlen(val);
   for (int j = 0; j < nd->ns; j++) {
     if (sp_streq(nd->s[j].key, key)) {

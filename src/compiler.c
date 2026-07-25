@@ -952,6 +952,48 @@ Scope *comp_scope_of(Compiler *c, int node_id) {
   return &c->scopes[idx];
 }
 
+static unsigned lvw_hash(const char *s) {
+  unsigned h = 2166136261u;
+  while (*s) { h ^= (unsigned char)*s++; h *= 16777619u; }
+  return h;
+}
+static void lvw_build(Compiler *c) {
+  free(c->lvw_head); free(c->lvw_next);
+  int n = c->nt->count;
+  int nb = 16;
+  while (nb < n && nb < (1 << 22)) nb <<= 1;
+  c->lvw_head = malloc((size_t)nb * sizeof(int));
+  c->lvw_next = malloc((size_t)(n > 0 ? n : 1) * sizeof(int));
+  if (!c->lvw_head || !c->lvw_next) {
+    free(c->lvw_head); free(c->lvw_next);
+    c->lvw_head = c->lvw_next = NULL;
+    c->lvw_built = 0;
+    return;
+  }
+  c->lvw_nbuckets = nb;
+  c->lvw_count = n;
+  for (int b = 0; b < nb; b++) c->lvw_head[b] = -1;
+  for (int w = 0; w < n; w++) {
+    c->lvw_next[w] = -1;
+    if (nt_kind(c->nt, w) != NK_LocalVariableWriteNode) continue;
+    const char *wn = nt_str(c->nt, w, "name");
+    if (!wn) continue;
+    unsigned b = lvw_hash(wn) & (unsigned)(nb - 1);
+    c->lvw_next[w] = c->lvw_head[b];
+    c->lvw_head[b] = w;
+  }
+  c->lvw_version = c->nt->version;
+  c->lvw_built = 1;
+}
+int comp_lvw_first(Compiler *c, const char *name) {
+  if (!c->lvw_built || c->lvw_version != c->nt->version) lvw_build(c);
+  if (!c->lvw_built) return -1;
+  return c->lvw_head[lvw_hash(name) & (unsigned)(c->lvw_nbuckets - 1)];
+}
+int comp_lvw_next(const Compiler *c, int w) {
+  return (w >= 0 && w < c->lvw_count) ? c->lvw_next[w] : -1;
+}
+
 int comp_method_index(Compiler *c, const char *name) {
   if (!name) return -1;
   if (!sm_frozen) {

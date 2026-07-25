@@ -52,6 +52,10 @@ typedef struct {
   char *source_file;   /* SOURCE_FILE path (unescaped), NULL if none */
   char **files;        /* FILE id -> path (unescaped); for multi-file #line maps */
   int nfiles;          /* length of `files` */
+  /* Bumped whenever a node is added or a string field is rewritten, i.e. by
+     exactly the edits that can change which node carries which name. Caches
+     keyed on node identity or name can revalidate against it. */
+  unsigned version;
 } NodeTable;
 
 

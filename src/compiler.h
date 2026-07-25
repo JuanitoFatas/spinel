@@ -302,6 +302,13 @@ typedef struct {
   Scope *scopes;    /* scope[0] = top level */
   int nscopes, cscopes;
 
+  /* local-write-by-name index; see comp_lvw_first */
+  int *lvw_head;        /* [lvw_nbuckets] first write id in each name bucket */
+  int *lvw_next;        /* [lvw_count] next write id sharing the bucket */
+  int lvw_nbuckets, lvw_count;
+  unsigned lvw_version; /* nt->version the index was built for */
+  int lvw_built;
+
   char **symbols;   /* interned symbol names; index = sp_sym id */
   int nsymbols, csymbols;
 
@@ -400,6 +407,14 @@ int comp_nil_chain_bottom(const NodeTable *nt, int v);
 /* Scopes. */
 Scope *comp_scope_new(Compiler *c, const char *name, int def_node);
 Scope *comp_scope_of(Compiler *c, int node_id);        /* owning scope */
+
+/* Walk the LocalVariableWriteNodes that bind `name`, newest id first. The
+   alternative -- scanning the whole node table per query -- is what made
+   resolving `k = Klass; k.new` quadratic on class-heavy programs. The index is
+   keyed on name alone and revalidated against nt->version, so the scope of
+   each write is still read fresh at every visit. */
+int comp_lvw_first(Compiler *c, const char *name);
+int comp_lvw_next(const Compiler *c, int w);
 int    comp_method_index(Compiler *c, const char *name); /* -1 if none */
 int    comp_included_method_index(Compiler *c, const char *name);
 
