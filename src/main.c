@@ -509,9 +509,26 @@ int main(int argc, char **argv) {
       }
       if (dup) continue;
       char op[4096];
-      snprintf(op, sizeof op, "%.*s/%s", blen, lib_dir, t);
-      if (access(op, F_OK) != 0)
-        snprintf(op, sizeof op, "%.*s/../%s", blen, lib_dir, t);
+      /* A threaded program's TU and runtime archive are built with
+         -DSP_THREADS, which makes the runtime's per-worker globals
+         thread-local; a package object compiled without it references them as
+         non-TLS and the link fails. Prefer the `_mt` variant, falling back to
+         the plain one for a package (or an installed tree) that has none. */
+      char tmt[4096]; tmt[0] = 0;
+      if (uses_threads) {
+        size_t tl = strlen(t);
+        if (tl > 2 && strcmp(t + tl - 2, ".o") == 0)
+          snprintf(tmt, sizeof tmt, "%.*s_mt.o", (int)(tl - 2), t);
+      }
+      const char *cands[2] = { tmt[0] ? tmt : t, tmt[0] ? t : NULL };
+      int placed = 0;
+      for (int ci = 0; ci < 2 && !placed; ci++) {
+        if (!cands[ci]) break;
+        snprintf(op, sizeof op, "%.*s/%s", blen, lib_dir, cands[ci]);
+        if (access(op, F_OK) != 0)
+          snprintf(op, sizeof op, "%.*s/../%s", blen, lib_dir, cands[ci]);
+        if (access(op, F_OK) == 0) placed = 1;
+      }
       s_add_arg(&cmd, op);
     }
     free(toks);

@@ -62,8 +62,15 @@ SPINEL = bin/spinel
 # definition further down would expand to empty in `all`'s prereq list. The
 # build rule + rationale live further below (near the runtime archive).
 BUNDLED_NATIVE_OBJS = packages/json/sp_json.o packages/stringio/sp_stringio.o packages/strscan/sp_strscan.o packages/base64/sp_base64.o
+# Threaded variant of every bundled package object. A program that uses threads
+# compiles its TU (and links the runtime archive) with -DSP_THREADS, which makes
+# the runtime's per-worker globals thread-local; a package object built without
+# it references them as non-TLS and the link fails (#3342). The driver picks the
+# matching variant.
+BUNDLED_NATIVE_MT_OBJS = $(BUNDLED_NATIVE_OBJS:.o=_mt.o)
+PKG_MT_FLAGS = -DSP_THREADS -ftls-model=initial-exec
 
-all: regexp $(SPINEL) $(RBS_EXTRACT_TARGET) tools $(BUNDLED_NATIVE_OBJS)
+all: regexp $(SPINEL) $(RBS_EXTRACT_TARGET) tools $(BUNDLED_NATIVE_OBJS) $(BUNDLED_NATIVE_MT_OBJS)
 
 # ---- Dependencies ----
 deps: vendor/prism/include/prism/diagnostic.h vendor/rbs/include/rbs/parser.h
@@ -265,6 +272,9 @@ build/sp_dtoa.o: lib/sp_dtoa.c lib/sp_dtoa.h lib/sp_types.h
 packages/json/sp_json.o: packages/json/sp_json.c packages/json/sp_json.h \
                          lib/spinel/runtime.h lib/sp_alloc.h lib/sp_gc.h lib/sp_types.h
 	$(CC) -c -O2 -Wno-all $(SEC_FLAGS) -Ilib -Ipackages/json packages/json/sp_json.c -o $@
+packages/json/sp_json_mt.o: packages/json/sp_json.c packages/json/sp_json.h \
+                            lib/spinel/runtime.h lib/sp_alloc.h lib/sp_gc.h lib/sp_types.h
+	$(CC) -c -O2 -Wno-all $(SEC_FLAGS) $(PKG_MT_FLAGS) -Ilib -Ipackages/json packages/json/sp_json.c -o $@
 
 build/sp_format.o: lib/sp_format.c lib/sp_format.h lib/sp_alloc.h lib/sp_gc.h lib/sp_types.h
 	@mkdir -p build
@@ -276,18 +286,27 @@ build/sp_format.o: lib/sp_format.c lib/sp_format.h lib/sp_alloc.h lib/sp_gc.h li
 packages/stringio/sp_stringio.o: packages/stringio/sp_stringio.c packages/stringio/sp_stringio.h \
                                  lib/spinel/runtime.h lib/sp_alloc.h lib/sp_gc.h lib/sp_types.h
 	$(CC) -c -O2 -Wno-all $(SEC_FLAGS) -Ilib -Ipackages/stringio packages/stringio/sp_stringio.c -o $@
+packages/stringio/sp_stringio_mt.o: packages/stringio/sp_stringio.c packages/stringio/sp_stringio.h \
+                                    lib/spinel/runtime.h lib/sp_alloc.h lib/sp_gc.h lib/sp_types.h
+	$(CC) -c -O2 -Wno-all $(SEC_FLAGS) $(PKG_MT_FLAGS) -Ilib -Ipackages/stringio packages/stringio/sp_stringio.c -o $@
 
 # strscan is likewise a native-bound spin package; its regex matching links
 # against the runtime archive's re_exec (a forward extern in the package C).
 packages/strscan/sp_strscan.o: packages/strscan/sp_strscan.c \
                                lib/spinel/runtime.h lib/sp_alloc.h lib/sp_gc.h lib/sp_types.h
 	$(CC) -c -O2 -Wno-all $(SEC_FLAGS) -Ilib packages/strscan/sp_strscan.c -o $@
+packages/strscan/sp_strscan_mt.o: packages/strscan/sp_strscan.c \
+                                  lib/spinel/runtime.h lib/sp_alloc.h lib/sp_gc.h lib/sp_types.h
+	$(CC) -c -O2 -Wno-all $(SEC_FLAGS) $(PKG_MT_FLAGS) -Ilib packages/strscan/sp_strscan.c -o $@
 
 # base64 carries its whole implementation; digest carries none (it binds the
 # runtime's vendored sp_crypto symbols and has no object of its own).
 packages/base64/sp_base64.o: packages/base64/sp_base64.c \
                              lib/spinel/runtime.h lib/sp_alloc.h lib/sp_gc.h lib/sp_types.h
 	$(CC) -c -O2 -Wno-all $(SEC_FLAGS) -Ilib packages/base64/sp_base64.c -o $@
+packages/base64/sp_base64_mt.o: packages/base64/sp_base64.c \
+                                lib/spinel/runtime.h lib/sp_alloc.h lib/sp_gc.h lib/sp_types.h
+	$(CC) -c -O2 -Wno-all $(SEC_FLAGS) $(PKG_MT_FLAGS) -Ilib packages/base64/sp_base64.c -o $@
 
 build/sp_string.o: lib/sp_string.c lib/sp_string.h lib/sp_alloc.h lib/sp_gc.h lib/sp_types.h
 	@mkdir -p build
