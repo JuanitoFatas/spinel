@@ -9129,16 +9129,19 @@ int emit_poly_call(Compiler *c, int id, Buf *b) {
        dispatch and raised "undefined method 'bytes' for poly". */
     if ((sp_streq(name, "bytes") || sp_streq(name, "codepoints")) && argc == 0 &&
         nt_ref(nt, id, "block") < 0) {
-      buf_printf(b, "sp_str_%s(sp_poly_to_s(", sp_streq(name, "bytes") ? "bytes" : "codepoints");
-      emit_expr(c, recv, b); buf_puts(b, "))"); return 1;
+      /* Skip when a user class owns the name -- the runtime value may be one of
+         those, and stringifying it would answer the bytes of its #inspect. A
+         Struct member or attr_reader called `bytes` hit exactly that (#3364);
+         the `chars` arm below has carried this guard since #2909. */
+      if (!user_defines_or_reads(c, name)) {
+        buf_printf(b, "sp_str_%s(sp_poly_to_s(", sp_streq(name, "bytes") ? "bytes" : "codepoints");
+        emit_expr(c, recv, b); buf_puts(b, "))"); return 1;
+      }
     }
     /* poly.chars -> TY_STR_ARRAY: a String read out of a container or
        destructured from a pair (`|a, b|`) reaches here poly-typed (#2909). */
     if (sp_streq(name, "chars") && argc == 0 && nt_ref(nt, id, "block") < 0) {
-      int has_user = 0;
-      for (int kk = 0; kk < c->nclasses && !has_user; kk++)
-        if (comp_method_in_chain(c, kk, "chars", NULL) >= 0) has_user = 1;
-      if (!has_user) {
+      if (!user_defines_or_reads(c, "chars")) {
         buf_puts(b, "sp_str_chars(sp_poly_to_s("); emit_expr(c, recv, b); buf_puts(b, "))"); return 1;
       }
     }

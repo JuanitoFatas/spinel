@@ -825,7 +825,7 @@ int diag_user_defines(Compiler *c, const char *name) {
    chain. Used where a builtin poly-method shortcut must decline to the general
    cls_id dispatch so a field-reader arm (which the general path DOES emit) wins
    over a colliding builtin (e.g. Data member `day` vs Time#day, #3239). */
-static int user_defines_or_reads(Compiler *c, const char *name) {
+int user_defines_or_reads(Compiler *c, const char *name) {
   if (diag_user_defines(c, name)) return 1;
   for (int uk = 0; uk < c->nclasses; uk++)
     if (comp_is_reader(&c->classes[uk], name)) return 1;

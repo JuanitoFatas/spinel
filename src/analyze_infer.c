@@ -11,6 +11,21 @@
 #define SP_NMEMO_SZ 16384
 static unsigned g_narrow_gen = 1;
 static struct { unsigned gen; long key; signed char val; } g_nmemo[SP_NMEMO_SZ];
+/* A user class owns this name as a method, a class method, or an attr / Struct
+   / Data reader. The poly String shortcuts must decline to the general dispatch
+   when it does, or a reader named after a String method answers that method's
+   result on the receiver's #inspect (#3364). Mirrors user_defines_or_reads on
+   the codegen side. */
+static int an_user_defines_or_reads(Compiler *c, const char *name) {
+  if (!name) return 0;
+  for (int k = 0; k < c->nclasses; k++) {
+    if (comp_method_in_chain(c, k, name, NULL) >= 0) return 1;
+    if (comp_cmethod_in_chain(c, k, name, NULL) >= 0) return 1;
+    if (comp_is_reader(&c->classes[k], name)) return 1;
+  }
+  return comp_method_index(c, name) >= 0;
+}
+
 void sp_narrow_memo_bump(void) { g_narrow_gen++; }
 static long narrow_key(int which, int cid, const char *ivname) {
   unsigned long h = 1469598103934665603UL ^ (unsigned)which;
@@ -969,7 +984,7 @@ TyKind infer_call(Compiler *c, int id) {
   /* String#chars on a poly value (a String read out of a container / pair):
      an array of single-char strings (#2909). */
   if (recv >= 0 && rt == TY_POLY && argc == 0 && sp_streq(name, "chars") &&
-      nt_ref(nt, id, "block") < 0 && !an_user_defines_method(c, name))
+      nt_ref(nt, id, "block") < 0 && !an_user_defines_or_reads(c, name))
     return TY_STR_ARRAY;
   /* Array#find / #detect over a poly value that is an array at runtime (an
      inner array read out of a poly container): the matched element (or nil) is
@@ -4415,7 +4430,7 @@ else {
          binary lump read whose method widened to poly): a concrete int array,
          emitted via sp_str_bytes(sp_poly_to_s(...)) with no boxing. */
       if ((sp_streq(name, "bytes") || sp_streq(name, "codepoints")) && argc == 0 &&
-          nt_ref(nt, id, "block") < 0)
+          nt_ref(nt, id, "block") < 0 && !an_user_defines_or_reads(c, name))
         return TY_INT_ARRAY;
       /* poly.unpack1(fmt): String#unpack1 on a value that widened to poly
          (pervasive in doom's binary WAD parsing). Mirrors the rt==TY_STRING

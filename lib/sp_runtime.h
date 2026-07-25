@@ -4386,8 +4386,17 @@ static sp_RbVal sp_poly_get_sym(sp_RbVal v, sp_sym key) {
     /* an OpenStruct read as poly (e.g. returned from a method that can also
        return an int): `o[:k]` is the member value (#3193). */
     case SP_BUILTIN_OPENSTRUCT: return sp_OpenStruct_get((sp_OpenStruct*)v.v.p, key);
-    default: return sp_box_nil();
+    default: break;
   }
+  /* A Struct / Data read out of a poly container still answers `o[:member]`:
+     the member table is the same one #to_h walks, so go through that rather
+     than returning nil for every subscript (#3369). */
+  if (v.cls_id >= 0 && sp_obj_to_h_fn) {
+    sp_RbVal h = sp_obj_to_h_fn(v);
+    if (h.tag == SP_TAG_OBJ && h.cls_id == SP_BUILTIN_SYM_POLY_HASH)
+      return sp_SymPolyHash_get((sp_SymPolyHash *)h.v.p, key);
+  }
+  return sp_box_nil();
 }
 static void sp_PolyPolyHash_set(sp_PolyPolyHash*h,sp_RbVal k,sp_RbVal v){if(h->len*2>=h->cap)sp_PolyPolyHash_grow(h);mrb_int idx=(mrb_int)(sp_rbval_hash_key(k)&h->mask);while(h->occ[idx]){if(sp_rbval_eql_key(h->keys[idx],k)){h->vals[idx]=v;return;}idx=(idx+1)&h->mask;}h->keys[idx]=k;h->vals[idx]=v;h->occ[idx]=TRUE;h->order[h->len]=idx;h->len++;}
 /* Marshal.dump/load hash vtable slots (sp_marshal_v.hash_new/hash_set):
@@ -4621,8 +4630,12 @@ static sp_RbVal sp_poly_get_str(sp_RbVal v, const char *key) {
     case SP_BUILTIN_STR_STR_HASH: { const char *s = sp_StrStrHash_get((sp_StrStrHash*)v.v.p, key); return s ? sp_box_str(s) : sp_box_nil(); }
     case SP_BUILTIN_STR_INT_HASH: { mrb_int i = sp_StrIntHash_get_opt((sp_StrIntHash*)v.v.p, key); return i == SP_INT_NIL ? sp_box_nil() : sp_box_int(i); }
     case SP_BUILTIN_POLY_POLY_HASH: return sp_PolyPolyHash_get((sp_PolyPolyHash*)v.v.p, sp_box_str(key));
-    default: return sp_box_nil();
+    default: break;
   }
+  /* Struct#["member"] names the member, like the symbol form (#3369) */
+  if (v.cls_id >= 0 && sp_obj_to_h_fn && key)
+    return sp_poly_get_sym(v, sp_sym_intern(key));
+  return sp_box_nil();
 }
 /* Extend sp_poly_arr_len for hash types defined after the initial declaration. */
 static mrb_int sp_poly_arr_len_ex(sp_RbVal a) {
@@ -4716,6 +4729,17 @@ static sp_RbVal sp_poly_massign_get(sp_RbVal v, mrb_int i) {
   return i == 0 ? v : sp_box_nil();
 }
 static sp_RbVal sp_poly_arr_get_hash(sp_RbVal a, mrb_int i) {
+  /* Struct#[n] is the nth MEMBER in declaration order, not an array index --
+     a Struct read out of a poly container reaches here (#3369). */
+  if (a.tag == SP_TAG_OBJ && a.cls_id >= 0 && sp_obj_to_h_fn) {
+    sp_RbVal hh = sp_obj_to_h_fn(a);
+    if (hh.tag == SP_TAG_OBJ && hh.cls_id == SP_BUILTIN_SYM_POLY_HASH) {
+      sp_SymPolyHash *sh = (sp_SymPolyHash *)hh.v.p;
+      mrb_int n = sh->len, k = i < 0 ? n + i : i;
+      if (k < 0 || k >= n) return sp_box_nil();
+      return sh->vals[sh->order[k]];
+    }
+  }
   if (a.tag == SP_TAG_INT) return sp_box_int((a.v.i >> i) & 1);
   /* String#[int]: return the single character at i (a 1-char string), or nil
      when out of range. A String that widened to poly (e.g. a method with
@@ -4772,6 +4796,18 @@ static sp_RbVal sp_poly_index_poly(sp_RbVal recv, sp_RbVal idx) {
                                          rg->first, rg->last, (int)rg->excl));
   }
   mrb_int i = (idx.tag == SP_TAG_INT) ? idx.v.i : 0;
+  /* Struct#[n] is the nth MEMBER, in declaration order -- the order #to_h
+     preserves -- not an array index (#3369). */
+  if (idx.tag == SP_TAG_INT && recv.tag == SP_TAG_OBJ && recv.cls_id >= 0 && sp_obj_to_h_fn) {
+    sp_RbVal hh = sp_obj_to_h_fn(recv);
+    if (hh.tag == SP_TAG_OBJ && hh.cls_id == SP_BUILTIN_SYM_POLY_HASH) {
+      sp_SymPolyHash *sh = (sp_SymPolyHash *)hh.v.p;
+      mrb_int n = sh->len;
+      mrb_int k = i < 0 ? n + i : i;
+      if (k < 0 || k >= n) return sp_box_nil();
+      return sh->vals[sh->order[k]];
+    }
+  }
   return sp_poly_arr_get_hash(recv, i);
 }
 
