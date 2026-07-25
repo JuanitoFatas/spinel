@@ -21,6 +21,11 @@ extern int g_promote_mode;
    array-literal args (fst([]) with def fst(a) = a.first). */
 extern int g_final_bind_pass;
 
+/* Unified value type of a slot's `recv[k] = v` writes; nwrites (optional)
+   reports how many contributed, so a caller can tell "no evidence" from
+   "evidence not derived yet". Defined in analyze_pass.c. */
+TyKind aset_value_type_ex(Compiler *c, int recv, int *nwrites);
+
 /* Run inference over the whole program: register locals, reach a fixpoint
    on their types, and fill the node type cache. */
 void analyze_program(Compiler *c);

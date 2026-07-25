@@ -132,7 +132,12 @@ static int aw_first(Compiler *c, const char *rnm) {
    its `[]=` writes establish (e.g. `@h[s] = int` -> str_int_hash) instead of
    defaulting to a str_poly slot that can never narrow. TY_UNKNOWN if there is
    no such write (caller falls back to poly). */
-static TyKind aset_value_type(Compiler *c, int recv) {
+/* Unified value type of every `recv[k] = v` write to this slot, and (through
+   nwrites) whether there are any. "No writes" and "writes whose value type has
+   not been derived yet" both answer TY_UNKNOWN, and a caller deciding a hash
+   variant has to tell them apart: the first means poly is the right answer,
+   the second means wait. */
+TyKind aset_value_type_ex(Compiler *c, int recv, int *nwrites) {
   const NodeTable *nt = c->nt;
   const char *rty = nt_type(nt, recv);
   if (!rty) return TY_UNKNOWN;
@@ -162,6 +167,7 @@ static TyKind aset_value_type(Compiler *c, int recv) {
     int an = 0;
     const int *av = args >= 0 ? nt_arr(nt, args, "arguments", &an) : NULL;
     if (an < 2) continue;
+    if (nwrites) (*nwrites)++;
     acc = ty_unify(acc, infer_type(c, av[1]));
   }
   return acc;
@@ -176,6 +182,10 @@ static TyKind aset_value_type(Compiler *c, int recv) {
    ONLY string/symbol-keyed writes are considered: an int-keyed `p[i] = v` is
    ambiguous with array element assignment (e.g. an int_array RAM param filled
    by `ram[i] = b`), so int keys must not be read as hash evidence. */
+static TyKind aset_value_type(Compiler *c, int recv) {
+  return aset_value_type_ex(c, recv, NULL);
+}
+
 int infer_param_hash_value(Compiler *c) {
   const NodeTable *nt = c->nt;
   int changed = 0;
