@@ -5324,8 +5324,8 @@ char *codegen_program(const NodeTable *nt) {
       if (na == 0) buf_puts(&b, "void");
       buf_puts(&b, ");\n");
     }
-    /* Byte count for the :binstr return mode (defined in sp_net.c). */
-    if (any_binstr) buf_puts(&b, "extern int sp_net_bin_len;\n");
+    /* Byte count for the :binstr return mode (defined in sp_alloc.c). */
+    if (any_binstr) buf_puts(&b, "extern int sp_ffi_bin_len;\n");
 
     /* native_func externs (Path B): prototype each bound C symbol so the
        generated TU needs no package header. Deduped by symbol (generate and

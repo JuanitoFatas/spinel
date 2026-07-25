@@ -194,6 +194,20 @@ const char *sp_crypto_sha256_hex(const char *msg) {
     return sp_crypto_sha256_hex_buf;
 }
 
+/* SHA-256(msg) -> the raw 32 digest bytes. Digest::SHA256.digest binds here
+   through the native binding's `:cbinstr` return mode, which reads the exact
+   length from sp_ffi_bin_len rather than calling strlen -- a binary digest
+   contains NUL bytes roughly one time in eight. Same static-buffer contract as
+   the hex siblings. */
+static char sp_crypto_sha256_bin_buf[32];
+
+const char *sp_crypto_sha256_bin(const char *msg) {
+    sp_crypto_sha256((const uint8_t *)msg, sp_str_byte_len(msg),
+                     (uint8_t *)sp_crypto_sha256_bin_buf);
+    sp_ffi_bin_len = 32;
+    return sp_crypto_sha256_bin_buf;
+}
+
 static char sp_crypto_sha1_hex_buf[41];
 
 const char *sp_crypto_sha1_hex(const char *msg) {
@@ -207,6 +221,16 @@ const char *sp_crypto_sha1_hex(const char *msg) {
     }
     sp_crypto_sha1_hex_buf[40] = '\0';
     return sp_crypto_sha1_hex_buf;
+}
+
+/* SHA-1(msg) -> the raw 20 digest bytes; see sp_crypto_sha256_bin. */
+static char sp_crypto_sha1_bin_buf[20];
+
+const char *sp_crypto_sha1_bin(const char *msg) {
+    sp_crypto_sha1((const uint8_t *)msg, sp_str_byte_len(msg),
+                   (uint8_t *)sp_crypto_sha1_bin_buf);
+    sp_ffi_bin_len = 20;
+    return sp_crypto_sha1_bin_buf;
 }
 
 /* RFC 6455 §1.3 Sec-WebSocket-Accept:

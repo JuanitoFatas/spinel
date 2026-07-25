@@ -102,10 +102,10 @@ void sp_net_set_nodelay(int fd);
  * Binary-safe recv: a NUL-terminated buffer can't carry an embedded
  * 0x00 (WebSocket frames do). Declaring recv_some/recv_all with the
  * FFI `:binstr` return mode builds the result String from the exact
- * byte count published in sp_net_bin_len instead of strlen, so binary
+ * byte count published in sp_ffi_bin_len instead of strlen, so binary
  * payloads survive. The same C functions serve both `:str` and
- * `:binstr` callers; sp_net_bin_len holds the last recv's byte count. */
-extern int  sp_net_bin_len;
+ * `:binstr` callers; sp_ffi_bin_len (declared in sp_alloc.h) holds the
+ * last recv's byte count. */
 const char *sp_net_recv_some(int fd, int maxlen);
 const char *sp_net_recv_all(int fd, int max_bytes);
 int         sp_net_write_str(int fd, const char *s);

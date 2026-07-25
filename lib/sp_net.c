@@ -9,6 +9,7 @@
  * sp_net is a POSIX prefork/poll runtime (sockets, poll(2), fork,
  * sigaction). */
 #include "sp_net.h"
+#include "sp_alloc.h"   /* sp_ffi_bin_len: the binary-safe return contract */
 
 
 #include <stdio.h>
@@ -79,7 +80,6 @@ int sp_net_shutdown_requested(void) {
  * this many bytes (rather than strlen-truncating at the first NUL), so the same
  * recv functions serve both text (`:str`) and binary (`:binstr`) callers.
  * Single-threaded (the Fiber model is cooperative), so no locking is needed. */
-int sp_net_bin_len = 0;
 
 /* Disable Nagle on a connection fd. TCP_NODELAY is a per-connection option, so
  * it must be set on each accepted fd, not just the listener -- otherwise small
@@ -560,7 +560,7 @@ const char *sp_net_recv_some(int fd, int maxlen) {
     for (;;) {
         /* Cooperative shutdown: bail rather than retry into the signal. */
         if (sp_net_term_flag) {
-            sp_net_bin_len = 0;
+            sp_ffi_bin_len = 0;
             sp_net_recv_buf[0] = '\0';
             return sp_net_recv_buf;
         }
@@ -570,11 +570,11 @@ const char *sp_net_recv_some(int fd, int maxlen) {
         /* Non-blocking fd would-block: wait for readability and retry rather
            than reporting an empty result the caller can't tell from EOF. */
         if ((errno == EAGAIN || errno == EWOULDBLOCK) && sp_net_wait_io(fd, POLLIN)) continue;
-        sp_net_bin_len = 0;
+        sp_ffi_bin_len = 0;
         sp_net_recv_buf[0] = '\0';
         return sp_net_recv_buf;
     }
-    sp_net_bin_len = (int)n;            /* exact byte count for the :binstr path */
+    sp_ffi_bin_len = (int)n;            /* exact byte count for the :binstr path */
     sp_net_recv_buf[n] = '\0';
     return sp_net_recv_buf;
 }
@@ -594,7 +594,7 @@ const char *sp_net_recv_all(int fd, int max_bytes) {
         if (n == 0) break;                   /* clean EOF */
         total += (int)n;
     }
-    sp_net_bin_len = total;              /* exact byte count for the :binstr path */
+    sp_ffi_bin_len = total;              /* exact byte count for the :binstr path */
     sp_net_recv_all_buf[total] = '\0';
     return sp_net_recv_all_buf;
 }
@@ -681,7 +681,7 @@ const char *sp_net_shell_capture(const char *cmd, int max_bytes) {
         if (n == 0) break;
         total += n;
     }
-    sp_net_bin_len = (int)total;        /* exact byte count for the :binstr path */
+    sp_ffi_bin_len = (int)total;        /* exact byte count for the :binstr path */
     sp_net_shell_buf[total] = '\0';
     pclose(fp);
     return sp_net_shell_buf;

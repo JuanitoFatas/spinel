@@ -48,6 +48,13 @@ const char *sp_crypto_sha1_hex(const char *msg);
 /* SHA-256(msg) -> 64-char lowercase hex. */
 const char *sp_crypto_sha256_hex(const char *msg);
 
+/* Raw digest bytes: 32 for SHA-256, 20 for SHA-1. The result is NOT
+ * NUL-terminated data -- it is arbitrary bytes -- so the length is published
+ * in sp_ffi_bin_len (sp_alloc.h) for the `:cbinstr` / `:binstr` return modes
+ * to pick up. Callers reading these directly must use the same length. */
+const char *sp_crypto_sha256_bin(const char *msg);
+const char *sp_crypto_sha1_bin(const char *msg);
+
 /* Sec-WebSocket-Accept = base64(SHA-1(client_key + GUID)) per
  * RFC 6455 §1.3. Returns a 28-char string ending in `=`. The
  * only modern use case for SHA-1 in this codebase; sugars the

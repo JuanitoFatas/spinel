@@ -94,9 +94,9 @@ cast to the declared C type at the call boundary. Floats collapse to
 `:str` builds the result String by `strlen`, so it stops at the first
 embedded NUL. `:binstr` is a return-only variant that builds a
 binary-safe String of an exact byte count instead (it reads
-`sp_net_bin_len`, the byte length recorded by the `sp_net` recv
-functions), so embedded NUL bytes are preserved — use it for binary
-socket reads where `:str` would truncate.
+`sp_ffi_bin_len`, which the callee sets to the exact byte count
+just before returning), so embedded NUL bytes are preserved. Use it for
+binary socket reads or raw digests where `:str` would truncate.
 
 `:float_array` / `:int_array` hand the C side a pointer to the Spinel
 Array's contiguous storage (`.data`). Length is **not** part of the

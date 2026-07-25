@@ -211,6 +211,14 @@ static inline void sp_str_set_len(char *s, size_t len) {
   }
 }
 
+/* Byte count for the binary-safe return modes (FFI `:binstr`, native binding
+   `:cbinstr`). A C function returning bytes rather than a NUL-terminated
+   string publishes the exact length here just before it returns; the call site
+   reads it instead of calling strlen, which would truncate at an embedded NUL.
+   Lives here rather than in any one provider because both sp_net (socket
+   reads) and sp_crypto (raw digests) write it. */
+extern int sp_ffi_bin_len;
+
 static inline const char *sp_str_from_bytes(const char *data, size_t len) {
   char *s = sp_str_alloc(len);
   if (data) memcpy(s, data, len);

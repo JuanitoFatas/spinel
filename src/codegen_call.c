@@ -15241,6 +15241,12 @@ else { memcpy(dir, sf, n); dir[n] = 0; } }
            to the same symbol clobbers it, so dup onto the GC string heap
            before the value escapes into Ruby. */
         int nv_cstr_ret = sp_streq(nf->ret, "cstring");
+        /* a `cbinstr` return is the same borrowed buffer, but holding raw
+           bytes rather than a C string: dup exactly the count the callee
+           published in sp_ffi_bin_len, since strlen would stop at the first
+           NUL byte in (say) a binary digest. */
+        int nv_bin_ret = sp_streq(nf->ret, "cbinstr");
+        int nv_bin_tmp = nv_bin_ret ? ++g_tmp : 0;
         /* JSON.parse's symbolize_names: the option rides a keyword hash the
            1-arg native signature would silently drop. Route the parse
            through the deep key-symbolizer: a literal true wraps directly, a
@@ -15268,6 +15274,9 @@ else { memcpy(dir, sf, n); dir[n] = 0; } }
           }
         }
         if (nv_cstr_ret) buf_puts(b, "sp_str_dup_external(");
+        /* Sequence the call before the sp_ffi_bin_len read: C leaves argument
+           evaluation order unspecified, so bind the result to a temp first. */
+        if (nv_bin_ret) buf_printf(b, "({ const char *_t%d = ", nv_bin_tmp);
         buf_puts(b, nf->csym); buf_puts(b, "(");
         for (int ai = 0; ai < nf->nargs && ai < argc; ai++) {
           if (ai) buf_puts(b, ", ");
@@ -15282,6 +15291,9 @@ else { memcpy(dir, sf, n); dir[n] = 0; } }
         }
         buf_puts(b, ")");
         if (nv_cstr_ret) buf_puts(b, ")");
+        if (nv_bin_ret)
+          buf_printf(b, "; sp_str_from_bytes(_t%d, (size_t)(sp_ffi_bin_len < 0 ? 0 : sp_ffi_bin_len)); })",
+                     nv_bin_tmp);
         return;
       }
     }
@@ -15461,12 +15473,12 @@ else { memcpy(dir, sf, n); dir[n] = 0; } }
         }
         else if (is_binstr_ret) {
           /* Binary-safe: build the String from the exact byte count the callee
-             published in sp_net_bin_len, not strlen (which truncates at an
+             published in sp_ffi_bin_len, not strlen (which truncates at an
              embedded NUL). Sequence the call before reading the length -- C
              leaves argument evaluation order unspecified -- via a temp. */
           int tp = ++g_tmp;
           buf_printf(b, "({ const char *_t%d = %s; "
-                        "sp_str_from_bytes(_t%d, (size_t)(sp_net_bin_len < 0 ? 0 : sp_net_bin_len)); })",
+                        "sp_str_from_bytes(_t%d, (size_t)(sp_ffi_bin_len < 0 ? 0 : sp_ffi_bin_len)); })",
                      tp, call_buf.p, tp);
         }
         else {

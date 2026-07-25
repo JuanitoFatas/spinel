@@ -20,7 +20,7 @@ static const FfiSpecInfo FFI_SPECS[] = {
   { "double",      TY_FLOAT,       "double"          },
   { "bool",        TY_BOOL,        "int"             },
   { "str",         TY_STRING,      "const char *"    },
-  { "binstr",      TY_STRING,      "const char *"    },  /* bytes + sp_net_bin_len */
+  { "binstr",      TY_STRING,      "const char *"    },  /* bytes + sp_ffi_bin_len */
   { "ptr",         TY_POLY,        "void *"          },
   { "float_array", TY_FLOAT_ARRAY, "const double *"  },
   { "int_array",   TY_INT_ARRAY,   "const int64_t *" },
