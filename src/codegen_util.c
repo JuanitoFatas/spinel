@@ -865,6 +865,17 @@ int builtin_class_id(const char *name) {
   if (sp_streq(name, "Process::Status")) return -163;
   if (sp_streq(name, "Process::Tms")) return -164;
   if (sp_streq(name, "Dir"))         return -165;
+  /* the socket classes exist only after `require "socket"`, like CRuby's */
+  if (sp_feature_required("socket")) {
+    if (sp_streq(name, "BasicSocket")) return -166;
+    if (sp_streq(name, "IPSocket"))    return -167;
+    if (sp_streq(name, "TCPSocket"))   return -168;
+    if (sp_streq(name, "TCPServer"))   return -169;
+    if (sp_streq(name, "UDPSocket"))   return -170;
+    if (sp_streq(name, "UNIXSocket"))  return -171;
+    if (sp_streq(name, "UNIXServer"))  return -172;
+    if (sp_streq(name, "Socket"))      return -173;
+  }
   return 0;
 }
 const char *c_type_name(TyKind t) {

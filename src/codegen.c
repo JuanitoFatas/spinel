@@ -5466,13 +5466,17 @@ char *codegen_program(const NodeTable *nt) {
     buf_puts(&b, "case -161:return SPL(\"SystemExit\");case -162:return SPL(\"Signal\");");
     buf_puts(&b, "case -163:return SPL(\"Process::Status\");case -164:return SPL(\"Process::Tms\");");
     buf_puts(&b, "case -165:return SPL(\"Dir\");");
+    buf_puts(&b, "case -166:return SPL(\"BasicSocket\");case -167:return SPL(\"IPSocket\");");
+    buf_puts(&b, "case -168:return SPL(\"TCPSocket\");case -169:return SPL(\"TCPServer\");");
+    buf_puts(&b, "case -170:return SPL(\"UDPSocket\");case -171:return SPL(\"UNIXSocket\");");
+    buf_puts(&b, "case -172:return SPL(\"UNIXServer\");case -173:return SPL(\"Socket\");");
     buf_puts(&b, "default:return \"\";} }\n\n");
     /* Inverse of the table above, for resolving a class carried by NAME back to
        its builtin id so the id-keyed hierarchy walks work on it (#3022). Cold
        path only (superclass/ancestors), so a linear scan is fine. */
     buf_puts(&b, "static mrb_int sp_builtin_id_of_name(const char *n){\n");
     buf_puts(&b, "  if(!n||!n[0])return SP_CLASS_NIL_ID;\n");
-    buf_puts(&b, "  for(mrb_int i=-100;i>=-165;i--){const char*s=sp_class_to_s((sp_Class){i,NULL});"
+    buf_puts(&b, "  for(mrb_int i=-100;i>=-173;i--){const char*s=sp_class_to_s((sp_Class){i,NULL});"
                  "if(s&&s[0]&&!strcmp(s,n))return i;}\n");
     buf_puts(&b, "  return SP_CLASS_NIL_ID;\n}\n\n");
   }

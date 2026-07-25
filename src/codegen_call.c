@@ -5710,8 +5710,18 @@ static int emit_class_new_call(Compiler *c, int id, Buf *b) {
          assigned from it still compiles. */
       if (cn) {
         TyKind nret = comp_ntype(c, id);
-        buf_printf(b, "(sp_raise_cls(\"NameError\", \"uninitialized constant %s\"), %s)",
-                   cn, (is_scalar_ret(nret) && nret != TY_UNKNOWN) ? default_value(nret) : "sp_box_nil()");
+        const char *ndflt = (is_scalar_ret(nret) && nret != TY_UNKNOWN)
+                            ? default_value(nret) : "sp_box_nil()";
+        /* A constant that IS a known builtin class (a socket class Spinel
+           recognizes but whose constructor it has not implemented) exists --
+           the METHOD is what is missing, so say so. Only a genuinely undefined
+           constant keeps the NameError. */
+        if (builtin_class_id(cn) != 0)
+          buf_printf(b, "(sp_raise_cls(\"NoMethodError\", \"undefined method 'new' for class %s\"), %s)",
+                     cn, ndflt);
+        else
+          buf_printf(b, "(sp_raise_cls(\"NameError\", \"uninitialized constant %s\"), %s)",
+                     cn, ndflt);
         return 1;
       }
     }
@@ -19076,9 +19086,20 @@ else { memcpy(dir, sf, n); dir[n] = 0; } }
       buf_puts(b, ")");
       return;
     }
+    /* A BUILTIN class constant has a closed method table, so an unresolved
+       class method on it is a real NoMethodError, not a typo worth failing the
+       build over -- and a `rescue` around it must be able to catch it. A USER
+       class keeps the hard compile error: there the missing method is a genuine
+       gap in the program's own code. */
+    int grt_builtin_cls = 0;
+    if (grt == TY_CLASS && nt_type(nt, recv) &&
+        sp_streq(nt_type(nt, recv), "ConstantReadNode")) {
+      const char *rcn = nt_str(nt, recv, "name");
+      grt_builtin_cls = rcn && comp_class_index(c, rcn) < 0 && builtin_class_id(rcn) != 0;
+    }
     if (grt == TY_POLY || grt == TY_NIL || grt == TY_INT || grt == TY_UNKNOWN ||
         grt == TY_STRING || grt == TY_FLOAT || grt == TY_BOOL ||
-        grt == TY_COMPLEX || grt == TY_RATIONAL) {
+        grt == TY_COMPLEX || grt == TY_RATIONAL || grt_builtin_cls) {
       TyKind ret = comp_ntype(c, id);
       /* An unresolved call raises NoMethodError by default, matching CRuby
          (a dead poly-dispatch arm still emits nothing; a live one raising here

@@ -20,8 +20,16 @@ int is_builtin_class_name(const char *n) {
     "RegexpError","EncodingError","SignalException","Interrupt",
     "ThreadError","FiberError","ClosedQueueError","UncaughtThrowError",
     "NoMatchingPatternError","NoMatchingPatternKeyError","EOFError",
-    "SystemExit",NULL
+    "SystemExit","Dir",NULL
   };
+  /* the socket classes are constants only after `require "socket"` (CRuby
+     defines them there too), so they are checked separately */
+  if (sp_feature_required("socket")) {
+    static const char *const SOCK[] = {
+      "BasicSocket","IPSocket","TCPSocket","TCPServer",
+      "UDPSocket","UNIXSocket","UNIXServer","Socket",NULL };
+    for (int i = 0; SOCK[i]; i++) if (sp_streq(n, SOCK[i])) return 1;
+  }
   for (int i = 0; CL[i]; i++) if (sp_streq(n, CL[i])) return 1;
   return 0;
 }
