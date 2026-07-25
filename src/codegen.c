@@ -5623,14 +5623,19 @@ char *codegen_program(const NodeTable *nt) {
        separately from the includes that follow the class (#2702). */
     int **cls_preps = calloc((size_t)c->nclasses, sizeof(int *));
     int  *cls_npreps = calloc((size_t)c->nclasses, sizeof(int));
-    for (int ci = 0; ci < c->nclasses; ci++) {
-      /* scan def_node body and all reopenings */
+    /* One pass over the node table, resolving each class/module body to its
+       own index. Scanning the whole table once per class was O(classes * N)
+       and dominated codegen on class-heavy programs; each class still sees its
+       own definitions in id order, so include/prepend order is unchanged. */
+    {
+      /* scan every def_node body and all reopenings */
       for (int id = 0; id < c->nt->count; id++) {
         const char *ty2 = nt_type(c->nt, id);
         if (!ty2 || (!sp_streq(ty2, "ClassNode") && !sp_streq(ty2, "ModuleNode"))) continue;
         int cp2 = nt_ref(c->nt, id, "constant_path");
         const char *cn2 = cp2 >= 0 ? nt_str(c->nt, cp2, "name") : NULL;
-        if (!cn2 || comp_class_index(c, cn2) != ci) continue;
+        int ci = cn2 ? comp_class_index(c, cn2) : -1;
+        if (ci < 0 || ci >= c->nclasses) continue;
         int body2 = nt_ref(c->nt, id, "body");
         int bn2 = 0;
         const int *stmts2 = body2 >= 0 ? nt_arr(c->nt, body2, "body", &bn2) : NULL;
