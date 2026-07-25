@@ -545,7 +545,19 @@ SP_NORETURN static void sp_file_raise_errno(const char *op, const char *path) {
   sp_raise_cls(errno == ENOENT ? "Errno::ENOENT" :
                errno == EACCES ? "Errno::EACCES" :
                errno == EEXIST ? "Errno::EEXIST" :
-               errno == EPERM  ? "Errno::EPERM"  : "SystemCallError",
+               errno == EPERM  ? "Errno::EPERM"  :
+               errno == EBADF  ? "Errno::EBADF"  :
+               errno == EINVAL ? "Errno::EINVAL" :
+               errno == EISDIR ? "Errno::EISDIR" :
+               errno == ENOTDIR ? "Errno::ENOTDIR" :
+               errno == EADDRINUSE ? "Errno::EADDRINUSE" :
+               errno == EADDRNOTAVAIL ? "Errno::EADDRNOTAVAIL" :
+               errno == ECONNREFUSED ? "Errno::ECONNREFUSED" :
+               errno == ECONNRESET ? "Errno::ECONNRESET" :
+               errno == EPIPE  ? "Errno::EPIPE"  :
+               errno == EAGAIN ? "Errno::EAGAIN" :
+               errno == EAFNOSUPPORT ? "Errno::EAFNOSUPPORT" :
+               errno == ENOTCONN ? "Errno::ENOTCONN" : "SystemCallError",
                sp_sprintf("%s @ %s - %s", strerror(errno), op, path ? path : ""));
 }
 

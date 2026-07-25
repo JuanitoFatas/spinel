@@ -2824,22 +2824,13 @@ int is_builtin_reopen(const char *name) {
 }
 
 /* Returns 1 if n is a known built-in exception class name. */
+/* The builtin exception class names, as one authority: is_builtin_exception_name
+   in analyze_util.c. There used to be a copy here and a third in
+   lib/sp_exc.c's matcher, and they drifted -- SystemCallError and the Errno::
+   family reached only some of them, so `rescue SystemCallError` compiled to a
+   plain name compare and never caught Errno::ENOENT. */
 int is_exc_name(const char *n) {
-  if (!n) return 0;
-  static const char *const EX[] = {
-    "Exception", "StandardError", "RuntimeError", "ArgumentError",
-    "TypeError", "NameError", "NoMethodError", "IndexError",
-    "KeyError", "RangeError", "IOError", "EOFError",
-    "ZeroDivisionError", "NotImplementedError", "StopIteration",
-    "FloatDomainError", "Math::DomainError", "FrozenError", "EncodingError",
-    "LoadError", "RegexpError", "StringScanner_Error", "FiberError",
-    "UncaughtThrowError", "SyntaxError", "SecurityError", "Interrupt",
-    "SignalException", "ThreadError", "ClosedQueueError",
-    "NoMatchingPatternError", "NoMatchingPatternKeyError", "SystemExit",
-    "LocalJumpError", "ScriptError", NULL   /* (#3023) */
-  };
-  for (int i = 0; EX[i]; i++) if (sp_streq(n, EX[i])) return 1;
-  return 0;
+  return is_builtin_exception_name(n);
 }
 
 /* Returns 1 if user class ci (or any ancestor) directly inherits a builtin exception. */

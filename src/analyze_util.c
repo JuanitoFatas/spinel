@@ -56,9 +56,13 @@ int is_builtin_exception_name(const char *n) {
     "RegexpError", "SecurityError", "SignalException", "ThreadError",
     "FiberError", "ClosedQueueError", "UncaughtThrowError",
     "NoMatchingPatternError", "NoMatchingPatternKeyError",
-    "LocalJumpError", "Math::DomainError", NULL
+    "LocalJumpError", "Math::DomainError", "SystemCallError",
+    "StringScanner_Error", "NoMemoryError", "SystemStackError", NULL
   };
   for (int i = 0; EXC[i]; i++) if (sp_streq(n, EXC[i])) return 1;
+  /* the Errno:: family is open -- the runtime picks a name from errno -- so
+     any qualified Errno name is an exception class (#2922 follow-up) */
+  if (strncmp(n, "Errno::", 7) == 0) return 1;
   return 0;
 }
 int class_inherits_builtin_exception(Compiler *c, int ci) {

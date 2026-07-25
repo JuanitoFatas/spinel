@@ -5,51 +5,16 @@
    `target`, using both the built-in hierarchy and the user hierarchy callback. */
 int sp_exc_cls_matches(const char *raised, const char *target) {
   if (!raised || !target) return 0;
-  static const char *const HIER2[][2] = {
-    {"RuntimeError",         "StandardError"},
-    {"ArgumentError",        "StandardError"},
-    {"TypeError",            "StandardError"},
-    {"NameError",            "StandardError"},
-    {"NoMethodError",        "NameError"},
-    {"IndexError",           "StandardError"},
-    {"KeyError",             "IndexError"},
-    {"RangeError",           "StandardError"},
-    {"IOError",              "StandardError"},
-    {"EOFError",             "IOError"},
-    {"ZeroDivisionError",    "StandardError"},
-    {"NotImplementedError",  "ScriptError"},
-    {"StopIteration",        "IndexError"},
-    {"FloatDomainError",     "RangeError"},
-    {"Math::DomainError",     "StandardError"},
-    {"FrozenError",          "RuntimeError"},
-    {"EncodingError",        "StandardError"},
-    {"LoadError",            "StandardError"},
-    {"RegexpError",          "StandardError"},
-    {"StringScanner_Error",  "StandardError"},
-    {"FiberError",           "StandardError"},
-    {"UncaughtThrowError",   "ArgumentError"},
-    {"SyntaxError",          "ScriptError"},
-    {"ScriptError",          "Exception"},
-    {"StandardError",        "Exception"},
-    {"SecurityError",        "Exception"},
-    {"SignalException",      "Exception"},
-    {"Interrupt",            "SignalException"},
-    {"ThreadError",          "StandardError"},
-    {"ClosedQueueError",     "StopIteration"},
-    {"NoMatchingPatternError", "StandardError"},
-    {"NoMatchingPatternKeyError", "NoMatchingPatternError"},
-    {NULL, NULL}
-  };
+  /* The builtin hierarchy lives in sp_exc_parent_of_name -- there used to be a
+     second copy here, and the two drifted (Errno::* / SystemCallError reached
+     only one of them, so `rescue SystemCallError` missed what #is_a? matched). */
   const char *cls = raised;
   for (int depth = 0; depth < 30 && cls; depth++) {
     if (!strcmp(cls, target)) return 1;
     const char *parent = NULL;
     /* user hierarchy first */
     if (sp_user_exc_parent_fn) parent = sp_user_exc_parent_fn(cls);
-    if (!parent) {
-      for (int i = 0; HIER2[i][0]; i++)
-        if (!strcmp(cls, HIER2[i][0])) { parent = HIER2[i][1]; break; }
-    }
+    if (!parent) parent = sp_exc_parent_of_name(cls);
     if (!parent) {
       if (!strcmp(target, "Exception") || !strcmp(target, "Object") || !strcmp(target, "BasicObject")) return 1;
       break;
@@ -275,10 +240,16 @@ const char *sp_exc_parent_of_name(const char *cls) {
     {"SystemExit",            "Exception"},
     {"SystemStackError",      "Exception"},
     {"NoMemoryError",         "Exception"},
+    {"SystemCallError",       "StandardError"},
     {NULL, NULL}
   };
   for (int i = 0; HIER[i][0]; i++)
     if (!strcmp(cls, HIER[i][0])) return HIER[i][1];
+  /* Every Errno::* is a SystemCallError, as in CRuby. The names are open --
+     sp_file_raise_errno picks one from errno at run time -- so this is a
+     prefix rule rather than a table row, and `rescue SystemCallError` catches
+     the whole family. */
+  if (!strncmp(cls, "Errno::", 7)) return "SystemCallError";
   return NULL;
 }
 /* NameError#name (NoMethodError inherits it): the carried missing name.
