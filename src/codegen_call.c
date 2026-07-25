@@ -4943,7 +4943,18 @@ static int emit_class_new_call(Compiler *c, int id, Buf *b) {
           if (kwh >= 0) vnode = struct_kwarg_value(c, kwh, cls->ivars[a] + 1);
           else if (a < argc) vnode = argv[a];
           if (vnode >= 0) {
-            if (cls->ivar_types[a] == TY_POLY && comp_ntype(c, vnode) != TY_POLY) emit_boxed(c, vnode, b);
+            /* an empty `[]` member value has no element type of its own and
+               would fall back to an IntArray, mismatching the member type that
+               another construction fixed (#3359) */
+            int mt_empty = ty_is_array(cls->ivar_types[a]) && !ty_is_obj_array(cls->ivar_types[a]) &&
+                           nt_kind(nt, vnode) == NK_ArrayNode;
+            if (mt_empty) { int en3 = 0; nt_arr(nt, vnode, "elements", &en3); mt_empty = (en3 == 0); }
+            if (mt_empty) {
+              const char *mk = (cls->ivar_types[a] == TY_POLY_ARRAY) ? "Poly" : array_kind(cls->ivar_types[a]);
+              if (mk) buf_printf(b, "sp_%sArray_new()", mk);
+              else emit_expr(c, vnode, b);
+            }
+            else if (cls->ivar_types[a] == TY_POLY && comp_ntype(c, vnode) != TY_POLY) emit_boxed(c, vnode, b);
             else emit_expr(c, vnode, b);
           }
           else if (splat_h >= 0) {

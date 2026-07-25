@@ -5346,6 +5346,18 @@ int emit_grep_expr(Compiler *c, int id, Buf *b) {
 void emit_arg_or_default(Compiler *c, Scope *m, int idx, int provided, Buf *out) {
   LocalVar *p = scope_local(m, m->pnames[idx]);
   TyKind pt = p ? p->type : TY_INT;
+  /* An empty `[]` argument carries no element type of its own and otherwise
+     falls back to an IntArray, which mismatches a parameter typed from another
+     call site (`P.new(deps: ["d1"])` then `P.new(deps: [])`). Build it at the
+     parameter's type instead, the way the ternary arms already do (#3359). */
+  if (provided >= 0 && ty_is_array(pt) && !ty_is_obj_array(pt) &&
+      nt_kind(c->nt, provided) == NK_ArrayNode) {
+    int en = 0; nt_arr(c->nt, provided, "elements", &en);
+    if (en == 0) {
+      const char *k = (pt == TY_POLY_ARRAY) ? "Poly" : array_kind(pt);
+      if (k) { buf_printf(out, "sp_%sArray_new()", k); return; }
+    }
+  }
   /* Byref string out-param: pass the caller's slot (const char**) so the
      callee's mutation lands in the caller's variable. A plain string local
      passes its address; an already-celled local (captured, or itself a byref
