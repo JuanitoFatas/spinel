@@ -4376,12 +4376,51 @@ static int env_enum_method(const char *n) {
    #2829): aliases retarget in place; foreach/each_child/glob-with-block become
    entries/children/glob followed by .each; a chdir block splices with a
    save/restore; a bare chdir gains Dir.home as its argument. */
+/* Dir includes Enumerable in Ruby. Spinel's Dir is an opaque handle with its
+   own #each / #entries, so route the Enumerable surface through #entries --
+   the same materialize-then-dispatch the Enumerable methods already take on a
+   Range or a user each (#3366). #each / #each_child / #read and the handle
+   readers keep their dedicated arms. */
+static int dir_enumerable_name(const char *nm) {
+  if (!nm) return 0;
+  static const char *const E[] = {
+    "to_a", "map", "collect", "select", "filter", "reject", "sort", "sort_by",
+    "min", "max", "min_by", "max_by", "count", "include?", "member?", "find",
+    "detect", "each_entry", "each_with_index", "each_with_object", "group_by",
+    "partition", "flat_map", "reduce", "inject", "sum", "tally", "first",
+    "take", "drop", "take_while", "drop_while", "zip", "each_slice",
+    "each_cons", "any?", "all?", "none?", "one?", "filter_map", "find_index",
+    "chunk_while", "slice_when", "uniq", "reverse_each", "lazy", NULL };
+  for (int i = 0; E[i]; i++) if (sp_streq(nm, E[i])) return 1;
+  return 0;
+}
 int desugar_dir_surface(Compiler *c) {
   NodeTable *nt = (NodeTable *)c->nt;
   int changed = 0;
   int n0 = nt->count;
   for (int id = 0; id < n0; id++) {
     if (nt_kind(nt, id) != NK_CallNode) continue;
+    {
+      const char *dnm = nt_str(nt, id, "name");
+      int drecv = nt_ref(nt, id, "receiver");
+      if (dnm && drecv >= 0 && dir_enumerable_name(dnm) &&
+          infer_type(c, drecv) == TY_DIR) {
+        int base = nt->count;
+        int ent = nt_new_node(nt, "CallNode");
+        if (ent >= 0) {
+          nt_node_set_ref(nt, ent, "receiver", drecv);
+          nt_node_set_str(nt, ent, "name", "entries");
+          nt_node_set_ref(nt, ent, "arguments", -1);
+          nt_node_set_ref(nt, ent, "block", -1);
+          nt_node_set_ref(nt, id, "receiver", ent);
+          comp_grow_node_arrays(c);
+          int encl = c->nscope[id];
+          for (int j = base; j < nt->count; j++) c->nscope[j] = encl;
+          changed = 1;
+          continue;
+        }
+      }
+    }
     const char *nm = nt_str(nt, id, "name");
     int recv = nt_ref(nt, id, "receiver");
     /* a call chained onto an ENV mutator's result must land on ENV itself,

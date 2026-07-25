@@ -6481,6 +6481,7 @@ void sp_Dir_fin(void *p);
 void sp_Dir_scan(void *p);
 sp_Dir *sp_Dir_new(const char *path);
 sp_Dir *sp_Dir_for_fd(mrb_int fd);
+sp_StrArray *sp_Dir_entries_h(sp_Dir *d, mrb_int children);
 mrb_int sp_Dir_fchdir(mrb_int fd);
 const char *sp_Dir_read(sp_Dir *d);
 const char *sp_Dir_path(sp_Dir *d);

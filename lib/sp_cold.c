@@ -1225,6 +1225,7 @@ void sp_Dir_fin(void *p);
 void sp_Dir_scan(void *p);
 sp_Dir *sp_Dir_new(const char *path);
 sp_Dir *sp_Dir_for_fd(mrb_int fd);
+sp_StrArray *sp_Dir_entries_h(sp_Dir *d, mrb_int children);
 mrb_int sp_Dir_fchdir(mrb_int fd);
 const char *sp_Dir_read(sp_Dir *d);
 const char *sp_Dir_path(sp_Dir *d);
@@ -1623,10 +1624,25 @@ sp_Dir *sp_Dir_for_fd(mrb_int fd) {
   if (!dp) sp_raise_cls("Errno::EBADF", "Bad file descriptor - fdopendir");
   sp_Dir *d = (sp_Dir *)sp_gc_alloc(sizeof(sp_Dir), sp_Dir_fin, sp_Dir_scan);
   d->dp = dp;
+  /* CRuby's Dir.for_fd has no path: the descriptor carries no name. */
   d->path = NULL;
-  SP_GC_ROOT(d);
-  d->path = sp_sprintf("");
   return d;
+}
+/* #entries / #children read the OPEN handle: a Dir from Dir.for_fd has no path
+   to re-open, and re-opening by path would miss a directory that has since been
+   renamed. Rewinds first so the listing is complete however far #read got. */
+sp_StrArray *sp_Dir_entries_h(sp_Dir *d, mrb_int children) {
+  if (!d || !d->dp) sp_raise_cls("IOError", "closed directory");
+  rewinddir(d->dp);
+  sp_StrArray *a = sp_StrArray_new();
+  SP_GC_ROOT(a);
+  struct dirent *e;
+  while ((e = readdir(d->dp)) != NULL) {
+    if (children && (strcmp(e->d_name, ".") == 0 || strcmp(e->d_name, "..") == 0)) continue;
+    sp_StrArray_push(a, sp_sprintf("%s", e->d_name));
+  }
+  rewinddir(d->dp);
+  return a;
 }
 mrb_int sp_Dir_fchdir(mrb_int fd) {
   if (fd < 0 || fchdir((int)fd) != 0)
@@ -1638,7 +1654,9 @@ const char *sp_Dir_read(sp_Dir *d) {
   struct dirent *e = readdir(d->dp);
   return e ? sp_sprintf("%s", e->d_name) : NULL;
 }
-const char *sp_Dir_path(sp_Dir *d) { return d && d->path ? d->path : sp_str_empty; }
+/* NULL is Ruby nil in the string convention: a Dir from Dir.for_fd has no path,
+   and CRuby answers nil for it rather than an empty string (#3365). */
+const char *sp_Dir_path(sp_Dir *d) { return d ? d->path : NULL; }
 sp_RbVal sp_Dir_close(sp_Dir *d) { if (d && d->dp) { closedir(d->dp); d->dp = NULL; } return sp_box_nil(); }
 sp_Dir *sp_Dir_rewind(sp_Dir *d) { if (d && d->dp) rewinddir(d->dp); return d; }
 mrb_int sp_Dir_tell(sp_Dir *d) { return d && d->dp ? (mrb_int)telldir(d->dp) : 0; }

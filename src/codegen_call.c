@@ -10384,7 +10384,8 @@ void emit_call(Compiler *c, int id, Buf *b) {
     }
     /* Dir#inspect renders as #<Dir:PATH> (#3250). */
     if (sp_streq(name, "inspect") && argc == 0) {
-      buf_printf(b, "sp_sprintf(\"#<Dir:%%s>\", sp_Dir_path(%s))", dr);
+      buf_printf(b, "({ const char *_dp = sp_Dir_path(%s);"
+                    " sp_sprintf(\"#<Dir:%%s>\", _dp ? _dp : \"\"); })", dr);
       free(drb.p); return;
     }
     if (sp_streq(name, "close") && argc == 0) { buf_printf(b, "sp_Dir_close(%s)", dr); free(drb.p); return; }
@@ -10404,8 +10405,7 @@ void emit_call(Compiler *c, int id, Buf *b) {
       free(drb.p); return;
     }
     if ((sp_streq(name, "children") || sp_streq(name, "entries")) && argc == 0) {
-      buf_printf(b, "sp_dir_entries_impl(sp_Dir_path(%s), %d)", dr,
-                 sp_streq(name, "children") ? 1 : 0);
+      buf_printf(b, "sp_Dir_entries_h(%s, %d)", dr, sp_streq(name, "children") ? 1 : 0);
       free(drb.p); return;
     }
     if ((sp_streq(name, "each") || sp_streq(name, "each_child")) &&
