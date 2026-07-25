@@ -3073,6 +3073,10 @@ int emit_reduce_block_expr(Compiler *c, int id, Buf *b) {
       if (sen == 0) { it = TY_POLY_POLY_HASH; init_empty_hash = 1; }
     }
     if (it != TY_UNKNOWN) acc_ty = it;
+    /* a nil seed carries no accumulator type -- TY_NIL emits as `void` -- and
+       the fold really is "nothing yet, then whatever the block returns", so
+       accumulate boxed (#3356) */
+    if (nt_kind(nt, init) == NK_NilNode) acc_ty = TY_POLY;
   }
   /* An int seed folded over floats accumulates float (matches the reduce
      return-type promotion in infer_type); keep the C accumulator type in step.
@@ -3166,6 +3170,15 @@ int emit_reduce_block_expr(Compiler *c, int id, Buf *b) {
   }
   else if (nested) { emit_ctype(c, et, b); buf_printf(b, " lv_%s = (sp_IntArray *)sp_PolyArray_get(_t%d, _t%d).v.p; ", p1, ta, ti); }
   else { emit_ctype(c, et, b); buf_printf(b, " lv_%s = sp_%sArray_get(_t%d, _t%d); ", p1, k, ta, ti); }
+  /* `next v` inside a fold block sets the accumulator and moves on, so point
+     the next-value channel at the accumulator temp for this body (#3356). The
+     for above is a real C loop, so the depth must say so or a `next` at the
+     top level of a proc body would take the proc-return path instead. */
+  char nx_acc[24]; snprintf(nx_acc, sizeof nx_acc, "_t%d", tacc);
+  const char *sv_nxv = g_ie_next_var; int sv_nxp = g_ie_res_poly;
+  int sv_cld = g_c_loop_depth;
+  g_ie_next_var = nx_acc; g_ie_res_poly = (acc_ty == TY_POLY);
+  g_c_loop_depth++;
   for (int j = 0; j < bn - 1; j++) {
     emit_stmt(c, bb[j], b, 0);
     buf_puts(b, " ");
@@ -3190,6 +3203,8 @@ int emit_reduce_block_expr(Compiler *c, int id, Buf *b) {
     buf_printf(b, "_t%d = %s; } } ", tacc, tail.p ? tail.p : "0");
     free(tail.p);
   }
+  g_c_loop_depth = sv_cld;
+  g_ie_next_var = sv_nxv; g_ie_res_poly = sv_nxp;
   /* the expression must carry the INFERRED type: a poly-typed reduce
      (e.g. a dyn-send body) boxes its scalar accumulator */
   if (comp_ntype(c, id) == TY_POLY && acc_ty != TY_POLY) {

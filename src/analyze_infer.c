@@ -1315,7 +1315,10 @@ TyKind infer_call(Compiler *c, int id) {
     TyKind a0r = argc == 1 ? comp_ntype(c, argv[0]) : TY_UNKNOWN;
     if (argc == 1 && (sp_streq(name, "+") || sp_streq(name, "-") || sp_streq(name, "*") ||
                       sp_streq(name, "/") || sp_streq(name, "quo")))
-      return a0r == TY_FLOAT ? TY_FLOAT : TY_RATIONAL;
+      /* a boxed operand folds through sp_poly_<op>, whose value is boxed: the
+         operand's runtime class picks the result class, so it stays poly
+         (typing it Rational handed an sp_RbVal to sp_rational_inspect) */
+      return a0r == TY_FLOAT ? TY_FLOAT : a0r == TY_POLY ? TY_POLY : TY_RATIONAL;
     if (argc == 1 && sp_streq(name, "**")) return a0r == TY_INT ? TY_RATIONAL : TY_FLOAT;
     if (argc == 1 && (sp_streq(name, "<") || sp_streq(name, ">") || sp_streq(name, "<=") ||
                       sp_streq(name, ">=") || sp_streq(name, "==") || sp_streq(name, "!=") ||
@@ -3896,6 +3899,13 @@ else {
         /* a symbol literal, or a local statically holding one (s = :+) */
         int is_sym_op = argc == 1 && sym_static_value(c, argv[0]) != NULL;
         (void)a0ty;
+        /* `reduce(nil) { |acc, t| acc.nil? ? t : acc + t }` -- the idiom for a
+           fold with no natural identity. The seed says nothing about the
+           accumulator except that it starts empty, so the fold is boxed: a
+           TY_NIL accumulator has no C representation at all (#3356). */
+        if (!is_sym_op && nt_ref(nt, id, "block") >= 0 &&
+            nt_kind(nt, argv[0]) == NK_NilNode)
+          return TY_POLY;
         if (!is_sym_op) {
           TyKind it = infer_type(c, argv[0]);
           /* An empty array-literal seed accumulates an array: poly, since the
