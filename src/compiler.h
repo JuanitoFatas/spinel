@@ -493,7 +493,8 @@ int lazy_stage_name(const char *nm);
    the `require "ostruct"` member-read catch-all must not swallow them. */
 int poly_builtin_zero_arg_name(const char *m);
 int chain_is_lazy_valued(Compiler *c, int node);      /* CallNode chain evaluating to a Lazy */
-int lazy_alias_chain(Compiler *c, int var_read);      /* local holding a lazy chain -> chain node, else -1 */
+int lazy_alias_chain(Compiler *c, int var_read);
+int lazy_method_chain(Compiler *c, int call);      /* parameterless method whose body is a lazy chain -> chain node, else -1 */
 int        hash_new_default_arg(Compiler *c, int recv); /* Hash.new(d) literal: d node or -1 */
 /* Class index of a `class_eval`/`module_eval { defs }` reopen, else -1.
    enclosing_class resolves bare/`self.` receivers (the class whose body we are

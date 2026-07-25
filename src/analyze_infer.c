@@ -4631,6 +4631,11 @@ else {
     }
   }
 
+  /* A lazy chain answers Enumerator::Lazy for #class. The chain itself has no
+     runtime value, so this is the one non-forcing call it can serve (#3358). */
+  if (sp_streq(name, "class") && argc == 0 && recv >= 0 && chain_is_lazy_valued(c, recv))
+    return TY_CLASS;
+
   /* (range).lazy[.select/reject{blk}].first(n) / .first. The chain may be held
      in a variable (`p = src.lazy.select{}; p.first(n)`) -- resolve the alias to
      the chain node so the forced type matches emit_lazy_pipeline_expr (#2932). */
@@ -4640,6 +4645,7 @@ else {
       int a = lazy_alias_chain(c, lrecv);
       if (a >= 0) lrecv = a;
     }
+    else if (lrecv >= 0) { int a = lazy_method_chain(c, lrecv); if (a >= 0) lrecv = a; }
   if (lrecv >= 0 && nt_type(nt, lrecv) && sp_streq(nt_type(nt, lrecv), "CallNode")) {
     int lazy_src = -1;
     int grouped = 0;   /* a terminal-adjacent each_cons/each_slice groups the stream */
@@ -4675,12 +4681,15 @@ else {
     if (lazy_src >= 0 && lst == TY_RANGE)
       return (argc == 1) ? TY_POLY_ARRAY : TY_POLY;
     /* An array-source lazy first(n) (e.g. the `arr.lazy.take(n).to_a` that the
-       take->first desugar produces) materializes n boxed elements. */
-    if (lazy_src >= 0 && argc == 1 &&
+       take->first desugar produces) materializes n boxed elements; the bare
+       form is that array's first element, exactly as for a range source --
+       leaving it out typed `[1,2,3].lazy.first` nil and the pipeline's value
+       was discarded (#3357). */
+    if (lazy_src >= 0 &&
         (ty_is_array(lst) ||
          (lst == TY_UNKNOWN && nt_type(nt, lazy_src) &&
           sp_streq(nt_type(nt, lazy_src), "ArrayNode"))))
-      return TY_POLY_ARRAY;
+      return (argc == 1) ? TY_POLY_ARRAY : (argc == 0 ? TY_POLY : TY_UNKNOWN);
   }
   }
 

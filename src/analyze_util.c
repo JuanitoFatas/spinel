@@ -311,6 +311,55 @@ int lazy_alias_chain(Compiler *c, int var_read) {
   return chain_is_lazy_valued(c, val) ? val : -1;
 }
 
+/* A bare call to a parameterless user method whose whole body is a lazy chain
+   resolves to that chain, so `def lz; [1,2,3].lazy; end; lz.first` fuses the
+   same way the inline form does. A lazy value has no runtime representation to
+   return, so without this the method body is simply not emittable (#3358).
+   Restricted to a self-independent chain -- no self, ivar, or local read --
+   because the chain is re-emitted at the CALL SITE, where the callee's
+   receiver and locals are not in scope. */
+static int lazy_chain_self_free(Compiler *c, int node, int depth) {
+  const NodeTable *nt = c->nt;
+  if (node < 0 || depth > 32) return 0;
+  NodeKind k = nt_kind(nt, node);
+  if (k == NK_SelfNode || k == NK_InstanceVariableReadNode ||
+      k == NK_LocalVariableReadNode || k == NK_ClassVariableReadNode)
+    return 0;
+  int nr = nt_num_refs(nt, node);
+  for (int i = 0; i < nr; i++) {
+    int ch = nt_ref_at(nt, node, i);
+    /* a block body binds its own params, so its reads are its own */
+    if (ch >= 0 && nt_kind(nt, ch) == NK_BlockNode) continue;
+    if (ch >= 0 && !lazy_chain_self_free(c, ch, depth + 1)) return 0;
+  }
+  int na = nt_num_arrs(nt, node);
+  for (int i = 0; i < na; i++) {
+    int n = 0; const int *ids = nt_arr_at(nt, node, i, &n);
+    for (int j = 0; j < n; j++)
+      if (ids[j] >= 0 && nt_kind(nt, ids[j]) != NK_BlockNode &&
+          !lazy_chain_self_free(c, ids[j], depth + 1)) return 0;
+  }
+  return 1;
+}
+int lazy_method_chain(Compiler *c, int call) {
+  const NodeTable *nt = c->nt;
+  if (call < 0 || nt_kind(nt, call) != NK_CallNode) return -1;
+  if (nt_ref(nt, call, "receiver") >= 0 || nt_ref(nt, call, "block") >= 0) return -1;
+  { int ar = nt_ref(nt, call, "arguments"); int ac = 0;
+    if (ar >= 0) nt_arr(nt, ar, "arguments", &ac);
+    if (ac != 0) return -1; }
+  const char *nm = nt_str(nt, call, "name");
+  if (!nm) return -1;
+  int m = comp_method_index(c, nm);
+  if (m < 0 || c->scopes[m].nparams != 0) return -1;
+  int body = c->scopes[m].body;
+  if (body < 0) return -1;
+  int n = 0; const int *st = nt_arr(nt, body, "body", &n);
+  if (n != 1 || !st) return -1;
+  if (!chain_is_lazy_valued(c, st[0])) return -1;
+  return lazy_chain_self_free(c, st[0], 0) ? st[0] : -1;
+}
+
 /* The anonymous struct class synthesized for a `k = Struct.new(:a, :b)`
    VALUE node (the write is the class's def_node), or -1. Lets the value
    type as TY_CLASS and emit as the class object. */

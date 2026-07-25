@@ -7625,6 +7625,7 @@ void analyze_program(Compiler *c) {
     ch |= desugar_public_send_recv(c);         /* r.public_send(:m, a) -> r.m(a), visibility-stamped */
     ch |= desugar_symbol_string_methods(c);    /* :sym.match(re) -> :sym.to_s.match(re) */
     ch |= desugar_lazy_stateful_stage(c);      /* arr.lazy.uniq -> arr.uniq (finite source) */
+    ch |= desugar_lazy_method_call(c);         /* lz.first where `def lz; ...lazy...; end` */
     ch |= desugar_str_range_methods(c);        /* ("a".."e").map -> .to_a.map */
     ch |= desugar_sym_to_proc_call(c);         /* :m.to_proc.call(r, a) -> r.m(a) */
     ch |= desugar_reduce_method_symbol(c);     /* reduce(:gcd) -> reduce { |a,x| a.gcd(x) } */

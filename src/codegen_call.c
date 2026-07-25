@@ -1261,7 +1261,8 @@ int lazy_alias_write_suppressible(Compiler *c, int write) {
       if (!cn) break;
       int ac = 0; int ar = nt_ref(nt, call, "arguments");
       if (ar >= 0) nt_arr(nt, ar, "arguments", &ac);
-      if ((sp_streq(cn, "first") && ac == 1) || sp_streq(cn, "to_a") || sp_streq(cn, "force")) {
+      /* bare `first` forces too (it is first(1) unwrapped, #3357) */
+      if ((sp_streq(cn, "first") && ac <= 1) || sp_streq(cn, "to_a") || sp_streq(cn, "force")) {
         forced = 1; break;
       }
       if (!lazy_stage_name(cn)) break;
@@ -1374,6 +1375,20 @@ int emit_lazy_size_expr(Compiler *c, int id, Buf *b) {
    loop collecting into an sp_IntArray, short-circuiting at the terminal count.
    Int-typed throughout (source and every stage stay mrb_int). Returns 1 if it
    handled the call. */
+/* `<lazy chain>.class` -> Enumerator::Lazy, without forcing the chain. */
+int emit_lazy_class_expr(Compiler *c, int id, Buf *b) {
+  const NodeTable *nt = c->nt;
+  const char *nm = nt_str(nt, id, "name");
+  if (!nm || !sp_streq(nm, "class") || nt_ref(nt, id, "block") >= 0) return 0;
+  { int ar = nt_ref(nt, id, "arguments"); int ac = 0;
+    if (ar >= 0) nt_arr(nt, ar, "arguments", &ac);
+    if (ac != 0) return 0; }
+  int recv = nt_ref(nt, id, "receiver");
+  if (recv < 0 || !chain_is_lazy_valued(c, recv)) return 0;
+  buf_puts(b, "((sp_Class){(mrb_int)-1, \"Enumerator::Lazy\"})");
+  return 1;
+}
+
 int emit_lazy_pipeline_expr(Compiler *c, int id, Buf *b) {
   const NodeTable *nt = c->nt;
   const char *tname = nt_str(nt, id, "name");
@@ -1392,6 +1407,7 @@ int emit_lazy_pipeline_expr(Compiler *c, int id, Buf *b) {
     int a = lazy_alias_chain(c, recv);
     if (a >= 0) recv = a;
   }
+  else { int a = lazy_method_chain(c, recv); if (a >= 0) recv = a; }
 
   int has_count = 0, count_node = -1;
   {
@@ -1418,6 +1434,7 @@ int emit_lazy_pipeline_expr(Compiler *c, int id, Buf *b) {
     int a = lazy_alias_chain(c, cur);
     if (a >= 0) cur = a;
   }
+  else { int a = lazy_method_chain(c, cur); if (a >= 0) cur = a; }
   while (cur >= 0 && nt_type(nt, cur) && sp_streq(nt_type(nt, cur), "CallNode")) {
     const char *nm = nt_str(nt, cur, "name");
     if (!nm) return 0;
@@ -1451,6 +1468,7 @@ int emit_lazy_pipeline_expr(Compiler *c, int id, Buf *b) {
         int a = lazy_alias_chain(c, cur);
         if (a >= 0) cur = a;
       }
+      else { int a = lazy_method_chain(c, cur); if (a >= 0) cur = a; }
       continue;
     }
     int blk = nt_ref(nt, cur, "block");
@@ -1470,6 +1488,7 @@ int emit_lazy_pipeline_expr(Compiler *c, int id, Buf *b) {
       int a = lazy_alias_chain(c, cur);
       if (a >= 0) cur = a;
     }
+    else { int a = lazy_method_chain(c, cur); if (a >= 0) cur = a; }
   }
   if (lazy_src < 0) return 0;
 
@@ -7569,6 +7588,7 @@ void emit_call(Compiler *c, int id, Buf *b) {
     }
   }
   if (emit_lazy_size_expr(c, id, b)) return;
+  if (emit_lazy_class_expr(c, id, b)) return;
   if (emit_lazy_pipeline_expr(c, id, b)) return;
   if (emit_partition_expr(c, id, b)) return;
   if (emit_with_index_expr(c, id, b)) return;

@@ -5855,6 +5855,45 @@ int desugar_to_hash_splat(Compiler *c) {
   return changed;
 }
 
+/* `def lz; [1,2,3].lazy.map { }; end; lz.first` -- a lazy chain returned from a
+   parameterless method. A lazy value has no runtime representation to return,
+   so the method body is not emittable at all; splice a clone of the chain into
+   the call site instead, which is exactly what a local alias already gets. The
+   method then has no callers left and drops out as dead code. Restricted by
+   lazy_method_chain to a self-free body, so the clone means the same thing
+   where it lands. */
+int desugar_lazy_method_call(Compiler *c) {
+  NodeTable *nt = (NodeTable *)c->nt;
+  int changed = 0;
+  int n0 = nt->count;
+  for (int id = 0; id < n0; id++) {
+    if (nt_kind(nt, id) != NK_CallNode) continue;
+    int recv = nt_ref(nt, id, "receiver");
+    if (recv < 0 || nt_kind(nt, recv) != NK_CallNode) continue;
+    int chain = lazy_method_chain(c, recv);
+    if (chain < 0) continue;
+    int base = nt->count;
+    int clone = nt_clone_subtree(nt, chain);
+    comp_grow_node_arrays(c);
+    int encl = c->nscope[id];
+    for (int j = base; j < nt->count; j++) c->nscope[j] = encl;
+    if (clone < 0) continue;
+    nt_node_set_ref(nt, id, "receiver", clone);
+    /* the cloned stages carry block parameters that were interned in the
+       CALLEE's scope; re-intern them here or their locals are never declared */
+    for (int j = base; j < nt->count; j++) {
+      if (nt_kind(nt, j) != NK_BlockNode) continue;
+      for (int k = 0; k < 4; k++) {
+        const char *bp = block_param_name(c, j, k);
+        if (!bp) break;
+        scope_local_intern(&c->scopes[encl], bp);
+      }
+    }
+    changed = 1;
+  }
+  return changed;
+}
+
 int desugar_value_callable_forwards(Compiler *c) {
   NodeTable *nt = (NodeTable *)c->nt;
   int changed = 0;
