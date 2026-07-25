@@ -3898,16 +3898,27 @@ int desugar_instance_eval_builtin(Compiler *c) {
    dispatches like the constant itself: retarget the receiver at the AST so
    `k = Array; k.new(3, 0)` rides every Array.new arm (#2715). User classes
    already resolve through class_var_static_ci at the dispatch sites. */
+static unsigned bcv_key_hash(const char *name, const Scope *sc) {
+  unsigned h = 5381;
+  for (const char *p = name; *p; p++) h = h * 33u + (unsigned char)*p;
+  size_t s = (size_t)(const void *)sc;
+  for (unsigned b = 0; b < sizeof s; b++) h = h * 33u + (unsigned char)(s >> (b * 8));
+  return h;
+}
+
 int desugar_builtin_class_var_recv(Compiler *c) {
   NodeTable *nt = (NodeTable *)c->nt;
   int changed = 0;
   int n0 = nt->count;
 
-  /* Index every LocalVariableWriteNode by variable name once, so resolving a
-     receiver's static class scans only the writes of THAT name instead of the
-     whole node table per receiver. Turns the pass from O(receivers * N) into
-     O(N) -- the quadratic that stalled the lobsters tree (#3115). Inlines the
-     old builtin_class_var_static_name resolution over the index. */
+  /* Index every LocalVariableWriteNode by (variable name, scope) once, so
+     resolving a receiver's static class scans only the writes that could
+     actually bind it instead of the whole node table per receiver. Turns the
+     pass from O(receivers * N) into O(N) -- the quadratic that stalled the
+     lobsters tree (#3115). Scope belongs in the key because a hot name reused
+     across many scopes otherwise leaves one long chain whose every entry needs
+     its scope resolved. Inlines the old builtin_class_var_static_name
+     resolution over the index. */
   int nbuckets = 16;
   while (nbuckets < n0) nbuckets <<= 1;
   int *head = malloc((size_t)nbuckets * sizeof(int));
@@ -3919,9 +3930,7 @@ int desugar_builtin_class_var_recv(Compiler *c) {
     if (nt_kind(nt, w) != NK_LocalVariableWriteNode) continue;
     const char *wn = nt_str(nt, w, "name");
     if (!wn) continue;
-    unsigned h = 5381;
-    for (const char *p = wn; *p; p++) h = h * 33u + (unsigned char)*p;
-    h &= mask;
+    unsigned h = bcv_key_hash(wn, comp_scope_of(c, w)) & mask;
     wnext[w] = head[h];
     head[h] = w;
   }
@@ -3933,9 +3942,7 @@ int desugar_builtin_class_var_recv(Compiler *c) {
     const char *vn = nt_str(nt, recv, "name");
     if (!vn) continue;
     Scope *sc = comp_scope_of(c, recv);
-    unsigned h = 5381;
-    for (const char *p = vn; *p; p++) h = h * 33u + (unsigned char)*p;
-    h &= mask;
+    unsigned h = bcv_key_hash(vn, sc) & mask;
     /* every write of this local in this scope must assign the SAME builtin (or
        user-class) constant, else the local is dynamic and does not retarget */
     const char *cn = NULL;
