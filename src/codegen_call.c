@@ -10529,6 +10529,56 @@ void emit_call(Compiler *c, int id, Buf *b) {
       buf_printf(b, "sp_sock_addr(%s, %d)", r, sp_streq(name, "peeraddr") ? 1 : 0);
       free(rb.p); return;
     }
+    /* The non-blocking family. `exception: false` swaps the IO::*Wait*
+       exception for the :wait_readable / :wait_writable marker, which changes
+       the result type, so the two forms take different arms. */
+    if (sp_feature_required("socket") &&
+        (sp_streq(name, "accept_nonblock") || sp_streq(name, "connect_nonblock") ||
+         sp_streq(name, "recv_nonblock"))) {
+      const char *lty9 = argc > 0 ? nt_type(nt, argv[argc - 1]) : NULL;
+      int kwh9 = (lty9 && sp_streq(lty9, "KeywordHashNode")) ? argv[argc - 1] : -1;
+      int exc9 = kwh9 >= 0 ? kwh_lookup(nt, kwh9, "exception") : -1;
+      int no_exc = exc9 >= 0 && nt_type(nt, exc9) && sp_streq(nt_type(nt, exc9), "FalseNode");
+      int pos9 = kwh9 >= 0 ? argc - 1 : argc;
+      if (sp_streq(name, "accept_nonblock") && pos9 == 0) {
+        if (no_exc) {
+          int tw = ++g_tmp;
+          buf_printf(b, "({ sp_File *_t%d = sp_sock_accept_nb(%s, 0);"
+                        " _t%d ? sp_box_obj(_t%d, SP_BUILTIN_IO)"
+                        " : sp_box_sym(sp_sym_intern(\"wait_readable\")); })", tw, r, tw, tw);
+        }
+        else buf_printf(b, "sp_sock_accept_nb(%s, 1)", r);
+        free(rb.p); return;
+      }
+      if (sp_streq(name, "recv_nonblock") && pos9 == 1) {
+        if (no_exc) {
+          int tw = ++g_tmp;
+          buf_printf(b, "({ const char *_t%d = sp_sock_read_nb(%s, ", tw, r);
+          emit_int_expr(c, argv[0], b);
+          buf_printf(b, ", 0, 1); _t%d ? sp_box_str(_t%d)"
+                        " : sp_box_sym(sp_sym_intern(\"wait_readable\")); })", tw, tw);
+        }
+        else {
+          buf_printf(b, "sp_sock_read_nb(%s, ", r); emit_int_expr(c, argv[0], b);
+          buf_puts(b, ", 1, 1)");
+        }
+        free(rb.p); return;
+      }
+      if (sp_streq(name, "connect_nonblock") && pos9 == 2) {
+        if (no_exc) {
+          int tw = ++g_tmp;
+          buf_printf(b, "({ mrb_int _t%d = sp_sock_connect_nb(%s, ", tw, r);
+          emit_str_expr(c, argv[0], b); buf_puts(b, ", "); emit_int_expr(c, argv[1], b);
+          buf_printf(b, ", 0); _t%d == SP_INT_NIL"
+                        " ? sp_box_sym(sp_sym_intern(\"wait_writable\")) : sp_box_int(_t%d); })", tw, tw);
+        }
+        else {
+          buf_printf(b, "sp_sock_connect_nb(%s, ", r); emit_str_expr(c, argv[0], b);
+          buf_puts(b, ", "); emit_int_expr(c, argv[1], b); buf_puts(b, ", 1)");
+        }
+        free(rb.p); return;
+      }
+    }
     if (sp_feature_required("socket") && argc == 0 &&
         (sp_streq(name, "local_address") || sp_streq(name, "remote_address"))) {
       buf_printf(b, "sp_sock_address(%s, %d)", r, sp_streq(name, "remote_address") ? 1 : 0);
@@ -10737,16 +10787,40 @@ void emit_call(Compiler *c, int id, Buf *b) {
       if (argc >= 2) emit_str_expr(c, argv[1], b); else buf_puts(b, "\"r\"");
       buf_puts(b, ")"); free(rb.p); return;
     }
-    /* read_nonblock / write_nonblock: this runtime has no non-blocking mode,
-       so they are the blocking reads/writes CRuby falls back to when data is
-       already available -- the common case for a file-backed handle. */
-    if (sp_streq(name, "read_nonblock") && argc >= 1) {
-      buf_printf(b, "sp_File_readpartial(%s, ", r); emit_int_expr(c, argv[0], b);
-      buf_puts(b, ")"); free(rb.p); return;
-    }
-    if (sp_streq(name, "write_nonblock") && argc == 1) {
-      buf_printf(b, "sp_File_write(%s, ", r); emit_str_expr(c, argv[0], b);
-      buf_puts(b, ")"); free(rb.p); return;
+    /* read_nonblock / write_nonblock: a real non-blocking try. `exception:
+       false` answers nil instead of raising IO::*Wait* / EOFError. */
+    if ((sp_streq(name, "read_nonblock") || sp_streq(name, "write_nonblock")) && argc >= 1) {
+      const char *lty8 = nt_type(nt, argv[argc - 1]);
+      int kwh8 = (lty8 && sp_streq(lty8, "KeywordHashNode")) ? argv[argc - 1] : -1;
+      int exc8 = kwh8 >= 0 ? kwh_lookup(nt, kwh8, "exception") : -1;
+      int no_exc8 = exc8 >= 0 && nt_type(nt, exc8) && sp_streq(nt_type(nt, exc8), "FalseNode");
+      if (sp_streq(name, "read_nonblock")) {
+        if (no_exc8) {
+          int tw = ++g_tmp;
+          buf_printf(b, "({ const char *_t%d = sp_sock_read_nb(%s, ", tw, r);
+          emit_int_expr(c, argv[0], b);
+          buf_printf(b, ", 0, 0); _t%d ? sp_box_str(_t%d)"
+                        " : sp_box_sym(sp_sym_intern(\"wait_readable\")); })", tw, tw);
+        }
+        else {
+          buf_printf(b, "sp_sock_read_nb(%s, ", r); emit_int_expr(c, argv[0], b);
+          buf_puts(b, ", 1, 0)");
+        }
+      }
+      else {
+        if (no_exc8) {
+          int tw = ++g_tmp;
+          buf_printf(b, "({ mrb_int _t%d = sp_sock_write_nb(%s, ", tw, r);
+          emit_str_expr(c, argv[0], b);
+          buf_printf(b, ", 0); _t%d == SP_INT_NIL"
+                        " ? sp_box_sym(sp_sym_intern(\"wait_writable\")) : sp_box_int(_t%d); })", tw, tw);
+        }
+        else {
+          buf_printf(b, "sp_sock_write_nb(%s, ", r); emit_str_expr(c, argv[0], b);
+          buf_puts(b, ", 1)");
+        }
+      }
+      free(rb.p); return;
     }
     if (sp_streq(name, "ungetc") && argc == 1) {
       buf_printf(b, "sp_File_ungetc(%s, ", r); emit_boxed(c, argv[0], b); buf_puts(b, ")");

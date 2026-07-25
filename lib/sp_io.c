@@ -204,7 +204,9 @@ mrb_bool sp_File_closed_p(sp_File *f) {
    The kind label a socket carries in ->mode is what tells the socket classes
    apart; a path-backed handle is a File and everything else is an IO. */
 const char *sp_io_kind_name(sp_File *f) {
-  if (!f) return "IO";
+  /* a NULL handle IS nil (the readiness family answers nil on timeout), so it
+     names NilClass -- both for #class and for the NoMethodError texts */
+  if (!f) return "NilClass";
   if (f->is_sock && f->mode) {
     if (strcmp(f->mode, "tcpserver") == 0) return "TCPServer";
     if (strcmp(f->mode, "tcp") == 0) return "TCPSocket";
@@ -470,6 +472,134 @@ mrb_int sp_sock_listen(sp_File *f, mrb_int backlog) {
   sp_sock_require(f, "listen");
   if (listen(fileno(f->fp), (int)backlog) != 0) sp_file_raise_errno("listen", "");
   return 0;
+}
+
+/* ---- the non-blocking readiness family ----
+   Each call tries once on a non-blocking descriptor. Would-block is not an
+   error: with `exception: false` the caller gets :wait_readable /
+   :wait_writable, otherwise the matching IO::*Wait* exception, which carries
+   both its Errno parent and the IO::Wait* module (see lib/sp_exc.c). */
+/* Bytes stdio already buffered for this handle. A #gets followed by a
+   #read_nonblock must see them: the raw read(2) below goes straight to the
+   descriptor and would skip the buffer. Same platform probe sp_sock_wait_readable
+   uses. */
+static long sp_io_buffered(sp_File *f) {
+#if defined(__GLIBC__)
+  return (long)(f->fp->_IO_read_end - f->fp->_IO_read_ptr);
+#elif defined(__APPLE__)
+  return (long)f->fp->_r;
+#else
+  return (long)__freadahead(f->fp);
+#endif
+}
+/* O_NONBLOCK is set for the duration of one call and put back: leaving it on
+   would make a later blocking #gets treat EAGAIN as EOF. */
+static int sp_io_nb_begin(sp_File *f) {
+  int fd = fileno(f->fp);
+  int fl = fcntl(fd, F_GETFL);
+  if (fl >= 0 && !(fl & O_NONBLOCK)) fcntl(fd, F_SETFL, fl | O_NONBLOCK);
+  return fl;
+}
+static void sp_io_nb_end(sp_File *f, int saved) {
+  if (saved >= 0 && !(saved & O_NONBLOCK)) fcntl(fileno(f->fp), F_SETFL, saved);
+}
+static void sp_sock_nb_prepare(sp_File *f, const char *m) {
+  if (!f || !f->is_sock)
+    sp_raise_cls("NoMethodError",
+                 sp_sprintf("undefined method '%s' for an instance of %s", m, sp_io_kind_name(f)));
+  if (!f->fp) sp_raise_cls("IOError", "closed stream");
+}
+SP_NORETURN static void sp_sock_raise_wait(int writable, const char *op) {
+  sp_raise_cls(writable ? "IO::EAGAINWaitWritable" : "IO::EAGAINWaitReadable",
+               sp_sprintf("Resource temporarily unavailable - %s would block", op));
+}
+static int sp_sock_would_block(void) {
+  return errno == EAGAIN || errno == EWOULDBLOCK;
+}
+/* accept_nonblock -> the new handle, or nil / the :wait_readable marker. */
+sp_File *sp_sock_accept_nb(sp_File *f, mrb_bool exc) {
+  extern int sp_net_accept_nb(int sfd);
+  sp_sock_nb_prepare(f, "accept_nonblock");
+  int saved = sp_io_nb_begin(f);
+  int fd = sp_net_accept_nb(fileno(f->fp));
+  int e = errno;
+  sp_io_nb_end(f, saved);
+  errno = e;
+  if (fd >= 0) return sp_io_fdopen_sock(fd, "tcp");
+  if (sp_sock_would_block()) {
+    if (!exc) return NULL;
+    sp_sock_raise_wait(0, "accept");
+  }
+  sp_file_raise_errno("accept", "");
+}
+/* read_nonblock / recv_nonblock -> the bytes read, or nil when it would block
+   and the caller asked for no exception. EOF is nil in CRuby only for
+   `exception: false`; otherwise it is EOFError. */
+const char *sp_sock_read_nb(sp_File *f, mrb_int len, mrb_bool exc, mrb_bool is_recv) {
+  if (is_recv) sp_sock_nb_prepare(f, "recv_nonblock");
+  else if (!f || !f->fp) sp_raise_cls("IOError", "closed stream");
+  if (len <= 0) return sp_str_from_bytes("", 0);
+  char *buf = (char *)malloc((size_t)len);
+  if (!buf) sp_raise_cls("NoMemoryError", "read_nonblock");
+  ssize_t n;
+  long pend = sp_io_buffered(f);
+  if (pend > 0) {   /* serve what stdio already holds, as CRuby does */
+    size_t want = (size_t)len < (size_t)pend ? (size_t)len : (size_t)pend;
+    n = (ssize_t)fread(buf, 1, want, f->fp);
+  }
+  else {
+    int saved = sp_io_nb_begin(f);
+    do { n = read(fileno(f->fp), buf, (size_t)len); } while (n < 0 && errno == EINTR);
+    int e = errno;
+    sp_io_nb_end(f, saved);
+    errno = e;
+  }
+  if (n > 0) { const char *s = sp_str_from_bytes(buf, (size_t)n); free(buf); return s; }
+  if (n == 0) {
+    free(buf);
+    if (!exc) return NULL;                     /* CRuby: nil at EOF */
+    sp_raise_cls("EOFError", "end of file reached");
+  }
+  free(buf);
+  if (sp_sock_would_block()) {
+    if (!exc) return NULL;
+    sp_sock_raise_wait(0, "read");
+  }
+  sp_file_raise_errno("read", "");
+}
+/* write_nonblock -> the byte count, or SP_INT_NIL when it would block. */
+mrb_int sp_sock_write_nb(sp_File *f, const char *data, mrb_bool exc) {
+  if (!f || !f->fp) sp_raise_cls("IOError", "closed stream");
+  size_t len = data ? strlen(data) : 0;
+  ssize_t n;
+  int saved = sp_io_nb_begin(f);
+  do { n = write(fileno(f->fp), data ? data : "", len); } while (n < 0 && errno == EINTR);
+  int we = errno;
+  sp_io_nb_end(f, saved);
+  errno = we;
+  if (n >= 0) return (mrb_int)n;
+  if (sp_sock_would_block()) {
+    if (!exc) return SP_INT_NIL;
+    sp_sock_raise_wait(1, "write");
+  }
+  sp_file_raise_errno("write", "");
+}
+/* connect_nonblock: an in-flight connect is IO::EINPROGRESSWaitWritable. */
+mrb_int sp_sock_connect_nb(sp_File *f, const char *host, mrb_int port, mrb_bool exc) {
+  extern int sp_net_udp_connect(int fd, const char *host, int port);
+  sp_sock_nb_prepare(f, "connect_nonblock");
+  int saved = sp_io_nb_begin(f);
+  int rc = sp_net_udp_connect(fileno(f->fp), host, (int)port);
+  int ce = errno;
+  sp_io_nb_end(f, saved);
+  errno = ce;
+  if (rc == 0) return 0;
+  if (errno == EINPROGRESS || errno == EALREADY) {
+    if (!exc) return SP_INT_NIL;
+    sp_raise_cls("IO::EINPROGRESSWaitWritable", "operation in progress - connect(2) would block");
+  }
+  if (errno == EISCONN) return 0;
+  sp_file_raise_errno("connect", host ? host : "");
 }
 
 /* TCPServer#accept: park cooperatively for a pending connection first -- a

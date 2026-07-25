@@ -75,7 +75,7 @@ Limited today, but additively fixable; listed roughly easiest-first.
 | Mixin/inheritance lifecycle hooks (`included` / `inherited` / `extended`) | defined but not fired | emit a startup call with the literal class arg (the include/inherit graph is known at compile time) |
 | External `Enumerator` — `.each` with no block is only an Enumerator on `Array` / `Range`, not on an arbitrary user method | mostly supported | `Array#each` / `Range#each` with no block return a working external Enumerator (`#next` / `#peek` / `#rewind` / `#size`, `loop` stops on `StopIteration`). `Enumerator.new { \|y\| ... }` is a fiber-backed generator (`y << v`, `y.yield(v)`, and the bare `y.yield v` without parentheses, plus `#next` / `#peek` / `#rewind` / `#take` / `#first`, infinite generators work). `Enumerator::Lazy` over an int range (incl. endless) or int array fuses map/select/reject/filter/take_while chains terminated by `first(n)` / `to_a` / `force`. Chained block→`.to_a` forms (`each_slice(n).to_a`, `filter_map`, `map{}.to_a`) also work. |
 | `Array#hash` (and arrays as hash keys) | unsupported | a builtin is additive, but array *keys* need the fundamental key-dispatch above |
-| Sockets | TCP / UDP / UNIX-domain, as IO handles; no non-blocking family — see below | additive, except the non-blocking protocol, which needs a module concept in the exception hierarchy |
+| Sockets | TCP / UDP / UNIX-domain, as IO handles — see below | additive: each missing class and method is its own runtime binding |
 | A promoted value stored into an int-typed Array (`--int-overflow=promote`) | truncated back to int64 by the store | the array's element type has to widen with the value; blanket-widening every int array costs promote mode more than it buys, so this wants a data-flow rule. Seeding the array with one value past 2^63 (or holding the state in a scalar) keeps the promotion today |
 
 ### Sockets
@@ -120,6 +120,14 @@ so they carry the right platform-specific values.
 **Socket::Option.** What `#getsockopt` returns: `#int`, `#bool`, `#level`,
 `#optname`, `#family`, `#inspect`.
 
+**Non-blocking.** `#accept_nonblock`, `#connect_nonblock`, `#recv_nonblock`,
+`#read_nonblock`, `#write_nonblock`. Would-block raises the CRuby exception --
+`IO::EAGAINWaitReadable` and friends, which answer to `IO::WaitReadable`, to
+`Errno::EAGAIN` and to `SystemCallError` alike -- or, with `exception: false`,
+returns the `:wait_readable` / `:wait_writable` marker. O_NONBLOCK is set for
+the duration of one call and put back, so a blocking `#gets` on the same handle
+still works.
+
 **Divergences and gaps.**
 
 - Only the **integer-valued** socket options are reachable, so
@@ -129,16 +137,14 @@ so they carry the right platform-specific values.
   `Addrinfo.getaddrinfo`, `#getnameinfo`, `#to_sockaddr`, `#canonname`,
   `#bind`, `#connect`, `#listen` are missing. `Socket.getaddrinfo` returns
   CRuby's array-of-arrays form, which is the usual way in.
-- The **non-blocking** family is missing: `#accept_nonblock`,
-  `#recv_nonblock`, `#recvfrom_nonblock`, `#connect_nonblock`. CRuby signals
-  these through `IO::WaitReadable`, a module mixed into an `Errno::EAGAIN`
-  subclass, and Spinel's exception hierarchy is single-parent with no module
-  concept, so the protocol has no faithful shape yet. `#read_nonblock` /
-  `#write_nonblock` exist but are the blocking calls.
+- `#recvfrom_nonblock`, `#sendmsg` and `#recvmsg` are missing; the rest of
+  the non-blocking family (`#accept_nonblock`, `#connect_nonblock`,
+  `#recv_nonblock`, `#read_nonblock`, `#write_nonblock`, and their
+  `exception: false` forms) is supported.
 - `SOCKSSocket` does not exist (CRuby only defines it when built with the
   SOCKS library, so a program cannot rely on it either).
-- Missing instance methods: `#sendmsg`, `#recvmsg`, `#getsockname`,
-  `#getpeername`, `#do_not_reverse_lookup`.
+- Missing instance methods: `#getsockname`, `#getpeername`,
+  `#do_not_reverse_lookup`.
 - Missing class methods: `.open`, `.gethostbyname`, `IPSocket.getaddress`.
 - `TCPServer.new` takes no backlog argument (the listen backlog is fixed);
   `TCPSocket.new` has no four-argument local-address form.

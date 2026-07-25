@@ -147,6 +147,11 @@ TyKind ty_unify(TyKind a, TyKind b) {
      the exception method arms NULL-guard (#2739). */
   if (a == TY_NIL && b == TY_EXCEPTION) return b;
   if (b == TY_NIL && a == TY_EXCEPTION) return a;
+  /* An IO handle that also sees nil stays TY_IO: sp_File* NULL is nil (the
+     readiness family answers nil on timeout, and #nil? reads it), and widening
+     to poly stripped every IO method from an `h = nil; h = <accept>` slot. */
+  if (a == TY_NIL && b == TY_IO) return b;
+  if (b == TY_NIL && a == TY_IO) return a;
   return TY_POLY;
 }
 

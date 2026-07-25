@@ -16,6 +16,20 @@ static struct { unsigned gen; long key; signed char val; } g_nmemo[SP_NMEMO_SZ];
    when it does, or a reader named after a String method answers that method's
    result on the receiver's #inspect (#3364). Mirrors user_defines_or_reads on
    the codegen side. */
+/* `exception: false` on a *_nonblock call: the would-block answer is the
+   :wait_readable / :wait_writable marker rather than a raise, so the result is
+   boxed (a symbol or the value). */
+static int an_nonblock_no_exception(Compiler *c, int id) {
+  const NodeTable *nt = c->nt;
+  int args = nt_ref(nt, id, "arguments");
+  int an = 0; const int *av = args >= 0 ? nt_arr(nt, args, "arguments", &an) : NULL;
+  if (!av || an == 0) return 0;
+  const char *lty = nt_type(nt, av[an - 1]);
+  if (!lty || !sp_streq(lty, "KeywordHashNode")) return 0;
+  int e = kwh_lookup(nt, av[an - 1], "exception");
+  return e >= 0 && nt_type(nt, e) && sp_streq(nt_type(nt, e), "FalseNode");
+}
+
 static int an_user_defines_or_reads(Compiler *c, const char *name) {
   if (!name) return 0;
   for (int k = 0; k < c->nclasses; k++) {
@@ -2845,6 +2859,14 @@ else {
         return TY_POLY_ARRAY;
       if ((sp_streq(name, "local_address") || sp_streq(name, "remote_address")) && argc == 0)
         return TY_ADDRINFO;
+      /* the non-blocking family: the handle / the bytes / the byte count, each
+         nullable so `exception: false` can answer nil */
+      if (sp_streq(name, "accept_nonblock") || sp_streq(name, "recv_nonblock") ||
+          sp_streq(name, "connect_nonblock"))
+        return an_nonblock_no_exception(c, id)
+               ? TY_POLY                                  /* :wait_* or the value */
+               : sp_streq(name, "accept_nonblock") ? TY_IO
+               : sp_streq(name, "recv_nonblock") ? TY_STRING : TY_INT;
       if (sp_streq(name, "recv") && argc == 1) return TY_STRING;
       if (sp_streq(name, "recvfrom") && argc == 1) return TY_POLY_ARRAY;
       if (((sp_streq(name, "bind") || sp_streq(name, "connect")) && argc == 2) ||
@@ -2856,6 +2878,9 @@ else {
       if (sp_streq(name, "getsockopt") && argc == 2) return TY_SOCKOPT;
     }
     /* fd-backed IO instance methods (#3038) */
+    if ((sp_streq(name, "read_nonblock") || sp_streq(name, "write_nonblock")) &&
+        an_nonblock_no_exception(c, id))
+      return TY_POLY;
     if (sp_streq(name, "readbyte") || sp_streq(name, "fcntl") ||
         sp_streq(name, "pwrite") || sp_streq(name, "write_nonblock")) return TY_INT;
     if (sp_streq(name, "pread") || sp_streq(name, "read_nonblock")) return TY_STRING;
