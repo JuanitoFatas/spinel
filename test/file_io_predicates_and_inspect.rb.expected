@@ -4,11 +4,11 @@ false
 false
 true
 false
-"/etc"
-"/etc/definitely_missing_name_xyz"
-"/etc/passwd"
-"#<File:/etc/passwd>"
-"#<File:/etc/passwd (closed)>"
+true
+true
+true
+true
+true
 "#<IO:<STDIN>>"
 "abc"
 nil

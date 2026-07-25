@@ -1,18 +1,27 @@
 # File real-uid predicates, File.realdirpath, IO#inspect, String/IO.try_convert
-p File.readable_real?("/etc/passwd")
-p File.readable_real?("/nonexistent_spinel_xyz")
-p File.writable_real?("/nonexistent_spinel_xyz")
-p File.executable_real?("/nonexistent_spinel_xyz")
-p File.readable?("/etc/passwd")
-p File.readable?("/nonexistent_spinel_xyz")
-p File.realdirpath("/etc")
-p File.realdirpath("/etc/definitely_missing_name_xyz")
-p File.realdirpath("passwd", "/etc")
+# Everything is compared against a path this test creates and resolves itself:
+# /tmp and /etc are symlinks on macOS, so a hardcoded expectation is not portable.
+dir = "spinel_rdp_test_dir"
+Dir.mkdir(dir) unless Dir.exist?(dir)
+path = File.join(dir, "sample.txt")
+File.write(path, "hello\n")
+real_dir = File.realpath(dir)
 
-f = File.open("/etc/passwd")
-p f.inspect
+p File.readable_real?(path)
+p File.readable_real?("no_such_spinel_file_xyz")
+p File.writable_real?("no_such_spinel_file_xyz")
+p File.executable_real?("no_such_spinel_file_xyz")
+p File.readable?(path)
+p File.readable?("no_such_spinel_file_xyz")
+
+p File.realdirpath(dir) == real_dir
+p File.realdirpath(File.join(dir, "missing_name_xyz")) == File.join(real_dir, "missing_name_xyz")
+p File.realdirpath("missing_name_xyz", dir) == File.join(real_dir, "missing_name_xyz")
+
+f = File.open(path)
+p f.inspect == "#<File:#{path}>"
 f.close
-p f.inspect
+p f.inspect == "#<File:#{path} (closed)>"
 p STDIN.inspect
 
 p String.try_convert("abc")
@@ -21,3 +30,6 @@ p Integer.try_convert(5)
 
 p Math.expm1(0)
 p Math.log1p(0)
+
+File.delete(path)
+Dir.rmdir(dir)

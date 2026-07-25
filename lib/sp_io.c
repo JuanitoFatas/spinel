@@ -202,7 +202,10 @@ mrb_bool sp_File_closed_p(sp_File *f) {
 const char *sp_File_inspect(sp_File *f) {
   const char *p = f && f->path ? f->path : "";
   const char *cls = (p[0] && p[0] != '<') ? "File" : "IO";
-  if (!f || !f->fp) return sp_sprintf("#<%s:%s (closed)>", cls, p);
+  if (!f || !f->fp) return p[0] ? sp_sprintf("#<%s:%s (closed)>", cls, p)
+                                : sp_sprintf("#<IO:(closed)>");
+  /* a pipe end or a wrapped descriptor has no path: CRuby names the fd */
+  if (!p[0]) return sp_sprintf("#<IO:fd %d>", fileno(f->fp));
   return sp_sprintf("#<%s:%s>", cls, p);
 }
 

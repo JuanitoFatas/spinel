@@ -1139,7 +1139,12 @@ TyKind infer_call(Compiler *c, int id) {
   /* the desugared ENV snapshot (#2742) */
   if (recv < 0 && sp_streq(name, "__env_to_h") && argc == 0) return TY_STR_STR_HASH;
   if (recv < 0 && sp_streq(name, "Complex")) return TY_COMPLEX;
-  if (recv < 0 && sp_streq(name, "Rational") && (argc == 1 || argc == 2)) return TY_RATIONAL;
+  if (recv < 0 && sp_streq(name, "Rational") && (argc == 1 || argc == 2)) {
+    /* a bignum operand needs the big Rational, which is a boxed value */
+    if (infer_type(c, argv[0]) == TY_BIGINT ||
+        (argc == 2 && infer_type(c, argv[1]) == TY_BIGINT)) return TY_POLY;
+    return TY_RATIONAL;
+  }
   if (recv >= 0) {
     const char *rrty = nt_type(nt, recv);
     if (rrty && sp_streq(rrty, "ConstantReadNode") && nt_str(nt, recv, "name") &&
@@ -2757,6 +2762,7 @@ else {
     if (sp_streq(name, "getc") || sp_streq(name, "readchar") || sp_streq(name, "readpartial") ||
         sp_streq(name, "sysread") || sp_streq(name, "ftype")) return TY_STRING;
     if (sp_streq(name, "inspect") && argc == 0) return TY_STRING;
+    if (sp_streq(name, "nil?") && argc == 0) return TY_BOOL;
     /* the readiness family answers the handle itself or nil -- a nullable
        sp_File*, which TY_IO already models (NULL is nil) */
     if (sp_streq(name, "wait_readable") || sp_streq(name, "wait_writable") ||

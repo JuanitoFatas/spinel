@@ -2203,6 +2203,23 @@ static int emit_complex_rational_call(Compiler *c, int id, Buf *b) {
       buf_puts(b, ")");
       return 1;
     }
+    /* A bignum operand cannot ride the mrb_int pair: the (mrb_int) cast below
+       reinterprets the sp_Bigint POINTER as the numerator, so Rational(10**30,
+       3) came out a different garbage value on every run. Build the big
+       Rational instead; sp_box_brat normalizes the sign and reduces. */
+    if ((argc == 1 || argc == 2) &&
+        (comp_ntype(c, argv[0]) == TY_BIGINT ||
+         (argc == 2 && comp_ntype(c, argv[1]) == TY_BIGINT))) {
+      buf_puts(b, "sp_box_brat(");
+      for (int k = 0; k < 2; k++) {
+        if (k) buf_puts(b, ", ");
+        if (k == 1 && argc == 1) { buf_puts(b, "sp_bigint_new_int(1)"); break; }
+        if (comp_ntype(c, argv[k]) == TY_BIGINT) emit_expr(c, argv[k], b);
+        else { buf_puts(b, "sp_bigint_new_int("); emit_int_expr(c, argv[k], b); buf_puts(b, ")"); }
+      }
+      buf_puts(b, ")");
+      return 1;
+    }
     if (argc == 2) {
       /* a zero denominator raises ZeroDivisionError (CRuby), not (n/0). Both
          arguments are evaluated first, in order. Render each into a local Buf so
@@ -10354,6 +10371,12 @@ void emit_call(Compiler *c, int id, Buf *b) {
     }
     if (sp_streq(name, "inspect") && argc == 0) {
       buf_printf(b, "sp_File_inspect(%s)", r);
+      free(rb.p); return;
+    }
+    /* the readiness family answers nil on timeout, so a handle slot is
+       nullable and #nil? is a real question about it */
+    if (sp_streq(name, "nil?") && argc == 0) {
+      buf_printf(b, "((%s) == NULL)", r);
       free(rb.p); return;
     }
     if ((sp_streq(name, "wait_readable") || sp_streq(name, "wait_writable") ||

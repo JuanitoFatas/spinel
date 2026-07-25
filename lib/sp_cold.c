@@ -2650,7 +2650,10 @@ sp_File *sp_io_wait_events(sp_File *f, double timeout, mrb_int kind) {
   int n;
   do { n = poll(&pfd, 1, ms); } while (n < 0 && errno == EINTR);
   if (n < 0) sp_raise_cls("IOError", "poll failed");
-  return n > 0 ? f : NULL;
+  /* Only the REQUESTED bits mean ready. POLLERR / POLLHUP / POLLNVAL are
+     output-only and poll sets them whatever was asked for, so `n > 0` alone
+     reported a pipe as priority-readable on macOS. */
+  return (n > 0 && (pfd.revents & pfd.events)) ? f : NULL;
 }
 
 /* IO.select(read, write, error, timeout) -> [ready_read, ready_write,
@@ -2693,7 +2696,8 @@ sp_RbVal sp_io_select(sp_PolyArray *rd, sp_PolyArray *wr, sp_PolyArray *er, doub
   for (int g = 0; g < 3; g++) {
     sp_PolyArray *part = sp_PolyArray_new();
     for (mrb_int i = 0; i < cnt[g]; i++)
-      if (fds[base + i].revents) sp_PolyArray_push(part, src[g]->data[i]);
+      if (fds[base + i].revents & fds[base + i].events)
+        sp_PolyArray_push(part, src[g]->data[i]);
     base += cnt[g];
     sp_PolyArray_push(out, sp_box_poly_array(part));
   }

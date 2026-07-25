@@ -1,9 +1,10 @@
 nil
 Array
 1
-IO
-IO
 nil
+IO
+IO
+true
 IO
 IO
 true
@@ -13,3 +14,4 @@ NoMethodError
 "undefined method 'bogus_xyz' for class Dir"
 Errno::EBADF
 Errno::EBADF
+Dir
