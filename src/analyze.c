@@ -5037,7 +5037,12 @@ static void narrow_object_arrays(Compiler *c) {
 
   /* 8. dependent locals: `b = arr[i]` (arr now a narrowed obj array) makes `b`
         the element object type, so its field accesses unbox. Every write of the
-        local must be such an index read of one class (nil writes excepted). */
+        local must be such an index read of one class (nil writes excepted).
+        Iterated, because the narrowing chains: `a = rows[0]` narrows a to an
+        int array only in this step, and only then can `m = a[1]` see an int
+        (#3354). */
+  for (int prop = 0; prop < 8; prop++) {
+  int prop_ch = 0;
   for (int s = 0; s < c->nscopes; s++) {
     Scope *sc = &c->scopes[s];
     for (int li = 0; li < sc->nlocals; li++) {
@@ -5061,14 +5066,20 @@ static void narrow_object_arrays(Compiler *c) {
         if ((!idx_op && !end_op) || crecv < 0) { ok = 0; break; }
         TyKind rt = infer_type(c, crecv);
         /* element type of a narrowed obj-array OR the new int-array-array */
+        /* a scalar-element array yields its element type; an out-of-range
+           read is that type's nil (SP_INT_NIL / NULL), which it models */
         TyKind ec = ty_is_obj_array(rt) ? ty_object(ty_obj_array_class(rt))
-                  : (rt == TY_INT_ARRAY_ARRAY) ? TY_INT_ARRAY : TY_UNKNOWN;
+                  : (rt == TY_INT_ARRAY_ARRAY) ? TY_INT_ARRAY
+                  : (rt == TY_INT_ARRAY || rt == TY_FLOAT_ARRAY || rt == TY_STR_ARRAY)
+                    ? ty_array_elem(rt) : TY_UNKNOWN;
         if (ec == TY_UNKNOWN) { ok = 0; break; }
         if (elem == TY_UNKNOWN) elem = ec; else if (elem != ec) { ok = 0; break; }
         saw = 1;
       }
-      if (ok && saw && elem != TY_UNKNOWN) lv->type = elem;
+      if (ok && saw && elem != TY_UNKNOWN) { lv->type = elem; prop_ch = 1; }
     }
+  }
+  if (!prop_ch) break;
   }
 
   free(sl); free(read_slot); free(claimed); free(value_ok);
