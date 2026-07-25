@@ -2085,7 +2085,15 @@ static sp_RbVal sp_poly_imaginary(sp_RbVal v) {
   if (sp_poly_numeric_p(v) || sp_poly_is_rational(v)) return sp_box_int(0);
   sp_raise_poly_nomethod("imaginary", v);
 }
-static mrb_bool sp_poly_zero_p(sp_RbVal v) { if (v.tag == SP_TAG_INT) return v.v.i == 0; if (v.tag == SP_TAG_FLT) return v.v.f == 0.0; if (v.tag == SP_TAG_BIGINT) return sp_bigint_sign((sp_Bigint *)v.v.p) == 0; sp_raise_poly_nomethod("zero?", v); }
+/* Sign of a boxed Rational / big Rational: its numerator's, both being kept
+   with a positive denominator. Read exactly rather than through a double --
+   a ratio smaller than DBL_MIN would round to 0.0 and lose its sign. */
+static int sp_poly_rat_sign(sp_RbVal v) {
+  if (sp_poly_is_rational(v)) { mrb_int n = ((sp_Rational *)v.v.p)->num; return n > 0 ? 1 : (n < 0 ? -1 : 0); }
+  return sp_bigint_sign(((sp_BigRational *)v.v.p)->num);
+}
+static inline int sp_poly_is_rat_kind(sp_RbVal v) { return (sp_poly_is_rational(v) || sp_poly_is_brat(v)) && v.v.p; }
+static mrb_bool sp_poly_zero_p(sp_RbVal v) { if (v.tag == SP_TAG_INT) return v.v.i == 0; if (v.tag == SP_TAG_FLT) return v.v.f == 0.0; if (v.tag == SP_TAG_BIGINT) return sp_bigint_sign((sp_Bigint *)v.v.p) == 0; if (sp_poly_is_rat_kind(v)) return sp_poly_rat_sign(v) == 0; sp_raise_poly_nomethod("zero?", v); }
 /* Complex#conjugate / #conj on a boxed value: negate the imaginary part; a real
    number (numeric/rational) is its own conjugate. */
 static sp_RbVal sp_poly_conjugate(sp_RbVal v) {
@@ -2098,8 +2106,8 @@ static sp_RbVal sp_poly_conjugate(sp_RbVal v) {
    poly container): the endpoint as an Integer. */
 static mrb_int sp_poly_range_begin(sp_RbVal v) { if (v.tag == SP_TAG_OBJ && v.cls_id == SP_BUILTIN_RANGE) return ((sp_Range *)v.v.p)->first; sp_raise_poly_nomethod("begin", v); }
 static mrb_int sp_poly_range_end(sp_RbVal v) { if (v.tag == SP_TAG_OBJ && v.cls_id == SP_BUILTIN_RANGE) return ((sp_Range *)v.v.p)->last; sp_raise_poly_nomethod("end", v); }
-static mrb_bool sp_poly_positive_p(sp_RbVal v) { if (v.tag == SP_TAG_INT) return v.v.i > 0; if (v.tag == SP_TAG_FLT) return v.v.f > 0.0; if (v.tag == SP_TAG_BIGINT) return sp_bigint_sign((sp_Bigint *)v.v.p) > 0; sp_raise_poly_nomethod("positive?", v); }
-static mrb_bool sp_poly_negative_p(sp_RbVal v) { if (v.tag == SP_TAG_INT) return v.v.i < 0; if (v.tag == SP_TAG_FLT) return v.v.f < 0.0; if (v.tag == SP_TAG_BIGINT) return sp_bigint_sign((sp_Bigint *)v.v.p) < 0; sp_raise_poly_nomethod("negative?", v); }
+static mrb_bool sp_poly_positive_p(sp_RbVal v) { if (v.tag == SP_TAG_INT) return v.v.i > 0; if (v.tag == SP_TAG_FLT) return v.v.f > 0.0; if (v.tag == SP_TAG_BIGINT) return sp_bigint_sign((sp_Bigint *)v.v.p) > 0; if (sp_poly_is_rat_kind(v)) return sp_poly_rat_sign(v) > 0; sp_raise_poly_nomethod("positive?", v); }
+static mrb_bool sp_poly_negative_p(sp_RbVal v) { if (v.tag == SP_TAG_INT) return v.v.i < 0; if (v.tag == SP_TAG_FLT) return v.v.f < 0.0; if (v.tag == SP_TAG_BIGINT) return sp_bigint_sign((sp_Bigint *)v.v.p) < 0; if (sp_poly_is_rat_kind(v)) return sp_poly_rat_sign(v) < 0; sp_raise_poly_nomethod("negative?", v); }
 /* abs of a negative int goes through SP_POLY_INT_OP(sub, 0, x): plain -x is
    UB for INT_MIN; promote mode boxes it as a bigint, wrap mode keeps the
    documented wrapping C arithmetic. fabs covers -0.0 -> 0.0 too. */
