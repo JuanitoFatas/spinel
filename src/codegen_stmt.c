@@ -1822,6 +1822,19 @@ static int pm_hash_value_class(const NodeTable *nt, int vpat) {
    would use `_t<t>` before it is declared. Routing to the arm's own block keeps
    the helpers after the subject (#3185). */
 static Buf *g_pm_hash_sink = NULL;
+
+/* The name an exception carries at run time is its FULLY QUALIFIED Ruby name:
+   sp_exc_new_sub is emitted with class_ruby_name, and sp_exc_is_a compares
+   against that. A `when Mod::Klass` pattern node carries only the last
+   segment, so comparing it directly never matched and the branch was silently
+   skipped (#3373). Resolve through the class table and use the name the
+   exception actually has. */
+static const char *exc_when_cls_name(Compiler *c, const char *cn) {
+  int ci = cn ? comp_class_index(c, cn) : -1;
+  const char *q = ci >= 0 ? class_ruby_name(c, ci) : NULL;
+  return q ? q : cn;
+}
+
 static int g_pm_hash_sink_indent = 0;
 
 int emit_pm_cond(Compiler *c, int pat, int t, TyKind pt, Buf *b) {
@@ -1865,7 +1878,7 @@ int emit_pm_cond(Compiler *c, int pat, int t, TyKind pt, Buf *b) {
     }
     if (pt == TY_EXCEPTION) {
       /* an exception scrutinee matches by name up its class chain (#2759) */
-      buf_printf(b, "sp_exc_is_a((sp_Exception *)_t%d, \"%s\")", t, cn2);
+      buf_printf(b, "sp_exc_is_a((sp_Exception *)_t%d, \"%s\")", t, exc_when_cls_name(c, cn2));
       return 1;
     }
     int yes = ty_matches_class(pt, cn2, 0);
@@ -3535,7 +3548,7 @@ void emit_case(Compiler *c, int id, Buf *b, int indent) {
           }
           else if (cn2 && pt == TY_EXCEPTION) {
             /* an exception scrutinee matches by name up its class chain (#2759) */
-            buf_printf(b, "sp_exc_is_a((sp_Exception *)_t%d, \"%s\")", t, cn2);
+            buf_printf(b, "sp_exc_is_a((sp_Exception *)_t%d, \"%s\")", t, exc_when_cls_name(c, cn2));
           }
           else if (cn2 && pt == TY_BOOL &&
                    (sp_streq(cn2, "TrueClass") || sp_streq(cn2, "FalseClass"))) {
@@ -3791,7 +3804,7 @@ void emit_case_expr(Compiler *c, int id, Buf *b) {
         }
         else if (cn2 && pt == TY_EXCEPTION) {
           /* an exception scrutinee matches by name up its class chain (#2759) */
-          buf_printf(b, "sp_exc_is_a((sp_Exception *)_t%d, \"%s\")", t, cn2);
+          buf_printf(b, "sp_exc_is_a((sp_Exception *)_t%d, \"%s\")", t, exc_when_cls_name(c, cn2));
         }
         else if (cn2 && pt == TY_BOOL &&
                  (sp_streq(cn2, "TrueClass") || sp_streq(cn2, "FalseClass"))) {
