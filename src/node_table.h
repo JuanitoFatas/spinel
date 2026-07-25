@@ -18,10 +18,21 @@
 #include <stddef.h>
 #include "types.h"   /* sp_streq -- used by the node-table accessors below */
 
-typedef struct { char *key; char *val; size_t val_len; } SpStrField;
-typedef struct { char *key; long long val; }    SpIntField;
-typedef struct { char *key; int ref; }          SpRefField;
-typedef struct { char *key; int *ids; int n; }  SpArrField;
+/* Field lookups are by NAME and are the compiler's hottest operation
+   (nt_str alone: ~160M calls and ~20% of self time on a 37k-line compile).
+   Each field carries a 2-byte discriminator -- first character plus length --
+   so the scan rejects a non-matching key with one 16-bit compare instead of
+   dereferencing its string. The query side folds to a constant: the callers
+   pass string literals, and the accessors below are inline, so
+   sp_field_disc("receiver") is computed at compile time. */
+#define SP_FIELD_DISC(k, klen) ((unsigned)(unsigned char)(k)[0] | ((unsigned)(klen) << 8))
+static inline unsigned sp_field_disc(const char *k) {
+  return SP_FIELD_DISC(k, __builtin_strlen(k));
+}
+typedef struct { char *key; unsigned disc; char *val; size_t val_len; } SpStrField;
+typedef struct { char *key; unsigned disc; long long val; }    SpIntField;
+typedef struct { char *key; unsigned disc; int ref; }          SpRefField;
+typedef struct { char *key; unsigned disc; int *ids; int n; }  SpArrField;
 
 typedef struct {
   char *type;          /* node type string ("CallNode"), NULL if unset */
@@ -188,7 +199,17 @@ typedef enum {
 
 /* Integer node-type, computed once per node and cached. NK_NONE if the node
    has no type or an unrecognized one. */
-NodeKind nt_kind(const NodeTable *nt, int id);
+/* Slow path: resolve the type string to a kind and cache it in the node. */
+NodeKind nt_kind_resolve(const NodeTable *nt, int id);
+/* The kind is cached in the node as kind+1 after the first resolve, so the
+   steady-state cost must be a load and a compare -- an out-of-line call here
+   measured SLOWER than the inlined byte compare it replaced (the old
+   `sp_streq(nt_type(...), "CallNode")` usually differs on the first byte). */
+static inline NodeKind nt_kind(const NodeTable *nt, int id) {
+  if (id < 0 || id >= nt->count) return NK_NONE;
+  int k = nt->nodes[id].kind;
+  return k ? (NodeKind)(k - 1) : nt_kind_resolve(nt, id);
+}
 
 /* Node ids of a given kind, in ascending id order (cached per node table).
    Lets a pass iterate only the nodes it cares about instead of scanning the
@@ -243,14 +264,53 @@ void nt_node_set_arr(NodeTable *nt, int id, const char *key, const int *ids, int
 const char *nt_file_path(const NodeTable *nt, int fid);
 
 const char *nt_type(const NodeTable *nt, int id);          /* NULL if unset */
-const char *nt_str(const NodeTable *nt, int id, const char *key);   /* NULL */
+static inline const char *nt_str(const NodeTable *nt, int id, const char *key) {
+  if (id < 0 || id >= nt->count) return NULL;
+  const SpNode *nd = &nt->nodes[id];
+  unsigned d = sp_field_disc(key);
+  for (int j = 0; j < nd->ns; j++)
+    if (nd->s[j].disc == d && sp_streq(nd->s[j].key, key)) return nd->s[j].val;
+  return NULL;
+}
 /* Overwrite an existing string field's value (no-op if the key is absent).
    Returns 1 if the field was found and updated. */
 int         nt_set_str(NodeTable *nt, int id, const char *key, const char *val);
-size_t      nt_str_len(const NodeTable *nt, int id, const char *key); /* 0 if absent */
-long long   nt_int(const NodeTable *nt, int id, const char *key, long long dflt);
-int         nt_ref(const NodeTable *nt, int id, const char *key);   /* -1 */
-const int  *nt_arr(const NodeTable *nt, int id, const char *key, int *out_n); /* NULL,0 */
+static inline size_t nt_str_len(const NodeTable *nt, int id, const char *key) {
+  if (id < 0 || id >= nt->count) return 0;
+  const SpNode *nd = &nt->nodes[id];
+  unsigned d = sp_field_disc(key);
+  for (int j = 0; j < nd->ns; j++)
+    if (nd->s[j].disc == d && sp_streq(nd->s[j].key, key)) return nd->s[j].val_len;
+  return 0;
+}
+static inline long long nt_int(const NodeTable *nt, int id, const char *key, long long dflt) {
+  if (id < 0 || id >= nt->count) return dflt;
+  const SpNode *nd = &nt->nodes[id];
+  unsigned d = sp_field_disc(key);
+  for (int j = 0; j < nd->ni; j++)
+    if (nd->i[j].disc == d && sp_streq(nd->i[j].key, key)) return nd->i[j].val;
+  return dflt;
+}
+static inline int nt_ref(const NodeTable *nt, int id, const char *key) {
+  if (id < 0 || id >= nt->count) return -1;
+  const SpNode *nd = &nt->nodes[id];
+  unsigned d = sp_field_disc(key);
+  for (int j = 0; j < nd->nr; j++)
+    if (nd->r[j].disc == d && sp_streq(nd->r[j].key, key)) return nd->r[j].ref;
+  return -1;
+}
+static inline const int *nt_arr(const NodeTable *nt, int id, const char *key, int *out_n) {
+  if (out_n) *out_n = 0;
+  if (id < 0 || id >= nt->count) return NULL;
+  const SpNode *nd = &nt->nodes[id];
+  unsigned d = sp_field_disc(key);
+  for (int j = 0; j < nd->na; j++)
+    if (nd->a[j].disc == d && sp_streq(nd->a[j].key, key)) {
+      if (out_n) *out_n = nd->a[j].n;
+      return nd->a[j].ids;
+    }
+  return NULL;
+}
 const char *nt_content(const NodeTable *nt, int id);       /* NULL */
 
 /* Generic child iteration (for structural walks that don't know field

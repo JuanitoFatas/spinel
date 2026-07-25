@@ -70,6 +70,7 @@ static void node_set_type(SpNode *nd, const char *type, size_t len) {
 static void node_add_str(SpNode *nd, const char *key, size_t klen, char *val /*owned*/, size_t vlen) {
   ensure_cap((void **)&nd->s, &nd->cs, nd->ns + 1, sizeof(SpStrField));
   nd->s[nd->ns].key = dup_n(key, klen);
+  nd->s[nd->ns].disc = SP_FIELD_DISC(key, klen);
   nd->s[nd->ns].val = val;
   nd->s[nd->ns].val_len = vlen;
   nd->ns++;
@@ -78,6 +79,7 @@ static void node_add_str(SpNode *nd, const char *key, size_t klen, char *val /*o
 static void node_add_int(SpNode *nd, const char *key, size_t klen, long long v) {
   ensure_cap((void **)&nd->i, &nd->ci, nd->ni + 1, sizeof(SpIntField));
   nd->i[nd->ni].key = dup_n(key, klen);
+  nd->i[nd->ni].disc = SP_FIELD_DISC(key, klen);
   nd->i[nd->ni].val = v;
   nd->ni++;
 }
@@ -85,6 +87,7 @@ static void node_add_int(SpNode *nd, const char *key, size_t klen, long long v) 
 static void node_add_ref(SpNode *nd, const char *key, size_t klen, int ref) {
   ensure_cap((void **)&nd->r, &nd->cr, nd->nr + 1, sizeof(SpRefField));
   nd->r[nd->nr].key = dup_n(key, klen);
+  nd->r[nd->nr].disc = SP_FIELD_DISC(key, klen);
   nd->r[nd->nr].ref = ref;
   nd->nr++;
 }
@@ -92,6 +95,7 @@ static void node_add_ref(SpNode *nd, const char *key, size_t klen, int ref) {
 static void node_add_arr(SpNode *nd, const char *key, size_t klen, int *ids, int n /*owned*/) {
   ensure_cap((void **)&nd->a, &nd->ca, nd->na + 1, sizeof(SpArrField));
   nd->a[nd->na].key = dup_n(key, klen);
+  nd->a[nd->na].disc = SP_FIELD_DISC(key, klen);
   nd->a[nd->na].ids = ids;
   nd->a[nd->na].n = n;
   nd->na++;
@@ -319,7 +323,7 @@ int nt_clone_subtree(NodeTable *nt, int root) {
     dst->ns = dst->cs = src->ns;
     if (src->ns) { dst->s = malloc(sizeof(SpStrField) * (size_t)src->ns);
       for (int j = 0; j < src->ns; j++) {
-        dst->s[j].key = dup_n(src->s[j].key, strlen(src->s[j].key));
+        dst->s[j].key = dup_n(src->s[j].key, strlen(src->s[j].key)); dst->s[j].disc = src->s[j].disc;
         dst->s[j].val_len = src->s[j].val_len;
         dst->s[j].val = malloc(src->s[j].val_len + 1);
         memcpy(dst->s[j].val, src->s[j].val, src->s[j].val_len);
@@ -327,11 +331,12 @@ int nt_clone_subtree(NodeTable *nt, int root) {
       } }
     dst->ni = dst->ci = src->ni;
     if (src->ni) { dst->i = malloc(sizeof(SpIntField) * (size_t)src->ni);
-      for (int j = 0; j < src->ni; j++) { dst->i[j].key = dup_n(src->i[j].key, strlen(src->i[j].key)); dst->i[j].val = src->i[j].val; } }
+      for (int j = 0; j < src->ni; j++) { dst->i[j].key = dup_n(src->i[j].key, strlen(src->i[j].key)); dst->i[j].disc = src->i[j].disc; dst->i[j].val = src->i[j].val; } }
     dst->nr = dst->cr = src->nr;
     if (src->nr) { dst->r = malloc(sizeof(SpRefField) * (size_t)src->nr);
       for (int j = 0; j < src->nr; j++) {
         dst->r[j].key = dup_n(src->r[j].key, strlen(src->r[j].key));
+        dst->r[j].disc = src->r[j].disc;
         int rf = src->r[j].ref;
         dst->r[j].ref = (rf >= 0 && rf < base && map[rf] >= 0) ? map[rf] : rf;
       } }
@@ -339,6 +344,7 @@ int nt_clone_subtree(NodeTable *nt, int root) {
     if (src->na) { dst->a = malloc(sizeof(SpArrField) * (size_t)src->na);
       for (int j = 0; j < src->na; j++) {
         dst->a[j].key = dup_n(src->a[j].key, strlen(src->a[j].key));
+        dst->a[j].disc = src->a[j].disc;
         dst->a[j].n = src->a[j].n;
         dst->a[j].ids = malloc(sizeof(int) * (size_t)src->a[j].n);
         for (int k = 0; k < src->a[j].n; k++) {
@@ -462,7 +468,7 @@ static int sp_kind_cmp(const void *a, const void *b) {
   return strcmp((const char *)a, *(const char *const *)b);
 }
 
-NodeKind nt_kind(const NodeTable *nt, int id) {
+NodeKind nt_kind_resolve(const NodeTable *nt, int id) {
   SpNode *nd = (SpNode *)node_at(nt, id);
   if (!nd) return NK_NONE;
   if (nd->kind) return (NodeKind)(nd->kind - 1);  /* cached (stored as kind+1) */
@@ -514,13 +520,6 @@ const int *nt_nodes_of_kind(const NodeTable *nt, NodeKind k, int *count) {
   return nki_ids + nki_off[k];
 }
 
-const char *nt_str(const NodeTable *nt, int id, const char *key) {
-  const SpNode *nd = node_at(nt, id);
-  if (!nd) return NULL;
-  for (int j = 0; j < nd->ns; j++)
-    if (sp_streq(nd->s[j].key, key)) return nd->s[j].val;
-  return NULL;
-}
 
 int nt_set_str(NodeTable *nt, int id, const char *key, const char *val) {
   SpNode *nd = (SpNode *)node_at(nt, id);
@@ -538,38 +537,9 @@ int nt_set_str(NodeTable *nt, int id, const char *key, const char *val) {
   return 0;
 }
 
-size_t nt_str_len(const NodeTable *nt, int id, const char *key) {
-  const SpNode *nd = node_at(nt, id);
-  if (!nd) return 0;
-  for (int j = 0; j < nd->ns; j++)
-    if (sp_streq(nd->s[j].key, key)) return nd->s[j].val_len;
-  return 0;
-}
 
-long long nt_int(const NodeTable *nt, int id, const char *key, long long dflt) {
-  const SpNode *nd = node_at(nt, id);
-  if (!nd) return dflt;
-  for (int j = 0; j < nd->ni; j++)
-    if (sp_streq(nd->i[j].key, key)) return nd->i[j].val;
-  return dflt;
-}
 
-int nt_ref(const NodeTable *nt, int id, const char *key) {
-  const SpNode *nd = node_at(nt, id);
-  if (!nd) return -1;
-  for (int j = 0; j < nd->nr; j++)
-    if (sp_streq(nd->r[j].key, key)) return nd->r[j].ref;
-  return -1;
-}
 
-const int *nt_arr(const NodeTable *nt, int id, const char *key, int *out_n) {
-  *out_n = 0;
-  const SpNode *nd = node_at(nt, id);
-  if (!nd) return NULL;
-  for (int j = 0; j < nd->na; j++)
-    if (sp_streq(nd->a[j].key, key)) { *out_n = nd->a[j].n; return nd->a[j].ids; }
-  return NULL;
-}
 
 const char *nt_content(const NodeTable *nt, int id) {
   const SpNode *nd = node_at(nt, id);
