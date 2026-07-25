@@ -641,6 +641,7 @@ int diagnose_eval_call(Compiler *c, int id);
 int diagnose_unsupported_call(Compiler *c, int id);
 int diag_user_defines(Compiler *c, const char *name);
 int user_defines_or_reads(Compiler *c, const char *name);
+void emit_complex_coerce(Compiler *c, int node, Buf *b);
 int emit_array_mutate_stmt(Compiler *c, int id, Buf *b, int indent);
 void emit_brk_wrapped_call(Compiler *c, int id, Buf *b);
 void emit_array_splice(Compiler *c, int id, int recv, TyKind rt, int start_node, int len_node, int range_node, int rhs_node, Buf *b);

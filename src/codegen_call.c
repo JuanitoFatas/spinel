@@ -1123,7 +1123,7 @@ void emit_rat_coerce(Compiler *c, int node, Buf *b) {
 }
 /* Emit a node as an sp_Complex: a Complex stays as-is, an Integer/Float
    becomes re+0i (a Float operand marks the real component Float-classed). */
-static void emit_complex_coerce(Compiler *c, int node, Buf *b) {
+void emit_complex_coerce(Compiler *c, int node, Buf *b) {
   if (comp_ntype(c, node) == TY_COMPLEX) { emit_expr(c, node, b); return; }
   /* a poly operand (e.g. a Complex read out of a poly array) unboxes at
      runtime -- a boxed Complex keeps its components, a real number is re+0i */

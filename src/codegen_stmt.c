@@ -1194,8 +1194,10 @@ void emit_op_assign(Compiler *c, int id, Buf *b, int indent) {
     return;
   }
   if (t == TY_COMPLEX && (sp_streq(op, "+") || sp_streq(op, "*"))) {
+    /* coerce the rhs like the binary path does: an Integer, a Float or a boxed
+       value all have to reach sp_complex_* as an sp_Complex */
     buf_printf(b, "lv_%s = sp_complex_%s(lv_%s, ", en, sp_streq(op, "+") ? "add" : "mul", en);
-    emit_expr(c, v, b); buf_puts(b, ");\n");
+    emit_complex_coerce(c, v, b); buf_puts(b, ");\n");
     return;
   }
   /* `r += x` on a Rational local: `r = r <op> x` through the same sp_rational_*
@@ -1272,6 +1274,28 @@ void emit_op_assign(Compiler *c, int id, Buf *b, int indent) {
       buf_printf(b, "lv_%s = %s(lv_%s, ", en, pfn, en);
       emit_boxed(c, v, b);
       buf_puts(b, ");\n");
+      return;
+    }
+  }
+  /* A Rational / Complex local op-assigned a BOXED value (an element read out
+     of a poly array): the binary form folds through sp_poly_<op>, whose result
+     is boxed, so unbox it back into the slot. `acc = acc + b[0]` already
+     worked; only the `+=` spelling was refused (#3362). */
+  if (t == TY_RATIONAL && comp_ntype(c, v) == TY_POLY) {
+    const char *pfn = NULL;
+    if (sp_streq(op, "+")) pfn = "sp_poly_add";
+    else if (sp_streq(op, "-")) pfn = "sp_poly_sub";
+    else if (sp_streq(op, "*")) pfn = "sp_poly_mul";
+    else if (sp_streq(op, "/")) pfn = "sp_poly_div";
+    if (pfn) {
+      char slot[64];
+      snprintf(slot, sizeof slot, "lv_%s", en);
+      Buf bx; memset(&bx, 0, sizeof bx);
+      emit_boxed_text(c, t, slot, &bx);
+      buf_printf(b, "lv_%s = sp_poly_as_rational(%s(%s, ", en, pfn, bx.p ? bx.p : slot);
+      free(bx.p);
+      emit_boxed(c, v, b);
+      buf_puts(b, "));\n");
       return;
     }
   }

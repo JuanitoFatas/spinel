@@ -566,7 +566,14 @@ int range_enum_redispatch(Compiler *c, int id) {
   if (rn >= 0 && nt_type(nt, rn) && sp_streq(nt_type(nt, rn), "RangeNode")) {
     int lo = nt_ref(nt, rn, "left"), hi = nt_ref(nt, rn, "right");
     if (lo < 0 || hi < 0) return 0;
-    if (infer_type(c, lo) != TY_INT || infer_type(c, hi) != TY_INT) return 0;
+    /* A BOXED bound is fine: the range literal's own emission coerces it to the
+       mrb_int sp_Range holds, exactly as it does for `(1...m).sum`. Demanding a
+       statically int bound refused a destructured block parameter, whose leaf
+       binds poly (#3363). A float / string bound still declines. */
+    for (int e = 0; e < 2; e++) {
+      TyKind bt = infer_type(c, e ? hi : lo);
+      if (bt != TY_INT && bt != TY_POLY) return 0;
+    }
   }
   /* Non-collecting Enumerable methods: their result does not depend on the
      block-produced element type, so materializing the range to an int array is
