@@ -250,50 +250,59 @@ int sp_net_accept_nb(int sfd) {
 /* ---- UDP and UNIX-domain sockets ---- */
 
 /* An unbound UDP socket; #bind attaches it to a local address later. */
-int sp_net_udp_open(void) {
+int sp_net_udp_open(int family) {
     signal(SIGPIPE, SIG_IGN);
-    return socket(AF_INET, SOCK_DGRAM, 0);
+    return socket(family > 0 ? family : AF_INET, SOCK_DGRAM, 0);
+}
+/* The family the fd was opened with. An address resolved for the other family
+   cannot be bound or sent to, so every UDP call resolves within it. */
+int sp_net_fd_family(int fd) {
+    struct sockaddr_storage ss;
+    socklen_t sl = sizeof ss;
+    if (fd < 0 || getsockname(fd, (struct sockaddr *)&ss, &sl) != 0) return AF_UNSPEC;
+    return (int)ss.ss_family;
+}
+/* First resolution matching `family` (any, when AF_UNSPEC). */
+static struct addrinfo *sp_net_udp_resolve(int fd, const char *host, int port,
+                                           int passive, struct addrinfo **head) {
+    struct addrinfo hints;
+    memset(&hints, 0, sizeof(hints));
+    hints.ai_family   = sp_net_fd_family(fd);
+    hints.ai_socktype = SOCK_DGRAM;
+    if (passive) hints.ai_flags = AI_PASSIVE;
+    char portbuf[16];
+    snprintf(portbuf, sizeof(portbuf), "%d", port);
+    *head = NULL;
+    if (getaddrinfo((host && *host) ? host : NULL, portbuf, &hints, head) != 0) return NULL;
+    return *head;
 }
 int sp_net_udp_bind(int fd, const char *host, int port) {
     if (fd < 0 || port < 0 || port > 65535) return -1;
-    struct addrinfo hints, *res = NULL;
-    memset(&hints, 0, sizeof(hints));
-    hints.ai_family   = AF_INET;
-    hints.ai_socktype = SOCK_DGRAM;
-    hints.ai_flags    = (host && *host) ? 0 : AI_PASSIVE;
-    char portbuf[16];
-    snprintf(portbuf, sizeof(portbuf), "%d", port);
-    if (getaddrinfo((host && *host) ? host : NULL, portbuf, &hints, &res) != 0) return -1;
-    int rc = bind(fd, res->ai_addr, res->ai_addrlen);
-    freeaddrinfo(res);
+    struct addrinfo *head = NULL;
+    struct addrinfo *ai = sp_net_udp_resolve(fd, host, port, (host && *host) ? 0 : 1, &head);
+    if (!ai) return -1;
+    int rc = bind(fd, ai->ai_addr, ai->ai_addrlen);
+    freeaddrinfo(head);
     return rc;
 }
 /* #connect fixes the peer so #send / #write need no address. */
 int sp_net_udp_connect(int fd, const char *host, int port) {
     if (fd < 0 || port < 0 || port > 65535) return -1;
-    struct addrinfo hints, *res = NULL;
-    memset(&hints, 0, sizeof(hints));
-    hints.ai_family   = AF_INET;
-    hints.ai_socktype = SOCK_DGRAM;
-    char portbuf[16];
-    snprintf(portbuf, sizeof(portbuf), "%d", port);
-    if (getaddrinfo(host, portbuf, &hints, &res) != 0) return -1;
-    int rc = connect(fd, res->ai_addr, res->ai_addrlen);
-    freeaddrinfo(res);
+    struct addrinfo *head = NULL;
+    struct addrinfo *ai = sp_net_udp_resolve(fd, host, port, 0, &head);
+    if (!ai) return -1;
+    int rc = connect(fd, ai->ai_addr, ai->ai_addrlen);
+    freeaddrinfo(head);
     return rc;
 }
 int sp_net_udp_send_to(int fd, const char *data, int len, const char *host, int port) {
     if (fd < 0) return -1;
     if (!host || !*host) return (int)send(fd, data, (size_t)len, 0);
-    struct addrinfo hints, *res = NULL;
-    memset(&hints, 0, sizeof(hints));
-    hints.ai_family   = AF_INET;
-    hints.ai_socktype = SOCK_DGRAM;
-    char portbuf[16];
-    snprintf(portbuf, sizeof(portbuf), "%d", port);
-    if (getaddrinfo(host, portbuf, &hints, &res) != 0) return -1;
-    int rc = (int)sendto(fd, data, (size_t)len, 0, res->ai_addr, res->ai_addrlen);
-    freeaddrinfo(res);
+    struct addrinfo *head = NULL;
+    struct addrinfo *ai = sp_net_udp_resolve(fd, host, port, 0, &head);
+    if (!ai) return -1;
+    int rc = (int)sendto(fd, data, (size_t)len, 0, ai->ai_addr, ai->ai_addrlen);
+    freeaddrinfo(head);
     return rc;
 }
 /* Reads one datagram into `buf`; fills the sender's IP/port when asked.
@@ -362,6 +371,60 @@ int sp_net_unix_path(int fd, int peer, char *buf, int cap) {
     if (rc != 0 || cap <= 0) { if (cap > 0) buf[0] = '\0'; return -1; }
     snprintf(buf, (size_t)cap, "%s", sa.sun_path);
     return 0;
+}
+
+/* ---- Socket class methods ---- */
+int sp_net_gethostname(char *buf, int cap) {
+    if (!buf || cap <= 0) return -1;
+    buf[0] = '\0';
+    return gethostname(buf, (size_t)cap);
+}
+/* A connected pair of the given domain/type; fds[0]/fds[1] on success. */
+int sp_net_socketpair(int domain, int type, int protocol, int fds[2]) {
+    signal(SIGPIPE, SIG_IGN);
+    return socketpair(domain > 0 ? domain : AF_UNIX,
+                      type > 0 ? type : SOCK_STREAM, protocol, fds);
+}
+int sp_net_socket(int domain, int type, int protocol) {
+    signal(SIGPIPE, SIG_IGN);
+    return socket(domain, type, protocol);
+}
+/* getaddrinfo, one resolution at a time: `idx` selects the entry so the caller
+   can walk them without owning the addrinfo list. Fills family/socktype/
+   protocol/ip/port; returns 0 on success, -1 past the end or on failure. */
+int sp_net_getaddrinfo_at(const char *host, int port, int socktype, int idx,
+                          int *family, int *stype, int *proto,
+                          char *ipbuf, int ipcap, int *port_out) {
+    struct addrinfo hints, *res = NULL, *ai;
+    memset(&hints, 0, sizeof(hints));
+    hints.ai_family   = AF_UNSPEC;
+    hints.ai_socktype = socktype > 0 ? socktype : 0;
+    char portbuf[16];
+    snprintf(portbuf, sizeof(portbuf), "%d", port);
+    if (getaddrinfo((host && *host) ? host : NULL, portbuf, &hints, &res) != 0) return -1;
+    int i = 0, rc = -1;
+    for (ai = res; ai; ai = ai->ai_next, i++) {
+        if (i != idx) continue;
+        if (family) *family = ai->ai_family;
+        if (stype)  *stype  = ai->ai_socktype;
+        if (proto)  *proto  = ai->ai_protocol;
+        if (ipbuf && ipcap > 0) {
+            ipbuf[0] = '\0';
+            if (ai->ai_family == AF_INET) {
+                struct sockaddr_in *a = (struct sockaddr_in *)ai->ai_addr;
+                inet_ntop(AF_INET, &a->sin_addr, ipbuf, (socklen_t)ipcap);
+                if (port_out) *port_out = ntohs(a->sin_port);
+            } else if (ai->ai_family == AF_INET6) {
+                struct sockaddr_in6 *a = (struct sockaddr_in6 *)ai->ai_addr;
+                inet_ntop(AF_INET6, &a->sin6_addr, ipbuf, (socklen_t)ipcap);
+                if (port_out) *port_out = ntohs(a->sin6_port);
+            } else if (port_out) *port_out = 0;
+        }
+        rc = 0;
+        break;
+    }
+    freeaddrinfo(res);
+    return rc;
 }
 
 /* ---- socket options ---- */

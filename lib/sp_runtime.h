@@ -1626,14 +1626,13 @@ static const char *sp_poly_class_name(sp_RbVal v) {
         case SP_BUILTIN_BASIC_OBJECT: return SPL("BasicObject");
         case SP_BUILTIN_PROC: return SPL("Proc");
         case SP_BUILTIN_IO: {
-          /* mirror the typed .class emit: a stat handle is a File::Stat
-             (#2841), a path-backed handle a File, a raw stream an IO (#3041) */
+          /* the handle kind names the class, through the same authority the
+             typed .class emit uses -- a boxed socket must not report plain IO */
           sp_File *_iof = (sp_File *)v.v.p;
           if (_iof && _iof->mode &&
               (strcmp(_iof->mode, "stat") == 0 || strcmp(_iof->mode, "lstat") == 0))
             return SPL("File::Stat");
-          if (_iof && sp_File_path(_iof)[0] && sp_File_path(_iof)[0] != '<') return SPL("File");
-          return SPL("IO");
+          return sp_io_kind_name(_iof);
         }
         case SP_BUILTIN_TMS: return SPL("Process::Tms");
         case SP_BUILTIN_OPENSTRUCT: return SPL("OpenStruct");
@@ -4926,6 +4925,10 @@ static mrb_bool sp_poly_kind_of_builtin(sp_RbVal v, const char *cn) {
   if (strcmp(cn, "Object") == 0 || strcmp(cn, "BasicObject") == 0 || strcmp(cn, "Kernel") == 0)
     return TRUE;
   if (strcmp(sp_poly_class_name(v), cn) == 0) return TRUE;  /* exact builtin class */
+  /* a boxed IO handle walks its own kind chain (a socket read back out of a
+     poly array must still answer BasicSocket / IO) */
+  if (v.tag == SP_TAG_OBJ && v.cls_id == SP_BUILTIN_IO)
+    return sp_io_is_a((sp_File *)v.v.p, cn);
   int is_int = (v.tag == SP_TAG_INT || v.tag == SP_TAG_BIGINT);
   int is_flt = (v.tag == SP_TAG_FLT);
   int is_rat = (v.tag == SP_TAG_OBJ && v.cls_id == SP_BUILTIN_RATIONAL);

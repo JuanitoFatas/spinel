@@ -5654,8 +5654,20 @@ static int emit_class_new_call(Compiler *c, int id, Buf *b) {
         buf_puts(b, "), (&(\"\\xff\" \"tcp\")[1]))");
         return 1;
       }
-      if (cn && sp_streq(cn, "UDPSocket") && sp_feature_required("socket") && argc == 0) {
-        buf_puts(b, "sp_sock_udp_new()");
+      /* UDPSocket.new / UDPSocket.new(Socket::AF_INET6) */
+      if (cn && sp_streq(cn, "UDPSocket") && sp_feature_required("socket") && argc <= 1) {
+        buf_puts(b, "sp_sock_udp_new(");
+        if (argc == 1) emit_int_expr(c, argv[0], b); else buf_puts(b, "0");
+        buf_puts(b, ")");
+        return 1;
+      }
+      /* Socket.new(domain, type, protocol) */
+      if (cn && sp_streq(cn, "Socket") && sp_feature_required("socket") && argc >= 2) {
+        buf_puts(b, "sp_sock_new(");
+        emit_int_expr(c, argv[0], b); buf_puts(b, ", ");
+        emit_int_expr(c, argv[1], b); buf_puts(b, ", ");
+        if (argc >= 3) emit_int_expr(c, argv[2], b); else buf_puts(b, "0");
+        buf_puts(b, ")");
         return 1;
       }
       if (cn && sp_streq(cn, "UNIXServer") && sp_feature_required("socket") && argc == 1) {
@@ -12539,7 +12551,7 @@ else { memcpy(dir, sf, n); dir[n] = 0; } }
                  tio, tio, tio, tio, tio, tio);
       static const struct { const char *k; int id; } IO_KIND_CLS[] = {
         { "TCPSocket", -168 }, { "TCPServer", -169 }, { "UDPSocket", -170 },
-        { "UNIXSocket", -171 }, { "UNIXServer", -172 },
+        { "UNIXSocket", -171 }, { "UNIXServer", -172 }, { "Socket", -173 },
         { "File", -121 }, { "IO", -120 }, { NULL, 0 }
       };
       for (int ki = 0; IO_KIND_CLS[ki].k; ki++)
@@ -14056,6 +14068,41 @@ else { memcpy(dir, sf, n); dir[n] = 0; } }
       }
       if (sp_streq(name, "to_tty?") && argc == 0) {
         buf_puts(b, "(isatty(2) != 0)"); return;
+      }
+    }
+    /* Socket class methods (#2922) */
+    if (tcn && sp_streq(tcn, "Socket") && sp_feature_required("socket")) {
+      if (sp_streq(name, "gethostname") && argc == 0) {
+        buf_puts(b, "sp_sock_gethostname()"); return;
+      }
+      /* Socket.pair / .socketpair -> [end0, end1]; the runtime creates both on
+         the first call and hands back the second on the next. */
+      if ((sp_streq(name, "pair") || sp_streq(name, "socketpair")) && argc >= 2) {
+        int tp0 = ++g_tmp, tp1 = ++g_tmp, tpa = ++g_tmp;
+        buf_printf(b, "({ sp_File *_t%d = sp_sock_pair_end(", tp0);
+        emit_int_expr(c, argv[0], b); buf_puts(b, ", ");
+        emit_int_expr(c, argv[1], b); buf_puts(b, ", ");
+        if (argc >= 3) emit_int_expr(c, argv[2], b); else buf_puts(b, "0");
+        buf_printf(b, ", 0); SP_GC_ROOT(_t%d); sp_File *_t%d = sp_sock_pair_end(0, 0, 0, 1);"
+                      " SP_GC_ROOT(_t%d); sp_PolyArray *_t%d = sp_PolyArray_new(); SP_GC_ROOT(_t%d);"
+                      " sp_PolyArray_push(_t%d, sp_box_obj(_t%d, SP_BUILTIN_IO));"
+                      " sp_PolyArray_push(_t%d, sp_box_obj(_t%d, SP_BUILTIN_IO)); _t%d; })",
+                   tp0, tp1, tp1, tpa, tpa, tpa, tp0, tpa, tp1, tpa);
+        return;
+      }
+      /* Socket.getaddrinfo(host, port) ->
+         [[family, port, host, ip, pfamily, socktype, protocol], ...].
+         The rows are built in the runtime: the family constants are
+         platform-dependent and the walk is a plain loop, neither of which
+         belongs in emitted C. */
+      if (sp_streq(name, "getaddrinfo") && argc >= 2) {
+        buf_puts(b, "sp_sock_getaddrinfo(");
+        emit_str_expr(c, argv[0], b);
+        buf_puts(b, ", ");
+        if (nt_type(nt, argv[1]) && sp_streq(nt_type(nt, argv[1]), "NilNode")) buf_puts(b, "0");
+        else emit_int_expr(c, argv[1], b);
+        buf_puts(b, ")");
+        return;
       }
     }
     /* IO.pipe / IO.copy_stream / IO.sysopen (#2815) */

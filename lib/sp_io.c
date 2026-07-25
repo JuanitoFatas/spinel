@@ -211,6 +211,7 @@ const char *sp_io_kind_name(sp_File *f) {
     if (strcmp(f->mode, "udp") == 0) return "UDPSocket";
     if (strcmp(f->mode, "unix") == 0) return "UNIXSocket";
     if (strcmp(f->mode, "unixserver") == 0) return "UNIXServer";
+    if (strcmp(f->mode, "socket") == 0) return "Socket";
   }
   if (f->path && f->path[0] && f->path[0] != '<') return "File";
   return "IO";
@@ -227,6 +228,7 @@ static const char *sp_io_super_of(const char *k) {
   if (strcmp(k, "IPSocket") == 0)    return "BasicSocket";
   if (strcmp(k, "UNIXServer") == 0)  return "UNIXSocket";
   if (strcmp(k, "UNIXSocket") == 0)  return "BasicSocket";
+  if (strcmp(k, "Socket") == 0)      return "BasicSocket";
   if (strcmp(k, "BasicSocket") == 0) return "IO";
   if (strcmp(k, "File") == 0)        return "IO";
   if (strcmp(k, "IO") == 0)          return "Object";
@@ -274,9 +276,9 @@ mrb_int sp_sock_const(const char *n) {
 /* UDPSocket.new / UNIXSocket.new / UNIXServer.new -- each wraps its fd in the
    same handle every other stream uses; the kind label is what tells them
    apart. A UDP handle keeps its own datagram path, so it is not fdopen'd. */
-sp_File *sp_sock_udp_new(void) {
-  extern int sp_net_udp_open(void);
-  int fd = sp_net_udp_open();
+sp_File *sp_sock_udp_new(mrb_int family) {
+  extern int sp_net_udp_open(int family);
+  int fd = sp_net_udp_open((int)family);
   if (fd < 0) sp_raise_cls("SocketError", "cannot create UDP socket");
   sp_File *f = (sp_File *)sp_gc_alloc(sizeof(sp_File), sp_File_fin, sp_File_scan);
   f->fp = fdopen(fd, "r+");
@@ -296,6 +298,66 @@ sp_File *sp_sock_unix_connect(const char *path) {
   int fd = sp_net_unix_connect(path);
   if (fd < 0) sp_file_raise_errno("connect", path ? path : "");
   return sp_io_fdopen_sock(fd, "unix");
+}
+
+const char *sp_sock_gethostname(void) {
+  extern int sp_net_gethostname(char *buf, int cap);
+  char buf[256];
+  if (sp_net_gethostname(buf, (int)sizeof buf) != 0) sp_file_raise_errno("gethostname", "");
+  return sp_str_from_bytes(buf, strlen(buf));
+}
+/* Socket.new(domain, type, protocol) -- a bare socket the bind/listen/connect
+   methods then drive. */
+sp_File *sp_sock_new(mrb_int domain, mrb_int type, mrb_int proto) {
+  extern int sp_net_socket(int domain, int type, int protocol);
+  int fd = sp_net_socket((int)domain, (int)type, (int)proto);
+  if (fd < 0) sp_file_raise_errno("socket", "");
+  sp_File *f = (sp_File *)sp_gc_alloc(sizeof(sp_File), sp_File_fin, sp_File_scan);
+  f->fp = fdopen(fd, "r+");
+  if (!f->fp) { close(fd); sp_raise_cls("IOError", "fdopen failed"); return NULL; }
+  /* Socket.new answers Socket, not the protocol-specific subclass CRuby uses
+     for TCPSocket.new -- the caller asked for the generic class. */
+  f->path = NULL; f->mode = "socket"; f->lineno = 0; f->is_sock = 1;
+  return f;
+}
+/* Socket.pair / Socket.socketpair -> the two connected ends. */
+sp_File *sp_sock_pair_end(mrb_int domain, mrb_int type, mrb_int proto, mrb_int which) {
+  extern int sp_net_socketpair(int domain, int type, int protocol, int fds[2]);
+  static int cached[2] = { -1, -1 };
+  if (which == 0) {
+    if (sp_net_socketpair((int)domain, (int)type, (int)proto, cached) != 0)
+      sp_file_raise_errno("socketpair", "");
+  }
+  int fd = cached[which == 0 ? 0 : 1];
+  if (fd < 0) sp_raise_cls("IOError", "socketpair");
+  (void)domain; (void)type;
+  return sp_io_fdopen_sock(fd, "socket");
+}
+
+/* Socket.getaddrinfo: one row per resolution, in CRuby's 7-element shape. */
+sp_PolyArray *sp_sock_getaddrinfo(const char *host, mrb_int port) {
+  extern int sp_net_getaddrinfo_at(const char *host, int port, int socktype, int idx,
+                                   int *family, int *stype, int *proto,
+                                   char *ipbuf, int ipcap, int *port_out);
+  sp_PolyArray *out = sp_PolyArray_new();
+  SP_GC_ROOT(out);
+  for (int i = 0; i < 64; i++) {
+    int fam = 0, stype = 0, proto = 0, p = 0;
+    char ip[64];
+    if (sp_net_getaddrinfo_at(host, (int)port, 0, i, &fam, &stype, &proto,
+                              ip, (int)sizeof ip, &p) != 0) break;
+    const char *ips = sp_str_from_bytes(ip, strlen(ip));
+    sp_PolyArray *row = sp_PolyArray_new();
+    sp_PolyArray_push(row, sp_box_str(fam == AF_INET6 ? "AF_INET6" : "AF_INET"));
+    sp_PolyArray_push(row, sp_box_int((mrb_int)p));
+    sp_PolyArray_push(row, sp_box_str(ips));
+    sp_PolyArray_push(row, sp_box_str(ips));
+    sp_PolyArray_push(row, sp_box_int((mrb_int)fam));
+    sp_PolyArray_push(row, sp_box_int((mrb_int)stype));
+    sp_PolyArray_push(row, sp_box_int((mrb_int)proto));
+    sp_PolyArray_push(out, sp_box_poly_array(row));
+  }
+  return out;
 }
 
 /* Only a socket answers the socket-specific methods; say which class the

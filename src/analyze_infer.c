@@ -2158,7 +2158,7 @@ else {
       /* the socket classes ARE IO handles (#2922) */
       if (cn && (sp_streq(cn, "TCPServer") || sp_streq(cn, "TCPSocket") ||
                  sp_streq(cn, "UDPSocket") || sp_streq(cn, "UNIXSocket") ||
-                 sp_streq(cn, "UNIXServer")) &&
+                 sp_streq(cn, "UNIXServer") || sp_streq(cn, "Socket")) &&
           sp_feature_required("socket")) return TY_IO;
       if (cn && sp_streq(cn, "OpenStruct") && sp_feature_required("ostruct")) return TY_OPENSTRUCT;
       if (cn && (sp_streq(cn, "Thread") || sp_streq(cn, "Mutex") || (sp_streq(cn, "Monitor") && sp_feature_enabled("monitor")) ||
@@ -2240,7 +2240,7 @@ else {
       /* the socket classes ARE IO handles (#2922) */
       if (cn && (sp_streq(cn, "TCPServer") || sp_streq(cn, "TCPSocket") ||
                  sp_streq(cn, "UDPSocket") || sp_streq(cn, "UNIXSocket") ||
-                 sp_streq(cn, "UNIXServer")) &&
+                 sp_streq(cn, "UNIXServer") || sp_streq(cn, "Socket")) &&
           sp_feature_required("socket")) return TY_IO;
       if (cn && sp_streq(cn, "OpenStruct") && sp_feature_required("ostruct")) return TY_OPENSTRUCT;
       if (cn && (sp_streq(cn, "Thread") ||
@@ -2452,6 +2452,12 @@ else {
         if (blv) blv->type = TY_IO;
         return TY_POLY;
       }
+    }
+    if (rty && sp_streq(rty, "ConstantReadNode") && nt_str(nt, recv, "name") &&
+        sp_streq(nt_str(nt, recv, "name"), "Socket") && sp_feature_required("socket")) {
+      if (sp_streq(name, "gethostname") && argc == 0) return TY_STRING;
+      if ((sp_streq(name, "pair") || sp_streq(name, "socketpair")) && argc >= 2) return TY_POLY_ARRAY;
+      if (sp_streq(name, "getaddrinfo") && argc >= 2) return TY_POLY_ARRAY;
     }
     if (rty && sp_streq(rty, "ConstantReadNode") &&
         nt_str(nt, recv, "name") && sp_streq(nt_str(nt, recv, "name"), "IO")) {
