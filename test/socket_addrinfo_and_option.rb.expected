@@ -1,14 +1,14 @@
 Addrinfo
 "127.0.0.1"
 80
-2
+true
 true
 false
 "#<Addrinfo: 127.0.0.1:80 TCP>"
-10
+true
 true
 "#<Addrinfo: [::1]:53 UDP>"
-1
+true
 true
 Addrinfo
 "127.0.0.1"

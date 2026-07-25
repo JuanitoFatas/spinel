@@ -44,8 +44,9 @@ File.delete(path)
 
 # --- options and constants ---
 p Socket::SOL_SOCKET.class
-p Socket::AF_INET
-p Socket::SOCK_DGRAM
+# print no raw AF_/SOCK_ values: they differ by platform
+p Socket::AF_INET.is_a?(Integer)
+p Socket::SOCK_DGRAM != Socket::SOCK_STREAM
 srv2 = TCPServer.new("127.0.0.1", 0)
 p srv2.setsockopt(Socket::SOL_SOCKET, Socket::SO_KEEPALIVE, 1)
 p srv2.getsockopt(Socket::SOL_SOCKET, Socket::SO_KEEPALIVE).int != 0

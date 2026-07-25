@@ -9,8 +9,8 @@ true
 UNIXSocket
 "hi\n"
 Integer
-2
-2
+true
+true
 0
 true
 NameError
