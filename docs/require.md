@@ -47,8 +47,15 @@ These are provided by Spinel but, like CRuby, only after their `require`:
 | `require "strscan"` | `StringScanner` | uninitialized constant |
 | `require "json"` | `JSON.generate`, `JSON.dump` | uninitialized constant |
 | `require "monitor"` | `Monitor` (`#synchronize`) | `NameError` (uninitialized constant) |
+| `require "socket"` | `TCPServer`, `TCPSocket` | `NameError` (uninitialized constant) |
 | `require "io/console"` | `IO#winsize` | `NoMethodError` |
 | `require "time"` | `Time#iso8601` | `NoMethodError` |
+
+`socket` is the strictest of these: its `require` is mandatory even with the
+gate **off**, because CRuby itself only defines `TCPServer` / `TCPSocket` after
+the require, and growing the constants unconditionally would diverge from
+CRuby's `NameError`. What the two classes actually cover is in
+[limitations.md](limitations.md#sockets).
 
 Two shapes, which set what the failure looks like:
 
