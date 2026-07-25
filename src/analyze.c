@@ -5969,12 +5969,19 @@ static void mark_empty_hash_cmp_peers(Compiler *c) {
    that key selects, instead of the StrPolyHash fallback that would coerce a
    Symbol key to a String (#3028) or emit ill-typed C for an Integer one
    (#3029). Values stay poly: the empty literal says nothing about them. */
-static void mark_empty_hash_key_ctx(Compiler *c) {
-  if (!c->empty_hash_want) return;
+static int mark_empty_hash_key_ctx(Compiler *c) {
+  int changed = 0;
+  if (!c->empty_hash_want) return 0;
   const NodeTable *nt = c->nt;
   for (int id = 0; id < nt->count; id++) {
-    if (nt_kind(nt, id) != NK_CallNode) continue;
-    const char *nm = nt_str(nt, id, "name");
+    NodeKind idk = nt_kind(nt, id);
+    /* `h[k] ||= v` and friends select a variant by their key exactly like a
+       read does, but they are not CallNodes, so the name gate below never saw
+       them and an Integer key fell back to StrPolyHash (#3353) */
+    int is_idx_write = (idk == NK_IndexOrWriteNode || idk == NK_IndexAndWriteNode ||
+                        idk == NK_IndexOperatorWriteNode);
+    if (idk != NK_CallNode && !is_idx_write) continue;
+    const char *nm = is_idx_write ? "[]" : nt_str(nt, id, "name");
     if (!nm || (!sp_streq(nm, "fetch") && !sp_streq(nm, "[]") &&
                 !sp_streq(nm, "key?") && !sp_streq(nm, "has_key?") &&
                 !sp_streq(nm, "include?") && !sp_streq(nm, "dig"))) continue;
@@ -5987,7 +5994,7 @@ static void mark_empty_hash_key_ctx(Compiler *c) {
       if (en != 0) continue;
       if (ty_is_hash(c->empty_hash_want[recv])) continue;   /* an earlier context won */
     }
-    else if (rk != NK_LocalVariableReadNode) continue;
+    else if (rk != NK_LocalVariableReadNode && rk != NK_InstanceVariableReadNode) continue;
     int anode = nt_ref(nt, id, "arguments");
     int an = 0; const int *av = anode >= 0 ? nt_arr(nt, anode, "arguments", &an) : NULL;
     if (an < 1) continue;
@@ -5996,8 +6003,34 @@ static void mark_empty_hash_key_ctx(Compiler *c) {
     if (kt == TY_SYMBOL) want = TY_SYM_POLY_HASH;
     else if (kt == TY_STRING) want = TY_STR_POLY_HASH;
     else if (kt == TY_INT) want = TY_POLY_POLY_HASH;  /* no Int->poly variant */
+    /* a boxed key (one call site passes a String, another an Integer) is only
+       representable by the poly-keyed variant; the StrPolyHash default would
+       hand the boxed value to a const char * slot and segfault */
+    else if (kt == TY_POLY) want = TY_POLY_POLY_HASH;
     if (!ty_is_hash(want)) continue;
-    if (direct) { c->empty_hash_want[recv] = want; continue; }
+    if (direct) { c->empty_hash_want[recv] = want; changed = 1; continue; }
+    /* `@h = {}` in initialize, indexed with a typed key elsewhere in the same
+       class: carry the context to the ivar's own empty literal, or the slot
+       stays typeless and the index-write has no hash to emit against */
+    if (rk == NK_InstanceVariableReadNode) {
+      const char *ivn = nt_str(nt, recv, "name");
+      Scope *rs = comp_scope_of(c, recv);
+      int rcid = rs ? rs->class_id : -1;
+      if (!ivn || rcid < 0) continue;
+      for (int w = 0; w < nt->count; w++) {
+        if (nt_kind(nt, w) != NK_InstanceVariableWriteNode) continue;
+        const char *wn = nt_str(nt, w, "name");
+        Scope *ws = comp_scope_of(c, w);
+        if (!wn || !sp_streq(wn, ivn) || !ws || ws->class_id != rcid) continue;
+        int wv = nt_ref(nt, w, "value");
+        if (wv < 0 || wv >= c->node_cap || nt_kind(nt, wv) != NK_HashNode) continue;
+        int en2 = 0; nt_arr(nt, wv, "elements", &en2);
+        if (en2 != 0 || ty_is_hash(c->empty_hash_want[wv])) continue;
+        c->empty_hash_want[wv] = want;
+        changed = 1;
+      }
+      continue;
+    }
     /* `h = {}; h.fetch(k)`: carry the key context back to the write's literal,
        so the local takes that variant instead of the StrPolyHash default */
     const char *ln = nt_str(nt, recv, "name");
@@ -6009,10 +6042,13 @@ static void mark_empty_hash_key_ctx(Compiler *c) {
       if (!wn || !sp_streq(wn, ln) || comp_scope_of(c, w) != sc) continue;
       int wv = nt_ref(nt, w, "value");
       if (wv >= 0 && wv < c->node_cap && nt_kind(nt, wv) == NK_HashNode &&
-          !ty_is_hash(c->empty_hash_want[wv]))
+          !ty_is_hash(c->empty_hash_want[wv])) {
         c->empty_hash_want[wv] = want;
+        changed = 1;
+      }
     }
   }
+  return changed;
 }
 /* `TBL = {}` followed by `TBL[k] = v` elsewhere: an empty literal bound to a
    constant has no type of its own, so the constant got no runtime slot at all
@@ -7303,7 +7339,7 @@ void analyze_program(Compiler *c) {
      variant from the peer it is compared against (#3040) or from the key it is
      indexed with (#3028, #3029) */
   mark_empty_hash_cmp_peers(c);
-  mark_empty_hash_key_ctx(c);
+  (void)mark_empty_hash_key_ctx(c);
   mark_empty_hash_const_writes(c);
 
   /* A bare identifier inside a class method that names a `class << self`
@@ -7624,6 +7660,11 @@ void analyze_program(Compiler *c) {
     ch |= desugar_implicit_send(c);            /* send(:m, a) -> m(a) on self */
     ch |= desugar_public_send_recv(c);         /* r.public_send(:m, a) -> r.m(a), visibility-stamped */
     ch |= desugar_symbol_string_methods(c);    /* :sym.match(re) -> :sym.to_s.match(re) */
+    /* re-run inside the fixpoint: a key whose type comes from a PARAMETER is
+       still UNKNOWN on the pre-fixpoint pass, so `h[k] ||= []` fell back to
+       the StrPolyHash default and handed an Integer key to a const char *
+       (#3353). The mark is monotone, so repeating it only ever fills in. */
+    ch |= mark_empty_hash_key_ctx(c);
     ch |= desugar_lazy_stateful_stage(c);      /* arr.lazy.uniq -> arr.uniq (finite source) */
     ch |= desugar_lazy_method_call(c);         /* lz.first where `def lz; ...lazy...; end` */
     ch |= desugar_str_range_methods(c);        /* ("a".."e").map -> .to_a.map */
