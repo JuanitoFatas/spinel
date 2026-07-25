@@ -45,6 +45,16 @@ typedef struct sp_Exception_s {
 } sp_Exception;
 
 extern const char *(*sp_user_exc_parent_fn)(const char *);   /* set by the generated main() */
+/* The modules a class includes, NULL-terminated, or NULL for none. Ruby's type
+   hierarchy is not a chain -- `rescue IO::WaitReadable` and `e.is_a?(Retryable)`
+   both ask about a MODULE, which a single-parent walk cannot answer. Same shape
+   as the parent hook: a builtin table plus a per-program hook. */
+extern const char *const *(*sp_user_exc_modules_fn)(const char *);
+const char *const *sp_exc_modules_of_name(const char *cls);
+/* CRuby aliases some exception classes to one object (Errno::EWOULDBLOCK IS
+   Errno::EAGAIN). Names cannot express identity, so both sides of a match are
+   canonicalized first. Returns `cls` itself when it has no alias. */
+const char *sp_exc_canonical_name(const char *cls);
 extern SP_TLS sp_RbVal sp_pending_exc_recv, sp_pending_exc_key, sp_pending_exc_val;
 extern SP_TLS unsigned char sp_pending_exc_flags;
 

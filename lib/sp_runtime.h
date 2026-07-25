@@ -5890,7 +5890,11 @@ SP_NORETURN void sp_raise_stop_iteration(sp_RbVal result) {
 static mrb_int sp_exc_is_a(volatile sp_Exception *ve, const char *cn) {
   sp_Exception *e = (sp_Exception *)ve;
   if (!e || !cn) return 0;
-  if (!strcmp(e->cls_name, cn)) return 1;
+  /* one authority for "does this level answer to cn", modules included: the
+     matcher rescue arms use. Without it #is_a?(SomeModule) said false where
+     `rescue SomeModule` said yes (#3366 follow-up). */
+  cn = sp_exc_canonical_name(cn);
+  if (sp_exc_cls_matches(e->cls_name, cn)) return 1;
   /* find the exception's class chain and check if cn appears in it */
   const char *cls = e->cls_name;
   int used_parent = 0;

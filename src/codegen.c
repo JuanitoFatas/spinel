@@ -4473,6 +4473,7 @@ void emit_regex_section(Compiler *c, Buf *b) {
     buf_puts(b, "  sp_obj_eq_hook = sp_obj_eq_dispatch;\n");
   if (g_needs_class_machinery)
     buf_puts(b, "  sp_user_exc_parent_fn = sp_user_exc_parent;\n"
+                "  sp_user_exc_modules_fn = sp_user_exc_modules;\n"
                 "  sp_poly_is_a_hook = sp_poly_is_a;\n");
   /* Replace the runtime's hook with the superset that also marks this
      program's heap-typed globals/constants/class-ivars (it chains to
@@ -5866,6 +5867,36 @@ char *codegen_program(const NodeTable *nt) {
           if (c->classes[i].name && !sp_streq(cn, c->classes[i].name))
             buf_printf(&b, "  if(!strcmp(cls,\"%s\"))return \"%s\";\n", c->classes[i].name, par);
         }
+        free(cn);
+      }
+    }
+    buf_puts(&b, "  return 0;\n}\n");
+    /* The modules each exception class includes, for the module-aware match.
+       Reuses the same include walk sp_class_ancestors is built from, so
+       `rescue SomeModule` and `e.is_a?(SomeModule)` agree. */
+    buf_puts(&b, "static const char *const *sp_user_exc_modules(const char *cls){\n");
+    if (!any) buf_puts(&b, "  (void)cls;\n");
+    if (any) {
+      for (int i = 0; i < c->nclasses; i++) {
+        if (!class_is_exc_subclass(c, i)) continue;
+        if (c->classes[i].nincluded_mods == 0) continue;
+        const char *cn0 = class_ruby_name(c, i);
+        if (!cn0) cn0 = c->classes[i].name;
+        if (!cn0) continue;
+        char *cn = strdup(cn0);
+        buf_printf(&b, "  { static const char *const _m%d[] = {", i);
+        for (int m = 0; m < c->classes[i].nincluded_mods; m++) {
+          int mi = c->classes[i].included_mods[m];
+          if (mi < 0 || mi >= c->nclasses) continue;
+          const char *mn = class_ruby_name(c, mi);
+          if (!mn) mn = c->classes[mi].name;
+          if (mn) buf_printf(&b, "\"%s\", ", mn);
+        }
+        buf_puts(&b, "0 };\n");
+        buf_printf(&b, "    if(!strcmp(cls,\"%s\"))return _m%d;\n", cn, i);
+        if (c->classes[i].name && !sp_streq(cn, c->classes[i].name))
+          buf_printf(&b, "    if(!strcmp(cls,\"%s\"))return _m%d;\n", c->classes[i].name, i);
+        buf_puts(&b, "  }\n");
         free(cn);
       }
     }

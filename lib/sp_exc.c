@@ -3,14 +3,52 @@
 
 /* Check if exception class name `raised` is the same as or a subclass of
    `target`, using both the built-in hierarchy and the user hierarchy callback. */
+const char *const *(*sp_user_exc_modules_fn)(const char *) = 0;
+
+/* Errno::EWOULDBLOCK and Errno::EAGAIN are the same class in CRuby, as are the
+   IO::EWOULDBLOCKWait* and IO::EAGAINWait* pairs; a name-keyed hierarchy has to
+   fold them together or `rescue Errno::EWOULDBLOCK` would miss an EAGAIN. */
+const char *sp_exc_canonical_name(const char *cls) {
+  if (!cls) return cls;
+  if (!strcmp(cls, "Errno::EWOULDBLOCK")) return "Errno::EAGAIN";
+  if (!strcmp(cls, "IO::EWOULDBLOCKWaitReadable")) return "IO::EAGAINWaitReadable";
+  if (!strcmp(cls, "IO::EWOULDBLOCKWaitWritable")) return "IO::EAGAINWaitWritable";
+  return cls;
+}
+
+/* The builtin classes that include a module. Only the exception side needs
+   this: class VALUES already walk the module-aware sp_class_ancestors. */
+const char *const *sp_exc_modules_of_name(const char *cls) {
+  if (!cls) return 0;
+  static const char *const WAIT_R[] = { "IO::WaitReadable", 0 };
+  static const char *const WAIT_W[] = { "IO::WaitWritable", 0 };
+  if (!strcmp(cls, "IO::EAGAINWaitReadable") ||
+      !strcmp(cls, "IO::EINPROGRESSWaitReadable")) return WAIT_R;
+  if (!strcmp(cls, "IO::EAGAINWaitWritable") ||
+      !strcmp(cls, "IO::EINPROGRESSWaitWritable")) return WAIT_W;
+  return 0;
+}
+
+/* Does `cls` itself, through any module it includes, answer to `target`? */
+static int sp_exc_level_matches(const char *cls, const char *target) {
+  if (!strcmp(cls, target)) return 1;
+  const char *const *mods = sp_exc_modules_of_name(cls);
+  if (!mods && sp_user_exc_modules_fn) mods = sp_user_exc_modules_fn(cls);
+  for (int i = 0; mods && mods[i]; i++)
+    if (!strcmp(mods[i], target)) return 1;
+  return 0;
+}
+
 int sp_exc_cls_matches(const char *raised, const char *target) {
   if (!raised || !target) return 0;
+  raised = sp_exc_canonical_name(raised);
+  target = sp_exc_canonical_name(target);
   /* The builtin hierarchy lives in sp_exc_parent_of_name -- there used to be a
      second copy here, and the two drifted (Errno::* / SystemCallError reached
      only one of them, so `rescue SystemCallError` missed what #is_a? matched). */
   const char *cls = raised;
   for (int depth = 0; depth < 30 && cls; depth++) {
-    if (!strcmp(cls, target)) return 1;
+    if (sp_exc_level_matches(cls, target)) return 1;
     const char *parent = NULL;
     /* user hierarchy first */
     if (sp_user_exc_parent_fn) parent = sp_user_exc_parent_fn(cls);
@@ -241,6 +279,15 @@ const char *sp_exc_parent_of_name(const char *cls) {
     {"SystemStackError",      "Exception"},
     {"NoMemoryError",         "Exception"},
     {"SystemCallError",       "StandardError"},
+    /* The non-blocking readiness exceptions. Each is an Errno subclass that
+       also includes IO::WaitReadable / IO::WaitWritable (see
+       sp_exc_modules_of_name) -- the module is why a single-parent chain could
+       not express them: WaitWritable is included by classes under two
+       different Errno parents. */
+    {"IO::EAGAINWaitReadable",      "Errno::EAGAIN"},
+    {"IO::EAGAINWaitWritable",      "Errno::EAGAIN"},
+    {"IO::EINPROGRESSWaitReadable", "Errno::EINPROGRESS"},
+    {"IO::EINPROGRESSWaitWritable", "Errno::EINPROGRESS"},
     {NULL, NULL}
   };
   for (int i = 0; HIER[i][0]; i++)

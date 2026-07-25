@@ -57,7 +57,13 @@ int is_builtin_exception_name(const char *n) {
     "FiberError", "ClosedQueueError", "UncaughtThrowError",
     "NoMatchingPatternError", "NoMatchingPatternKeyError",
     "LocalJumpError", "Math::DomainError", "SystemCallError",
-    "StringScanner_Error", "NoMemoryError", "SystemStackError", NULL
+    "StringScanner_Error", "NoMemoryError", "SystemStackError",
+    /* the non-blocking readiness family: two modules plus their Errno
+       subclasses, so `rescue IO::WaitReadable` walks the hierarchy */
+    "IO::WaitReadable", "IO::WaitWritable",
+    "IO::EAGAINWaitReadable", "IO::EAGAINWaitWritable",
+    "IO::EWOULDBLOCKWaitReadable", "IO::EWOULDBLOCKWaitWritable",
+    "IO::EINPROGRESSWaitReadable", "IO::EINPROGRESSWaitWritable", NULL
   };
   for (int i = 0; EXC[i]; i++) if (sp_streq(n, EXC[i])) return 1;
   /* the Errno:: family is open -- the runtime picks a name from errno -- so
