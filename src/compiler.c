@@ -241,6 +241,7 @@ ClassInfo *comp_class_new(Compiler *c, const char *name, int def_node) {
     c->classes = realloc(c->classes, sizeof(ClassInfo) * (size_t)c->cclasses);
   }
   ClassInfo *ci = &c->classes[c->nclasses++];
+  c->anon_struct_ids_valid = 0;
   memset(ci, 0, sizeof(*ci));
   ci->name = name ? strdup(name) : NULL;
   ci->c_name = sp_class_c_name(name);

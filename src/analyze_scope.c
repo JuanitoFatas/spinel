@@ -1487,6 +1487,7 @@ void register_structs(Compiler *c) {
       snprintf(an, sizeof an, "StructAnon_%d", id);
       ClassInfo *cls = comp_class_new(c, an, id);
       cls->is_anon_struct = 1;
+      c->anon_struct_ids_valid = 0;
       register_struct_members(c, cls, val);
     }
     /* Inline `Data.define(...).method(...)` / `Struct.new(...).method(...)`: the
@@ -1502,6 +1503,7 @@ void register_structs(Compiler *c) {
         snprintf(an, sizeof an, "StructAnon_%d", id);
         ClassInfo *cls = comp_class_new(c, an, id);
         cls->is_anon_struct = 1;
+        c->anon_struct_ids_valid = 0;
         register_struct_members(c, cls, id);
       }
     }

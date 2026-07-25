@@ -339,8 +339,29 @@ const char *struct_call_dup_member(Compiler *c, int callnode) {
 int anon_struct_ci_for_value(Compiler *c, int val) {
   const NodeTable *nt = c->nt;
   if (val < 0) return -1;
-  for (int k = 0; k < c->nclasses; k++) {
-    if (!c->classes[k].is_anon_struct) continue;
+  /* Anonymous structs number a handful at most while c->classes can hold
+     hundreds, and this runs per candidate receiver: collect the anon subset
+     once instead of rescanning every class on each call. */
+  if (!c->anon_struct_ids_valid) {
+    int *ids = malloc((size_t)(c->nclasses > 0 ? c->nclasses : 1) * sizeof(int));
+    if (ids) {
+      free(c->anon_struct_ids);
+      c->anon_struct_ids = ids;
+      c->n_anon_struct_ids = 0;
+      for (int k = 0; k < c->nclasses; k++)
+        if (c->classes[k].is_anon_struct) c->anon_struct_ids[c->n_anon_struct_ids++] = k;
+      c->anon_struct_ids_valid = 1;
+    } else {
+      for (int k = 0; k < c->nclasses; k++) {
+        if (!c->classes[k].is_anon_struct) continue;
+        int w = c->classes[k].def_node;
+        if (w >= 0 && (nt_ref(nt, w, "value") == val || w == val)) return k;
+      }
+      return -1;
+    }
+  }
+  for (int q = 0; q < c->n_anon_struct_ids; q++) {
+    int k = c->anon_struct_ids[q];
     int w = c->classes[k].def_node;
     /* keyed by a write node (k = Struct.new -> def_node's value is the call),
        or, for an inline `Data.define(...).method(...)` receiver, keyed by the

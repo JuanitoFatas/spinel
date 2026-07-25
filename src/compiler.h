@@ -302,6 +302,12 @@ typedef struct {
   Scope *scopes;    /* scope[0] = top level */
   int nscopes, cscopes;
 
+  /* the subset of `classes` synthesized for an anonymous Struct/Data, so
+     resolving one does not walk every user class; invalidated wherever
+     is_anon_struct is set */
+  int *anon_struct_ids;
+  int n_anon_struct_ids, anon_struct_ids_valid;
+
   /* local-write-by-name index; see comp_lvw_first */
   int *lvw_head;        /* [lvw_nbuckets] first write id in each name bucket */
   int *lvw_next;        /* [lvw_count] next write id sharing the bucket */
