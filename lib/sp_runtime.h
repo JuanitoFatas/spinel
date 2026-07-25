@@ -2598,7 +2598,12 @@ static sp_RbVal sp_poly_shl(sp_RbVal a, sp_RbVal b) {
     }
     if (a.cls_id == SP_BUILTIN_IO && a.v.p) {
       /* IO#<< through a boxed handle writes and chains (#2802) */
-      sp_File_write((sp_File *)a.v.p, sp_poly_to_s(b));
+      /* A String operand writes its own byte count; only a stringified value
+         needs strlen (sp_poly_to_s can answer an unmarked static name). Without
+         the split, `io << binary` truncated or not depending on whether
+         inference typed the operand -- the same bug, but intermittent. */
+      if (b.tag == SP_TAG_STR && b.v.s) sp_File_write_bin((sp_File *)a.v.p, b.v.s);
+      else sp_File_write((sp_File *)a.v.p, sp_poly_to_s(b));
       return a;
     }
     /* A user object with a `<<` method (a Set held as a Hash value, #3174):

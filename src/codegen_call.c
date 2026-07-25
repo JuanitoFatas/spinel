@@ -11165,8 +11165,11 @@ void emit_call(Compiler *c, int id, Buf *b) {
       emit_boxed(c, recv, b);
       buf_printf(b, ", \"%s\"); ", name);
       if (sp_streq(name, "write") && argc >= 1) {
-        buf_printf(b, "sp_File_write(_t%d, ", tio2);
-        if (comp_ntype(c, argv[0]) == TY_STRING) emit_expr(c, argv[0], b);
+        /* Same String/non-String split as the TY_IO arm: a String knows its own
+           byte count, a stringified value may be an unmarked static name. */
+        int sk2 = comp_ntype(c, argv[0]) == TY_STRING;
+        buf_printf(b, "%s(_t%d, ", sk2 ? "sp_File_write_bin" : "sp_File_write", tio2);
+        if (sk2) emit_expr(c, argv[0], b);
         else { buf_puts(b, "sp_poly_to_s("); emit_boxed(c, argv[0], b); buf_puts(b, ")"); }
         buf_puts(b, "); })");
       }
@@ -14340,16 +14343,16 @@ else { memcpy(dir, sf, n); dir[n] = 0; } }
             buf_printf(b, "sp_RbVal _t%d = ", tdd); emit_expr(c, argv[1], b);
             if (sio_cid >= 0)
               buf_printf(b, "; _t%d.cls_id == %d ? sp_StringIO_write((sp_StringIO *)_t%d.v.p, _t%d)"
-                            " : sp_File_write((sp_File *)_t%d.v.p, _t%d); })", tdd, sio_cid, tdd, td, tdd, td);
+                            " : sp_File_write_bin((sp_File *)_t%d.v.p, _t%d); })", tdd, sio_cid, tdd, td, tdd, td);
             else
-              buf_printf(b, "; sp_File_write((sp_File *)_t%d.v.p, _t%d); })", tdd, td);
+              buf_printf(b, "; sp_File_write_bin((sp_File *)_t%d.v.p, _t%d); })", tdd, td);
           }
           else if (a1_sio) { buf_puts(b, "sp_StringIO_write("); emit_expr(c, argv[1], b); buf_printf(b, ", _t%d); })", td); }
-          else { buf_puts(b, "sp_File_write("); emit_expr(c, argv[1], b); buf_printf(b, ", _t%d); })", td); }
+          else { buf_puts(b, "sp_File_write_bin("); emit_expr(c, argv[1], b); buf_printf(b, ", _t%d); })", td); }
           return;
         }
         if ((a0_sio || a0_io) && (a1_sio || a1_io)) {
-          buf_puts(b, a1_sio ? "sp_StringIO_write(" : "sp_File_write(");
+          buf_puts(b, a1_sio ? "sp_StringIO_write(" : "sp_File_write_bin(");
           emit_expr(c, argv[1], b);
           buf_puts(b, a0_sio ? ", sp_StringIO_read(" : ", sp_File_read(");
           emit_expr(c, argv[0], b);
@@ -19011,10 +19014,17 @@ else { memcpy(dir, sf, n); dir[n] = 0; } }
         /* IO#write: write each arg (stringified), return total bytes written. */
         buf_puts(b, "({ mrb_int _w = 0; ");
         for (int k = 0; k < argc; k++) {
+          int sk9 = comp_ntype(c, argv[k]) == TY_STRING;
           buf_puts(b, "{ const char *_s = ");
-          if (comp_ntype(c, argv[k]) == TY_STRING) emit_expr(c, argv[k], b);
+          if (sk9) emit_expr(c, argv[k], b);
           else { buf_puts(b, "sp_poly_to_s("); emit_boxed(c, argv[k], b); buf_puts(b, ")"); }
-          buf_printf(b, "; _w += _s ? (mrb_int)fwrite(_s, 1, strlen(_s), %s) : 0; } ", fd);
+          /* A String's own byte count, so `$stdout.write(bin)` writes what
+             `io = $stdout; io.write(bin)` does -- the same method answering
+             differently depending on how the receiver is spelled is worse than
+             either answer. A stringified value keeps strlen: sp_poly_to_s can
+             return an unmarked static class/symbol name. */
+          buf_printf(b, "; _w += _s ? (mrb_int)fwrite(_s, 1, %s, %s) : 0; } ",
+                     sk9 ? "sp_str_byte_len(_s)" : "strlen(_s)", fd);
         }
         buf_puts(b, "_w; })");
         return;
