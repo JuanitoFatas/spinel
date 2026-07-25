@@ -5612,6 +5612,20 @@ char *codegen_program(const NodeTable *nt) {
   /* Module -> Object, Class -> Module */
   buf_puts(&b, "  case -108: return ((sp_Class){-116});\n");
   buf_puts(&b, "  case -109: return ((sp_Class){-108});\n");
+  /* File, IO -> Object (a socket's chain terminates through IO) */
+  buf_puts(&b, "  case -120: return ((sp_Class){-116});\n");
+  buf_puts(&b, "  case -121: return ((sp_Class){-120});\n");
+  /* Dir -> Object */
+  buf_puts(&b, "  case -165: return ((sp_Class){-116});\n");
+  /* the socket chain, as CRuby's:
+     TCPServer -> TCPSocket -> IPSocket -> BasicSocket -> IO,
+     UDPSocket -> IPSocket, UNIXServer -> UNIXSocket -> BasicSocket,
+     Socket -> BasicSocket */
+  buf_puts(&b, "  case -166: return ((sp_Class){-120});\n");
+  buf_puts(&b, "  case -167:case -171:case -173: return ((sp_Class){-166});\n");
+  buf_puts(&b, "  case -168:case -170: return ((sp_Class){-167});\n");
+  buf_puts(&b, "  case -169: return ((sp_Class){-168});\n");
+  buf_puts(&b, "  case -172: return ((sp_Class){-171});\n");
   /* Object -> BasicObject */
   buf_puts(&b, "  case -116: return ((sp_Class){-117});\n");
   /* BasicObject: the hierarchy root -- its superclass is nil (#2654) */

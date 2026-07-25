@@ -212,6 +212,34 @@ const char *sp_io_kind_name(sp_File *f) {
   return "IO";
 }
 
+/* The builtin superclass chain for a handle's class, mirroring the one the
+   generated TU carries for class VALUES (sp_builtin_superclass). A handle
+   answers #is_a? from its kind, which is a runtime property, so the walk lives
+   here rather than in the emitted switch. */
+static const char *sp_io_super_of(const char *k) {
+  if (strcmp(k, "TCPServer") == 0)   return "TCPSocket";
+  if (strcmp(k, "TCPSocket") == 0)   return "IPSocket";
+  if (strcmp(k, "UDPSocket") == 0)   return "IPSocket";
+  if (strcmp(k, "IPSocket") == 0)    return "BasicSocket";
+  if (strcmp(k, "UNIXServer") == 0)  return "UNIXSocket";
+  if (strcmp(k, "UNIXSocket") == 0)  return "BasicSocket";
+  if (strcmp(k, "BasicSocket") == 0) return "IO";
+  if (strcmp(k, "File") == 0)        return "IO";
+  if (strcmp(k, "IO") == 0)          return "Object";
+  if (strcmp(k, "Object") == 0)      return "BasicObject";
+  return NULL;
+}
+mrb_bool sp_io_is_a(sp_File *f, const char *cls) {
+  if (!cls) return 0;
+  if (strcmp(cls, "Kernel") == 0) return 1;   /* Object includes Kernel */
+  for (const char *k = sp_io_kind_name(f); k; k = sp_io_super_of(k))
+    if (strcmp(k, cls) == 0) return 1;
+  return 0;
+}
+mrb_bool sp_io_instance_of(sp_File *f, const char *cls) {
+  return cls && strcmp(sp_io_kind_name(f), cls) == 0;
+}
+
 /* TCPServer#accept: park cooperatively for a pending connection first -- a
    blocking accept would stall the whole green-thread scheduler -- then wrap the
    new descriptor. Only a socket handle answers it. */

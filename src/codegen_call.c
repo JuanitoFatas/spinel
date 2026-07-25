@@ -10389,6 +10389,18 @@ void emit_call(Compiler *c, int id, Buf *b) {
       buf_printf(b, "((%s) == NULL)", r);
       free(rb.p); return;
     }
+    /* A handle's class is a runtime property (a socket kind, a path-backed
+       File, a bare stream), so the ancestor walk runs on the kind rather than
+       on a static class id. */
+    if (argc == 1 && (sp_streq(name, "is_a?") || sp_streq(name, "kind_of?") ||
+                      sp_streq(name, "instance_of?"))) {
+      const char *icn = isa_const_name(nt, argv[0]);
+      if (icn) {
+        buf_printf(b, "%s(%s, \"%s\")",
+                   sp_streq(name, "instance_of?") ? "sp_io_instance_of" : "sp_io_is_a", r, icn);
+        free(rb.p); return;
+      }
+    }
     if ((sp_streq(name, "wait_readable") || sp_streq(name, "wait_writable") ||
          sp_streq(name, "wait_priority") || sp_streq(name, "wait")) && argc <= 2) {
       int ev = sp_streq(name, "wait_writable") ? 1

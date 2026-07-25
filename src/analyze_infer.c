@@ -2763,6 +2763,8 @@ else {
         sp_streq(name, "sysread") || sp_streq(name, "ftype")) return TY_STRING;
     if (sp_streq(name, "inspect") && argc == 0) return TY_STRING;
     if (sp_streq(name, "nil?") && argc == 0) return TY_BOOL;
+    if (argc == 1 && (sp_streq(name, "is_a?") || sp_streq(name, "kind_of?") ||
+                      sp_streq(name, "instance_of?"))) return TY_BOOL;
     /* the readiness family answers the handle itself or nil -- a nullable
        sp_File*, which TY_IO already models (NULL is nil) */
     if (sp_streq(name, "wait_readable") || sp_streq(name, "wait_writable") ||
