@@ -54,14 +54,30 @@ extern pthread_mutex_t sp_heap_lock;
    onto its list, and it pumps one green thread at a time: no concurrent push.
    The collector reaches every list under stop-the-world (all workers parked).
    The single-threaded build keeps one global list and stays byte-identical. */
+/* Generations. Allocation always pushes onto the YOUNG list; a string still
+   live at a sweep moves to the OLD list, which ordinary (minor) sweeps then
+   skip. Without this every sweep walks the entire live set, so a program
+   holding a large one -- a Merkle tree of hex digests, a parsed document --
+   pays that walk again on each collection no matter how little of it changed.
+   Strings have no outgoing references, so there is nothing here of the write
+   barrier and forwarding a generational OBJECT heap would need: the split is
+   two list heads and a byte counter.
+   Reclamation of old strings is deferred to a major sweep, which runs when the
+   old generation has itself grown past a threshold. */
 #ifdef SP_THREADS
 /* sp_worker_id / sp_active_workers / SP_MAX_WORKERS: sp_types.h */
-extern sp_str_hdr *sp_str_heap_w[SP_MAX_WORKERS];  /* per-worker live-string lists */
-extern size_t sp_str_heap_bytes_w[SP_MAX_WORKERS]; /* per-worker live string bytes */
+extern sp_str_hdr *sp_str_heap_w[SP_MAX_WORKERS];  /* per-worker young lists */
+extern size_t sp_str_heap_bytes_w[SP_MAX_WORKERS]; /* per-worker young bytes */
+extern sp_str_hdr *sp_str_old_w[SP_MAX_WORKERS];   /* per-worker old lists */
+extern size_t sp_str_old_bytes_w[SP_MAX_WORKERS];  /* per-worker old bytes */
 #else
-extern sp_str_hdr *sp_str_heap;          /* live-string singly-linked list head */
-extern size_t sp_str_heap_bytes;         /* live string-heap bytes */
+extern sp_str_hdr *sp_str_heap;          /* young list head */
+extern size_t sp_str_heap_bytes;         /* young string-heap bytes */
+extern sp_str_hdr *sp_str_old;           /* old list head */
+extern size_t sp_str_old_bytes;          /* old string-heap bytes */
 #endif
+extern size_t sp_str_old_threshold;      /* old bytes that trigger a major sweep */
+extern size_t sp_str_old_threshold_init; /* recompute floor for the above */
 extern size_t sp_str_threshold;          /* string-GC trigger (own heuristic) */
 extern size_t sp_str_threshold_init;     /* recompute floor */
 extern int    sp_str_stress_checked;     /* one-shot SPINEL_GC_STRESS check */

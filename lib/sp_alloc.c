@@ -9,6 +9,8 @@
 #ifdef SP_THREADS
 sp_str_hdr *sp_str_heap_w[SP_MAX_WORKERS];       /* zero-init: NULL lists */
 size_t sp_str_heap_bytes_w[SP_MAX_WORKERS];      /* zero-init: 0 bytes */
+sp_str_hdr *sp_str_old_w[SP_MAX_WORKERS];        /* zero-init: NULL lists */
+size_t sp_str_old_bytes_w[SP_MAX_WORKERS];       /* zero-init: 0 bytes */
 /* Aggregate live string bytes across every worker's list. Called only off the
    fast path (collection trigger uses the per-worker slice; sweep/retune here). */
 static size_t sp_str_bytes_total(void) {
@@ -20,7 +22,23 @@ static size_t sp_str_bytes_total(void) {
 #else
 sp_str_hdr *sp_str_heap = NULL;
 size_t sp_str_heap_bytes = 0;
+sp_str_hdr *sp_str_old = NULL;
+size_t sp_str_old_bytes = 0;
 #endif
+size_t sp_str_old_threshold = 1024 * 1024;
+size_t sp_str_old_threshold_init = 1024 * 1024;
+
+/* Live bytes in the old generation, across every worker's list. */
+static size_t sp_str_old_total(void) {
+#ifdef SP_THREADS
+  size_t t = 0;
+  int n = sp_active_workers; if (n < 1) n = 1; if (n > SP_MAX_WORKERS) n = SP_MAX_WORKERS;
+  for (int i = 0; i < n; i++) t += SP_GC_CTR_GET(sp_str_old_bytes_w[i]);
+  return t;
+#else
+  return SP_GC_CTR_GET(sp_str_old_bytes);
+#endif
+}
 size_t sp_str_threshold = 256 * 1024;
 size_t sp_str_threshold_init = 256 * 1024;
 int sp_str_stress_checked = 0;
@@ -73,13 +91,16 @@ void sp_gc_retune_object(size_t before) {
    budget tracks a single worker's survivor size and does NOT inflate by N each
    cycle -- retuning on the aggregate would grow it geometrically for long-lived
    strings. The single-threaded build works in absolute bytes (N == 1). */
-static void sp_str_retune(size_t before) {
+static void sp_str_retune(size_t before, size_t promoted) {
 #ifdef SP_THREADS
   int nw = sp_active_workers; if (nw < 1) nw = 1;
-  size_t after = sp_str_bytes_total() / (size_t)nw;
+  size_t after = (sp_str_bytes_total() + promoted) / (size_t)nw;
   before /= (size_t)nw;
 #else
-  size_t after = sp_str_heap_bytes;
+  /* A promoted string is a survivor, not a reclamation: leaving it out of
+     `after` would read as a very productive sweep and shrink the trigger,
+     collecting harder and harder as the old generation grows. */
+  size_t after = sp_str_heap_bytes + promoted;
 #endif
   size_t freed = before - after;
   if (freed < before / 4) { sp_str_threshold = before * 2; }
@@ -190,18 +211,53 @@ void sp_str_lcache_clear(void) {
 /* Sweep one worker's list head (or the single st list). Runs under stop-the-
    world (threaded) or the held heap lock (st), so no concurrent push races it.
    `bytes` is decremented per freed string to keep the live-byte count in step. */
-static void sp_str_sweep_list(sp_str_hdr **head, size_t *bytes) {
+/* Sweep the YOUNG list: free what the mark phase did not reach, and move every
+   survivor onto the old list. The mark reset (0xfc -> 0xfe) happens at the move,
+   so a promoted string behaves exactly as it did before -- the next mark phase
+   re-marks it if it is still reachable, and the next MAJOR sweep frees it if
+   not. Survival of a single sweep is the whole promotion test: a string still
+   alive when the young generation filled is, empirically, one the program is
+   holding rather than one it is churning through.
+   `promoted` accumulates the moved bytes so the caller's threshold retune can
+   count them as survivors and not mistake promotion for reclamation. */
+static void sp_str_sweep_young(sp_str_hdr **head, size_t *bytes,
+                               sp_str_hdr **old_head, size_t *old_bytes,
+                               size_t *promoted) {
+  sp_str_hdr *h = *head;
+  sp_str_hdr *keep = *old_head;
+  size_t moved = 0;
+  while (h) {
+    sp_str_hdr *next = h->next;
+    char *body = (char *)(h + 1);
+    unsigned char m = (unsigned char)body[0];
+    if (m == 0xfc || m == 0xf1) {
+      if (m == 0xfc) body[0] = (char)0xfe;
+      h->next = keep;
+      keep = h;
+      moved += h->size;
+    }
+    else {
+      *bytes -= h->size;
+      free(h);
+    }
+    h = next;
+  }
+  *head = NULL;
+  *old_head = keep;
+  *bytes -= moved;
+  *old_bytes += moved;
+  *promoted += moved;
+}
+
+/* Sweep the OLD list in place. Survivors stay old; nothing is demoted. */
+static void sp_str_sweep_old(sp_str_hdr **head, size_t *bytes) {
   sp_str_hdr **pp = head;
   while (*pp) {
     sp_str_hdr *h = *pp;
     char *body = (char *)(h + 1);
-    if ((unsigned char)body[0] == 0xfc) {
-      body[0] = (char)0xfe;
-      pp = &h->next;
-    }
-    else if ((unsigned char)body[0] == 0xf1) {
-      pp = &h->next;
-    }
+    unsigned char m = (unsigned char)body[0];
+    if (m == 0xfc) { body[0] = (char)0xfe; pp = &h->next; }
+    else if (m == 0xf1) { pp = &h->next; }
     else {
       *pp = h->next;
       *bytes -= h->size;
@@ -210,14 +266,30 @@ static void sp_str_sweep_list(sp_str_hdr **head, size_t *bytes) {
   }
 }
 
-void sp_str_sweep(void) {
+/* `major` also walks the old generation. Returns the bytes promoted, for the
+   threshold retune. */
+static size_t sp_str_sweep_gen(int major) {
+  size_t promoted = 0;
 #ifdef SP_THREADS
   int n = sp_active_workers; if (n < 1) n = 1; if (n > SP_MAX_WORKERS) n = SP_MAX_WORKERS;
-  for (int i = 0; i < n; i++) sp_str_sweep_list(&sp_str_heap_w[i], &sp_str_heap_bytes_w[i]);
+  for (int i = 0; i < n; i++) {
+    if (major) sp_str_sweep_old(&sp_str_old_w[i], &sp_str_old_bytes_w[i]);
+    sp_str_sweep_young(&sp_str_heap_w[i], &sp_str_heap_bytes_w[i],
+                       &sp_str_old_w[i], &sp_str_old_bytes_w[i], &promoted);
+  }
 #else
-  sp_str_sweep_list(&sp_str_heap, &sp_str_heap_bytes);
+  if (major) sp_str_sweep_old(&sp_str_old, &sp_str_old_bytes);
+  sp_str_sweep_young(&sp_str_heap, &sp_str_heap_bytes,
+                     &sp_str_old, &sp_str_old_bytes, &promoted);
 #endif
   sp_str_lcache_clear();
+  return promoted;
+}
+
+/* Full sweep of both generations. GC.start and the shutdown paths want every
+   unreachable string gone, not just the young ones. */
+void sp_str_sweep(void) {
+  (void)sp_str_sweep_gen(1);
 }
 
 /* PolyArray free-list pool (see sp_alloc.h). Bounded so a burst does not pin
@@ -269,8 +341,20 @@ static void sp_str_sweep_gated(void) {
   size_t before = SP_GC_CTR_GET(sp_str_heap_bytes);
 #endif
   if (before <= SP_GC_CTR_GET(sp_str_threshold)) return;
-  sp_str_sweep();
-  sp_str_retune(before);
+  /* Walk the old generation only once it has itself grown past a threshold,
+     then re-aim that threshold at what survived. Between majors, old strings
+     that die are reclaimed late -- the same delayed-reclamation trade this
+     gate already makes for the whole heap, one level up. */
+  size_t old_before = sp_str_old_total();
+  int major = old_before > sp_str_old_threshold;
+  size_t promoted = sp_str_sweep_gen(major);
+  if (major) {
+    size_t old_after = sp_str_old_total();
+    sp_str_old_threshold = old_after * 2;
+    if (sp_str_old_threshold < sp_str_old_threshold_init)
+      sp_str_old_threshold = sp_str_old_threshold_init;
+  }
+  sp_str_retune(before, promoted);
 }
 
 /* Wire string sweep into the object collector. Runs before main, so the hook is
