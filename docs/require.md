@@ -47,7 +47,7 @@ These are provided by Spinel but, like CRuby, only after their `require`:
 | `require "strscan"` | `StringScanner` | uninitialized constant |
 | `require "json"` | `JSON.generate`, `JSON.dump` | uninitialized constant |
 | `require "monitor"` | `Monitor` (`#synchronize`) | `NameError` (uninitialized constant) |
-| `require "socket"` | `TCPServer`, `TCPSocket` | `NameError` (uninitialized constant) |
+| `require "socket"` | `TCPServer`, `TCPSocket`, `UDPSocket`, `UNIXServer`, `UNIXSocket` | `NameError` (uninitialized constant) |
 | `require "io/console"` | `IO#winsize` | `NoMethodError` |
 | `require "time"` | `Time#iso8601` | `NoMethodError` |
 

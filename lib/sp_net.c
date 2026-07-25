@@ -26,6 +26,7 @@
 #include <netinet/tcp.h>
 #include <arpa/inet.h>
 #include <signal.h>
+#include <sys/un.h>   /* UNIXSocket / UNIXServer */
 
 #define SP_NET_BUFSIZE 65536
 
@@ -244,6 +245,142 @@ int sp_net_accept_nb(int sfd) {
     } while (fd < 0 && errno == EINTR);
     if (fd >= 0) sp_net_set_nodelay(fd);
     return fd;
+}
+
+/* ---- UDP and UNIX-domain sockets ---- */
+
+/* An unbound UDP socket; #bind attaches it to a local address later. */
+int sp_net_udp_open(void) {
+    signal(SIGPIPE, SIG_IGN);
+    return socket(AF_INET, SOCK_DGRAM, 0);
+}
+int sp_net_udp_bind(int fd, const char *host, int port) {
+    if (fd < 0 || port < 0 || port > 65535) return -1;
+    struct addrinfo hints, *res = NULL;
+    memset(&hints, 0, sizeof(hints));
+    hints.ai_family   = AF_INET;
+    hints.ai_socktype = SOCK_DGRAM;
+    hints.ai_flags    = (host && *host) ? 0 : AI_PASSIVE;
+    char portbuf[16];
+    snprintf(portbuf, sizeof(portbuf), "%d", port);
+    if (getaddrinfo((host && *host) ? host : NULL, portbuf, &hints, &res) != 0) return -1;
+    int rc = bind(fd, res->ai_addr, res->ai_addrlen);
+    freeaddrinfo(res);
+    return rc;
+}
+/* #connect fixes the peer so #send / #write need no address. */
+int sp_net_udp_connect(int fd, const char *host, int port) {
+    if (fd < 0 || port < 0 || port > 65535) return -1;
+    struct addrinfo hints, *res = NULL;
+    memset(&hints, 0, sizeof(hints));
+    hints.ai_family   = AF_INET;
+    hints.ai_socktype = SOCK_DGRAM;
+    char portbuf[16];
+    snprintf(portbuf, sizeof(portbuf), "%d", port);
+    if (getaddrinfo(host, portbuf, &hints, &res) != 0) return -1;
+    int rc = connect(fd, res->ai_addr, res->ai_addrlen);
+    freeaddrinfo(res);
+    return rc;
+}
+int sp_net_udp_send_to(int fd, const char *data, int len, const char *host, int port) {
+    if (fd < 0) return -1;
+    if (!host || !*host) return (int)send(fd, data, (size_t)len, 0);
+    struct addrinfo hints, *res = NULL;
+    memset(&hints, 0, sizeof(hints));
+    hints.ai_family   = AF_INET;
+    hints.ai_socktype = SOCK_DGRAM;
+    char portbuf[16];
+    snprintf(portbuf, sizeof(portbuf), "%d", port);
+    if (getaddrinfo(host, portbuf, &hints, &res) != 0) return -1;
+    int rc = (int)sendto(fd, data, (size_t)len, 0, res->ai_addr, res->ai_addrlen);
+    freeaddrinfo(res);
+    return rc;
+}
+/* Reads one datagram into `buf`; fills the sender's IP/port when asked.
+   Returns the byte count, or -1. */
+int sp_net_udp_recv_from(int fd, char *buf, int cap, char *ipbuf, int ipcap, int *port_out) {
+    if (fd < 0 || cap <= 0) return -1;
+    struct sockaddr_storage ss;
+    socklen_t sl = sizeof ss;
+    ssize_t n;
+    do { n = recvfrom(fd, buf, (size_t)cap, 0, (struct sockaddr *)&ss, &sl); }
+    while (n < 0 && errno == EINTR);
+    if (n < 0) return -1;
+    if (ipbuf && ipcap > 0) {
+        ipbuf[0] = '\0';
+        if (ss.ss_family == AF_INET) {
+            struct sockaddr_in *a = (struct sockaddr_in *)&ss;
+            inet_ntop(AF_INET, &a->sin_addr, ipbuf, (socklen_t)ipcap);
+            if (port_out) *port_out = ntohs(a->sin_port);
+        } else if (ss.ss_family == AF_INET6) {
+            struct sockaddr_in6 *a = (struct sockaddr_in6 *)&ss;
+            inet_ntop(AF_INET6, &a->sin6_addr, ipbuf, (socklen_t)ipcap);
+            if (port_out) *port_out = ntohs(a->sin6_port);
+        } else if (port_out) *port_out = 0;
+    }
+    return (int)n;
+}
+
+/* UNIX-domain stream sockets. `path` is a filesystem path; a server unlinks a
+   stale socket file first, as CRuby's UNIXServer does not (it raises) -- so we
+   do not either, and bind fails on a leftover file. */
+static int sp_net_unix_addr(const char *path, struct sockaddr_un *sa) {
+    if (!path || !*path) return -1;
+    size_t n = strlen(path);
+    if (n >= sizeof sa->sun_path) return -1;
+    memset(sa, 0, sizeof *sa);
+    sa->sun_family = AF_UNIX;
+    memcpy(sa->sun_path, path, n + 1);
+    return 0;
+}
+int sp_net_unix_listen(const char *path, int backlog) {
+    struct sockaddr_un sa;
+    if (sp_net_unix_addr(path, &sa) != 0) return -1;
+    signal(SIGPIPE, SIG_IGN);
+    int fd = socket(AF_UNIX, SOCK_STREAM, 0);
+    if (fd < 0) return -1;
+    if (bind(fd, (struct sockaddr *)&sa, sizeof sa) != 0) { close(fd); return -1; }
+    if (listen(fd, backlog > 0 ? backlog : 128) != 0) { close(fd); return -1; }
+    return fd;
+}
+int sp_net_unix_connect(const char *path) {
+    struct sockaddr_un sa;
+    if (sp_net_unix_addr(path, &sa) != 0) return -1;
+    signal(SIGPIPE, SIG_IGN);
+    int fd = socket(AF_UNIX, SOCK_STREAM, 0);
+    if (fd < 0) return -1;
+    if (connect(fd, (struct sockaddr *)&sa, sizeof sa) != 0) { close(fd); return -1; }
+    return fd;
+}
+/* The bound path of a UNIX socket (empty for an unnamed peer). */
+int sp_net_unix_path(int fd, int peer, char *buf, int cap) {
+    struct sockaddr_un sa;
+    socklen_t sl = sizeof sa;
+    memset(&sa, 0, sizeof sa);
+    int rc = peer ? getpeername(fd, (struct sockaddr *)&sa, &sl)
+                  : getsockname(fd, (struct sockaddr *)&sa, &sl);
+    if (rc != 0 || cap <= 0) { if (cap > 0) buf[0] = '\0'; return -1; }
+    snprintf(buf, (size_t)cap, "%s", sa.sun_path);
+    return 0;
+}
+
+/* ---- socket options ---- */
+/* getsockopt/setsockopt over the integer-valued options, which is every option
+   Ruby programs reach for in practice (SO_REUSEADDR, SO_KEEPALIVE,
+   TCP_NODELAY, SO_RCVBUF, ...). Returns -1 on failure. */
+int sp_net_setsockopt_int(int fd, int level, int optname, int value) {
+    if (fd < 0) return -1;
+    return setsockopt(fd, level, optname, &value, (socklen_t)sizeof value);
+}
+int sp_net_getsockopt_int(int fd, int level, int optname) {
+    int value = 0;
+    socklen_t len = (socklen_t)sizeof value;
+    if (fd < 0 || getsockopt(fd, level, optname, &value, &len) != 0) return -1;
+    return value;
+}
+int sp_net_shutdown(int fd, int how) {
+    if (fd < 0) return -1;
+    return shutdown(fd, how);
 }
 
 int sp_net_connect(const char *host, int port) {

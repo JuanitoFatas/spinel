@@ -2155,8 +2155,10 @@ else {
       if (cn && sp_streq(cn, "Fiber")) return TY_FIBER;
       if (cn && sp_streq(cn, "File")) return TY_IO;   /* File.new is File.open (#2779) */
       if (cn && sp_streq(cn, "Dir")) return TY_DIR;   /* Dir.new is an open handle (#2821) */
-      /* the TCP socket classes ARE IO handles (#2922) */
-      if (cn && (sp_streq(cn, "TCPServer") || sp_streq(cn, "TCPSocket")) &&
+      /* the socket classes ARE IO handles (#2922) */
+      if (cn && (sp_streq(cn, "TCPServer") || sp_streq(cn, "TCPSocket") ||
+                 sp_streq(cn, "UDPSocket") || sp_streq(cn, "UNIXSocket") ||
+                 sp_streq(cn, "UNIXServer")) &&
           sp_feature_required("socket")) return TY_IO;
       if (cn && sp_streq(cn, "OpenStruct") && sp_feature_required("ostruct")) return TY_OPENSTRUCT;
       if (cn && (sp_streq(cn, "Thread") || sp_streq(cn, "Mutex") || (sp_streq(cn, "Monitor") && sp_feature_enabled("monitor")) ||
@@ -2235,8 +2237,10 @@ else {
       if (cn && sp_streq(cn, "Random")) return TY_RANDOM;
       if (cn && sp_streq(cn, "File")) return TY_IO;   /* File.new is File.open (#2779) */
       if (cn && sp_streq(cn, "Dir")) return TY_DIR;   /* Dir.new is an open handle (#2821) */
-      /* the TCP socket classes ARE IO handles (#2922) */
-      if (cn && (sp_streq(cn, "TCPServer") || sp_streq(cn, "TCPSocket")) &&
+      /* the socket classes ARE IO handles (#2922) */
+      if (cn && (sp_streq(cn, "TCPServer") || sp_streq(cn, "TCPSocket") ||
+                 sp_streq(cn, "UDPSocket") || sp_streq(cn, "UNIXSocket") ||
+                 sp_streq(cn, "UNIXServer")) &&
           sp_feature_required("socket")) return TY_IO;
       if (cn && sp_streq(cn, "OpenStruct") && sp_feature_required("ostruct")) return TY_OPENSTRUCT;
       if (cn && (sp_streq(cn, "Thread") ||
@@ -2775,6 +2779,15 @@ else {
       if (sp_streq(name, "accept") && argc == 0) return TY_IO;
       if ((sp_streq(name, "addr") || sp_streq(name, "peeraddr")) && argc == 0)
         return TY_POLY_ARRAY;
+      if (sp_streq(name, "recv") && argc == 1) return TY_STRING;
+      if (sp_streq(name, "recvfrom") && argc == 1) return TY_POLY_ARRAY;
+      if (((sp_streq(name, "bind") || sp_streq(name, "connect")) && argc == 2) ||
+          (sp_streq(name, "send") && (argc == 2 || argc == 4)) ||
+          (sp_streq(name, "shutdown") && argc <= 1) ||
+          (sp_streq(name, "listen") && argc == 1) ||
+          (sp_streq(name, "setsockopt") && argc == 3) ||
+          (sp_streq(name, "getsockopt") && argc == 2))
+        return TY_INT;
     }
     /* fd-backed IO instance methods (#3038) */
     if (sp_streq(name, "readbyte") || sp_streq(name, "fcntl") ||
@@ -6061,6 +6074,10 @@ TyKind infer_uncached(Compiler *c, int id) {
     if (par_nm && sp_streq(par_nm, "Integer")) {
       if (nm && (sp_streq(nm, "MAX") || sp_streq(nm, "MIN"))) return TY_UNKNOWN; /* raises NameError */
     }
+    /* Socket::<CONST> is an Integer flag; the runtime resolves its value, so
+       an unknown name raises NameError there rather than typing here. */
+    if (par_nm && sp_streq(par_nm, "Socket") && sp_feature_required("socket") && nm)
+      return TY_INT;
     if (nm && comp_class_index(c, nm) >= 0) return TY_CLASS;
     if (nm && is_builtin_class_name(nm)) return TY_CLASS;
     /* FFI const: Module::NAME -> int */

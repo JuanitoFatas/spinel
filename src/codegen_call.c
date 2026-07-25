@@ -5654,6 +5654,18 @@ static int emit_class_new_call(Compiler *c, int id, Buf *b) {
         buf_puts(b, "), (&(\"\\xff\" \"tcp\")[1]))");
         return 1;
       }
+      if (cn && sp_streq(cn, "UDPSocket") && sp_feature_required("socket") && argc == 0) {
+        buf_puts(b, "sp_sock_udp_new()");
+        return 1;
+      }
+      if (cn && sp_streq(cn, "UNIXServer") && sp_feature_required("socket") && argc == 1) {
+        buf_puts(b, "sp_sock_unix_server("); emit_str_expr(c, argv[0], b); buf_puts(b, ")");
+        return 1;
+      }
+      if (cn && sp_streq(cn, "UNIXSocket") && sp_feature_required("socket") && argc == 1) {
+        buf_puts(b, "sp_sock_unix_connect("); emit_str_expr(c, argv[0], b); buf_puts(b, ")");
+        return 1;
+      }
       /* OpenStruct.new(k: v, ..) / OpenStruct.new({k => v}) -- a dynamic
          member bag backed by a symbol->value hash (#3135). Members are set
          later via `o.k=`/`o[:k]=`; the ctor seeds from a literal keyword hash
@@ -10459,6 +10471,70 @@ void emit_call(Compiler *c, int id, Buf *b) {
       buf_printf(b, "sp_sock_addr(%s, %d)", r, sp_streq(name, "peeraddr") ? 1 : 0);
       free(rb.p); return;
     }
+    if (sp_feature_required("socket")) {
+      /* the address-taking pair; UDPSocket#send's 3-arg form carries the
+         destination, the 2-arg form goes to the connected peer */
+      if ((sp_streq(name, "bind") || sp_streq(name, "connect")) && argc == 2) {
+        buf_printf(b, "sp_sock_%s(%s, ", name, r);
+        emit_str_expr(c, argv[0], b); buf_puts(b, ", ");
+        emit_int_expr(c, argv[1], b); buf_puts(b, ")");
+        free(rb.p); return;
+      }
+      if (sp_streq(name, "send") && (argc == 2 || argc == 4)) {
+        int tsd = ++g_tmp;
+        buf_printf(b, "({ const char *_t%d = ", tsd); emit_str_expr(c, argv[0], b);
+        buf_printf(b, "; sp_sock_send(%s, _t%d, (mrb_int)sp_str_byte_len(_t%d), ", r, tsd, tsd);
+        if (argc == 4) { emit_str_expr(c, argv[2], b); buf_puts(b, ", "); emit_int_expr(c, argv[3], b); }
+        else buf_puts(b, "NULL, 0");
+        buf_puts(b, "); })");
+        free(rb.p); return;
+      }
+      if (sp_streq(name, "recv") && argc == 1) {
+        buf_printf(b, "sp_sock_recv(%s, ", r); emit_int_expr(c, argv[0], b); buf_puts(b, ")");
+        free(rb.p); return;
+      }
+      /* recvfrom -> [payload, ["AF_INET", port, ip, ip]] */
+      if (sp_streq(name, "recvfrom") && argc == 1) {
+        int tp = ++g_tmp, ti = ++g_tmp, to = ++g_tmp, ta = ++g_tmp, tw = ++g_tmp;
+        buf_printf(b, "({ const char *_t%d = NULL; mrb_int _t%d = 0;"
+                      " const char *_t%d = sp_sock_recvfrom(%s, ", ti, tp, to, r);
+        emit_int_expr(c, argv[0], b);
+        buf_printf(b, ", &_t%d, &_t%d);"
+                      " sp_PolyArray *_t%d = sp_PolyArray_new(); SP_GC_ROOT(_t%d);"
+                      " sp_PolyArray_push(_t%d, sp_box_str(strchr(_t%d, ':') ? SPL(\"AF_INET6\") : SPL(\"AF_INET\")));"
+                      " sp_PolyArray_push(_t%d, sp_box_int(_t%d));"
+                      " sp_PolyArray_push(_t%d, sp_box_str(_t%d));"
+                      " sp_PolyArray_push(_t%d, sp_box_str(_t%d));"
+                      " sp_PolyArray *_t%d = sp_PolyArray_new(); SP_GC_ROOT(_t%d);"
+                      " sp_PolyArray_push(_t%d, sp_box_str(_t%d));"
+                      " sp_PolyArray_push(_t%d, sp_box_poly_array(_t%d)); _t%d; })",
+                   ti, tp, ta, ta, ta, ti, ta, tp, ta, ti, ta, ti, tw, tw, tw, to, tw, ta, tw);
+        free(rb.p); return;
+      }
+      if (sp_streq(name, "shutdown") && argc <= 1) {
+        buf_printf(b, "sp_sock_shutdown(%s, ", r);
+        if (argc == 1) emit_int_expr(c, argv[0], b); else buf_puts(b, "2");
+        buf_puts(b, ")");
+        free(rb.p); return;
+      }
+      if (sp_streq(name, "listen") && argc == 1) {
+        buf_printf(b, "sp_sock_listen(%s, ", r); emit_int_expr(c, argv[0], b); buf_puts(b, ")");
+        free(rb.p); return;
+      }
+      if (sp_streq(name, "setsockopt") && argc == 3) {
+        buf_printf(b, "sp_sock_setsockopt(%s, ", r);
+        emit_int_expr(c, argv[0], b); buf_puts(b, ", ");
+        emit_int_expr(c, argv[1], b); buf_puts(b, ", ");
+        emit_int_expr(c, argv[2], b); buf_puts(b, ")");
+        free(rb.p); return;
+      }
+      if (sp_streq(name, "getsockopt") && argc == 2) {
+        buf_printf(b, "sp_sock_getsockopt(%s, ", r);
+        emit_int_expr(c, argv[0], b); buf_puts(b, ", ");
+        emit_int_expr(c, argv[1], b); buf_puts(b, ")");
+        free(rb.p); return;
+      }
+    }
     if (argc == 0 && sp_streq(name, "stat")) {
       buf_printf(b, "sp_file_stat_handle(sp_File_path(%s))", r);
       free(rb.p); return;
@@ -12451,19 +12527,25 @@ else { memcpy(dir, sf, n); dir[n] = 0; } }
     else if (rt == TY_IO) {
       /* a stat handle is a File::Stat (#2841); a path-backed handle is a
          File; a raw stream (STDOUT, pipe end) is an IO (#2797) */
+      /* The handle kind names its class; sp_io_kind_name is the single
+         authority (it also drives #is_a? and the NoMethodError texts). Each
+         socket class carries its real builtin id so the class VALUE walks the
+         same ancestor chain a constant does. */
       int tio = ++g_tmp;
       buf_printf(b, "({ sp_File *_t%d = ", tio); emit_expr(c, recv, b);
-      buf_printf(b, "; (_t%d && _t%d->mode && strcmp(_t%d->mode, \"tcp\") == 0)"
-                    " ? ((sp_Class){(mrb_int)-1, \"TCPSocket\"})"
-                    " : (_t%d && _t%d->mode && strcmp(_t%d->mode, \"tcpserver\") == 0)"
-                    " ? ((sp_Class){(mrb_int)-1, \"TCPServer\"})"
-                    " : (_t%d && _t%d->mode && (strcmp(_t%d->mode, \"stat\") == 0"
-                    " || strcmp(_t%d->mode, \"lstat\") == 0))"
-                    " ? ((sp_Class){(mrb_int)-1, \"File::Stat\"})"
-                    " : (_t%d && sp_File_path(_t%d)[0] && sp_File_path(_t%d)[0] != '<')"
-                    " ? ((sp_Class){(mrb_int)-121, \"File\"})"
-                    " : ((sp_Class){(mrb_int)-120, \"IO\"}); })",
-                 tio, tio, tio, tio, tio, tio, tio, tio, tio, tio, tio, tio, tio);
+      buf_printf(b, "; const char *_k%d = (_t%d && _t%d->mode &&"
+                    " (strcmp(_t%d->mode, \"stat\") == 0 || strcmp(_t%d->mode, \"lstat\") == 0))"
+                    " ? \"File::Stat\" : sp_io_kind_name(_t%d); ",
+                 tio, tio, tio, tio, tio, tio);
+      static const struct { const char *k; int id; } IO_KIND_CLS[] = {
+        { "TCPSocket", -168 }, { "TCPServer", -169 }, { "UDPSocket", -170 },
+        { "UNIXSocket", -171 }, { "UNIXServer", -172 },
+        { "File", -121 }, { "IO", -120 }, { NULL, 0 }
+      };
+      for (int ki = 0; IO_KIND_CLS[ki].k; ki++)
+        buf_printf(b, "strcmp(_k%d, \"%s\") == 0 ? ((sp_Class){(mrb_int)%d, NULL}) : ",
+                   tio, IO_KIND_CLS[ki].k, IO_KIND_CLS[ki].id);
+      buf_printf(b, "((sp_Class){(mrb_int)-1, _k%d}); })", tio);
       return;
     }
     else if (rt == TY_ARGF) cn = "ARGF.class";  /* ARGF's singleton class name (CRuby) */

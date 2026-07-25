@@ -57,6 +57,28 @@ int sp_net_sock_ip(int fd, int peer, char *ipbuf, int cap);
 int sp_net_accept(int sfd);
 int sp_net_accept_nb(int sfd);
 int sp_net_connect(const char *host, int port);
+
+/* ---- UDP ----
+ * udp_open: an unbound SOCK_DGRAM fd. bind/connect attach it to a local /
+ * remote address. send_to with a NULL host uses the connected peer.
+ * recv_from reads one datagram and reports the sender. */
+int sp_net_udp_open(void);
+int sp_net_udp_bind(int fd, const char *host, int port);
+int sp_net_udp_connect(int fd, const char *host, int port);
+int sp_net_udp_send_to(int fd, const char *data, int len, const char *host, int port);
+int sp_net_udp_recv_from(int fd, char *buf, int cap, char *ipbuf, int ipcap, int *port_out);
+
+/* ---- UNIX-domain stream sockets ---- */
+int sp_net_unix_listen(const char *path, int backlog);
+int sp_net_unix_connect(const char *path);
+int sp_net_unix_path(int fd, int peer, char *buf, int cap);
+
+/* ---- socket options ----
+ * The integer-valued options, which is what Ruby programs reach for
+ * (SO_REUSEADDR, SO_KEEPALIVE, TCP_NODELAY, SO_RCVBUF, ...). */
+int sp_net_setsockopt_int(int fd, int level, int optname, int value);
+int sp_net_getsockopt_int(int fd, int level, int optname);
+int sp_net_shutdown(int fd, int how);
 int sp_net_close(int fd);
 int sp_net_set_nonblock(int fd);
 void sp_net_set_nodelay(int fd);

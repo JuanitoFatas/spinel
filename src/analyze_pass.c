@@ -4986,6 +4986,10 @@ int desugar_public_send_recv(Compiler *c) {
       int bsrecv = nt_ref(nt, id, "receiver");
       TyKind bsrt = bsrecv >= 0 ? infer_type(c, bsrecv) : TY_UNKNOWN;
       if (ty_is_object(bsrt) && class_is_blank_slate(c, ty_object_class(bsrt))) continue;
+      /* A socket's #send is the datagram write, not Object#send: CRuby picks
+         by the receiver's class, and `u.send("ping", 0, host, port)` would
+         otherwise retarget to a method named "ping" (#2922). */
+      if (sp_streq(nm, "send") && bsrt == TY_IO && sp_feature_required("socket")) continue;
     }
     int args = nt_ref(nt, id, "arguments");
     if (args < 0) continue;

@@ -1709,6 +1709,14 @@ void emit_expr(Compiler *c, int id, Buf *b) {
         }
       }
     }
+    /* Socket::<CONST>: the value is platform-dependent, so the runtime (where
+       the system headers are in scope) resolves it by name. */
+    if (par_nmc && nm && sp_streq(par_nmc, "Socket") && sp_feature_required("socket")) {
+      buf_printf(b, "({ mrb_int _sc = sp_sock_const(\"%s\");"
+                    " if (_sc < 0) sp_raise_cls(\"NameError\","
+                    " \"uninitialized constant Socket::%s\"); _sc; })", nm, nm);
+      return;
+    }
     /* class/module constant as value */
     if (nm) {
       int _cpidx = comp_class_index(c, nm);

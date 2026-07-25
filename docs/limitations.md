@@ -75,42 +75,54 @@ Limited today, but additively fixable; listed roughly easiest-first.
 | Mixin/inheritance lifecycle hooks (`included` / `inherited` / `extended`) | defined but not fired | emit a startup call with the literal class arg (the include/inherit graph is known at compile time) |
 | External `Enumerator` — `.each` with no block is only an Enumerator on `Array` / `Range`, not on an arbitrary user method | mostly supported | `Array#each` / `Range#each` with no block return a working external Enumerator (`#next` / `#peek` / `#rewind` / `#size`, `loop` stops on `StopIteration`). `Enumerator.new { \|y\| ... }` is a fiber-backed generator (`y << v`, `y.yield(v)`, and the bare `y.yield v` without parentheses, plus `#next` / `#peek` / `#rewind` / `#take` / `#first`, infinite generators work). `Enumerator::Lazy` over an int range (incl. endless) or int array fuses map/select/reject/filter/take_while chains terminated by `first(n)` / `to_a` / `force`. Chained block→`.to_a` forms (`each_slice(n).to_a`, `filter_map`, `map{}.to_a`) also work. |
 | `Array#hash` (and arrays as hash keys) | unsupported | a builtin is additive, but array *keys* need the fundamental key-dispatch above |
-| Sockets | TCP only, as IO handles — see below | additive: each missing class and method is its own runtime binding |
+| Sockets | TCP / UDP / UNIX-domain, as IO handles — see below | additive: each missing class and method is its own runtime binding |
 
 ### Sockets
 
 `require "socket"` is mandatory (see [require.md](require.md)); without it the
 constants are undefined, as in CRuby.
 
-**Supported.** `TCPServer.new(port)` / `TCPServer.new(host, port)`,
-`TCPSocket.new(host, port)`, and on the resulting handle `#accept`, `#addr`,
-`#peeraddr`. `#addr` / `#peeraddr` return CRuby's numeric 4-element form
-(`["AF_INET", port, ip, ip]`). Hostname resolution works. `#accept` parks
+**Supported classes.** `TCPServer`, `TCPSocket`, `UDPSocket`, `UNIXServer`,
+`UNIXSocket`, and the `BasicSocket` / `IPSocket` / `Socket` classes they inherit
+from. They sit in CRuby's chain (`TCPServer < TCPSocket < IPSocket <
+BasicSocket < IO`), so `#is_a?`, `#class`, `.superclass` and `.ancestors`
+answer as CRuby does. (IO's own mixins, `File::Constants` and `Enumerable`, are
+still missing, so `ancestors` diverges past `IO`.)
+
+**Constructors.** `TCPServer.new(port)` / `TCPServer.new(host, port)`,
+`TCPSocket.new(host, port)`, `UDPSocket.new`, `UNIXServer.new(path)`,
+`UNIXSocket.new(path)`.
+
+**Methods.** `#accept`, `#addr`, `#peeraddr`, `#bind`, `#connect`, `#send`,
+`#recv`, `#recvfrom`, `#listen`, `#shutdown`, `#setsockopt`, `#getsockopt`, and
+the whole IO surface a handle carries (`#gets`, `#read`, `#readpartial`,
+`#write`, `#puts`, `#print`, `#flush`, `#close`, `#closed?`, `#eof?`,
+`#fileno`, `#each_line`, the `IO#wait_*` readiness family, `IO.select`).
+`#addr` / `#peeraddr` return CRuby's numeric 4-element form. `#accept` parks
 cooperatively on the green-thread scheduler, so a thread-per-connection server
-does not stall its siblings, and socket writes bypass stdio (`sync` is true, as
-in CRuby).
+does not stall its siblings, and socket writes bypass stdio (`#sync` is true,
+as in CRuby).
 
-Everything else that works on a socket works because a socket **is** an IO
-handle: `#gets`, `#read`, `#readpartial`, `#write`, `#puts`, `#print`, `#flush`,
-`#close`, `#closed?`, `#eof?`, `#fileno`, `#each_line`, and the rest of the IO
-surface.
+`Socket::` constants (`SOL_SOCKET`, `SO_REUSEADDR`, `AF_INET`, `SOCK_DGRAM`,
+`SHUT_RDWR`, `TCP_NODELAY`, ...) resolve at run time from the system headers,
+so they carry the right platform-specific values.
 
-**Not implemented.** `UDPSocket`, `UNIXSocket`, `UNIXServer`, `Socket`,
-`BasicSocket`, `IPSocket`, `SOCKSSocket`, `Addrinfo`, and the `Socket::`
-constants — the constants are undefined, so a program naming them fails at the
-`require`-gate boundary rather than silently misbehaving. On the two supported
-classes these methods are missing: `#listen`, `#bind`, `#connect`,
-`#accept_nonblock`, `#recv`, `#recvfrom`, `#send`, `#shutdown`, `#setsockopt`,
-`#getsockopt`, `#getsockname`, `#getpeername`, `#local_address`,
-`#remote_address`, and the class methods `.open`, `.gethostbyname`,
-`Socket.getaddrinfo`, `Socket.pair`. `TCPServer.new` takes no backlog argument
-(the listen backlog is fixed); `TCPSocket.new` has no four-argument
-local-address form.
+**Divergences and gaps.**
 
-The runtime layer (`lib/sp_net.c`) is broader than the Ruby surface — it also
-carries non-blocking accept, a `poll(2)` wrapper set, prefork helpers and byte
-oriented recv/write — but those are reachable only through FFI today, not from
-socket syntax.
+- `#getsockopt` answers an Integer; CRuby answers a `Socket::Option`. Only the
+  integer-valued options are reachable.
+- `Addrinfo` and `SOCKSSocket` do not exist. `Socket` exists as a class (so the
+  inheritance chain and its constants work) but has no class methods:
+  `Socket.new`, `Socket.gethostname`, `Socket.getaddrinfo`, `Socket.pair` all
+  raise NoMethodError.
+- Missing instance methods: `#accept_nonblock`, `#recvfrom_nonblock`,
+  `#recv_nonblock`, `#sendmsg`, `#recvmsg`, `#getsockname`, `#getpeername`,
+  `#local_address`, `#remote_address`, `#do_not_reverse_lookup`.
+- Missing class methods: `.open`, `.gethostbyname`, `IPSocket.getaddress`.
+- `TCPServer.new` takes no backlog argument (the listen backlog is fixed);
+  `TCPSocket.new` has no four-argument local-address form. UDP is IPv4 only.
+- A class Spinel recognizes but has not implemented reports the missing
+  **method** (`undefined method 'new' for class ...`), not a missing constant.
 
 ---
 

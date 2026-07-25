@@ -13,6 +13,10 @@
 #include <unistd.h>   /* pipe, isatty */
 #include <sys/stat.h> /* stat() for the File predicates */
 #include <sys/ioctl.h> /* TIOCGWINSZ for #winsize */
+#include <sys/socket.h> /* the Socket:: constants */
+#include <netinet/in.h>
+#include <netinet/tcp.h>
+#include <sys/un.h>
 #include <sys/time.h> /* utimes() for File.utime */
 #include <errno.h>
 #include <fcntl.h>   /* fcntl flags for #close_on_exec?, #fcntl */
@@ -238,6 +242,144 @@ mrb_bool sp_io_is_a(sp_File *f, const char *cls) {
 }
 mrb_bool sp_io_instance_of(sp_File *f, const char *cls) {
   return cls && strcmp(sp_io_kind_name(f), cls) == 0;
+}
+
+/* Socket:: numeric constants. Their values differ between Linux and the BSDs
+   (SO_REUSEADDR is 2 on Linux, 0x0004 on macOS), so they are resolved here --
+   where the system headers are in scope -- rather than baked into the emitted
+   C as literals. Unknown names answer -1; the caller raises NameError. */
+mrb_int sp_sock_const(const char *n) {
+  if (!n) return -1;
+  struct { const char *n; mrb_int v; } T[] = {
+    { "SOL_SOCKET", SOL_SOCKET }, { "IPPROTO_TCP", IPPROTO_TCP },
+    { "IPPROTO_IP", IPPROTO_IP }, { "IPPROTO_UDP", IPPROTO_UDP },
+    { "SO_REUSEADDR", SO_REUSEADDR }, { "SO_KEEPALIVE", SO_KEEPALIVE },
+    { "SO_BROADCAST", SO_BROADCAST }, { "SO_RCVBUF", SO_RCVBUF },
+    { "SO_SNDBUF", SO_SNDBUF }, { "SO_ERROR", SO_ERROR },
+    { "SO_LINGER", SO_LINGER }, { "SO_TYPE", SO_TYPE },
+#ifdef SO_REUSEPORT
+    { "SO_REUSEPORT", SO_REUSEPORT },
+#endif
+    { "TCP_NODELAY", TCP_NODELAY },
+    { "AF_INET", AF_INET }, { "AF_INET6", AF_INET6 }, { "AF_UNIX", AF_UNIX },
+    { "PF_INET", PF_INET }, { "PF_INET6", PF_INET6 }, { "PF_UNIX", PF_UNIX },
+    { "SOCK_STREAM", SOCK_STREAM }, { "SOCK_DGRAM", SOCK_DGRAM },
+    { "SHUT_RD", SHUT_RD }, { "SHUT_WR", SHUT_WR }, { "SHUT_RDWR", SHUT_RDWR },
+    { NULL, 0 }
+  };
+  for (int i = 0; T[i].n; i++) if (strcmp(T[i].n, n) == 0) return T[i].v;
+  return -1;
+}
+
+/* UDPSocket.new / UNIXSocket.new / UNIXServer.new -- each wraps its fd in the
+   same handle every other stream uses; the kind label is what tells them
+   apart. A UDP handle keeps its own datagram path, so it is not fdopen'd. */
+sp_File *sp_sock_udp_new(void) {
+  extern int sp_net_udp_open(void);
+  int fd = sp_net_udp_open();
+  if (fd < 0) sp_raise_cls("SocketError", "cannot create UDP socket");
+  sp_File *f = (sp_File *)sp_gc_alloc(sizeof(sp_File), sp_File_fin, sp_File_scan);
+  f->fp = fdopen(fd, "r+");
+  if (!f->fp) { close(fd); sp_raise_cls("IOError", "fdopen failed"); return NULL; }
+  f->path = NULL; f->mode = "udp"; f->lineno = 0; f->is_sock = 1;
+  return f;
+}
+sp_File *sp_sock_unix_server(const char *path) {
+  extern int sp_net_unix_listen(const char *path, int backlog);
+  int fd = sp_net_unix_listen(path, 128);
+  if (fd < 0) sp_file_raise_errno("bind", path ? path : "");
+  sp_File *f = sp_io_fdopen_sock(fd, "unixserver");
+  return f;
+}
+sp_File *sp_sock_unix_connect(const char *path) {
+  extern int sp_net_unix_connect(const char *path);
+  int fd = sp_net_unix_connect(path);
+  if (fd < 0) sp_file_raise_errno("connect", path ? path : "");
+  return sp_io_fdopen_sock(fd, "unix");
+}
+
+/* Only a socket answers the socket-specific methods; say which class the
+   receiver actually is when it does not. */
+static void sp_sock_require(sp_File *f, const char *m) {
+  if (!f || !f->is_sock)
+    sp_raise_cls("NoMethodError",
+                 sp_sprintf("undefined method '%s' for an instance of %s", m, sp_io_kind_name(f)));
+  if (!f->fp) sp_raise_cls("IOError", "closed stream");
+}
+mrb_int sp_sock_bind(sp_File *f, const char *host, mrb_int port) {
+  extern int sp_net_udp_bind(int fd, const char *host, int port);
+  sp_sock_require(f, "bind");
+  if (sp_net_udp_bind(fileno(f->fp), host, (int)port) != 0)
+    sp_file_raise_errno("bind", host ? host : "");
+  return 0;
+}
+mrb_int sp_sock_connect(sp_File *f, const char *host, mrb_int port) {
+  extern int sp_net_udp_connect(int fd, const char *host, int port);
+  sp_sock_require(f, "connect");
+  if (sp_net_udp_connect(fileno(f->fp), host, (int)port) != 0)
+    sp_file_raise_errno("connect", host ? host : "");
+  return 0;
+}
+mrb_int sp_sock_send(sp_File *f, const char *data, mrb_int len, const char *host, mrb_int port) {
+  extern int sp_net_udp_send_to(int fd, const char *data, int len, const char *host, int port);
+  sp_sock_require(f, "send");
+  int n = sp_net_udp_send_to(fileno(f->fp), data, (int)len, host, (int)port);
+  if (n < 0) sp_file_raise_errno("send", host ? host : "");
+  return (mrb_int)n;
+}
+/* #recv reads one datagram (or up to `len` stream bytes) as a String;
+   #recvfrom pairs it with the sender's address, CRuby's 4-element form. */
+const char *sp_sock_recv(sp_File *f, mrb_int len) {
+  extern int sp_net_udp_recv_from(int fd, char *buf, int cap, char *ipbuf, int ipcap, int *port_out);
+  sp_sock_require(f, "recv");
+  if (len <= 0) return sp_str_from_bytes("", 0);
+  char *buf = (char *)malloc((size_t)len);
+  if (!buf) sp_raise_cls("NoMemoryError", "recv");
+  int n = sp_net_udp_recv_from(fileno(f->fp), buf, (int)len, NULL, 0, NULL);
+  if (n < 0) { free(buf); sp_file_raise_errno("recv", ""); }
+  const char *s = sp_str_from_bytes(buf, (size_t)n);
+  free(buf);
+  return s;
+}
+/* Fills the caller's address slots; returns the payload. */
+const char *sp_sock_recvfrom(sp_File *f, mrb_int len, const char **ip_out, mrb_int *port_out) {
+  extern int sp_net_udp_recv_from(int fd, char *buf, int cap, char *ipbuf, int ipcap, int *port_out);
+  sp_sock_require(f, "recvfrom");
+  char ipbuf[64];
+  int port = 0;
+  if (len <= 0) { *ip_out = sp_str_from_bytes("", 0); *port_out = 0; return sp_str_from_bytes("", 0); }
+  char *buf = (char *)malloc((size_t)len);
+  if (!buf) sp_raise_cls("NoMemoryError", "recvfrom");
+  int n = sp_net_udp_recv_from(fileno(f->fp), buf, (int)len, ipbuf, (int)sizeof ipbuf, &port);
+  if (n < 0) { free(buf); sp_file_raise_errno("recvfrom", ""); }
+  const char *s = sp_str_from_bytes(buf, (size_t)n);
+  free(buf);
+  *ip_out = sp_str_from_bytes(ipbuf, strlen(ipbuf));
+  *port_out = (mrb_int)port;
+  return s;
+}
+mrb_int sp_sock_shutdown(sp_File *f, mrb_int how) {
+  extern int sp_net_shutdown(int fd, int how);
+  sp_sock_require(f, "shutdown");
+  if (sp_net_shutdown(fileno(f->fp), (int)how) != 0) sp_file_raise_errno("shutdown", "");
+  return 0;
+}
+mrb_int sp_sock_setsockopt(sp_File *f, mrb_int level, mrb_int opt, mrb_int value) {
+  extern int sp_net_setsockopt_int(int fd, int level, int optname, int value);
+  sp_sock_require(f, "setsockopt");
+  if (sp_net_setsockopt_int(fileno(f->fp), (int)level, (int)opt, (int)value) != 0)
+    sp_file_raise_errno("setsockopt", "");
+  return 0;
+}
+mrb_int sp_sock_getsockopt(sp_File *f, mrb_int level, mrb_int opt) {
+  extern int sp_net_getsockopt_int(int fd, int level, int optname);
+  sp_sock_require(f, "getsockopt");
+  return (mrb_int)sp_net_getsockopt_int(fileno(f->fp), (int)level, (int)opt);
+}
+mrb_int sp_sock_listen(sp_File *f, mrb_int backlog) {
+  sp_sock_require(f, "listen");
+  if (listen(fileno(f->fp), (int)backlog) != 0) sp_file_raise_errno("listen", "");
+  return 0;
 }
 
 /* TCPServer#accept: park cooperatively for a pending connection first -- a
