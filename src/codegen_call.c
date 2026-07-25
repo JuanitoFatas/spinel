@@ -3150,7 +3150,14 @@ static void emit_poly_fetch_absent(Compiler *c, int argc, const int *atmp, int a
    real gap under the ruby/spec harness (`x.should.eql?(y)` and friends). */
 static int poly_pred_kind(const char *name, int argc) {
   if (!name) return 0;
-  if (argc == 0) return (sp_streq(name, "frozen?") || sp_streq(name, "nil?")) ? 1 : 0;
+  /* zero?/positive?/negative? are numeric rather than universal, but they take
+     the same default arm: a user class defining one of them makes this switch
+     the only path, and a Float or Integer reaching it must still answer its own
+     sign instead of the empty default. sp_poly_zero_p and friends raise
+     NoMethodError for a tag that has no sign, as CRuby does. */
+  if (argc == 0) return (sp_streq(name, "frozen?") || sp_streq(name, "nil?") ||
+                         sp_streq(name, "zero?") || sp_streq(name, "positive?") ||
+                         sp_streq(name, "negative?")) ? 1 : 0;
   if (argc == 1) return (sp_streq(name, "eql?") || sp_streq(name, "equal?") ||
                          sp_streq(name, "is_a?") || sp_streq(name, "kind_of?") ||
                          sp_streq(name, "instance_of?")) ? 1 : 0;
@@ -3171,6 +3178,9 @@ static int emit_poly_pred_value(Compiler *c, int id, const char *tvref,
   const int *argv = call_args(nt, id, &argc);
   if (argc == 0 && sp_streq(name, "frozen?")) { buf_printf(b, "sp_poly_frozen(%s)", tvref); return 1; }
   if (argc == 0 && sp_streq(name, "nil?"))    { buf_printf(b, "sp_poly_nil_p(%s)", tvref); return 1; }
+  if (argc == 0 && sp_streq(name, "zero?"))     { buf_printf(b, "sp_poly_zero_p(%s)", tvref); return 1; }
+  if (argc == 0 && sp_streq(name, "positive?")) { buf_printf(b, "sp_poly_positive_p(%s)", tvref); return 1; }
+  if (argc == 0 && sp_streq(name, "negative?")) { buf_printf(b, "sp_poly_negative_p(%s)", tvref); return 1; }
   if (argc == 1 && sp_streq(name, "eql?"))    { buf_printf(b, "sp_poly_eql(%s, %s)", tvref, argref); return 1; }
   if (argc == 1 && sp_streq(name, "equal?"))  { buf_printf(b, "sp_poly_equal(%s, %s)", tvref, argref); return 1; }
   int is_isa = argc == 1 && (sp_streq(name, "is_a?") || sp_streq(name, "kind_of?"));
@@ -16611,17 +16621,19 @@ else { memcpy(dir, sf, n); dir[n] = 0; } }
     else { buf_puts(b, "(~"); emit_expr(c, recv, b); buf_puts(b, ")"); }
     return;
   }
-  /* poly numeric predicates: coerce the poly value to int and test. */
+  /* poly parity predicates: Integer-only in Ruby, so truncation cannot lose a
+     value that legally reaches them and the int coercion stays correct.
+     zero?/positive?/negative? are NOT handled here: this arm ran ahead of
+     emit_poly_call and shadowed sp_poly_zero_p and friends, which dispatch on
+     the runtime tag. Truncating first answered every |v| < 1 as zero (0.004
+     came back zero? -> true, positive? -> false), read a bigint through a
+     wrapped int64, and hid a user class's own zero?. */
   if (recv >= 0 && rt == TY_POLY && argc == 0 &&
-      (sp_streq(name, "even?") || sp_streq(name, "odd?") || sp_streq(name, "zero?") ||
-       sp_streq(name, "positive?") || sp_streq(name, "negative?"))) {
+      (sp_streq(name, "even?") || sp_streq(name, "odd?"))) {
     int t = ++g_tmp;
     buf_printf(b, "({ mrb_int _t%d = sp_poly_to_i(", t); emit_expr(c, recv, b); buf_puts(b, "); ");
     if (sp_streq(name, "even?")) buf_printf(b, "(_t%d %% 2 == 0); })", t);
-    else if (sp_streq(name, "odd?")) buf_printf(b, "(_t%d %% 2 != 0); })", t);
-    else if (sp_streq(name, "zero?")) buf_printf(b, "(_t%d == 0); })", t);
-    else if (sp_streq(name, "positive?")) buf_printf(b, "(_t%d > 0); })", t);
-    else buf_printf(b, "(_t%d < 0); })", t);
+    else buf_printf(b, "(_t%d %% 2 != 0); })", t);
     return;
   }
 
