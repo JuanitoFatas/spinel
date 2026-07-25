@@ -522,6 +522,12 @@ void emit_p_one(Compiler *c, int arg, Buf *b, int indent) {
     buf_puts(b, "{ sp_Enumerator *_pe = ("); emit_expr(c, arg, b);
     buf_puts(b, "); fputs(sp_enum_inspect(_pe), stdout); putchar('\\n'); }\n");
   }
+  else if (t == TY_IO) {
+    /* a nullable handle: the readiness family answers nil on timeout */
+    int iv = ++g_tmp;
+    buf_printf(b, "{ sp_File *_t%d = (", iv); emit_expr(c, arg, b);
+    buf_printf(b, "); fputs(_t%d ? sp_File_inspect(_t%d) : \"nil\", stdout); putchar('\\n'); }\n", iv, iv);
+  }
   else if (t == TY_RANDOM) {
     buf_puts(b, "{ sp_Random *_pr = ("); emit_expr(c, arg, b);
     buf_puts(b, "); fputs(sp_Random_inspect(_pr), stdout); putchar('\\n'); }\n");

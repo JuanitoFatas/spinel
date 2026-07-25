@@ -10315,6 +10315,25 @@ void emit_call(Compiler *c, int id, Buf *b) {
       buf_printf(b, "sp_File_inspect(%s)", r);
       free(rb.p); return;
     }
+    if ((sp_streq(name, "wait_readable") || sp_streq(name, "wait_writable") ||
+         sp_streq(name, "wait_priority") || sp_streq(name, "wait")) && argc <= 2) {
+      int ev = sp_streq(name, "wait_writable") ? 1
+             : sp_streq(name, "wait_priority") ? 2 : 0;
+      /* IO#wait takes the direction as a trailing symbol */
+      if (sp_streq(name, "wait") && argc == 2) {
+        const char *sym = nt_type(nt, argv[1]) && sp_streq(nt_type(nt, argv[1]), "SymbolNode")
+                          ? nt_str(nt, argv[1], "value") : NULL;
+        if (sym && sp_streq(sym, "write")) ev = 1;
+        else if (sym && sp_streq(sym, "priority")) ev = 2;
+        else if (sym && sp_streq(sym, "read_write")) ev = 3;
+      }
+      buf_printf(b, "sp_io_wait_events(%s, ", r);
+      if (argc >= 1 && !(nt_type(nt, argv[0]) && sp_streq(nt_type(nt, argv[0]), "NilNode")))
+        emit_float_expr(c, argv[0], b);
+      else buf_puts(b, "-1.0");
+      buf_printf(b, ", %d)", ev);
+      free(rb.p); return;
+    }
     /* size/ftype read the HANDLE so an lstat handle describes the link
        itself rather than its target (#2986) */
     if (argc == 0 && (sp_streq(name, "size") || sp_streq(name, "ftype"))) {
@@ -13875,6 +13894,38 @@ else { memcpy(dir, sf, n); dir[n] = 0; } }
     /* IO.pipe / IO.copy_stream / IO.sysopen (#2815) */
     if (tcn && sp_streq(tcn, "IO")) {
       if (sp_streq(name, "pipe") && argc == 0) { buf_puts(b, "sp_io_pipe()"); return; }
+      /* IO.for_fd(fd [, mode] [, autoclose: bool]) */
+      if (sp_streq(name, "for_fd") && argc >= 1) {
+        const char *lty = nt_type(nt, argv[argc - 1]);
+        int kwh = (lty && sp_streq(lty, "KeywordHashNode")) ? argv[argc - 1] : -1;
+        int ac = kwh >= 0 ? kwh_lookup(nt, kwh, "autoclose") : -1;
+        buf_puts(b, "sp_io_for_fd(");
+        emit_int_expr(c, argv[0], b);
+        buf_puts(b, ", ");
+        if (argc >= 2 && comp_ntype(c, argv[1]) == TY_STRING) emit_expr(c, argv[1], b);
+        else buf_puts(b, "\"r\"");
+        buf_puts(b, ", ");
+        if (ac >= 0) { buf_puts(b, "("); emit_expr(c, ac, b); buf_puts(b, ")"); }
+        else buf_puts(b, "1");
+        buf_puts(b, ")");
+        return;
+      }
+      /* IO.select(read, write, error, timeout): a nil array watches nothing */
+      if (sp_streq(name, "select") && argc >= 1 && argc <= 4) {
+        buf_puts(b, "sp_io_select(");
+        for (int k = 0; k < 3; k++) {
+          if (k) buf_puts(b, ", ");
+          if (k >= argc || (nt_type(nt, argv[k]) && sp_streq(nt_type(nt, argv[k]), "NilNode")))
+            buf_puts(b, "NULL");
+          else emit_expr(c, argv[k], b);
+        }
+        buf_puts(b, ", ");
+        if (argc >= 4 && !(nt_type(nt, argv[3]) && sp_streq(nt_type(nt, argv[3]), "NilNode")))
+          emit_float_expr(c, argv[3], b);
+        else buf_puts(b, "-1.0");
+        buf_puts(b, ")");
+        return;
+      }
       if (sp_streq(name, "copy_stream") && argc == 2) {
         /* IO.copy_stream(src, dst): read the whole source, write it to the dest,
            returning the byte count. sp_io_copy_stream takes two path strings, so
@@ -14626,6 +14677,14 @@ else { memcpy(dir, sf, n); dir[n] = 0; } }
   }
   if (recv >= 0 && nt_type(nt, recv) && sp_streq(nt_type(nt, recv), "ConstantReadNode") &&
       nt_str(nt, recv, "name") && sp_streq(nt_str(nt, recv, "name"), "Dir")) {
+    if (sp_streq(name, "for_fd") && argc == 1) {
+      buf_puts(b, "sp_Dir_for_fd("); emit_int_expr(c, argv[0], b); buf_puts(b, ")");
+      return;
+    }
+    if (sp_streq(name, "fchdir") && argc == 1) {
+      buf_puts(b, "sp_Dir_fchdir("); emit_int_expr(c, argv[0], b); buf_puts(b, ")");
+      return;
+    }
     /* Dir.new / Dir.open -> a directory handle; the block form closes on
        exit and returns the block's value (#2821) */
     if ((sp_streq(name, "new") || sp_streq(name, "open")) && argc >= 1) {
@@ -19030,6 +19089,14 @@ else { memcpy(dir, sf, n); dir[n] = 0; } }
         else if (grt == TY_COMPLEX) snprintf(rdesc, sizeof rdesc, "an instance of Complex");
         else if (grt == TY_RATIONAL) snprintf(rdesc, sizeof rdesc, "an instance of Rational");
         else snprintf(rdesc, sizeof rdesc, "%s", ty_name(grt));
+        /* a class constant receiver names the class, as CRuby does ("undefined
+           method 'x' for class Dir"); the static type of a bare builtin
+           constant is UNKNOWN, which otherwise leaks "for unknown" */
+        if (recv >= 0 && nt_type(nt, recv) && sp_streq(nt_type(nt, recv), "ConstantReadNode")) {
+          const char *rcn = nt_str(nt, recv, "name");
+          if (rcn && (comp_class_index(c, rcn) >= 0 || builtin_class_id(rcn) != 0))
+            snprintf(rdesc, sizeof rdesc, "class %s", rcn);
+        }
         if (grt == TY_POLY || grt == TY_BOOL) {
           /* The RESULT slot is sized by the call's own type (ret), not the
              receiver's: a poly receiver whose unresolved call is typed to a

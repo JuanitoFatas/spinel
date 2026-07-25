@@ -1133,6 +1133,8 @@ TyKind infer_call(Compiler *c, int id) {
     if (sp_streq(name, "empty?") && argc == 1) return TY_BOOL;
     if (sp_streq(name, "home") && argc == 1) return TY_STRING;
     if (sp_streq(name, "glob") && (argc == 1 || argc == 2)) return TY_STR_ARRAY;
+    if (sp_streq(name, "for_fd") && argc == 1) return TY_DIR;
+    if (sp_streq(name, "fchdir") && argc == 1) return TY_INT;
   }
   /* the desugared ENV snapshot (#2742) */
   if (recv < 0 && sp_streq(name, "__env_to_h") && argc == 0) return TY_STR_STR_HASH;
@@ -2444,6 +2446,9 @@ else {
       /* IO.pipe -> [reader, writer], boxed IO handles (#2815) */
       if (sp_streq(name, "pipe")) return TY_POLY_ARRAY;
       if (sp_streq(name, "copy_stream") || sp_streq(name, "sysopen")) return TY_INT;
+      if (sp_streq(name, "for_fd") && argc >= 1) return TY_IO;
+      /* [ready_read, ready_write, ready_error] or nil on timeout */
+      if (sp_streq(name, "select") && argc >= 1) return TY_POLY;
     }
 
     /* <local>.yield(v) or bare <local>.yield: a generator yielder / fiber yield
@@ -2749,6 +2754,11 @@ else {
     if (sp_streq(name, "getc") || sp_streq(name, "readchar") || sp_streq(name, "readpartial") ||
         sp_streq(name, "sysread") || sp_streq(name, "ftype")) return TY_STRING;
     if (sp_streq(name, "inspect") && argc == 0) return TY_STRING;
+    /* the readiness family answers the handle itself or nil -- a nullable
+       sp_File*, which TY_IO already models (NULL is nil) */
+    if (sp_streq(name, "wait_readable") || sp_streq(name, "wait_writable") ||
+        sp_streq(name, "wait_priority") || sp_streq(name, "wait"))
+      return TY_IO;
     /* socket methods on the IO handle (#2922) */
     if (sp_feature_required("socket")) {
       if (sp_streq(name, "accept") && argc == 0) return TY_IO;

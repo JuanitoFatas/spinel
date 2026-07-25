@@ -856,6 +856,7 @@ int builtin_class_id(const char *name) {
   if (sp_streq(name, "Signal"))      return -162;
   if (sp_streq(name, "Process::Status")) return -163;
   if (sp_streq(name, "Process::Tms")) return -164;
+  if (sp_streq(name, "Dir"))         return -165;
   return 0;
 }
 const char *c_type_name(TyKind t) {

@@ -32,6 +32,7 @@
 #include "sp_string.h"
 #include "sp_system.h" /* sp_last_status for backtick */
 #include "sp_format.h" /* sp_float_to_rational for sp_float_denominator/numerator */
+#include <poll.h>      /* IO.select and the IO#wait_* readiness family */
 
 /* execinfo.h (backtrace_symbols) is a glibc/Apple extension; not all libc
    implementations ship it. Detect availability by the toolchain macros so we
@@ -1190,6 +1191,9 @@ mrb_bool sp_file_readable_real(const char *path);
 mrb_bool sp_file_writable_real(const char *path);
 mrb_bool sp_file_executable_real(const char *path);
 const char *sp_file_realdirpath(const char *path);
+sp_File *sp_io_for_fd(mrb_int fd, const char *mode, mrb_bool autoclose);
+sp_File *sp_io_wait_events(sp_File *f, double timeout, mrb_int kind);
+sp_RbVal sp_io_select(sp_PolyArray *rd, sp_PolyArray *wr, sp_PolyArray *er, double timeout);
 mrb_int sp_file_size_q(const char *path);
 mrb_bool sp_file_pipe(const char *path);
 mrb_bool sp_file_identical(const char *a, const char *b);
@@ -1215,6 +1219,8 @@ const char *sp_dir_home(void);
 void sp_Dir_fin(void *p);
 void sp_Dir_scan(void *p);
 sp_Dir *sp_Dir_new(const char *path);
+sp_Dir *sp_Dir_for_fd(mrb_int fd);
+mrb_int sp_Dir_fchdir(mrb_int fd);
 const char *sp_Dir_read(sp_Dir *d);
 const char *sp_Dir_path(sp_Dir *d);
 sp_RbVal sp_Dir_close(sp_Dir *d);
@@ -1604,6 +1610,23 @@ sp_Dir *sp_Dir_new(const char *path) {
   SP_GC_ROOT(d);
   d->path = sp_sprintf("%s", path ? path : "");
   return d;
+}
+/* Dir.for_fd(fd): take over a descriptor already opened on a directory. The
+   handle owns the fd from here, as CRuby's does. */
+sp_Dir *sp_Dir_for_fd(mrb_int fd) {
+  DIR *dp = fd >= 0 ? fdopendir((int)fd) : NULL;
+  if (!dp) sp_raise_cls("Errno::EBADF", "Bad file descriptor - fdopendir");
+  sp_Dir *d = (sp_Dir *)sp_gc_alloc(sizeof(sp_Dir), sp_Dir_fin, sp_Dir_scan);
+  d->dp = dp;
+  d->path = NULL;
+  SP_GC_ROOT(d);
+  d->path = sp_sprintf("");
+  return d;
+}
+mrb_int sp_Dir_fchdir(mrb_int fd) {
+  if (fd < 0 || fchdir((int)fd) != 0)
+    sp_raise_cls("Errno::EBADF", "Bad file descriptor - fchdir");
+  return 0;
 }
 const char *sp_Dir_read(sp_Dir *d) {
   if (!d || !d->dp) return NULL;
@@ -2601,6 +2624,83 @@ sp_PolyArray *sp_io_pipe(void) {
   sp_PolyArray_push(a, sp_box_obj(sp_io_fdopen(fds[1], "w"), SP_BUILTIN_IO));
   return a;
 }
+/* IO.for_fd(fd, mode): wrap a descriptor the program already owns. autoclose
+   false leaves the fd open when the handle is collected, which is the point of
+   the call -- the fd usually belongs to something else. */
+sp_File *sp_io_for_fd(mrb_int fd, const char *mode, mrb_bool autoclose) {
+  if (fd < 0 || fcntl((int)fd, F_GETFD) < 0)
+    sp_raise_cls("Errno::EBADF", "Bad file descriptor");
+  sp_File *f = sp_io_fdopen((int)fd, mode && *mode ? mode : "r");
+  if (f && !autoclose) f->no_autoclose = 1;
+  return f;
+}
+
+/* The readiness family. `kind` is 0 read / 1 write / 2 priority / 3 both, kept
+   numeric so the generated TU does not have to pull in poll.h for the poll(2)
+   flags. A negative timeout blocks. Each answers the handle itself when ready
+   and nil on timeout, like CRuby. */
+sp_File *sp_io_wait_events(sp_File *f, double timeout, mrb_int kind) {
+  if (!f || !f->fp) sp_raise_cls("IOError", "closed stream");
+  struct pollfd pfd;
+  pfd.fd = fileno(f->fp);
+  pfd.events = kind == 1 ? POLLOUT : kind == 2 ? POLLPRI
+             : kind == 3 ? (short)(POLLIN | POLLOUT) : POLLIN;
+  pfd.revents = 0;
+  int ms = timeout < 0 ? -1 : (int)(timeout * 1000.0);
+  int n;
+  do { n = poll(&pfd, 1, ms); } while (n < 0 && errno == EINTR);
+  if (n < 0) sp_raise_cls("IOError", "poll failed");
+  return n > 0 ? f : NULL;
+}
+
+/* IO.select(read, write, error, timeout) -> [ready_read, ready_write,
+   ready_error], or nil when the timeout expires first. A nil array stands for
+   "watch nothing", so all three nil is just a sleep. */
+static sp_File *sp_select_io_of(sp_RbVal v) {
+  if (v.tag == SP_TAG_OBJ && v.cls_id == SP_BUILTIN_IO && v.v.p) return (sp_File *)v.v.p;
+  sp_raise_cls("TypeError", "no implicit conversion into IO");
+  return NULL;
+}
+sp_RbVal sp_io_select(sp_PolyArray *rd, sp_PolyArray *wr, sp_PolyArray *er, double timeout) {
+  mrb_int nr = rd ? rd->len : 0, nw = wr ? wr->len : 0, ne = er ? er->len : 0;
+  mrb_int total = nr + nw + ne;
+  struct pollfd stackfds[16];
+  struct pollfd *fds = total <= 16 ? stackfds : (struct pollfd *)malloc(sizeof(struct pollfd) * (size_t)(total > 0 ? total : 1));
+  if (!fds) sp_raise_cls("NoMemoryError", "IO.select");
+  mrb_int k = 0;
+  for (mrb_int i = 0; i < nr; i++, k++) {
+    sp_File *f = sp_select_io_of(rd->data[i]);
+    fds[k].fd = f && f->fp ? fileno(f->fp) : -1; fds[k].events = POLLIN; fds[k].revents = 0;
+  }
+  for (mrb_int i = 0; i < nw; i++, k++) {
+    sp_File *f = sp_select_io_of(wr->data[i]);
+    fds[k].fd = f && f->fp ? fileno(f->fp) : -1; fds[k].events = POLLOUT; fds[k].revents = 0;
+  }
+  for (mrb_int i = 0; i < ne; i++, k++) {
+    sp_File *f = sp_select_io_of(er->data[i]);
+    fds[k].fd = f && f->fp ? fileno(f->fp) : -1; fds[k].events = POLLPRI; fds[k].revents = 0;
+  }
+  int ms = timeout < 0 ? -1 : (int)(timeout * 1000.0);
+  int n;
+  do { n = poll(fds, (nfds_t)total, ms); } while (n < 0 && errno == EINTR);
+  if (n < 0) { if (fds != stackfds) free(fds); sp_raise_cls("IOError", "select failed"); }
+  if (n == 0) { if (fds != stackfds) free(fds); return sp_box_nil(); }
+  sp_PolyArray *out = sp_PolyArray_new();
+  SP_GC_ROOT(out);
+  sp_PolyArray *src[3] = { rd, wr, er };
+  mrb_int cnt[3] = { nr, nw, ne };
+  mrb_int base = 0;
+  for (int g = 0; g < 3; g++) {
+    sp_PolyArray *part = sp_PolyArray_new();
+    for (mrb_int i = 0; i < cnt[g]; i++)
+      if (fds[base + i].revents) sp_PolyArray_push(part, src[g]->data[i]);
+    base += cnt[g];
+    sp_PolyArray_push(out, sp_box_poly_array(part));
+  }
+  if (fds != stackfds) free(fds);
+  return sp_box_poly_array(out);
+}
+
 mrb_int sp_io_sysopen(const char *path) {
   int fd = open(path ? path : "", O_RDONLY);
   if (fd < 0)
