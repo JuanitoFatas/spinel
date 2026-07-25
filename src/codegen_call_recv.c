@@ -8908,6 +8908,34 @@ int emit_poly_call(Compiler *c, int id, Buf *b) {
     }
   }
   /* poly receiver: nil? / conversions / a few type-agnostic queries */
+  /* poly.scan(re) -- a String read out of a `{}`-then-filled Hash reaches
+     here poly-typed, and without an arm it hit the NoMethodError gate
+     (#3368). Mirrors the rt==TY_STRING arms: no captures -> string array,
+     captures -> array of arrays. */
+  if (recv >= 0 && rt == TY_POLY && sp_streq(name, "scan") && argc == 1 &&
+      nt_ref(nt, id, "block") < 0 && !user_defines_or_reads(c, name)) {
+    /* Guard on the tag: only a String actually answers #scan, and a nil (or an
+       Integer) receiver must raise NoMethodError as CRuby does rather than be
+       stringified into an empty scan (test/issue_3147.rb pins that). */
+    int rli = re_lit_index(c, argv[0]);
+    int str_arg = comp_ntype(c, argv[0]) == TY_STRING;
+    if (rli >= 0 || str_arg) {
+      int poly_res = rli >= 0 && re_has_captures(re_lit_src(c, argv[0]));
+      int ts = ++g_tmp;
+      buf_printf(b, "({ sp_RbVal _t%d = ", ts); emit_boxed(c, recv, b);
+      buf_printf(b, "; (_t%d.tag == SP_TAG_STR || sp_poly_is_strbuf(_t%d)) ? ", ts, ts);
+      if (rli >= 0)
+        buf_printf(b, "%s(sp_re_pat_%d, sp_poly_to_s(_t%d))",
+                   poly_res ? "sp_re_scan_poly" : "sp_re_scan", rli, ts);
+      else {
+        buf_printf(b, "sp_str_scan(sp_poly_to_s(_t%d), ", ts);
+        emit_expr(c, argv[0], b); buf_puts(b, ")");
+      }
+      buf_printf(b, " : (%s *)(sp_raise_nomethod(sp_nomethod_msg(\"scan\", _t%d)), (void *)0); })",
+                 poly_res ? "sp_PolyArray" : "sp_StrArray", ts);
+      return 1;
+    }
+  }
   if (recv >= 0 && rt == TY_POLY && argc == 0) {
     if (sp_streq(name, "nil?")) { buf_puts(b, "sp_poly_nil_p("); emit_expr(c, recv, b); buf_puts(b, ")"); return 1; }
     /* to_a on a runtime-tagged value: nil -> [], array -> itself, hash -> its

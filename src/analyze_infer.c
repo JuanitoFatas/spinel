@@ -986,6 +986,18 @@ TyKind infer_call(Compiler *c, int id) {
   if (recv >= 0 && rt == TY_POLY && argc == 0 && sp_streq(name, "chars") &&
       nt_ref(nt, id, "block") < 0 && !an_user_defines_or_reads(c, name))
     return TY_STR_ARRAY;
+  /* poly.scan(re): a String read out of a container. Same shape as the
+     rt==TY_STRING rule -- captures give an array of arrays (#3368). */
+  if (recv >= 0 && rt == TY_POLY && argc == 1 && sp_streq(name, "scan") &&
+      nt_ref(nt, id, "block") < 0 && !an_user_defines_or_reads(c, name)) {
+    const char *aty = nt_type(nt, argv[0]);
+    if (aty && sp_streq(aty, "RegularExpressionNode")) {
+      const char *src = nt_str(nt, argv[0], "unescaped");
+      if (src && an_re_has_captures(src)) return TY_POLY_ARRAY;
+      return TY_STR_ARRAY;
+    }
+    if (infer_type(c, argv[0]) == TY_STRING) return TY_STR_ARRAY;
+  }
   /* Array#find / #detect over a poly value that is an array at runtime (an
      inner array read out of a poly container): the matched element (or nil) is
      boxed, so the result is poly (#2904). */

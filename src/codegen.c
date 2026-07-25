@@ -6061,6 +6061,15 @@ char *codegen_program(const NodeTable *nt) {
   }
   for (int i = 0; i < c->nconsts; i++) {
     LocalVar *lv = &c->consts[i];
+    /* `NAME = nil` still needs a slot: the assignment and every read reference
+       cst_NAME, so skipping the declaration left an undeclared identifier
+       (#3361). An int carrier is enough -- the reads fold to nil on their own,
+       they just have to have something to evaluate. */
+    if (lv->type == TY_NIL) {
+      buf_printf(&b, "static mrb_int cst_%s = SP_INT_NIL;\n", lv->name);
+      if (lv->init_guarded) buf_printf(&b, "static int sp_init_in_progress_%s;\n", lv->name);
+      continue;
+    }
     if (!is_scalar_ret(lv->type)) continue;
     buf_puts(&b, "static ");
     emit_ctype(c, lv->type, &b);
