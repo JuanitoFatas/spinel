@@ -10425,14 +10425,11 @@ void emit_call(Compiler *c, int id, Buf *b) {
       buf_printf(b, ", sp_File_path(%s)); (mrb_int)0; })", r);
       free(rb.p); return;
     }
-    /* socket methods on the IO handle (#2922) */
+    /* socket methods on the IO handle (#2922). The handle kind decides at run
+       time whether the receiver actually owns them: a plain File answers
+       NoMethodError, as CRuby does. */
     if (sp_feature_required("socket") && argc == 0 && sp_streq(name, "accept")) {
-      /* wait cooperatively for a pending connection first: the blocking
-         accept would stall the whole green-thread scheduler otherwise */
-      int tac = ++g_tmp;
-      buf_printf(b, "({ sp_File *_t%d = %s; sp_sock_wait_readable(_t%d);"
-                    " sp_io_fdopen_sock(sp_net_accept(fileno(_t%d->fp)), (&(\"\\xff\" \"tcp\")[1])); })",
-                 tac, r, tac, tac);
+      buf_printf(b, "sp_sock_accept(%s)", r);
       free(rb.p); return;
     }
     if (sp_feature_required("socket") && argc == 0 &&
@@ -10849,9 +10846,11 @@ void emit_call(Compiler *c, int id, Buf *b) {
       buf_printf(b, "sp_File_path(%s)", r); free(rb.p); return;
     }
     if (sp_streq(name, "sync")) {
-      /* CRuby's default: buffered (false); spinel does not model per-handle
-         sync state, so report the default (#2792) */
-      buf_printf(b, "({ (void)%s; (mrb_bool)0; })", r);
+      /* CRuby's default is buffered (false) for a file, but a socket is
+         sync = true -- and spinel's socket writes really do bypass stdio, so
+         reporting false contradicted the implementation. Per-handle sync state
+         is still not modelled beyond that (#2792). */
+      buf_printf(b, "((%s)->is_sock ? (mrb_bool)1 : (mrb_bool)0)", r);
       free(rb.p); return;
     }
     if (sp_streq(name, "sync=") && argc >= 1) {

@@ -36,6 +36,8 @@ mrb_int sp_File_write(sp_File *f, const char *s);
 mrb_int sp_File_close(sp_File *f);
 mrb_bool sp_File_closed_p(sp_File *f);
 const char *sp_File_inspect(sp_File *f);
+const char *sp_io_kind_name(sp_File *f);
+sp_File *sp_sock_accept(sp_File *f);
 void sp_File_puts(sp_File *f, const char *s);
 void sp_File_print(sp_File *f, const char *s);
 mrb_int sp_File_flush(sp_File *f);

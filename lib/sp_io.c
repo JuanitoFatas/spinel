@@ -196,6 +196,35 @@ mrb_bool sp_File_closed_p(sp_File *f) {
   return !f || !f->fp;
 }
 
+/* The Ruby class a handle presents as, for the NoMethodError texts and #inspect.
+   The kind label a socket carries in ->mode is what tells the socket classes
+   apart; a path-backed handle is a File and everything else is an IO. */
+const char *sp_io_kind_name(sp_File *f) {
+  if (!f) return "IO";
+  if (f->is_sock && f->mode) {
+    if (strcmp(f->mode, "tcpserver") == 0) return "TCPServer";
+    if (strcmp(f->mode, "tcp") == 0) return "TCPSocket";
+    if (strcmp(f->mode, "udp") == 0) return "UDPSocket";
+    if (strcmp(f->mode, "unix") == 0) return "UNIXSocket";
+    if (strcmp(f->mode, "unixserver") == 0) return "UNIXServer";
+  }
+  if (f->path && f->path[0] && f->path[0] != '<') return "File";
+  return "IO";
+}
+
+/* TCPServer#accept: park cooperatively for a pending connection first -- a
+   blocking accept would stall the whole green-thread scheduler -- then wrap the
+   new descriptor. Only a socket handle answers it. */
+sp_File *sp_sock_accept(sp_File *f) {
+  extern int sp_net_accept(int sfd);
+  if (!f || !f->is_sock)
+    sp_raise_cls("NoMethodError",
+                 sp_sprintf("undefined method 'accept' for an instance of %s", sp_io_kind_name(f)));
+  if (!f->fp) sp_raise_cls("IOError", "closed stream");
+  sp_sock_wait_readable(f);
+  return sp_io_fdopen_sock(sp_net_accept(fileno(f->fp)), "tcp");
+}
+
 /* `#<File:/etc/passwd>` for a path-backed handle, `#<IO:<STDOUT>>` for a
    standard stream. The path is what tells the two apart, the same way #class
    renders them (a stream's path is bracketed). */

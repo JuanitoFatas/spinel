@@ -1729,9 +1729,14 @@ int sp_net_listen_host(const char *host, int port, int backlog);
 int sp_net_connect(const char *host, int port);
 int sp_net_accept(int sfd);
 int sp_net_sock_ip(int fd, int peer, char *ipbuf, int cap);
-/* TCPSocket#addr / #peeraddr: ["AF_INET", port, ip, ip], CRuby's numeric form */
+/* TCPSocket#addr / #peeraddr: ["AF_INET", port, ip, ip], CRuby's numeric form.
+   These belong to the socket classes, not to IO: a plain File answers
+   NoMethodError, as CRuby does, rather than an empty address. */
 static sp_PolyArray *sp_sock_addr(sp_File *f, int peer) __attribute__((unused));
 static sp_PolyArray *sp_sock_addr(sp_File *f, int peer) {
+  if (!f || !f->is_sock)
+    sp_raise_cls("NoMethodError", sp_sprintf("undefined method '%s' for an instance of %s",
+                                             peer ? "peeraddr" : "addr", sp_io_kind_name(f)));
   sp_PolyArray *a = sp_PolyArray_new();
   SP_GC_ROOT(a);
   char ip[64];
