@@ -16,6 +16,8 @@ usage: spin <command> [args]
   remove <name>        drop a dependency + relock
   lock | fetch | vendor  resolve deps / warm the cache / copy into vendor/
   build [target..]     build bin/ executables into build/bin/
+                       (--debug / -g: debuggable -O0 build for lldb/gdb;
+                        also SPIN_DEBUG=1 — applies to build/run/test)
   run [target] [-- a]  build, then run one executable
   test [file..]        build and run test/*.rb against expectations
   trust <name>         always allow <name>'s declared native build steps
@@ -901,6 +903,11 @@ def compile_cmd(prj, entry, out, extra)
   prj.native_objs.each { |o| cmd += " --link #{o}" }
   prj.native_build_libs.split("\n").each { |l| cmd += " --link #{l}" if l != "" }
   cmd += " #{extra}" if extra != ""
+  # `spin build --debug` / `-g` (or SPIN_DEBUG=1) forwards the compiler's
+  # debug build (#line + -g -O0) so the emitted binary is steppable in
+  # lldb/gdb — otherwise there is no way to get a debuggable build through
+  # spin (it always compiles release).
+  cmd += " --debug" if ENV["SPIN_DEBUG"].to_s != ""
   cmd += " -o #{out}"
   cmd
 end
@@ -1559,6 +1566,10 @@ when "build", "run", "test", "clean"
   if rest.include?("--allow-native-build")
     ENV["SPIN_ALLOW_NATIVE_BUILD"] = "1"
     rest = rest.reject { |a| a == "--allow-native-build" }
+  end
+  if rest.include?("--debug") || rest.include?("-g")
+    ENV["SPIN_DEBUG"] = "1"
+    rest = rest.reject { |a| a == "--debug" || a == "-g" }
   end
   prj = Project.new(root)
   case cmd
