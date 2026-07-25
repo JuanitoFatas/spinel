@@ -5616,10 +5616,12 @@ else {
     if ((sp_streq(name, "to_r") || sp_streq(name, "rationalize")) && argc == 0) return TY_POLY;
     if (sp_streq(name, "quo") && argc == 1) return TY_POLY;
   }
-  /* poly recv bitwise op: result is int (sp_poly_to_i applied). */
+  /* poly recv bitwise op / `>>`: the runtime keeps a bignum operand in bignum
+     space (a positive value past 2^63 must not truncate to a negative int), so
+     the result is boxed like the receiver was (#3371). */
   if (recv >= 0 && argc == 1 && rt == TY_POLY &&
       (sp_streq(name, ">>") || sp_streq(name, "&") || sp_streq(name, "|") || sp_streq(name, "^")))
-    return TY_INT;
+    return TY_POLY;
   /* poly recv `<<` is ambiguous (Integer#<< shift vs Array#push append); the
      runtime sp_poly_shl dispatches on the tag and returns a boxed result either
      way, so the static type is poly. A downstream bitwise op coerces it back to

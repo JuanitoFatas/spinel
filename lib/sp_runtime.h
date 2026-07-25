@@ -1520,10 +1520,28 @@ static mrb_bool sp_poly_truthy(sp_RbVal v) { return !(v.tag == SP_TAG_NIL || (v.
    the BOOLEAN ops (nil & x == false, nil | x == truthy(x), ...), integers take
    the bitwise ops (#2401). */
 static mrb_int sp_poly_to_i(sp_RbVal v);  /* defined below */
+sp_Bigint *sp_bigint_and(sp_Bigint *a, sp_Bigint *b);   /* fwd: bignum bitops */
+sp_Bigint *sp_bigint_or(sp_Bigint *a, sp_Bigint *b);
+sp_Bigint *sp_bigint_xor(sp_Bigint *a, sp_Bigint *b);
+static sp_Bigint *sp_poly_as_bigint(sp_RbVal v);
 static sp_RbVal sp_poly_bitop(sp_RbVal a, sp_RbVal b, int op) {  /* 0:& 1:| 2:^ */
   if (a.tag == SP_TAG_NIL || a.tag == SP_TAG_BOOL) {
     mrb_bool av = sp_poly_truthy(a), bv = sp_poly_truthy(b);
     return sp_box_bool(op == 0 ? (av && bv) : op == 1 ? (av || bv) : (av != bv));
+  }
+  /* A bignum operand keeps its width: truncating both sides to int64 first
+     turned `x ^ (x << 17)` into a negative int once the shift had promoted,
+     which is how a masked xorshift diverged from CRuby for good (#3371). `&`
+     is the exception the other way -- masking a bignum with a 64-bit constant
+     is the truncation idiom, and its result fits an int by construction, so it
+     still goes through the bignum path and lands back in range. */
+  if (a.tag == SP_TAG_BIGINT || b.tag == SP_TAG_BIGINT) {
+    sp_Bigint *ba = sp_poly_as_bigint(a), *bb = sp_poly_as_bigint(b);
+    if (ba && bb) {
+      sp_Bigint *r = op == 0 ? sp_bigint_and(ba, bb)
+                   : op == 1 ? sp_bigint_or(ba, bb) : sp_bigint_xor(ba, bb);
+      return sp_box_bigint(r);
+    }
   }
   mrb_int ai = sp_poly_to_i(a), bi = sp_poly_to_i(b);
   return sp_box_int(op == 0 ? (ai & bi) : op == 1 ? (ai | bi) : (ai ^ bi));
@@ -2449,10 +2467,16 @@ static sp_RbVal sp_poly_shl(sp_RbVal a, sp_RbVal b);
 /* Proc#>> / #<< compose rather than shift. sp_Proc is not declared yet here,
    so go through a void* shim defined beside sp_proc_compose (#2880). */
 static void *sp_proc_compose_v(void *outer, void *inner);
+sp_Bigint *sp_bigint_shr(sp_Bigint *a, int64_t n);   /* fwd */
 static sp_RbVal sp_poly_shr(sp_RbVal a, sp_RbVal b) {
   if (a.tag == SP_TAG_OBJ && a.cls_id == SP_BUILTIN_PROC &&
       b.tag == SP_TAG_OBJ && b.cls_id == SP_BUILTIN_PROC)
     return sp_box_proc(sp_proc_compose_v(b.v.p, a.v.p));
+  /* a bignum shifts in bignum space: truncating to int64 first turned a
+     positive value past 2^63 negative, so the shift became arithmetic and a
+     masked xorshift diverged from CRuby (#3371) */
+  if (a.tag == SP_TAG_BIGINT)
+    return sp_box_bigint(sp_bigint_shr((sp_Bigint *)a.v.p, (int64_t)sp_poly_to_i(b)));
   return sp_box_int(sp_poly_to_i(a) >> sp_poly_to_i(b));
 }
 /* & | ^ are boolean operators on a nil/boolean receiver (NilClass#& is

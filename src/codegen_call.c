@@ -11113,11 +11113,15 @@ void emit_call(Compiler *c, int id, Buf *b) {
     emit_boxed(c, argv[0], b); buf_printf(b, ", %d)", bop);
     return;
   }
+  /* `poly >> n`: through sp_poly_shr, which keeps a bignum receiver in bignum
+     space. Truncating to int64 here made a positive value past 2^63 negative,
+     turning the shift arithmetic and diverging a masked xorshift from CRuby for
+     good (#3371). sp_poly_shr also carries the Proc#>> composition arm. */
   if (recv >= 0 && argc == 1 && comp_ntype(c, recv) == TY_POLY && sp_streq(name, ">>")) {
-    TyKind at = comp_ntype(c, argv[0]);
-    buf_puts(b, "(sp_poly_to_i("); emit_expr(c, recv, b); buf_printf(b, ") %s ", name);
-    if (at == TY_POLY) { buf_puts(b, "sp_poly_to_i("); emit_expr(c, argv[0], b); buf_puts(b, ")"); }
-    else emit_expr(c, argv[0], b);
+    buf_puts(b, "sp_poly_shr(");
+    emit_boxed(c, recv, b);
+    buf_puts(b, ", ");
+    emit_boxed(c, argv[0], b);
     buf_puts(b, ")");
     return;
   }
@@ -17065,6 +17069,16 @@ else { memcpy(dir, sf, n); dir[n] = 0; } }
       if (at0 == TY_POLY) { buf_puts(b, "sp_poly_to_i("); emit_expr(c, argv[0], b); buf_puts(b, ")"); }
       else if (at0 == TY_FLOAT) { buf_puts(b, "(mrb_int)("); emit_expr(c, argv[0], b); buf_puts(b, ")"); }
       else emit_expr(c, argv[0], b);
+      buf_puts(b, ")");
+      return;
+    }
+    /* A POLY receiver keeps its width: `sp_poly_to_i(x) >> n` truncated a
+       bignum to int64 and then shifted arithmetically (#3371). */
+    if (is_shift && rt == TY_POLY) {
+      buf_printf(b, "sp_poly_%s(", sp_streq(name, "<<") ? "shl" : "shr");
+      emit_boxed(c, recv, b);
+      buf_puts(b, ", ");
+      emit_boxed(c, argv[0], b);
       buf_puts(b, ")");
       return;
     }
