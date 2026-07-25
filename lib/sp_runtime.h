@@ -2093,7 +2093,9 @@ static int sp_poly_rat_sign(sp_RbVal v) {
   return sp_bigint_sign(((sp_BigRational *)v.v.p)->num);
 }
 static inline int sp_poly_is_rat_kind(sp_RbVal v) { return (sp_poly_is_rational(v) || sp_poly_is_brat(v)) && v.v.p; }
-static mrb_bool sp_poly_zero_p(sp_RbVal v) { if (v.tag == SP_TAG_INT) return v.v.i == 0; if (v.tag == SP_TAG_FLT) return v.v.f == 0.0; if (v.tag == SP_TAG_BIGINT) return sp_bigint_sign((sp_Bigint *)v.v.p) == 0; if (sp_poly_is_rat_kind(v)) return sp_poly_rat_sign(v) == 0; sp_raise_poly_nomethod("zero?", v); }
+/* Complex#zero? is `self == 0`: both parts zero. It has no #positive? /
+   #negative?, so only this one gets the arm. */
+static mrb_bool sp_poly_zero_p(sp_RbVal v) { if (v.tag == SP_TAG_INT) return v.v.i == 0; if (v.tag == SP_TAG_FLT) return v.v.f == 0.0; if (v.tag == SP_TAG_BIGINT) return sp_bigint_sign((sp_Bigint *)v.v.p) == 0; if (sp_poly_is_rat_kind(v)) return sp_poly_rat_sign(v) == 0; if (v.tag == SP_TAG_OBJ && v.cls_id == SP_BUILTIN_COMPLEX && v.v.p) { sp_Complex *_cz = (sp_Complex *)v.v.p; return _cz->re == 0.0 && _cz->im == 0.0; } sp_raise_poly_nomethod("zero?", v); }
 /* Complex#conjugate / #conj on a boxed value: negate the imaginary part; a real
    number (numeric/rational) is its own conjugate. */
 static sp_RbVal sp_poly_conjugate(sp_RbVal v) {
