@@ -14442,11 +14442,11 @@ else { memcpy(dir, sf, n); dir[n] = 0; } }
           emit_expr(c, argv[0], b);
           buf_puts(b, "))"); return;
         }
-        buf_puts(b, "sp_io_copy_stream("); emit_expr(c, argv[0], b); buf_puts(b, ", ");
+        buf_puts(b, "sp_io_copy_stream("); emit_str_expr(c, argv[0], b); buf_puts(b, ", ");
         emit_expr(c, argv[1], b); buf_puts(b, ")"); return;
       }
       if (sp_streq(name, "sysopen") && argc >= 1) {
-        buf_puts(b, "sp_io_sysopen("); emit_expr(c, argv[0], b); buf_puts(b, ")"); return;
+        buf_puts(b, "sp_io_sysopen("); emit_str_expr(c, argv[0], b); buf_puts(b, ")"); return;
       }
     }
     /* Signal module queries (#2735) */
@@ -14771,7 +14771,7 @@ else { memcpy(dir, sf, n); dir[n] = 0; } }
       buf_puts(b, "); sp_raise_cls(\"NoMethodError\", \"undefined method 'exists?' for class Dir\"); (mrb_bool)0; })");
       return;
     }
-    buf_puts(b, "sp_file_directory("); emit_expr(c, argv[0], b); buf_puts(b, ")");
+    buf_puts(b, "sp_file_directory("); emit_str_expr(c, argv[0], b); buf_puts(b, ")");
     return;
   }
 
@@ -14805,26 +14805,26 @@ else { memcpy(dir, sf, n); dir[n] = 0; } }
       buf_puts(b, "sp_file_ftype("); emit_str_expr(c, argv[0], b); buf_puts(b, ")"); return;
     }
     if (sp_streq(name, "writable?") && argc == 1) {
-      buf_puts(b, "sp_file_writable("); emit_expr(c, argv[0], b); buf_puts(b, ")"); return;
+      buf_puts(b, "sp_file_writable("); emit_str_expr(c, argv[0], b); buf_puts(b, ")"); return;
     }
     if (sp_streq(name, "executable?") && argc == 1) {
-      buf_puts(b, "sp_file_executable("); emit_expr(c, argv[0], b); buf_puts(b, ")"); return;
+      buf_puts(b, "sp_file_executable("); emit_str_expr(c, argv[0], b); buf_puts(b, ")"); return;
     }
     if (sp_streq(name, "size?") && argc == 1) {
-      buf_puts(b, "sp_file_size_q("); emit_expr(c, argv[0], b); buf_puts(b, ")"); return;
+      buf_puts(b, "sp_file_size_q("); emit_str_expr(c, argv[0], b); buf_puts(b, ")"); return;
     }
     if (sp_streq(name, "pipe?") && argc == 1) {
-      buf_puts(b, "sp_file_pipe("); emit_expr(c, argv[0], b); buf_puts(b, ")"); return;
+      buf_puts(b, "sp_file_pipe("); emit_str_expr(c, argv[0], b); buf_puts(b, ")"); return;
     }
     if (sp_streq(name, "identical?") && argc == 2) {
-      buf_puts(b, "sp_file_identical("); emit_expr(c, argv[0], b); buf_puts(b, ", ");
+      buf_puts(b, "sp_file_identical("); emit_str_expr(c, argv[0], b); buf_puts(b, ", ");
       emit_expr(c, argv[1], b); buf_puts(b, ")"); return;
     }
     if ((sp_streq(name, "atime") || sp_streq(name, "ctime") || sp_streq(name, "birthtime")) && argc == 1) {
       buf_printf(b, "sp_file_%s(", name); emit_expr(c, argv[0], b); buf_puts(b, ")"); return;
     }
     if (sp_streq(name, "realpath") && argc == 1) {
-      buf_puts(b, "sp_file_realpath("); emit_expr(c, argv[0], b); buf_puts(b, ")"); return;
+      buf_puts(b, "sp_file_realpath("); emit_str_expr(c, argv[0], b); buf_puts(b, ")"); return;
     }
     if (sp_streq(name, "realdirpath") && (argc == 1 || argc == 2)) {
       buf_puts(b, "sp_file_realdirpath(");
@@ -14836,28 +14836,28 @@ else { memcpy(dir, sf, n); dir[n] = 0; } }
       buf_puts(b, ")"); return;
     }
     if (sp_streq(name, "stat") && argc == 1) {
-      buf_puts(b, "sp_file_stat_handle("); emit_expr(c, argv[0], b); buf_puts(b, ")"); return;
+      buf_puts(b, "sp_file_stat_handle("); emit_str_expr(c, argv[0], b); buf_puts(b, ")"); return;
     }
     if (sp_streq(name, "lstat") && argc == 1) {
-      buf_puts(b, "sp_file_lstat_handle("); emit_expr(c, argv[0], b); buf_puts(b, ")"); return;
+      buf_puts(b, "sp_file_lstat_handle("); emit_str_expr(c, argv[0], b); buf_puts(b, ")"); return;
     }
     /* the path-manipulation family (#2774, #2787) */
     if (sp_streq(name, "split") && argc == 1) {
-      buf_puts(b, "sp_file_split("); emit_expr(c, argv[0], b); buf_puts(b, ")"); return;
+      buf_puts(b, "sp_file_split("); emit_str_expr(c, argv[0], b); buf_puts(b, ")"); return;
     }
     if (sp_streq(name, "path") && argc == 1) {
       emit_expr(c, argv[0], b); return;
     }
     if (sp_streq(name, "absolute_path") && (argc == 1 || argc == 2)) {
-      buf_puts(b, "sp_file_expand_path("); emit_expr(c, argv[0], b); buf_puts(b, ", ");
+      buf_puts(b, "sp_file_expand_path("); emit_str_expr(c, argv[0], b); buf_puts(b, ", ");
       if (argc == 2) emit_expr(c, argv[1], b); else buf_puts(b, "(const char *)0");
       buf_puts(b, ")"); return;
     }
     if (sp_streq(name, "absolute_path?") && argc == 1) {  /* (#2988) */
-      buf_puts(b, "sp_file_absolute_path_p("); emit_expr(c, argv[0], b); buf_puts(b, ")"); return;
+      buf_puts(b, "sp_file_absolute_path_p("); emit_str_expr(c, argv[0], b); buf_puts(b, ")"); return;
     }
     if (sp_streq(name, "chown") && argc == 3) {  /* File.chown(uid, gid, path); nil id -> -1 (#2987) */
-      buf_puts(b, "sp_file_chown("); emit_expr(c, argv[2], b); buf_puts(b, ", ");
+      buf_puts(b, "sp_file_chown("); emit_str_expr(c, argv[2], b); buf_puts(b, ", ");
       for (int ci = 0; ci < 2; ci++) {
         if (ci) buf_puts(b, ", ");
         if (nt_type(nt, argv[ci]) && sp_streq(nt_type(nt, argv[ci]), "NilNode")) buf_puts(b, "-1LL");
@@ -14866,7 +14866,7 @@ else { memcpy(dir, sf, n); dir[n] = 0; } }
       buf_puts(b, ")"); return;
     }
     if ((sp_streq(name, "fnmatch") || sp_streq(name, "fnmatch?")) && argc >= 2) {
-      buf_puts(b, "sp_file_fnmatch("); emit_expr(c, argv[0], b); buf_puts(b, ", ");
+      buf_puts(b, "sp_file_fnmatch("); emit_str_expr(c, argv[0], b); buf_puts(b, ", ");
       emit_expr(c, argv[1], b); buf_puts(b, ")"); return;
     }
     if (sp_streq(name, "dirname") && argc == 2) {
@@ -14884,7 +14884,7 @@ else { memcpy(dir, sf, n); dir[n] = 0; } }
       emit_expr(c, argv[1], b); buf_puts(b, ")"); return;
     }
     if (sp_streq(name, "truncate") && argc == 2) {
-      buf_puts(b, "sp_file_truncate("); emit_expr(c, argv[0], b); buf_puts(b, ", ");
+      buf_puts(b, "sp_file_truncate("); emit_str_expr(c, argv[0], b); buf_puts(b, ", ");
       emit_int_expr(c, argv[1], b); buf_puts(b, ")"); return;
     }
     /* File.write(path, str, offset) / File.write(path, str, mode: "a") (#2782) */
@@ -14893,14 +14893,14 @@ else { memcpy(dir, sf, n); dir[n] = 0; } }
       if (k3 && sp_streq(k3, "KeywordHashNode")) {
         int mv = struct_kwarg_value(c, argv[2], "mode");
         if (mv >= 0) {
-          buf_puts(b, "sp_file_write_mode("); emit_expr(c, argv[0], b); buf_puts(b, ", ");
+          buf_puts(b, "sp_file_write_mode("); emit_str_expr(c, argv[0], b); buf_puts(b, ", ");
           emit_str_expr(c, argv[1], b); buf_puts(b, ", ");
           emit_expr(c, mv, b); buf_puts(b, ")");
           return;
         }
       }
       else {
-        buf_puts(b, "sp_file_write_at("); emit_expr(c, argv[0], b); buf_puts(b, ", ");
+        buf_puts(b, "sp_file_write_at("); emit_str_expr(c, argv[0], b); buf_puts(b, ", ");
         emit_str_expr(c, argv[1], b); buf_puts(b, ", ");
         emit_int_expr(c, argv[2], b); buf_puts(b, ")");
         return;
@@ -14923,10 +14923,10 @@ else { memcpy(dir, sf, n); dir[n] = 0; } }
       return;
     }
     if (sp_streq(name, "exist?") && argc == 1) {
-      buf_puts(b, "sp_file_exist("); emit_expr(c, argv[0], b); buf_puts(b, ")"); return;
+      buf_puts(b, "sp_file_exist("); emit_str_expr(c, argv[0], b); buf_puts(b, ")"); return;
     }
     if (sp_streq(name, "readable?") && argc == 1) {
-      buf_puts(b, "sp_file_readable("); emit_expr(c, argv[0], b); buf_puts(b, ")"); return;
+      buf_puts(b, "sp_file_readable("); emit_str_expr(c, argv[0], b); buf_puts(b, ")"); return;
     }
     if ((sp_streq(name, "readable_real?") || sp_streq(name, "writable_real?") ||
          sp_streq(name, "executable_real?")) && argc == 1) {
@@ -14934,14 +14934,14 @@ else { memcpy(dir, sf, n); dir[n] = 0; } }
       emit_expr(c, argv[0], b); buf_puts(b, ")"); return;
     }
     if (sp_streq(name, "directory?") && argc == 1) {
-      buf_puts(b, "sp_file_directory("); emit_expr(c, argv[0], b); buf_puts(b, ")"); return;
+      buf_puts(b, "sp_file_directory("); emit_str_expr(c, argv[0], b); buf_puts(b, ")"); return;
     }
     /* zero-length non-directory, not the directory test it aliased to (#2783) */
     if ((sp_streq(name, "zero?") || sp_streq(name, "empty?")) && argc == 1) {
-      buf_puts(b, "sp_file_zero("); emit_expr(c, argv[0], b); buf_puts(b, ")"); return;
+      buf_puts(b, "sp_file_zero("); emit_str_expr(c, argv[0], b); buf_puts(b, ")"); return;
     }
     if (sp_streq(name, "symlink?") && argc == 1) {
-      buf_puts(b, "sp_file_symlink("); emit_expr(c, argv[0], b); buf_puts(b, ")"); return;
+      buf_puts(b, "sp_file_symlink("); emit_str_expr(c, argv[0], b); buf_puts(b, ")"); return;
     }
     /* POSIX ownership / type predicates and helpers (#3005) */
     {
@@ -14965,10 +14965,10 @@ else { memcpy(dir, sf, n); dir[n] = 0; } }
       emit_expr(c, argv[1], b); buf_puts(b, ")"); return;
     }
     if (sp_streq(name, "readlink") && argc == 1) {
-      buf_puts(b, "sp_file_readlink("); emit_expr(c, argv[0], b); buf_puts(b, ")"); return;
+      buf_puts(b, "sp_file_readlink("); emit_str_expr(c, argv[0], b); buf_puts(b, ")"); return;
     }
     if (sp_streq(name, "mkfifo") && (argc == 1 || argc == 2)) {
-      buf_puts(b, "sp_file_mkfifo("); emit_expr(c, argv[0], b); buf_puts(b, ", ");
+      buf_puts(b, "sp_file_mkfifo("); emit_str_expr(c, argv[0], b); buf_puts(b, ", ");
       if (argc == 2) emit_int_expr(c, argv[1], b); else buf_puts(b, "0666");
       buf_puts(b, ")"); return;
     }
@@ -15008,13 +15008,13 @@ else { memcpy(dir, sf, n); dir[n] = 0; } }
       emit_expr(c, argv[1], b); buf_puts(b, "); (mrb_int)0; })"); return;
     }
     if (sp_streq(name, "mtime") && argc == 1) {
-      buf_puts(b, "sp_file_mtime("); emit_expr(c, argv[0], b); buf_puts(b, ")"); return;
+      buf_puts(b, "sp_file_mtime("); emit_str_expr(c, argv[0], b); buf_puts(b, ")"); return;
     }
     if (sp_streq(name, "size") && argc == 1) {
-      buf_puts(b, "sp_file_size("); emit_expr(c, argv[0], b); buf_puts(b, ")"); return;
+      buf_puts(b, "sp_file_size("); emit_str_expr(c, argv[0], b); buf_puts(b, ")"); return;
     }
     if (sp_streq(name, "expand_path") && (argc == 1 || argc == 2)) {
-      buf_puts(b, "sp_file_expand_path("); emit_expr(c, argv[0], b); buf_puts(b, ", ");
+      buf_puts(b, "sp_file_expand_path("); emit_str_expr(c, argv[0], b); buf_puts(b, ", ");
       if (argc == 2) emit_expr(c, argv[1], b); else buf_puts(b, "(const char *)0");
       buf_puts(b, ")"); return;
     }
@@ -15075,13 +15075,17 @@ else { memcpy(dir, sf, n); dir[n] = 0; } }
       int int_mode = argc >= 2 && kw_mode < 0 && comp_ntype(c, argv[1]) == TY_INT;
       #define EMIT_FILE_OPEN() do { \
         if (int_mode) { \
-          buf_puts(b, "sp_File_open_flags("); emit_expr(c, argv[0], b); buf_puts(b, ", "); \
+          buf_puts(b, "sp_File_open_flags("); emit_str_expr(c, argv[0], b); buf_puts(b, ", "); \
           emit_int_expr(c, argv[1], b); buf_puts(b, ")"); \
         } \
         else { \
-          buf_puts(b, "sp_File_open("); emit_expr(c, argv[0], b); buf_puts(b, ", "); \
-          if (kw_mode >= 0) emit_expr(c, kw_mode, b); \
-          else if (argc >= 2 && !(nt_type(nt, argv[1]) && sp_streq(nt_type(nt, argv[1]), "KeywordHashNode"))) emit_expr(c, argv[1], b); \
+          /* emit_str_expr, not emit_expr: the path and mode are const char *
+             slots, and a String reached through a poly binding -- a String
+             ivar the fixpoint widened, an untyped accessor -- would otherwise
+             go in as a raw sp_RbVal (#3385). Identity for a real String. */ \
+          buf_puts(b, "sp_File_open("); emit_str_expr(c, argv[0], b); buf_puts(b, ", "); \
+          if (kw_mode >= 0) emit_str_expr(c, kw_mode, b); \
+          else if (argc >= 2 && !(nt_type(nt, argv[1]) && sp_streq(nt_type(nt, argv[1]), "KeywordHashNode"))) emit_str_expr(c, argv[1], b); \
           else buf_puts(b, "\"r\""); \
           buf_puts(b, ")"); \
         } \
@@ -15136,11 +15140,24 @@ else { memcpy(dir, sf, n); dir[n] = 0; } }
         }
       }
       buf_printf(b, "sp_File_close(_t%d); ", tf);
-      buf_printf(b, "%s; })",
-        scalar && bn > 0 ? ({ static char _tb[16]; snprintf(_tb, sizeof _tb, "_t%d", rv); _tb; }) : "0");
+      /* The value of the whole statement-expression has to fit the slot the
+         call was typed into. A bare `0` fits an int slot only, so an EMPTY
+         block (`File.open(p, "a") { |f| }`) in a poly-returning method emitted
+         an int where an sp_RbVal was expected (#3385). */
+      if (scalar && bn > 0) buf_printf(b, "_t%d; })", rv);
+      else if (scalar && res == TY_POLY) buf_puts(b, "sp_box_nil(); })");
+      else if (scalar) { buf_puts(b, default_value(res)); buf_puts(b, "; })"); }
+      else buf_puts(b, "0; })");
       return;
     }
   }
+  /* Path arguments throughout the File / Dir / IO surface go through
+     emit_str_expr rather than emit_expr: they land in `const char *` slots,
+     and a String reached through a poly binding -- a widened String ivar, an
+     untyped accessor, an element read -- would otherwise be handed over as a
+     raw sp_RbVal (#3256, #3330, #3385 are three sightings of the same shape).
+     emit_str_expr is the identity for a value already typed String, so the
+     conversion costs nothing where inference succeeded. */
   if (recv >= 0 && nt_type(nt, recv) && sp_streq(nt_type(nt, recv), "ConstantReadNode") &&
       nt_str(nt, recv, "name") && sp_streq(nt_str(nt, recv, "name"), "Dir")) {
     if (sp_streq(name, "for_fd") && argc == 1) {
@@ -15156,7 +15173,7 @@ else { memcpy(dir, sf, n); dir[n] = 0; } }
     if ((sp_streq(name, "new") || sp_streq(name, "open")) && argc >= 1) {
       int dblk = nt_ref(nt, id, "block");
       if (dblk < 0) {
-        buf_puts(b, "sp_Dir_new("); emit_expr(c, argv[0], b); buf_puts(b, ")");
+        buf_puts(b, "sp_Dir_new("); emit_str_expr(c, argv[0], b); buf_puts(b, ")");
         return;
       }
       const char *dp0 = block_param_name(c, dblk, 0);
@@ -15186,21 +15203,21 @@ else { memcpy(dir, sf, n); dir[n] = 0; } }
     if (sp_streq(name, "pwd") && argc == 0) { buf_puts(b, "sp_dir_pwd()"); return; }
     if (sp_streq(name, "home") && argc == 0) { buf_puts(b, "sp_dir_home()"); return; }
     if (sp_streq(name, "empty?") && argc == 1) {
-      buf_puts(b, "sp_dir_empty("); emit_expr(c, argv[0], b); buf_puts(b, ")"); return;
+      buf_puts(b, "sp_dir_empty("); emit_str_expr(c, argv[0], b); buf_puts(b, ")"); return;
     }
     if (sp_streq(name, "home") && argc == 1) {
-      buf_puts(b, "sp_dir_home_user("); emit_expr(c, argv[0], b); buf_puts(b, ")"); return;
+      buf_puts(b, "sp_dir_home_user("); emit_str_expr(c, argv[0], b); buf_puts(b, ")"); return;
     }
     if (sp_streq(name, "glob") && argc == 2 && nt_type(nt, argv[1]) &&
         sp_streq(nt_type(nt, argv[1]), "ConstantPathNode") &&
         nt_str(nt, argv[1], "name") && sp_streq(nt_str(nt, argv[1], "name"), "FNM_DOTMATCH")) {
-      buf_puts(b, "sp_dir_glob_dot("); emit_expr(c, argv[0], b); buf_puts(b, ")"); return;
+      buf_puts(b, "sp_dir_glob_dot("); emit_str_expr(c, argv[0], b); buf_puts(b, ")"); return;
     }
     if (sp_streq(name, "glob") && argc == 1 && ty_is_array(comp_ntype(c, argv[0]))) {
       buf_puts(b, "sp_dir_glob_multi("); emit_boxed(c, argv[0], b); buf_puts(b, ")"); return;
     }
     if (sp_streq(name, "glob") && argc == 1) {
-      buf_puts(b, "sp_dir_glob("); emit_expr(c, argv[0], b); buf_puts(b, ")"); return;
+      buf_puts(b, "sp_dir_glob("); emit_str_expr(c, argv[0], b); buf_puts(b, ")"); return;
     }
     if ((sp_streq(name, "entries") || sp_streq(name, "children")) && argc == 1) {
       buf_printf(b, "sp_dir_%s(", name); emit_expr(c, argv[0], b); buf_puts(b, ")"); return;
