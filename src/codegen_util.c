@@ -942,6 +942,20 @@ int is_scalar_ret(TyKind t) {
 /* native binding (Path B): map a spinel type spec to the C type at the ABI
    boundary. any -> the boxed value; string -> the runtime string; scalars
    pass by value. */
+/* Kinds whose C representation is a struct passed BY VALUE (see c_type_name).
+   A struct never implicitly converts to or from anything else in C, so a
+   parameter and an argument that disagree here can never be the same call --
+   unlike the numeric scalars, where int-into-float is an ordinary conversion. */
+int ty_is_struct_valued(TyKind t) {
+  switch (t) {
+    case TY_RANGE: case TY_FLOAT_RANGE: case TY_STR_RANGE:
+    case TY_TIME: case TY_COMPLEX: case TY_RATIONAL:
+    case TY_TMS: case TY_CLASS:
+      return 1;
+    default: return 0;
+  }
+}
+
 const char *native_c_type(const char *spec) {
   if (!spec) return "void";
   if (sp_streq(spec, "any"))    return "sp_RbVal";

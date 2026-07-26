@@ -4158,7 +4158,13 @@ static int emit_poly_method_dispatch(Compiler *c, int id, Buf *b) {
                   object arg -- the raw pass would be a C int-conversion
                   error and semantic garbage; the arm cannot be this call's
                   real target shape */
-               ty_is_object(pt0) != ty_is_object(at0))) {
+               ty_is_object(pt0) != ty_is_object(at0) ||
+               /* a struct passed by value converts to nothing: a Range slice
+                  `s[0...-5]` on an untyped receiver was matching a seeded
+                  `#[](Symbol)` by name and handing sp_Range to an sp_sym slot
+                  (#3384). The arm passes its temps raw, so a disagreement here
+                  is always a hard C error, never a coercion that works. */
+               ty_is_struct_valued(pt0) || ty_is_struct_valued(at0))) {
             arm_key_incompat = 1; break;
           }
         }
