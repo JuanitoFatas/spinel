@@ -7763,16 +7763,6 @@ void analyze_program(Compiler *c) {
   g_infer_optimistic = 1;
   for (int iter = 0; iter < 128; iter++) {
     int ch = 0;
-    if (getenv("SP_DBG_FIX")) {
-      for (int _s = 0; _s < c->nscopes; _s++) {
-        Scope *_sc = &c->scopes[_s];
-        if (!_sc->name || !strstr(getenv("SP_DBG_FIX"), _sc->name)) continue;
-        fprintf(stderr, "[fix %d] %s ret=%d", iter, _sc->name, (int)_sc->ret);
-        for (int _l = 0; _l < _sc->nlocals; _l++)
-          fprintf(stderr, " %s=%d", _sc->locals[_l].name, (int)_sc->locals[_l].type);
-        fprintf(stderr, "\n");
-      }
-    }
     sp_narrow_memo_bump();  /* invalidate per-iteration narrow-helper memo */
     build_ie_map(c);  /* refresh instance_exec receiver-class map each pass */
     ch |= register_ie_block_ivars(c);  /* slot ivars first assigned in iexec blocks */
