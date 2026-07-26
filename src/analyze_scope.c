@@ -1009,7 +1009,13 @@ void register_locals(Compiler *c) {
         sp_streq(ty, "LocalVariableOrWriteNode") ||
         sp_streq(ty, "LocalVariableAndWriteNode")) {
       const char *nm = nt_str(nt, id, "name");
-      if (nm) scope_local_intern(comp_scope_of(c, id), nm);
+      if (nm) {
+        LocalVar *lv = scope_local_intern(comp_scope_of(c, id), nm);
+        /* or_write_only is a two-bit scratch here: 1 = an or-write was seen,
+           2 = a definite write was seen. Normalised to the flag below. */
+        if (sp_streq(ty, "LocalVariableOrWriteNode")) lv->or_write_only |= 1;
+        else if (!sp_streq(ty, "LocalVariableReadNode")) lv->or_write_only |= 2;
+      }
     }
     if (sp_streq(ty, "InstanceVariableWriteNode") ||
         sp_streq(ty, "InstanceVariableReadNode") ||
@@ -1020,6 +1026,17 @@ void register_locals(Compiler *c) {
       const char *nm = nt_str(nt, id, "name");
       Scope *s = comp_scope_of(c, id);
       if (nm && s->class_id >= 0) comp_ivar_intern(&c->classes[s->class_id], nm);
+    }
+  }
+  /* Normalise the scratch: only "an or-write and nothing else" leaves the
+     local without a definite assignment. Parameters are bound on entry, so
+     they are assigned however the scratch reads. */
+  for (int si = 0; si < c->nscopes; si++) {
+    Scope *s = &c->scopes[si];
+    for (int li = 0; li < s->nlocals; li++) {
+      LocalVar *lv = &s->locals[li];
+      lv->or_write_only = (lv->or_write_only == 1 && !lv->is_param && !lv->is_block_param);
+
     }
   }
 }

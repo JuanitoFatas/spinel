@@ -514,7 +514,7 @@ void emit_tail_lead(Buf *b) {
    default_value's zero-value): a fresh block-local starts nil, and several
    types carry an in-band nil sentinel (NULL string, SP_INT_NIL, NaN float,
    (sp_sym)-1). Types with no sentinel fall back to the zero value. */
-static const char *nil_value(TyKind t) {
+const char *nil_value(TyKind t) {
   switch (t) {
     case TY_STRING: return "NULL";
     case TY_INT:    return "SP_INT_NIL";
@@ -985,6 +985,55 @@ const char *ffi_c_type(const char *spec) {
 const char *ffi_cb_arg_ctype(const char *spec) {
   if (sp_streq(spec, "ptr")) return "const void *";
   return ffi_c_type(spec);
+}
+/* Write into `out` the C test for "local `en` currently holds nil", and answer
+   1. Answers 0 when the slot has no nil representation: every value the type
+   can hold is truthy, and its zero is indistinguishable from a real one, so
+   `x ||= v` on it genuinely is a no-op.
+
+   The pointer-shaped kinds are exactly the ones declare_local initialises to
+   NULL, so a slot still holding NULL has never been assigned -- which is nil,
+   not "already truthy". Reading it as truthy is what dropped the assignment in
+   `text ||= [...].join(" ")` (#3388). */
+/* The initial value of a local's slot: its type's zero, or the type's nil
+   sentinel when the local has no definite assignment anywhere (#3388). */
+const char *local_init_value(Compiler *c, LocalVar *lv) {
+  (void)c;
+  if (lv->or_write_only && !lv->is_param && !lv->is_block_param) {
+    const char *nv = nil_value(lv->type);
+    if (nv) return nv;
+  }
+  return lv->type == TY_RANGE ? "(sp_Range){0}" : default_value(lv->type);
+}
+int local_nil_test(Compiler *c, LocalVar *lv, const char *ref, Buf *out) {
+  if (!lv) return 0;
+  TyKind t = lv->type;
+  /* mrb_int 0 and 0.0 are real values, so the slot only distinguishes nil when
+     it was declared with the sentinel -- which declare_local does exactly when
+     the local has no definite assignment anywhere. */
+  int nil_init = lv->or_write_only && !lv->is_param && !lv->is_block_param;
+  switch (t) {
+    case TY_STRING: case TY_BIGINT: case TY_OPENSTRUCT:
+      buf_printf(out, "!%s", ref); return 1;
+    case TY_CLASS:
+      buf_printf(out, "sp_class_nil_p(%s)", ref); return 1;
+    case TY_INT:
+      if (!nil_init) return 0;
+      buf_printf(out, "%s == SP_INT_NIL", ref); return 1;
+    case TY_FLOAT:
+      if (!nil_init) return 0;
+      buf_printf(out, "sp_float_is_nil(%s)", ref); return 1;
+    /* value kinds with no in-band nil (and POLY/BOOL/SYMBOL, whose callers
+       test their own sentinel before reaching here) */
+    case TY_BOOL: case TY_SYMBOL: case TY_POLY:
+    case TY_RANGE: case TY_FLOAT_RANGE: case TY_STR_RANGE: case TY_TIME:
+    case TY_COMPLEX: case TY_RATIONAL: case TY_TMS:
+      return 0;
+    default:
+      if (comp_ty_value_obj(c, t)) return 0;
+      if (t != TY_UNKNOWN && is_scalar_ret(t)) { buf_printf(out, "!%s", ref); return 1; }
+      return 0;
+  }
 }
 const char *default_value(TyKind t) {
   switch (t) {

@@ -253,7 +253,7 @@ int emit_inline_call_x(Compiler *c, int id, Buf *b, int indent, int as_expr) {
     g_nren++;
     emit_indent(b, din);
     emit_ctype(c, lv->type, b);
-    buf_printf(b, " lv_%s = %s;\n", rn, lv->type == TY_RANGE ? "(sp_Range){0}" : default_value(lv->type));
+    buf_printf(b, " lv_%s = %s;\n", rn, local_init_value(c, lv));
     if (needs_root(lv->type)) { emit_indent(b, din); buf_printf(b, lv->type == TY_POLY ? "SP_GC_ROOT_RBVAL(lv_%s);\n" : "SP_GC_ROOT(lv_%s);\n", rn); }
   }
 

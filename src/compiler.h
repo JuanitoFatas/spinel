@@ -55,6 +55,13 @@ typedef struct {
   int const_def_write; /* (consts) has a definite (non-or/and) assignment; an
                           or/and-write-only const is nil-defaulted (poly) so its
                           `||=` truthiness check fires on first use */
+  int or_write_only; /* every write to this local is a `||=`: it has no definite
+                        assignment anywhere in the scope, so it starts as nil
+                        and the or-write's truthiness check must fire on first
+                        use. The slot is declared with its type's nil sentinel
+                        rather than the zero value, so a kind whose zero is a
+                        real value (mrb_int 0, 0.0) can still tell the two
+                        apart (mirrors ConstantVar's const_def_write). */
   int str_shared;   /* (TY_STRBUF) a shared-mutable string: it is aliased
                        (`s2 = s1`) AND mutated in place, so the whole alias set
                        holds the one sp_String* handle -- reads hand out the live

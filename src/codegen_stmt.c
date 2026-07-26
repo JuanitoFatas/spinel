@@ -5677,7 +5677,30 @@ else {
       emit_indent(b, indent);
       buf_printf(b, "lv_%s = ", en); emit_expr(c, v, b); buf_puts(b, ";\n");
     }
-    /* a ||= v on an always-truthy var: no-op */
+    else {
+      /* `x ||= v` on a slot that can hold nil: test it. Only a slot with no
+         nil representation at all is the no-op this used to assume for every
+         non-poly type. The assignment goes through emit_assign so it gets the
+         same coercions the plain `x = v` form does, with its statement-shaped
+         setup caught in a local buffer -- routed to g_pre it would run (and
+         its side effects with it) even when the variable is already set. */
+      Buf rb; memset(&rb, 0, sizeof rb); emit_local_ref(c, id, nm, &rb);
+      Buf nb; memset(&nb, 0, sizeof nb);
+      if (rb.p && local_nil_test(c, lv, rb.p, &nb)) {
+        Buf apre, abody;
+        memset(&apre, 0, sizeof apre); memset(&abody, 0, sizeof abody);
+        Buf *sv_pre = g_pre; int sv_ind = g_indent;
+        g_pre = &apre; g_indent = indent + 1;
+        emit_assign(c, id, &abody, indent + 1);
+        g_pre = sv_pre; g_indent = sv_ind;
+        emit_indent(b, indent); buf_printf(b, "if (%s) {\n", nb.p);
+        if (apre.p) buf_puts(b, apre.p);
+        if (abody.p) buf_puts(b, abody.p);
+        emit_indent(b, indent); buf_puts(b, "}\n");
+        free(apre.p); free(abody.p);
+      }
+      free(nb.p); free(rb.p);
+    }
     return;
   }
   if (sp_streq(ty, "InstanceVariableOrWriteNode") || sp_streq(ty, "InstanceVariableAndWriteNode")) {
@@ -8083,10 +8106,38 @@ void emit_stmt_tail_inner(Compiler *c, int id, Buf *b, int indent) {
     TyKind _ivt9 = comp_ntype(c, nt_ref(nt, id, "value"));
     if (ty_is_object(_ivt9)) _iv_tail_val = 1;
   }
+  /* A tail LOCAL write is the method's value in Ruby (`def m; x = v; end`
+     answers v), and returning the statement default instead answered "" for a
+     String method and 0 for an Integer one (#3388). Routing the write itself
+     through the value path is what perturbs the inference the note above
+     guards, so emit the write as a statement and then hand back the SLOT:
+     same value, evaluated once, no inference change. Only when the slot's
+     type reaches the return slot without a conversion this text form cannot
+     express -- otherwise keep the old statement-only shape. */
   if (sp_streq(ty, "LocalVariableWriteNode") ||
       sp_streq(ty, "LocalVariableOrWriteNode") ||
-      sp_streq(ty, "LocalVariableAndWriteNode") ||
-      (sp_streq(ty, "InstanceVariableWriteNode") && !_iv_tail_val) ||
+      sp_streq(ty, "LocalVariableAndWriteNode")) {
+    const char *lnm = nt_str(nt, id, "name");
+    LocalVar *lv9 = lnm ? scope_local(comp_scope_of(c, id), lnm) : NULL;
+    TyKind lt9 = lv9 ? lv9->type : TY_UNKNOWN;
+    int want_poly9 = g_result_var ? g_result_poly : (g_ret_type == TY_POLY);
+    int slot_ok = lv9 && lt9 != TY_UNKNOWN && lt9 != TY_VOID &&
+                  (want_poly9 || lt9 == (g_result_var ? g_result_ty : g_ret_type));
+    emit_stmt(c, id, b, indent);
+    if (!slot_ok) return;
+    Buf rb9; memset(&rb9, 0, sizeof rb9); emit_local_ref(c, id, lnm, &rb9);
+    emit_indent(b, indent); emit_tail_lead(b);
+    if (want_poly9 && lt9 != TY_POLY) {
+      Buf bx9; memset(&bx9, 0, sizeof bx9);
+      emit_boxed_text(c, lt9, rb9.p ? rb9.p : "0", &bx9);
+      buf_printf(b, "%s;\n", bx9.p ? bx9.p : "sp_box_nil()");
+      free(bx9.p);
+    }
+    else buf_printf(b, "%s;\n", rb9.p ? rb9.p : "0");
+    free(rb9.p);
+    return;
+  }
+  if ((sp_streq(ty, "InstanceVariableWriteNode") && !_iv_tail_val) ||
       sp_streq(ty, "GlobalVariableWriteNode") ||
       sp_streq(ty, "ConstantWriteNode") ||
       sp_streq(ty, "WhileNode") || sp_streq(ty, "UntilNode") ||

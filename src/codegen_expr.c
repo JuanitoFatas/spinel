@@ -1148,7 +1148,26 @@ void emit_expr(Compiler *c, int id, Buf *b) {
       buf_printf(b, "; lv_%s; })", en);
     }
     else {
-      buf_printf(b, "lv_%s", en);
+      /* `x ||= v` in value position on a slot that can hold nil (see
+         local_nil_test): the old bare read assumed every non-poly local was
+         already truthy and dropped the assignment entirely (#3388). */
+      Buf rb; memset(&rb, 0, sizeof rb); emit_local_ref(c, id, nm, &rb);
+      Buf nb; memset(&nb, 0, sizeof nb);
+      if (rb.p && local_nil_test(c, lv, rb.p, &nb)) {
+        Buf apre, abody;
+        memset(&apre, 0, sizeof apre); memset(&abody, 0, sizeof abody);
+        Buf *sv_pre = g_pre; int sv_ind = g_indent;
+        g_pre = &apre; g_indent = 0;
+        emit_assign(c, id, &abody, 0);
+        g_pre = sv_pre; g_indent = sv_ind;
+        buf_printf(b, "({ if (%s) { ", nb.p);
+        if (apre.p) buf_puts(b, apre.p);
+        if (abody.p) buf_puts(b, abody.p);
+        buf_printf(b, " } %s; })", rb.p);
+        free(apre.p); free(abody.p);
+      }
+      else buf_printf(b, "lv_%s", en);
+      free(nb.p); free(rb.p);
     }
     return;
   }

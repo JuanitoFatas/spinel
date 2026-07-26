@@ -600,6 +600,15 @@ void declare_local(Compiler *c, Buf *b, LocalVar *lv, int vol) {
         exit(1);
       }
   }
+  /* A local with no definite assignment anywhere starts as Ruby nil, not as
+     its type's zero: `x ||= v` has to be able to tell "never assigned" from
+     "assigned 0". The pointer kinds already start NULL; this is what gives the
+     sentinel-carrying scalars the same footing (#3388). Block-locals are reset
+     to nil_value on every iteration already (emit_block_locals_reset). */
+  if (lv->or_write_only && !lv->is_param && !lv->is_block_param) {
+    const char *nv = nil_value(t);   /* NULL for the kinds with no sentinel */
+    if (nv) init = nv;
+  }
   buf_puts(b, "    ");
   if (vol && !ptr) buf_puts(b, "volatile ");
   buf_puts(b, cty.p ? cty.p : "");
@@ -3798,7 +3807,7 @@ int emit_super_inline(Compiler *c, int id, Buf *b, int indent, int as_expr) {
     g_nren++;
     emit_indent(b, din);
     emit_ctype(c, lv->type, b);
-    buf_printf(b, " lv_%s = %s;\n", rn, lv->type == TY_RANGE ? "(sp_Range){0}" : default_value(lv->type));
+    buf_printf(b, " lv_%s = %s;\n", rn, local_init_value(c, lv));
     if (lv->type == TY_POLY) { emit_indent(b, din); buf_printf(b, "SP_GC_ROOT_RBVAL(lv_%s);\n", rn); }
     else if (needs_root(lv->type) && !comp_ty_value_obj(c, lv->type)) { emit_indent(b, din); buf_printf(b, "SP_GC_ROOT(lv_%s);\n", rn); }
   }
