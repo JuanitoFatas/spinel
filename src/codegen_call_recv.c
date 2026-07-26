@@ -8949,14 +8949,28 @@ int emit_poly_call(Compiler *c, int id, Buf *b) {
        stringified into an empty scan (test/issue_3147.rb pins that). */
     int rli = re_lit_index(c, argv[0]);
     int str_arg = comp_ntype(c, argv[0]) == TY_STRING;
-    if (rli >= 0 || str_arg) {
-      int poly_res = rli >= 0 && re_has_captures(re_lit_src(c, argv[0]));
+    /* A pattern the compiler cannot resolve to a literal -- an inline
+       `Regexp.new(s)`, a local holding one, an interpolated literal -- is
+       still an mrb_regexp_pattern* at run time, and the String-receiver arm
+       has taken it since #3389. Without it here the call fell past this
+       handler to the unresolved-call gate and raised on the String (#3392).
+       The tag guard stays: only a String answers #scan. */
+    int re_arg = !str_arg && rli < 0 && comp_ntype(c, argv[0]) == TY_REGEX;
+    if (rli >= 0 || str_arg || re_arg) {
+      /* follow the type analyze settled on, so emit and type stay in step for
+         a run-time pattern (sp_re_scan_poly decides per match) */
+      int poly_res = comp_ntype(c, id) == TY_POLY_ARRAY;
       int ts = ++g_tmp;
       buf_printf(b, "({ sp_RbVal _t%d = ", ts); emit_boxed(c, recv, b);
       buf_printf(b, "; (_t%d.tag == SP_TAG_STR || sp_poly_is_strbuf(_t%d)) ? ", ts, ts);
       if (rli >= 0)
         buf_printf(b, "%s(sp_re_pat_%d, sp_poly_to_s(_t%d))",
                    poly_res ? "sp_re_scan_poly" : "sp_re_scan", rli, ts);
+      else if (re_arg) {
+        buf_printf(b, "%s(", poly_res ? "sp_re_scan_poly" : "sp_re_scan");
+        emit_expr(c, argv[0], b);
+        buf_printf(b, ", sp_poly_to_s(_t%d))", ts);
+      }
       else {
         buf_printf(b, "sp_str_scan(sp_poly_to_s(_t%d), ", ts);
         emit_expr(c, argv[0], b); buf_puts(b, ")");

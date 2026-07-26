@@ -1011,12 +1011,12 @@ TyKind infer_call(Compiler *c, int id) {
      rt==TY_STRING rule -- captures give an array of arrays (#3368). */
   if (recv >= 0 && rt == TY_POLY && argc == 1 && sp_streq(name, "scan") &&
       nt_ref(nt, id, "block") < 0 && !an_user_defines_or_reads(c, name)) {
-    const char *aty = nt_type(nt, argv[0]);
-    if (aty && sp_streq(aty, "RegularExpressionNode")) {
-      const char *src = nt_str(nt, argv[0], "unescaped");
-      if (src && an_re_has_captures(src)) return TY_POLY_ARRAY;
-      return TY_STR_ARRAY;
-    }
+    const char *rsrc = an_regex_lit_src(c, argv[0]);
+    if (rsrc) return an_re_has_captures(rsrc) ? TY_POLY_ARRAY : TY_STR_ARRAY;
+    /* A pattern only known at run time takes the shape that answers either
+       way, exactly as the String-receiver rule does: the poly arm was narrower
+       than the String one for no reason of its own (#3392). */
+    if (infer_type(c, argv[0]) == TY_REGEX) return TY_POLY_ARRAY;
     if (infer_type(c, argv[0]) == TY_STRING) return TY_STR_ARRAY;
   }
   /* Array#find / #detect over a poly value that is an array at runtime (an
