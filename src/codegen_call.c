@@ -3034,6 +3034,19 @@ static int emit_complex_rational_call(Compiler *c, int id, Buf *b) {
           buf_puts(b, ", "); emit_rat_coerce(c, argv[0], b); buf_puts(b, "))");
           return 1;
         }
+        /* A POLY operand is not a non-numeric operand -- it is one whose type
+           is not known here, and at run time it is very often the Rational
+           that came out of an Array. Answering a constant false made
+           `Rational(5,6) == arr_elem` false while the swapped spelling, which
+           reaches sp_poly_eq, was true (#3382). Box the receiver and let the
+           runtime compare; sp_poly_eq already does Rational-vs-numeric by
+           value. */
+        if (rat == TY_POLY || rat == TY_UNKNOWN) {
+          buf_printf(b, "(%ssp_poly_eq(sp_box_rational(", neg ? "!" : "");
+          emit_expr(c, recv, b); buf_puts(b, "), ");
+          emit_boxed(c, argv[0], b); buf_puts(b, "))");
+          return 1;
+        }
         buf_puts(b, "((void)("); emit_expr(c, recv, b); buf_puts(b, "), (void)(");
         emit_boxed(c, argv[0], b);
         buf_printf(b, "), %d)", neg ? 1 : 0);
@@ -3076,9 +3089,19 @@ static int emit_complex_rational_call(Compiler *c, int id, Buf *b) {
          constant false otherwise. */
       if (crt == TY_RATIONAL && argc == 1 &&
           (sp_streq(name, "eql?") || sp_streq(name, "equal?"))) {
-        if (comp_ntype(c, argv[0]) == TY_RATIONAL) {
+        TyKind eq_a = comp_ntype(c, argv[0]);
+        if (eq_a == TY_RATIONAL) {
           buf_puts(b, "sp_rational_eq("); emit_expr(c, recv, b); buf_puts(b, ", ");
           emit_expr(c, argv[0], b); buf_puts(b, ")");
+        }
+        else if (sp_streq(name, "eql?") && (eq_a == TY_POLY || eq_a == TY_UNKNOWN)) {
+          /* #eql? is #== plus a class check, so a poly operand has to be
+             asked at run time whether it IS a Rational -- Rational(1,1).eql?(1)
+             is false where == is true. See the == arm above (#3382). */
+          int te = ++g_tmp;
+          buf_printf(b, "({ sp_RbVal _t%d = ", te); emit_boxed(c, argv[0], b);
+          buf_printf(b, "; sp_poly_is_rational(_t%d) && sp_poly_eq(sp_box_rational(", te);
+          emit_expr(c, recv, b); buf_printf(b, "), _t%d); })", te);
         }
         else {
           buf_puts(b, "((void)("); emit_expr(c, recv, b); buf_puts(b, "), 0)");
