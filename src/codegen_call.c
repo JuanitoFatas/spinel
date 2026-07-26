@@ -15124,10 +15124,23 @@ else { memcpy(dir, sf, n); dir[n] = 0; } }
                         (lty != TY_NIL ||
                          (nt_type(nt, bb[bn-1]) && sp_streq(nt_type(nt, bb[bn-1]), "NilNode"))));
         if (scalar && can_expr) {
+          /* Catch the tail expression's statement-shaped setup in a local
+             buffer: g_pre here is the buffer for the whole `File.open(...) {
+             ... }` line, so anything routed there runs BEFORE the file is
+             opened. `h[k] += f.read.length` put its read-modify-write out
+             there and read the file before it existed (same shape as #3387). */
+          Buf fpre; memset(&fpre, 0, sizeof fpre);
+          Buf fval; memset(&fval, 0, sizeof fval);
+          Buf *sv_fp = g_pre; int sv_fi = g_indent;
+          g_pre = &fpre; g_indent = 0;
+          if (res == TY_POLY && lty != TY_POLY) emit_boxed(c, bb[bn-1], &fval);
+          else emit_expr(c, bb[bn-1], &fval);
+          g_pre = sv_fp; g_indent = sv_fi;
+          if (fpre.p) buf_puts(b, fpre.p);
           emit_ctype(c, res, b); buf_printf(b, " _t%d = ", rv);
-          if (res == TY_POLY && lty != TY_POLY) emit_boxed(c, bb[bn-1], b);
-          else emit_expr(c, bb[bn-1], b);
+          buf_puts(b, fval.p ? fval.p : "0");
           buf_puts(b, "; ");
+          free(fpre.p); free(fval.p);
         }
         else {
           emit_stmt(c, bb[bn-1], b, 0);
@@ -19310,10 +19323,26 @@ else { memcpy(dir, sf, n); dir[n] = 0; } }
       int nil_lit = (lty == TY_NIL && lnty && sp_streq(lnty, "NilNode"));
       int can_expr = (lty != TY_VOID && lty != TY_UNKNOWN && (lty != TY_NIL || nil_lit));
       if (scalar && can_expr) {
+        /* The tail is emitted as an EXPRESSION, and an expression's
+           statement-shaped setup goes to g_pre -- which at this point is the
+           buffer for the whole `lock.synchronize { ... }` line, i.e. OUTSIDE
+           the lock. `h[k] += 1` puts its read-modify-write there and leaves
+           only the read inside, so concurrent increments lost updates while
+           the same thing written as two statements did not (#3387). Catch the
+           prelude in a local buffer and flush it inside the critical section,
+           where it belongs. */
+        Buf tpre; memset(&tpre, 0, sizeof tpre);
+        Buf tval; memset(&tval, 0, sizeof tval);
+        Buf *sv_pre = g_pre; int sv_ind = g_indent;
+        g_pre = &tpre; g_indent = 0;
+        if (res == TY_POLY && lty != TY_POLY) emit_boxed(c, bbb[bbn-1], &tval);
+        else emit_expr(c, bbb[bbn-1], &tval);
+        g_pre = sv_pre; g_indent = sv_ind;
+        if (tpre.p) buf_puts(b, tpre.p);
         buf_printf(b, "_t%d = ", rv);
-        if (res == TY_POLY && lty != TY_POLY) emit_boxed(c, bbb[bbn-1], b);
-        else emit_expr(c, bbb[bbn-1], b);
+        buf_puts(b, tval.p ? tval.p : "0");
         buf_puts(b, "; ");
+        free(tpre.p); free(tval.p);
       }
       else {
         emit_stmt(c, bbb[bbn-1], b, 0);  /* scalar default already set at rv decl */
