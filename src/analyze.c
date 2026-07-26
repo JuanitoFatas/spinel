@@ -3789,6 +3789,56 @@ static int name_is_math_fn(const char *nm) {
    them (#2600). Only fires when the program includes Math and no user method of
    the same name shadows it; a bare call needs at least one argument (the Math
    functions are all n-ary), so a receiverless niladic call is never touched. */
+/* Kernel's module functions, by name. A whitelist rather than "anything with
+   the Kernel receiver": Kernel is also a VALUE, so `Kernel === 5` asks whether
+   5 is in the Object hierarchy, and `Kernel.name` / `.to_s` / `.freeze` /
+   `.instance_methods` are Module's own methods on it. Dropping the receiver for
+   those would change what they mean. Only names that Module does not also
+   answer belong here. */
+static int kernel_module_function(const char *m) {
+  static const char *const K[] = {
+    "puts", "print", "p", "pp", "printf", "sprintf", "format",
+    "raise", "fail", "exit", "exit!", "abort", "at_exit",
+    "rand", "srand", "sleep", "gets", "loop", "lambda", "proc",
+    "block_given?", "catch", "throw", "caller", "binding", "__method__",
+    "require", "require_relative", "load", "warn", "system",
+    "Integer", "Float", "String", "Array", "Hash", "Rational", "Complex",
+    NULL
+  };
+  for (int i = 0; K[i]; i++) if (sp_streq(m, K[i])) return 1;
+  return 0;
+}
+
+/* `Kernel.puts x` / `Kernel.exit(1)` / `Kernel.format(...)`: Kernel's module
+   functions are callable with the module as an explicit receiver, and mean
+   exactly what the bare call means. Nothing served that receiver, so every one
+   of them raised "undefined method 'exit' for class Kernel" -- including the
+   `lambda { |status| Kernel.exit(status) }` idiom for making the exit path
+   injectable in a CLI library.
+
+   Drop the receiver and let the bare-call machinery handle it. Skipped when the
+   program defines its own Kernel, where the name means whatever it says. */
+int desugar_kernel_recv(Compiler *c) {
+  NodeTable *nt = (NodeTable *)c->nt;
+  if (comp_class_index(c, "Kernel") >= 0) return 0;
+  int changed = 0;
+  int n0 = nt->count;
+  for (int id = 0; id < n0; id++) {
+    if (!nt_type(nt, id) || !sp_streq(nt_type(nt, id), "CallNode")) continue;
+    int recv = nt_ref(nt, id, "receiver");
+    if (recv < 0) continue;
+    const char *rty = nt_type(nt, recv);
+    if (!rty || !sp_streq(rty, "ConstantReadNode")) continue;
+    const char *rn = nt_str(nt, recv, "name");
+    if (!rn || !sp_streq(rn, "Kernel")) continue;
+    const char *mn = nt_str(nt, id, "name");
+    if (!mn || !kernel_module_function(mn)) continue;
+    nt_node_set_ref(nt, id, "receiver", -1);
+    changed = 1;
+  }
+  return changed;
+}
+
 int desugar_include_math(Compiler *c) {
   NodeTable *nt = (NodeTable *)c->nt;
   int n0 = nt->count;
@@ -7737,6 +7787,7 @@ void analyze_program(Compiler *c) {
     ch |= pad_unsupplied_params(c);            /* under-supplied call: placeholder param type */
     ch |= desugar_builtin_method_obj(c);       /* builtin recv.method(:sym) -> wrapper def */
     ch |= desugar_include_math(c);             /* include Math: sqrt(x) -> Math.sqrt(x) */
+    ch |= desugar_kernel_recv(c);              /* Kernel.puts x -> puts x */
     ch |= desugar_enum_method_recv(c);         /* obj.map{} -> obj.__enum_to_a.map{} */
     ch |= desugar_for_enumerable(c);           /* for x in obj -> for x in obj.__enum_to_a */
     ch |= desugar_to_enum(c);                  /* recv.to_enum(:m) -> generator/blockless */
