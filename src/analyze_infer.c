@@ -5289,21 +5289,23 @@ else {
     if (sp_streq(name, "scan") && argc == 1) {
       /* the block form iterates and returns self (the receiver string) */
       if (nt_ref(nt, id, "block") >= 0) return TY_STRING;
-      /* scan with capture groups returns poly_array (array of arrays or strings) */
-      const char *aty = nt_type(nt, argv[0]);
-      if (aty && sp_streq(aty, "RegularExpressionNode")) {
-        const char *src = nt_str(nt, argv[0], "unescaped");
-        if (src && an_re_has_captures(src)) return TY_POLY_ARRAY;
-        return TY_STR_ARRAY;
-      }
-      /* A regex whose source is not visible here -- an interpolated literal, a
-         local holding one, an inline `Regexp.new(s)` -- can only be asked at
+      /* scan with capture groups returns poly_array (array of arrays or
+         strings). Whether the rows are whole matches or capture rows is a
+         property of the pattern's SOURCE, and the pattern may be reached
+         through a name: a constant or a local bound to a literal is exactly as
+         visible as the literal, which is what an_regex_lit_src resolves (and
+         what codegen's re_lit_node resolves on its side). Reading only a direct
+         literal node left the two disagreeing the moment the pattern had a
+         name -- a capturing constant compiled to sp_re_scan_poly under a
+         str_array type (#3391). */
+      const char *rsrc = an_regex_lit_src(c, argv[0]);
+      if (rsrc) return an_re_has_captures(rsrc) ? TY_POLY_ARRAY : TY_STR_ARRAY;
+      /* A regex whose source is not visible at all -- an interpolated literal,
+         an inline `Regexp.new(s)`, a method's return -- can only be asked at
          run time whether it captures, so take the shape that answers both:
          sp_re_scan_poly pushes the whole match when the pattern has no groups
-         and a captures row when it does. Statically visible literals stay on
-         the narrower arms above (#3389). */
-      if (infer_type(c, argv[0]) == TY_REGEX && !an_regex_lit_src(c, argv[0]))
-        return TY_POLY_ARRAY;
+         and a captures row when it does (#3389). */
+      if (infer_type(c, argv[0]) == TY_REGEX) return TY_POLY_ARRAY;
       return TY_STR_ARRAY;
     }
     if (sp_streq(name, "upto") && argc == 1) return TY_STR_ARRAY;  /* blockless: materialized sequence */

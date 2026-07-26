@@ -7229,11 +7229,11 @@ int infer_block_params(Compiler *c) {
       const int *scan_argv = scan_args_id >= 0 ? nt_arr(nt, scan_args_id, "arguments", &scan_argc) : NULL;
       int has_cap = 0;
       if (scan_argc == 1 && scan_argv) {
-        const char *apty = nt_type(nt, scan_argv[0]);
-        if (apty && sp_streq(apty, "RegularExpressionNode")) {
-          const char *src = nt_str(nt, scan_argv[0], "unescaped");
-          if (src && an_re_has_captures(src)) has_cap = 1;
-        }
+        /* through a name too: `PAT = /(\d)(\w)/; s.scan(PAT) { |a, b| }` must
+           destructure the capture row exactly as the inline literal does
+           (#3391) */
+        const char *src = an_regex_lit_src(c, scan_argv[0]);
+        if (src && an_re_has_captures(src)) has_cap = 1;
       }
       /* a capturing scan yields each captures ROW (a boxed-element array);
          multiple params destructure it into strings */

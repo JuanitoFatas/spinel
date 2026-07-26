@@ -308,45 +308,46 @@ int re_has_captures(const char *src) {
   }
   return 0;
 }
-int re_lit_index(Compiler *c, int nid) {
+/* The RegularExpressionNode behind `nid`, or -1 when the pattern is only
+   knowable at run time. A bare literal, a constant bound to one
+   (`PAT = /re/[.freeze]`, possibly namespaced) and a regex-typed local bound to
+   one all resolve.
+
+   One resolver for every caller. re_lit_index, re_lit_src and re_lit_flags each
+   carried their own copy and they disagreed about names: re_lit_src did not
+   follow a local, so codegen picked the capturing `scan` emit for a pattern
+   named by a constant while typing the same call from the non-capturing shape,
+   and dropped the capture groups for one named by a local (#3391). */
+int re_lit_node(Compiler *c, int nid) {
   if (nid < 0) return -1;
-  const char *ty = nt_type(c->nt, nid);
+  const NodeTable *nt = c->nt;
+  const char *ty = nt_type(nt, nid);
   if (!ty) return -1;
-  /* a constant bound to a regex literal (PATTERN = /re/[.freeze], possibly
-     namespaced) resolves to that literal's precompiled pattern */
-  if (sp_streq(ty, "ConstantReadNode") || sp_streq(ty, "ConstantPathNode")) {
-    const char *nm = nt_str(c->nt, nid, "name");
-    if (!nm) return -1;
-    for (int k = 0; k < c->nt->count; k++) {
-      const char *kt = nt_type(c->nt, k);
-      if (!kt || (!sp_streq(kt, "ConstantWriteNode") && !sp_streq(kt, "ConstantPathWriteNode"))) continue;
-      const char *kn = nt_str(c->nt, k, "name");
-      if (!kn || !sp_streq(kn, nm)) continue;
-      int v = nt_ref(c->nt, k, "value");
-      if (v >= 0 && nt_type(c->nt, v) && sp_streq(nt_type(c->nt, v), "CallNode") &&
-          nt_str(c->nt, v, "name") && sp_streq(nt_str(c->nt, v, "name"), "freeze"))
-        v = nt_ref(c->nt, v, "receiver");
-      if (v >= 0 && nt_type(c->nt, v) && sp_streq(nt_type(c->nt, v), "RegularExpressionNode"))
-        return re_lit_index(c, v);
-    }
-    return -1;
+  if (sp_streq(ty, "RegularExpressionNode")) return nid;
+  int want_const = sp_streq(ty, "ConstantReadNode") || sp_streq(ty, "ConstantPathNode");
+  int want_local = sp_streq(ty, "LocalVariableReadNode") && comp_ntype(c, nid) == TY_REGEX;
+  if (!want_const && !want_local) return -1;
+  const char *nm = nt_str(nt, nid, "name");
+  if (!nm) return -1;
+  for (int k = 0; k < nt->count; k++) {
+    const char *kt = nt_type(nt, k);
+    if (!kt) continue;
+    if (want_const ? (!sp_streq(kt, "ConstantWriteNode") && !sp_streq(kt, "ConstantPathWriteNode"))
+                   : !sp_streq(kt, "LocalVariableWriteNode"))
+      continue;
+    const char *kn = nt_str(nt, k, "name");
+    if (!kn || !sp_streq(kn, nm)) continue;
+    int v = nt_ref(nt, k, "value");
+    if (want_const && v >= 0 && nt_type(nt, v) && sp_streq(nt_type(nt, v), "CallNode") &&
+        nt_str(nt, v, "name") && sp_streq(nt_str(nt, v, "name"), "freeze"))
+      v = nt_ref(nt, v, "receiver");
+    if (v >= 0 && nt_type(nt, v) && sp_streq(nt_type(nt, v), "RegularExpressionNode")) return v;
   }
-  /* a local variable of type TY_REGEX: look up its write node */
-  if (sp_streq(ty, "LocalVariableReadNode") && comp_ntype(c, nid) == TY_REGEX) {
-    const char *nm = nt_str(c->nt, nid, "name");
-    if (!nm) return -1;
-    for (int k = 0; k < c->nt->count; k++) {
-      const char *kt = nt_type(c->nt, k);
-      if (!kt || !sp_streq(kt, "LocalVariableWriteNode")) continue;
-      const char *kn = nt_str(c->nt, k, "name");
-      if (!kn || !sp_streq(kn, nm)) continue;
-      int v = nt_ref(c->nt, k, "value");
-      if (v >= 0 && nt_type(c->nt, v) && sp_streq(nt_type(c->nt, v), "RegularExpressionNode"))
-        return re_lit_index(c, v);
-    }
-    return -1;
-  }
-  if (!sp_streq(ty, "RegularExpressionNode")) return -1;
+  return -1;
+}
+int re_lit_index(Compiler *c, int nid) {
+  nid = re_lit_node(c, nid);
+  if (nid < 0) return -1;
   const char *src = nt_str(c->nt, nid, "unescaped");
   if (!src) return -1;
   int flg = re_engine_flags((int)nt_int(c->nt, nid, "flags", 0));
@@ -362,52 +363,13 @@ int re_lit_index(Compiler *c, int nid) {
   return g_re_count++;
 }
 const char *re_lit_src(Compiler *c, int nid) {
-  if (nid < 0) return NULL;
-  const char *ty = nt_type(c->nt, nid);
-  if (!ty) return NULL;
-  if (sp_streq(ty, "RegularExpressionNode")) return nt_str(c->nt, nid, "unescaped");
-  if (sp_streq(ty, "ConstantReadNode") || sp_streq(ty, "ConstantPathNode")) {
-    const char *nm = nt_str(c->nt, nid, "name");
-    if (!nm) return NULL;
-    for (int k = 0; k < c->nt->count; k++) {
-      const char *kt = nt_type(c->nt, k);
-      if (!kt || (!sp_streq(kt, "ConstantWriteNode") && !sp_streq(kt, "ConstantPathWriteNode"))) continue;
-      const char *kn = nt_str(c->nt, k, "name");
-      if (!kn || !sp_streq(kn, nm)) continue;
-      int v = nt_ref(c->nt, k, "value");
-      if (v >= 0 && nt_type(c->nt, v) && sp_streq(nt_type(c->nt, v), "CallNode") &&
-          nt_str(c->nt, v, "name") && sp_streq(nt_str(c->nt, v, "name"), "freeze"))
-        v = nt_ref(c->nt, v, "receiver");
-      if (v >= 0 && nt_type(c->nt, v) && sp_streq(nt_type(c->nt, v), "RegularExpressionNode"))
-        return nt_str(c->nt, v, "unescaped");
-    }
-  }
-  return NULL;
+  nid = re_lit_node(c, nid);
+  return nid < 0 ? NULL : nt_str(c->nt, nid, "unescaped");
 }
-/* Prism flags of a literal/const-bound regexp (-1 if `nid` is not one). Mirrors
-   re_lit_src's resolution so callers can check a regex operand for flags. */
+/* Prism flags of a statically resolvable regexp (-1 if `nid` is not one). */
 int re_lit_flags(Compiler *c, int nid) {
-  if (nid < 0) return -1;
-  const char *ty = nt_type(c->nt, nid);
-  if (!ty) return -1;
-  if (sp_streq(ty, "RegularExpressionNode")) return (int)nt_int(c->nt, nid, "flags", 0);
-  if (sp_streq(ty, "ConstantReadNode") || sp_streq(ty, "ConstantPathNode")) {
-    const char *nm = nt_str(c->nt, nid, "name");
-    if (!nm) return -1;
-    for (int k = 0; k < c->nt->count; k++) {
-      const char *kt = nt_type(c->nt, k);
-      if (!kt || (!sp_streq(kt, "ConstantWriteNode") && !sp_streq(kt, "ConstantPathWriteNode"))) continue;
-      const char *kn = nt_str(c->nt, k, "name");
-      if (!kn || !sp_streq(kn, nm)) continue;
-      int v = nt_ref(c->nt, k, "value");
-      if (v >= 0 && nt_type(c->nt, v) && sp_streq(nt_type(c->nt, v), "CallNode") &&
-          nt_str(c->nt, v, "name") && sp_streq(nt_str(c->nt, v, "name"), "freeze"))
-        v = nt_ref(c->nt, v, "receiver");
-      if (v >= 0 && nt_type(c->nt, v) && sp_streq(nt_type(c->nt, v), "RegularExpressionNode"))
-        return (int)nt_int(c->nt, v, "flags", 0);
-    }
-  }
-  return -1;
+  nid = re_lit_node(c, nid);
+  return nid < 0 ? -1 : (int)nt_int(c->nt, nid, "flags", 0);
 }
 void emit_interp(Compiler *c, int id, Buf *b);  /* forward */
 

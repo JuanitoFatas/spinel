@@ -482,6 +482,7 @@ void emit_case_expr(Compiler *c, int id, Buf *b);
 int re_engine_flags(int pf);
 int re_has_captures(const char *src);
 int re_lit_index(Compiler *c, int nid);
+int re_lit_node(Compiler *c, int nid);
 const char *re_lit_src(Compiler *c, int nid);
 int re_lit_flags(Compiler *c, int nid);
 void emit_interp(Compiler *c, int id, Buf *b);
