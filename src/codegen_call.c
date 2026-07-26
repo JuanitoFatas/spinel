@@ -19316,7 +19316,17 @@ else { memcpy(dir, sf, n); dir[n] = 0; } }
            and pop the sp_rescue_sp handler for each rescue body it leaves */
         { char g[24]; snprintf(g, sizeof g, "_retf%d", eid);
           if (emit_frame_unwind(b, 0, g)) buf_puts(b, " "); }
-        if (has_retval) buf_printf(b, "if (_retf%d) return _retv%d; ", eid, eid);
+        /* Inside a first-class proc body whose returns route through the boxed
+           slot, the deferred value leaves through the slot -- a raw C return
+           of an sp_RbVal from an mrb_int function does not compile. The
+           statement-side copy of this funnel (codegen_stmt.c) has had the
+           branch; this one did not, so `Mutex#synchronize` inside a proc body
+           emitted it (#3383). */
+        if (has_retval && g_in_proc_body && g_result_var && g_result_poly)
+          buf_printf(b, "if (_retf%d) { %s = _retv%d; return 0; } ", eid, g_result_var, eid);
+        else if (has_retval) buf_printf(b, "if (_retf%d) return _retv%d; ", eid, eid);
+        else if (g_in_proc_body && g_result_var && g_result_poly)
+          buf_printf(b, "if (_retf%d) { %s = sp_box_nil(); return 0; } ", eid, g_result_var);
         else if (g_ret_type == TY_POLY) buf_printf(b, "if (_retf%d) return sp_box_nil(); ", eid);
         else if (g_ret_type == TY_UNKNOWN) buf_printf(b, "if (_retf%d) return 0; ", eid);
         else buf_printf(b, "if (_retf%d) return; ", eid);

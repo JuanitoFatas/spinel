@@ -1351,7 +1351,24 @@ int proc_body_node(Compiler *c, int create) {
    (string/array/hash/object) is laundered through (mrb_int)(uintptr_t). Other
    shapes (float, poly, range, time) don't fit the slot and defer. */
 int proc_slot_is_direct(TyKind t) { return t == TY_INT || t == TY_BOOL || t == TY_SYMBOL || t == TY_NIL || t == TY_UNKNOWN; }
-int proc_slot_is_ptr(TyKind t) { return t == TY_STRING || t == TY_STRBUF || ty_is_array(t) || ty_is_hash(t) || ty_is_object(t); }
+/* Every kind whose C representation is a bare `T *`. The runtime handles
+   were missing, so a Mutex (or an IO, a Thread, a Queue, ...) yielded to a
+   block through the proc ABI went into the mrb_int slot uncast and came
+   back out as a pointer without a cast either -- the generated C did not
+   compile (#3383). Kept in step with c_type_name; sp_RbVal (poly) and
+   sp_Class are structs, not pointers, and stay out. */
+int proc_slot_is_ptr(TyKind t) {
+  switch (t) {
+    case TY_STRING: case TY_STRBUF: case TY_BIGINT: case TY_MATCHDATA:
+    case TY_EXCEPTION: case TY_CURRY: case TY_FIBER: case TY_THREAD:
+    case TY_QUEUE: case TY_MUTEX: case TY_CONDVAR: case TY_RANDOM:
+    case TY_DIR: case TY_ADDRINFO: case TY_SOCKOPT: case TY_OPENSTRUCT:
+    case TY_METHOD: case TY_IO: case TY_ARGF: case TY_ENUMERATOR:
+      return 1;
+    default: break;
+  }
+  return ty_is_array(t) || ty_is_hash(t) || ty_is_object(t);
+}
 
 /* True if a closure cell for `lv` carries the variable's real typed pointer
    (string / array / hash / object), as opposed to a laundered or scalar slot.

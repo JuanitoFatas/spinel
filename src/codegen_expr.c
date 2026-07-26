@@ -1297,7 +1297,13 @@ void emit_expr(Compiler *c, int id, Buf *b) {
       /* force_poly=1: a rest/post-taking block recovers arguments from the boxed
          side-channel, and this callee's signature is unknown here. */
       emit_proc_call_args(c, yargc, yargv, b, 1);
-      buf_puts(b, ", _sp_proc_poly_ret.v.i)");
+      /* `.v.i` is the raw carrier the lowered method's own mrb_int ABI wants,
+         and the call site casts it back. A consumer whose slot is the BOXED
+         value -- a Thread body's yielded_value, which is an sp_RbVal -- needs
+         the whole struct instead, so take the yield's own inferred type as the
+         answer to which (#3383). */
+      if (comp_ntype(c, id) == TY_POLY) buf_puts(b, ", _sp_proc_poly_ret)");
+      else buf_puts(b, ", _sp_proc_poly_ret.v.i)");
       return;
     }
     if (g_yield_proc_ref) {

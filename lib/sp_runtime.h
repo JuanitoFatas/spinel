@@ -2606,6 +2606,14 @@ static sp_RbVal sp_poly_shl(sp_RbVal a, sp_RbVal b) {
       else sp_File_write((sp_File *)a.v.p, sp_poly_to_s(b));
       return a;
     }
+    if (a.cls_id == SP_BUILTIN_QUEUE && a.v.p) {
+      /* Queue#<< (and #push / #enq, which lower to it) appends and chains.
+         Without an arm the boxed handle fell past every case to the Integer
+         bit-shift fallback below, so a push through a yielded Queue was
+         silently discarded and the queue stayed empty. */
+      sp_Queue_push((sp_queue *)a.v.p, b);
+      return a;
+    }
     /* A user object with a `<<` method (a Set held as a Hash value, #3174):
        dispatch through the user-binop hook, which mutates it in place and
        returns the receiver -- not the Integer#<< bit-shift fallback below. */
