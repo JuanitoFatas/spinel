@@ -6376,12 +6376,15 @@ TyKind infer_uncached(Compiler *c, int id) {
       /* an empty literal whose use context fixes a variant (compared against a
          hash-typed peer) adopts it, so both sides share a representation and
          the comparison is a real content check (#3040). */
+      /* A literal that is ALSO passed to a user method has to be wide enough
+         for whatever the callee writes, which the key context cannot see. The
+         arg rule therefore wins over the key context rather than the other way
+         round: narrowing here left the caller's `{}` and the callee's
+         parameter naming different C structs for the same object (#3386). */
+      int eh_arg = c->empty_hash_arg && id < c->node_cap && c->empty_hash_arg[id];
+      if (eh_arg) return TY_POLY_POLY_HASH;
       if (c->empty_hash_want && id < c->node_cap && ty_is_hash(c->empty_hash_want[id]))
         return c->empty_hash_want[id];
-      /* a bare `{}` passed as a user-method arg (an accumulator seed) is the
-         widest hash, so the callee may write any key/value type (#2860). */
-      if (c->empty_hash_arg && id < c->node_cap && c->empty_hash_arg[id])
-        return TY_POLY_POLY_HASH;
       return TY_UNKNOWN;
     }
     TyKind kt = TY_UNKNOWN, vt = TY_UNKNOWN;

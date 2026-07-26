@@ -30,3 +30,13 @@ nodes.each { |n| n.walk(shared) }
 p shared.keys.sort
 p shared["a"]
 p shared["b"]
+
+# ... and read back with a key that comes from ANOTHER hash's iteration, which
+# is what made the caller's `{}` and the callee's parameter name different C
+# structs: the key context narrowed the literal while the callee, invisible to
+# it, filled the hash with its own key type (#3386).
+freqs = { "a" => 5, "b" => 9 }
+tally = {}
+nodes.each { |n| n.walk(tally) }
+p freqs.sum { |ch, f| f * tally[ch].length }
+p freqs.map { |ch, _| tally[ch] }.sort
