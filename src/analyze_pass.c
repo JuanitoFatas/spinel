@@ -196,8 +196,15 @@ int infer_param_hash_value(Compiler *c) {
       LocalVar *lv = scope_local(sc, sc->pnames[p]);
       if (!lv || lv->is_block_param) continue;
       TyKind cur = lv->type;
-      int seedable = cur == TY_UNKNOWN || cur == TY_POLY ||
-                     (ty_is_hash(cur) && ty_hash_val(cur) == TY_POLY);
+      /* An already-CONCRETE hash type is a caller's, and the object is shared:
+         narrowing str->poly to str->str here does not convert anything, it
+         reinterprets the caller's sp_StrPolyHash * through an sp_StrStrHash *
+         parameter. The arms of one polymorphic dispatch then disagreed on the
+         variant and the call passed the wrong struct (#3381). Seed only a
+         parameter no call site has typed yet -- which is the case the
+         narrowing exists for: an empty `{}` at the caller, still UNKNOWN, that
+         the reverse binding then coerces to whatever this settles on. */
+      int seedable = cur == TY_UNKNOWN || cur == TY_POLY;
       if (!seedable || lv->rbs_seeded) continue;
       /* An int-keyed `p[i] = v` is normally excluded: it is ambiguous with
          array-element assignment (an int_array RAM param filled by `ram[i]=b`).
