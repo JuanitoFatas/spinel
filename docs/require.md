@@ -48,6 +48,7 @@ These are provided by Spinel but, like CRuby, only after their `require`:
 | `require "json"` | `JSON.generate`, `JSON.dump` | uninitialized constant |
 | `require "monitor"` | `Monitor` (`#synchronize`) | `NameError` (uninitialized constant) |
 | `require "socket"` | `TCPServer`, `TCPSocket`, `UDPSocket`, `UNIXServer`, `UNIXSocket`, `Socket`, `Addrinfo` | `NameError` (uninitialized constant) |
+| `require "pathname"` | `Pathname` | uninitialized constant |
 | `require "io/console"` | `IO#winsize` | `NoMethodError` |
 | `require "time"` | `Time#iso8601` | `NoMethodError` |
 

@@ -1,0 +1,30 @@
+true
+true
+true
+true
+false
+8
+false
+one
+two
+2
+.txt
+hello.txt
+a/b/c
+file
+Time
+2
+one
+2
+["hello.txt", "z.txt"]
+[".", "..", "hello.txt", "z.txt"]
+false
+false
+["hello.txt", "z.txt"]
+["hello.txt", "z.txt"]
+[".", "a", "a/b", "a/b/c", "a/b/c/hello.txt", "a/b/c/z.txt"]
+true
+true
+false
+false
+false
