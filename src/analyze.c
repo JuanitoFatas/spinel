@@ -2618,47 +2618,6 @@ static void desugar_enum_chain_shapes(Compiler *c) {
       }
       if (finite) { nt_node_set_ref(nt, id, "receiver", lz_recv); continue; }
     }
-    /* enum.to_set == Set.new(enum) whenever the set package's Set class is
-       in the program (an in-place rewrite; Set's initialize adds each
-       element, deduplicating). */
-    if (sp_streq(nm, "to_set") && recv >= 0 &&
-        nt_ref(nt, id, "block") < 0 && nt_ref(nt, id, "arguments") < 0) {
-      /* this desugar runs before class collection: scan the AST for the
-         class (lazily, at most once per program) */
-      static int has_set_cls = -1;
-      if (has_set_cls < 0) {
-        has_set_cls = 0;
-        for (int k = 0; k < n0 && !has_set_cls; k++) {
-          const char *kty = nt_type(nt, k);
-          if (!kty || !sp_streq(kty, "ClassNode")) continue;
-          int cp = nt_ref(nt, k, "constant_path");
-          const char *kn = cp >= 0 ? nt_str(nt, cp, "name") : NULL;
-          if (kn && sp_streq(kn, "Set")) has_set_cls = 1;
-        }
-      }
-      if (!has_set_cls) continue;
-      int cst = nt_new_node(nt, "ConstantReadNode");
-      int one = nt_new_node(nt, "ArgumentsNode");
-      /* Materialize the receiver to a flat array first (`Set.new(recv.to_a)`):
-         Set#initialize iterates its arg via `enum.each`, and a struct/user object
-         passed as a poly value does not dispatch #each through the poly path (it
-         would add nothing). to_a rides the struct-native / __enum_to_a machinery,
-         and is a no-op copy for array/range/hash receivers. */
-      int toa = nt_new_node(nt, "CallNode");
-      if (cst >= 0 && one >= 0 && toa >= 0) {
-        nt_node_set_str(nt, toa, "name", "to_a");
-        nt_node_set_ref(nt, toa, "receiver", recv);
-        nt_node_set_str(nt, cst, "name", "Set");
-        nt_node_set_arr(nt, one, "arguments", &toa, 1);
-        nt_node_set_str(nt, id, "name", "new");
-        nt_node_set_ref(nt, id, "receiver", cst);
-        nt_node_set_ref(nt, id, "arguments", one);
-        comp_grow_node_arrays(c);
-        c->nscope[toa] = c->nscope[id];
-        c->nscope[cst] = c->nscope[id];
-      }
-      continue;
-    }
     if ((sp_streq(nm, "merge") || sp_streq(nm, "merge!")) && recv >= 0) {
       /* h.merge(a, b, ...) folds left into h.merge(a).merge(b)...; merge!
          chains the same way because it returns self. */
@@ -3907,6 +3866,54 @@ int desugar_enum_method_recv(Compiler *c) {
               c->nscope[toa] = c->nscope[wrecv];
               changed = 1;
             }
+          }
+        }
+      }
+    }
+    /* enum.to_set == Set.new(enum.to_a) whenever the set package's Set class
+       is in the program (an in-place rewrite; Set's initialize adds each
+       element, deduplicating).
+
+       Type-aware, hence here and not in the one-shot pre-pass: a class that
+       defines its OWN to_set has to keep it. The pre-pass could not tell --
+       it runs before class collection, so it rewrote every to_set in the
+       program and a `CookieJar#to_set` returning a Hash became a Set, with
+       the error landing on whatever the real return type supported several
+       lines later (#3378). While the receiver's type is still unresolved,
+       wait rather than guess: g_infer_optimistic says the fixpoint has more
+       to say. */
+    if (nm && sp_streq(nm, "to_set") && nt_ref(nt, id, "block") < 0 &&
+        nt_ref(nt, id, "arguments") < 0 && comp_class_index(c, "Set") >= 0) {
+      int recv = nt_ref(nt, id, "receiver");
+      if (recv >= 0) {
+        TyKind rt = infer_type(c, recv);
+        int decline = 0;
+        if (rt == TY_UNKNOWN && g_infer_optimistic) decline = 1;   /* not yet known */
+        else if (ty_is_object(rt) &&
+                 comp_method_in_chain(c, ty_object_class(rt), "to_set", NULL) >= 0)
+          decline = 1;                                             /* the class owns the name */
+        if (!decline) {
+          int cst = nt_new_node(nt, "ConstantReadNode");
+          int one = nt_new_node(nt, "ArgumentsNode");
+          /* Materialize the receiver to a flat array first: Set#initialize
+             iterates its arg via `enum.each`, and a struct/user object passed
+             as a poly value does not dispatch #each through the poly path.
+             to_a rides the struct-native / __enum_to_a machinery, and is a
+             no-op copy for array/range/hash receivers. */
+          int toa = nt_new_node(nt, "CallNode");
+          if (cst >= 0 && one >= 0 && toa >= 0) {
+            nt_node_set_str(nt, toa, "name", "to_a");
+            nt_node_set_ref(nt, toa, "receiver", recv);
+            nt_node_set_str(nt, cst, "name", "Set");
+            nt_node_set_arr(nt, one, "arguments", &toa, 1);
+            nt_node_set_str(nt, id, "name", "new");
+            nt_node_set_ref(nt, id, "receiver", cst);
+            nt_node_set_ref(nt, id, "arguments", one);
+            comp_grow_node_arrays(c);
+            c->nscope[toa] = c->nscope[id];
+            c->nscope[cst] = c->nscope[id];
+            changed = 1;
+            continue;
           }
         }
       }
