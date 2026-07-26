@@ -898,6 +898,15 @@ void emit_block_invoke(Compiler *c, int args_node, Buf *b, int indent, int as_ex
      inline started) so that a nested `yield` inside the block chains to
      the outermost caller's block rather than going dead. */
   int svb = g_block_id; g_block_id = g_yield_block_fallback;
+  /* The fallback has to move out one level with it. Leaving it pointing at
+     the block now being spliced makes that block its OWN fallback, so a yield
+     inside its body re-splices the same body -- forever, until the compiler
+     runs out of C stack. Only one fallback level is ever recorded, so once it
+     is consumed there is no outer block left to name: -1, not itself.
+     Reached by a method that both yields and recurses through a block that
+     forwards the yield (`def walk; yield self; @kids.each { |k| k.walk { |x|
+     yield x } }; end`) -- valid Ruby that segfaulted the compiler. */
+  int svfb = g_yield_block_fallback; g_yield_block_fallback = -1;
   /* the body is block-definition-site code: emit it below the callee's
      rename entries, and pair the fallback block with ITS depth so a nested
      yield inside the body splices at the right level */
@@ -1046,7 +1055,7 @@ void emit_block_invoke(Compiler *c, int args_node, Buf *b, int indent, int as_ex
   g_block_brk_var = svbbv; g_block_brk_ebase = svbbe;
   g_block_nren = sv_bnren;
   BI_METHOD_SIDE();
-  g_block_id = svb; g_block_param_name = svbpn;
+  g_block_id = svb; g_yield_block_fallback = svfb; g_block_param_name = svbpn;
   if (as_expr) {
     /* `{ return e }`: the block exits the enclosing function, so the
        statement-expr's tail is unreachable — but C still needs a value
