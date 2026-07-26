@@ -5343,7 +5343,8 @@ int emit_scalar_call(Compiler *c, int id, Buf *b) {
         buf_printf(b, ", %s, ", r); emit_expr(c, argv[1], b); buf_puts(b, ")");
       }
       else if (sp_streq(name, "scan") && argc == 1 &&
-               (re_lit_index(c, argv[0]) >= 0 || comp_ntype(c, argv[0]) == TY_STRING) &&
+               (re_lit_index(c, argv[0]) >= 0 || comp_ntype(c, argv[0]) == TY_STRING ||
+                comp_ntype(c, argv[0]) == TY_REGEX) &&
                nt_ref(nt, id, "block") >= 0) {
         /* value-form scan { }: iterate in the prelude; the value is the
            receiver string (CRuby returns self from the block form). With
@@ -5366,6 +5367,21 @@ int emit_scalar_call(Compiler *c, int id, Buf *b) {
         else if (re_idx >= 0)
           buf_printf(g_pre, "sp_StrArray *_t%d = sp_re_scan(sp_re_pat_%d, _t%d); SP_GC_ROOT(_t%d);\n",
                      tm, re_idx, tr, tm);
+        /* pattern only known at run time (an inline `Regexp.new(s)`, a local
+           holding one): the value already IS the mrb_regexp_pattern*. has_cap
+           is 0 for such a pattern, so the block param stays a whole-match
+           String -- the same shape a local bound to a capturing literal
+           already yields here (#3389). */
+        else if (comp_ntype(c, argv[0]) == TY_REGEX) {
+          /* render the pattern to a scratch buffer: `Regexp.new(s)` roots its
+             own argument, and those decls go to g_pre, which must receive them
+             as whole statements rather than spliced into this initializer */
+          Buf eb; memset(&eb, 0, sizeof eb);
+          emit_expr(c, argv[0], &eb);
+          buf_printf(g_pre, "sp_StrArray *_t%d = sp_re_scan(%s, _t%d); SP_GC_ROOT(_t%d);\n",
+                     tm, eb.p ? eb.p : "NULL", tr, tm);
+          free(eb.p);
+        }
         else {
           buf_printf(g_pre, "sp_StrArray *_t%d = sp_str_scan(_t%d, ", tm, tr);
           emit_expr(c, argv[0], g_pre);
@@ -5408,6 +5424,20 @@ int emit_scalar_call(Compiler *c, int id, Buf *b) {
       }
       else if (sp_streq(name, "scan") && argc == 1 && comp_ntype(c, argv[0]) == TY_STRING) {
         buf_printf(b, "sp_str_scan(%s, ", r); emit_expr(c, argv[0], b); buf_puts(b, ")");
+      }
+      /* scan against a regex VALUE the arms above could not resolve to a
+         precompiled literal (an interpolated pattern, a local holding one, an
+         inline `Regexp.new(s)`): the value already IS the
+         mrb_regexp_pattern*. Without this arm the call fell through to the
+         unresolved-call gate and raised NoMethodError on the String (#3389).
+         The result shape follows the type analyze settled on, so the two stay
+         in step: an unresolvable pattern is typed poly_array and
+         sp_re_scan_poly decides per match whether the row is the whole match
+         or its captures. */
+      else if (sp_streq(name, "scan") && argc == 1 && comp_ntype(c, argv[0]) == TY_REGEX &&
+               nt_ref(nt, id, "block") < 0) {
+        buf_printf(b, "%s(", comp_ntype(c, id) == TY_POLY_ARRAY ? "sp_re_scan_poly" : "sp_re_scan");
+        emit_expr(c, argv[0], b); buf_printf(b, ", %s)", r);
       }
       else if (sp_streq(name, "to_sym") || sp_streq(name, "intern")) buf_printf(b, "sp_sym_intern(%s)", r);
       else if (sp_streq(name, "to_c") && argc == 0) buf_printf(b, "sp_str_to_c(%s)", r);

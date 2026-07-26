@@ -5294,7 +5294,16 @@ else {
       if (aty && sp_streq(aty, "RegularExpressionNode")) {
         const char *src = nt_str(nt, argv[0], "unescaped");
         if (src && an_re_has_captures(src)) return TY_POLY_ARRAY;
+        return TY_STR_ARRAY;
       }
+      /* A regex whose source is not visible here -- an interpolated literal, a
+         local holding one, an inline `Regexp.new(s)` -- can only be asked at
+         run time whether it captures, so take the shape that answers both:
+         sp_re_scan_poly pushes the whole match when the pattern has no groups
+         and a captures row when it does. Statically visible literals stay on
+         the narrower arms above (#3389). */
+      if (infer_type(c, argv[0]) == TY_REGEX && !an_regex_lit_src(c, argv[0]))
+        return TY_POLY_ARRAY;
       return TY_STR_ARRAY;
     }
     if (sp_streq(name, "upto") && argc == 1) return TY_STR_ARRAY;  /* blockless: materialized sequence */

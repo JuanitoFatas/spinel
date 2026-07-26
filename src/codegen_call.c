@@ -16332,15 +16332,27 @@ else { memcpy(dir, sf, n); dir[n] = 0; } }
     if (recv >= 0 && argc >= 1) {
       const char *a0ty = nt_type(nt, argv[0]);
       int is_interp_arg = a0ty && sp_streq(a0ty, "InterpolatedRegularExpressionNode");
-      int is_regex_lv_arg = !is_interp_arg && argc >= 1 && comp_ntype(c, argv[0]) == TY_REGEX
-                            && nt_type(nt, argv[0])
-                            && (sp_streq(nt_type(nt, argv[0]), "LocalVariableReadNode") ||
-                                sp_streq(nt_type(nt, argv[0]), "ConstantReadNode"));
-      if (is_interp_arg || is_regex_lv_arg) {
+      /* Any regex-typed argument EXPRESSION, not just a local or constant read:
+         an inline `Regexp.new(s)` / `Regexp.union(..)` / a method returning a
+         regex is the same mrb_regexp_pattern* in argument position, so
+         `str.match(Regexp.new(s))` belongs here rather than falling through to
+         the unresolved-call gate and raising NoMethodError on the String
+         (#3389). Two shapes stay out. A bare regex literal is already served
+         by the precompiled arms above; routing it here would pull e.g. a
+         Symbol receiver off its own handler. And an Object receiver -- a user
+         class, or a native-bound one like StringScanner -- dispatches its OWN
+         match/match?, the same exclusion those precompiled arms carry: without
+         it `matcher.match?(re_local)` fed the object into sp_re_match_p's
+         const char* slot and the generated C did not compile. */
+      const char *a0nt = nt_type(nt, argv[0]);
+      int is_regex_val_arg = !is_interp_arg && argc >= 1 && comp_ntype(c, argv[0]) == TY_REGEX
+                             && a0nt && !sp_streq(a0nt, "RegularExpressionNode")
+                             && !ty_is_object(rt);
+      if (is_interp_arg || is_regex_val_arg) {
         Buf rp; memset(&rp, 0, sizeof rp);
         int rp_ok = emit_regex_pat_to_buf(c, argv[0], &rp) && rp.p;
         /* Fallback: TY_REGEX local/constant/inline Regexp.new -- value IS the mrb_regexp_pattern* */
-        if (!rp_ok && is_regex_lv_arg) {
+        if (!rp_ok && is_regex_val_arg) {
           int tv = ++g_tmp;
           Buf eb; memset(&eb, 0, sizeof eb);
           emit_expr(c, argv[0], &eb);  /* may itself append pre-code to g_pre */
@@ -16366,11 +16378,19 @@ else { memcpy(dir, sf, n); dir[n] = 0; } }
                        name, tn9, dv9 ? dv9 : "sp_box_nil()");
             free(rp.p); return;
           }
-          if (sp_streq(name, "match?") && argc == 1) {
+          if (sp_streq(name, "match?") && (argc == 1 || argc == 2)) {
             /* A symbol receiver matches over its name, so feed the runtime
                pattern the symbol's string rather than the raw sp_sym. */
             if (rt == TY_SYMBOL) { buf_printf(b, "sp_re_match_p(%s, sp_sym_to_s(", rp.p); emit_expr(c, recv, b); buf_puts(b, "))"); }
-            else { buf_printf(b, "sp_re_match_p(%s, ", rp.p); emit_expr(c, recv, b); buf_puts(b, ")"); }
+            /* emit_str_expr, not emit_expr: a poly receiver (a String read out
+               of a widened container) needs coercing into the const char* slot
+               the same way the precompiled-literal arms do it (#3389). */
+            else if (argc == 1) { buf_printf(b, "sp_re_match_p(%s, ", rp.p); emit_str_expr(c, recv, b); buf_puts(b, ")"); }
+            /* match?(re, pos) starts the scan at pos */
+            else {
+              buf_printf(b, "sp_str_re_match_p_at(%s, ", rp.p); emit_str_expr(c, recv, b);
+              buf_puts(b, ", "); emit_int_expr(c, argv[1], b); buf_puts(b, ")");
+            }
             free(rp.p); return;
           }
           if (sp_streq(name, "=~") && rt == TY_STRING) {
@@ -16394,8 +16414,14 @@ else { memcpy(dir, sf, n); dir[n] = 0; } }
             buf_printf(b, "(!sp_re_match_p(%s, ", rp.p); emit_expr(c, recv, b); buf_puts(b, "))");
             free(rp.p); return;
           }
-          if (sp_streq(name, "match") && argc == 1) {
-            buf_printf(b, "sp_re_matchdata(%s, ", rp.p); emit_expr(c, recv, b); buf_puts(b, ")");
+          if (sp_streq(name, "match") && (argc == 1 || argc == 2)) {
+            /* emit_str_expr, not emit_expr: a poly receiver needs coercing into
+               the const char* slot, as the precompiled-literal arms do (#3389) */
+            if (argc == 1) { buf_printf(b, "sp_re_matchdata(%s, ", rp.p); emit_str_expr(c, recv, b); buf_puts(b, ")"); }
+            else {
+              buf_printf(b, "sp_re_matchdata_at(%s, ", rp.p); emit_str_expr(c, recv, b);
+              buf_puts(b, ", "); emit_int_expr(c, argv[1], b); buf_puts(b, ")");
+            }
             free(rp.p); return;
           }
           free(rp.p);

@@ -104,6 +104,42 @@ int an_re_has_captures(const char *src) {
   }
   return 0;
 }
+/* The source text of the regex literal behind `nid`, or NULL when the pattern
+   is only known at run time (an interpolated literal, a `Regexp.new(s)` call,
+   a method's return). Deliberately mirrors codegen's re_lit_index resolution
+   -- a bare literal, a constant bound to one (`PAT = /re/[.freeze]`), or a
+   regex-typed local bound to one -- so a type rule here and the emit arm there
+   agree on which patterns are statically visible. Unlike re_lit_index this
+   only looks, never registers a pattern slot, so it is safe to call during
+   inference. */
+const char *an_regex_lit_src(Compiler *c, int nid) {
+  const NodeTable *nt = c->nt;
+  if (nid < 0) return NULL;
+  const char *ty = nt_type(nt, nid);
+  if (!ty) return NULL;
+  if (sp_streq(ty, "RegularExpressionNode")) return nt_str(nt, nid, "unescaped");
+  int want_const = sp_streq(ty, "ConstantReadNode") || sp_streq(ty, "ConstantPathNode");
+  int want_local = sp_streq(ty, "LocalVariableReadNode") && infer_type(c, nid) == TY_REGEX;
+  if (!want_const && !want_local) return NULL;
+  const char *nm = nt_str(nt, nid, "name");
+  if (!nm) return NULL;
+  for (int k = 0; k < nt->count; k++) {
+    const char *kt = nt_type(nt, k);
+    if (!kt) continue;
+    if (want_const ? (!sp_streq(kt, "ConstantWriteNode") && !sp_streq(kt, "ConstantPathWriteNode"))
+                   : !sp_streq(kt, "LocalVariableWriteNode"))
+      continue;
+    const char *kn = nt_str(nt, k, "name");
+    if (!kn || !sp_streq(kn, nm)) continue;
+    int v = nt_ref(nt, k, "value");
+    if (want_const && v >= 0 && nt_type(nt, v) && sp_streq(nt_type(nt, v), "CallNode") &&
+        nt_str(nt, v, "name") && sp_streq(nt_str(nt, v, "name"), "freeze"))
+      v = nt_ref(nt, v, "receiver");
+    if (v >= 0 && nt_type(nt, v) && sp_streq(nt_type(nt, v), "RegularExpressionNode"))
+      return nt_str(nt, v, "unescaped");
+  }
+  return NULL;
+}
 int str_in(const char *s, const char *const *set) {
   if (!s) return 0;
   for (int i = 0; set[i]; i++) if (sp_streq(s, set[i])) return 1;

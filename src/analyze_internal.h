@@ -121,6 +121,7 @@ int builtin_class_id(const char *name);
 int builtin_object_method_known(const char *m);
 int class_inherits_builtin_exception(Compiler *c, int ci);
 int an_re_has_captures(const char *src);
+const char *an_regex_lit_src(Compiler *c, int nid);
 int str_in(const char *s, const char *const *set);
 int is_arith_op(const char *op);
 int is_cmp_op(const char *op);
