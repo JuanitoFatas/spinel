@@ -3616,6 +3616,48 @@ static int emit_poly_method_dispatch(Compiler *c, int id, Buf *b) {
                         " { sp_StringIO_rewind((sp_StringIO *)_t%d.v.p); }\nelse ",
                      tv, tv, sio_cid3, tv);
       }
+      /* A zero-arg String transform whose name a user class ALSO owns. The
+         poly String shortcuts decline to this dispatch so a Struct member or
+         attr_reader called `upcase` answers the member rather than the upcased
+         #inspect of the object holding it (#3364, #3380) -- but the cls_id
+         switch below only covers SP_TAG_OBJ, so a genuine String receiver then
+         fell through to the seed (nil, or 0 for #bytes). Same tag pre-arm the
+         `[]` and #include? cases above use: String at run time takes the
+         String method, an object takes its member. */
+      if (argc == 0) {
+        static const struct { const char *nm, *fn; int arr; } STRT[] = {
+          {"upcase","sp_str_upcase",0}, {"downcase","sp_str_downcase",0},
+          {"capitalize","sp_str_capitalize",0}, {"swapcase","sp_str_swapcase",0},
+          {"strip","sp_str_strip",0}, {"reverse","sp_str_reverse",0},
+          {"chomp","sp_str_chomp",0}, {"chop","sp_str_chop",0},
+          {"succ","sp_str_succ",0}, {"next","sp_str_succ",0},
+          {"chr","sp_str_chr",0},
+          {"bytes","sp_str_bytes",1}, {"chars","sp_str_chars",2}, {NULL,NULL,0}
+        };
+        for (int si = 0; STRT[si].nm; si++) {
+          if (!sp_streq(name, STRT[si].nm)) continue;
+          /* the result has to fit the slot the dispatch assigns into */
+          int ok = STRT[si].arr == 0 ? (ret == TY_POLY || ret == TY_STRING)
+                 : STRT[si].arr == 1 ? (ret == TY_POLY || ret == TY_INT_ARRAY)
+                 :                     (ret == TY_POLY || ret == TY_STR_ARRAY);
+          if (!ok) break;
+          /* #chr is Integer#chr on an int tag: stringifying first turns
+             65.chr into "65".chr == "6" (#3328). */
+          if (sp_streq(name, "chr")) {
+            buf_printf(b, "if (_t%d.tag == SP_TAG_INT) { _t%d = ", tv, tr);
+            if (ret == TY_STRING) buf_printf(b, "sp_int_chr(_t%d.v.i)", tv);
+            else buf_printf(b, "sp_box_str(sp_int_chr(_t%d.v.i))", tv);
+            buf_puts(b, "; }\nelse ");
+          }
+          buf_printf(b, "if (_t%d.tag == SP_TAG_STR) { _t%d = ", tv, tr);
+          if (ret != TY_POLY) buf_printf(b, "%s(_t%d.v.s)", STRT[si].fn, tv);
+          else if (STRT[si].arr == 1) buf_printf(b, "sp_box_int_array(%s(_t%d.v.s))", STRT[si].fn, tv);
+          else if (STRT[si].arr == 2) buf_printf(b, "sp_box_str_array(%s(_t%d.v.s))", STRT[si].fn, tv);
+          else buf_printf(b, "sp_box_str(%s(_t%d.v.s))", STRT[si].fn, tv);
+          buf_puts(b, "; }\nelse ");
+          break;
+        }
+      }
       /* class 0 emits a `case 0:` arm here when it defines/inherits the method
          (nrequired 0) or exposes it as a reader; the dispatch key is then guarded
          so a boxed scalar (cls_id 0) does not alias it (issue #1576). */

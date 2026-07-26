@@ -1005,8 +1005,8 @@ TyKind infer_call(Compiler *c, int id) {
   /* String#chars on a poly value (a String read out of a container / pair):
      an array of single-char strings (#2909). */
   if (recv >= 0 && rt == TY_POLY && argc == 0 && sp_streq(name, "chars") &&
-      nt_ref(nt, id, "block") < 0 && !an_user_defines_or_reads(c, name))
-    return TY_STR_ARRAY;
+      nt_ref(nt, id, "block") < 0)
+    return an_user_defines_or_reads(c, name) ? TY_POLY : TY_STR_ARRAY;
   /* poly.scan(re): a String read out of a container. Same shape as the
      rt==TY_STRING rule -- captures give an array of arrays (#3368). */
   if (recv >= 0 && rt == TY_POLY && argc == 1 && sp_streq(name, "scan") &&
@@ -4474,8 +4474,14 @@ else {
          binary lump read whose method widened to poly): a concrete int array,
          emitted via sp_str_bytes(sp_poly_to_s(...)) with no boxing. */
       if ((sp_streq(name, "bytes") || sp_streq(name, "codepoints")) && argc == 0 &&
-          nt_ref(nt, id, "block") < 0 && !an_user_defines_or_reads(c, name))
-        return TY_INT_ARRAY;
+          nt_ref(nt, id, "block") < 0) {
+        if (!an_user_defines_or_reads(c, name)) return TY_INT_ARRAY;
+        /* A user class owns the name too, so the value may be a String (an int
+           array) or that class's member (whatever it holds). One C slot cannot
+           be both, and letting the member's type win made the String answer 0.
+           Box it: the codegen's tag pre-arm fills either side (#3380). */
+        return TY_POLY;
+      }
       /* poly.unpack1(fmt): String#unpack1 on a value that widened to poly
          (pervasive in doom's binary WAD parsing). Mirrors the rt==TY_STRING
          rule so a single-directive int format stays int, not poly. */

@@ -9130,6 +9130,17 @@ int emit_poly_call(Compiler *c, int id, Buf *b) {
         }
       }
     }
+    /* These stringify the receiver and apply a String method to the result, so
+       a user class owning the name must win: a Struct member, Data field or
+       attr_reader called `upcase` otherwise answers the UPCASED #inspect of
+       the object holding it (#3380). The `bytes` / `chars` arms below have
+       carried this guard since #2909 / #3364; this is the same list of names
+       that return a String rather than an array, which is why it was missed.
+       Declining falls through to the general poly dispatch, which reads the
+       member -- and still serves a genuine String receiver in the same
+       program. */
+    int str_conv_owned = user_defines_or_reads(c, name);
+    if (!str_conv_owned) {
     if ((sp_streq(name, "succ") || sp_streq(name, "next")) && argc == 0) {
       buf_puts(b, "sp_poly_case_conv("); emit_expr(c, recv, b); buf_puts(b, ", sp_str_succ)"); return 1;
     }
@@ -9141,7 +9152,8 @@ int emit_poly_call(Compiler *c, int id, Buf *b) {
     if (sp_streq(name, "reverse"))    { buf_puts(b, "sp_poly_reverse("); emit_expr(c, recv, b); buf_puts(b, ")"); return 1; }
     if (sp_streq(name, "chomp"))      { buf_puts(b, "sp_box_str(sp_str_chomp(sp_poly_to_s("); emit_expr(c, recv, b); buf_puts(b, ")))"); return 1; }
     if (sp_streq(name, "chop"))       { buf_puts(b, "sp_box_str(sp_str_chop(sp_poly_to_s("); emit_expr(c, recv, b); buf_puts(b, ")))"); return 1; }
-    if (sp_streq(name, "chr")) {
+    }
+    if (sp_streq(name, "chr") && !str_conv_owned) {
       /* dispatch on the runtime tag: (48 + n).chr through a widened int
          must be Integer#chr -- stringifying first turned 61.chr into
          "61".chr == "6", corrupting percent-encoding digits (#3328) */
