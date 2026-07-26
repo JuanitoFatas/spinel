@@ -552,6 +552,39 @@ sp_File *sp_sock_accept_nb(sp_File *f, mrb_bool exc) {
 /* read_nonblock / recv_nonblock -> the bytes read, or nil when it would block
    and the caller asked for no exception. EOF is nil in CRuby only for
    `exception: false`; otherwise it is EOFError. */
+/* IO#readpartial / #sysread: at most n bytes, returning as soon as ANY are
+   available. It used to be one fread of the full n, which is a different
+   operation: fread keeps calling read(2) until it has n bytes or hits EOF. On
+   a socket that blocks until the peer sends n or closes, so the read-then-write
+   shape every HTTP server has -- read the request, write the response --
+   deadlocks, both ends waiting for the other (#3379). Where libc returns a
+   short fread instead of blocking, the same call left the stream in a state
+   the following write did not survive.
+
+   Buffer first, exactly as sp_sock_read_nb does: whatever stdio already holds
+   is data the peer has sent, and a raw read(2) would step over it, so a #gets
+   before a #readpartial would lose bytes. Then a single BLOCKING read -- that
+   is the only difference from the nonblocking sibling below. */
+const char *sp_File_readpartial(sp_File *f, mrb_int n) {
+  if (!f || !f->fp || n < 0) sp_raise_cls("EOFError", "end of file reached");
+  if (n == 0) return sp_str_from_bytes("", 0);
+  char *r = sp_str_alloc((size_t)n);
+  ssize_t got;
+  long pend = sp_io_buffered(f);
+  if (pend > 0) {
+    size_t want = (size_t)n < (size_t)pend ? (size_t)n : (size_t)pend;
+    got = (ssize_t)fread(r, 1, want, f->fp);
+  }
+  else {
+    do { got = read(fileno(f->fp), r, (size_t)n); } while (got < 0 && errno == EINTR);
+    if (got < 0) sp_file_raise_errno("read", "");
+  }
+  if (got == 0) sp_raise_cls("EOFError", "end of file reached");
+  r[got] = 0;
+  sp_str_set_len(r, (size_t)got);
+  return r;
+}
+
 const char *sp_sock_read_nb(sp_File *f, mrb_int len, mrb_bool exc, mrb_bool is_recv) {
   if (is_recv) sp_sock_nb_prepare(f, "recv_nonblock");
   else if (!f || !f->fp) sp_raise_cls("IOError", "closed stream");

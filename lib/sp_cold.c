@@ -1334,15 +1334,6 @@ sp_RbVal sp_File_ungetc(sp_File *f, sp_RbVal v) {
   }
   return sp_box_nil();
 }
-const char *sp_File_readpartial(sp_File *f, mrb_int n) {
-  if (!f || !f->fp || n < 0) sp_raise_cls("EOFError", "end of file reached");
-  char *r = sp_str_alloc((size_t)n);
-  size_t got = fread(r, 1, (size_t)n, f->fp);
-  if (got == 0 && n > 0) sp_raise_cls("EOFError", "end of file reached");
-  r[got] = 0;
-  sp_str_set_len(r, got);
-  return r;
-}
 mrb_int sp_File_sysseek(sp_File *f, mrb_int off, mrb_int whence) {
   if (!f || !f->fp) return 0;
   fseek(f->fp, (long)off, whence == 1 ? SEEK_CUR : whence == 2 ? SEEK_END : SEEK_SET);
