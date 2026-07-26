@@ -5328,8 +5328,13 @@ static int emit_class_new_call(Compiler *c, int id, Buf *b) {
         buf_puts(b, "sp_box_obj(sp_Object_new(), SP_BUILTIN_BASIC_OBJECT)");
         return 1;
       }
-      if (cn && (sp_streq(cn, "Mutex") || sp_streq(cn, "Monitor"))) {
-        buf_puts(b, "sp_Mutex_new()"); return 1;
+      if (cn && sp_streq(cn, "Mutex")) { buf_puts(b, "sp_Mutex_new()"); return 1; }
+      /* Monitor is a Mutex with reentrancy on: `m.synchronize { m.synchronize
+         { } }` is what it is for, and a plain Mutex raises ThreadError there.
+         Gated like the docs say -- CRuby only defines Monitor after
+         `require "monitor"`. */
+      if (cn && sp_streq(cn, "Monitor") && sp_feature_enabled("monitor")) {
+        buf_puts(b, "sp_Monitor_new()"); return 1;
       }
       if (cn && sp_streq(cn, "ConditionVariable")) {
         buf_puts(b, "sp_CondVar_new()"); return 1;

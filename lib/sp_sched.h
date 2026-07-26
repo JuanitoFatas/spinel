@@ -172,9 +172,19 @@ void       sp_Queue_clear(sp_queue *q);             /* #clear */
 typedef struct sp_mutex {
   struct sp_thread *owner;     /* NULL = unlocked */
   struct sp_thread *waiters;   /* threads blocked in #lock */
+  /* Monitor is a REENTRANT mutex, and that is the whole reason it exists:
+     `m.synchronize { m.synchronize { } }` is the ordinary way to write a
+     method that is safe to call from another synchronized method of the same
+     object. A Mutex must still raise ThreadError there, so reentrancy is a
+     per-object flag rather than the lock's behaviour. `depth` counts the
+     re-acquisitions the owner holds beyond the first. */
+  int reentrant;
+  int depth;
 } sp_mutex;
 
 sp_mutex  *sp_Mutex_new(void);
+sp_mutex  *sp_Monitor_new(void);              /* a Mutex with reentrancy on */
+const char *sp_Mutex_class_name(sp_mutex *m); /* "Monitor" or "Thread::Mutex" */
 void       sp_Mutex_lock(sp_mutex *m);
 void       sp_Mutex_unlock(sp_mutex *m);
 mrb_bool   sp_Mutex_try_lock(sp_mutex *m);   /* #try_lock: true if acquired */

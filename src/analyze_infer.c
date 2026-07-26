@@ -2280,7 +2280,7 @@ else {
       /* Thread.new { block }: an eager green thread (sp_thread) on the scheduler. */
       if (cn && sp_streq(cn, "Thread") && nt_ref(nt, id, "block") >= 0) return TY_THREAD;
       if (cn && (sp_streq(cn, "Queue") || sp_streq(cn, "SizedQueue"))) return TY_QUEUE;
-      if (cn && (sp_streq(cn, "Mutex") || sp_streq(cn, "Monitor"))) return TY_MUTEX;
+      if (cn && (sp_streq(cn, "Mutex") || (sp_streq(cn, "Monitor") && sp_feature_enabled("monitor")))) return TY_MUTEX;
       if (cn && sp_streq(cn, "ConditionVariable")) return TY_CONDVAR;
       if (cn && sp_streq(cn, "Random")) return TY_RANDOM;
       if (cn && sp_streq(cn, "File")) return TY_IO;   /* File.new is File.open (#2779) */
@@ -2543,7 +2543,7 @@ else {
           nt_ref(nt, id, "block") >= 0)
         return TY_THREAD;
       if (cn2 && sp_streq(name, "new") && (sp_streq(cn2, "Queue") || sp_streq(cn2, "SizedQueue"))) return TY_QUEUE;
-      if (cn2 && sp_streq(name, "new") && (sp_streq(cn2, "Mutex") || sp_streq(cn2, "Monitor"))) return TY_MUTEX;
+      if (cn2 && sp_streq(name, "new") && (sp_streq(cn2, "Mutex") || (sp_streq(cn2, "Monitor") && sp_feature_enabled("monitor")))) return TY_MUTEX;
       if (cn2 && sp_streq(name, "new") && sp_streq(cn2, "ConditionVariable")) return TY_CONDVAR;
       if (cn2 && sp_streq(name, "new") && sp_streq(cn2, "Random")) return TY_RANDOM;
       if (cn2 && sp_streq(cn2, "Enumerator") && sp_streq(name, "product") && (argc == 2 || argc == 3))

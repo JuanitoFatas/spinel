@@ -1366,9 +1366,21 @@ sp_mutex *sp_Mutex_new(void) {
   return m;
 }
 
+sp_mutex *sp_Monitor_new(void) {
+  sp_mutex *m = sp_Mutex_new();
+  if (m) m->reentrant = 1;
+  return m;
+}
+
+const char *sp_Mutex_class_name(sp_mutex *m) {
+  return (m && m->reentrant) ? "Monitor" : "Thread::Mutex";
+}
+
 void sp_Mutex_lock(sp_mutex *m) {
   SCHED_LOCK();
   sp_thread *self = g_current;
+  /* the owner re-entering its own Monitor just goes deeper */
+  if (m->owner == self && m->reentrant) { m->depth++; SCHED_UNLOCK(); return; }
   if (m->owner == self) { SCHED_UNLOCK(); sp_raise_cls("ThreadError", "deadlock; recursive locking"); }
   if (m->owner == NULL) { m->owner = self; SCHED_UNLOCK(); return; }
   /* unlock hands ownership to us (sets m->owner) before waking us. */
@@ -1378,6 +1390,7 @@ void sp_Mutex_lock(sp_mutex *m) {
 
 void sp_Mutex_unlock(sp_mutex *m) {
   SCHED_LOCK();
+  if (m->depth > 0 && m->owner == g_current) { m->depth--; SCHED_UNLOCK(); return; }
   if (m->owner != g_current) {
     SCHED_UNLOCK();
     sp_raise_cls("ThreadError", "Attempt to unlock a mutex which is not locked");
@@ -1389,7 +1402,8 @@ void sp_Mutex_unlock(sp_mutex *m) {
 mrb_bool sp_Mutex_try_lock(sp_mutex *m) {
   SCHED_LOCK();
   mrb_bool r;
-  if (m->owner != NULL) r = 0;
+  if (m->owner == g_current && m->reentrant) { m->depth++; r = 1; }
+  else if (m->owner != NULL) r = 0;
   else { m->owner = g_current; r = 1; }
   SCHED_UNLOCK();
   return r;
