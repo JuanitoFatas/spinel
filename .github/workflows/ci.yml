@@ -28,7 +28,7 @@ jobs:
       # up by the sccache-action step below). The test/bench rules
       # use separate compile and link steps so the compile step is
       # in sccache's cacheable pattern; the test compile also loads
-      # a precompiled sp_runtime.h (see PCH_ROOT in the Makefile),
+      # a precompiled spinel_rt.h (see PCH_ROOT in the Makefile),
       # which cuts the compile even when sccache misses. sccache
       # hashes the preprocessed source, so the gcc-implicit .gch
       # never leaks into the cache key; for clang's -include-pch
@@ -67,7 +67,7 @@ jobs:
 
       - name: Run tests
         # Opt level is compiler-specific -- they behave oppositely on the
-        # sp_runtime.h-heavy per-test TUs (800+ static fns):
+        # spinel_rt.h-heavy per-test TUs (800+ static fns):
         #   gcc:   -O1 prunes unreferenced statics + DCEs before the costly
         #          codegen, so -O1 compiles ~9x FASTER than -O0 (2.7 vs 25ms).
         #   clang: -O1 still runs the full optimizer over every emitted inline
