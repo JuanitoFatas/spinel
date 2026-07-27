@@ -9111,6 +9111,17 @@ int emit_array_mutate_stmt(Compiler *c, int id, Buf *b, int indent) {
       else if (vt == TY_POLY && et == TY_STRING) { buf_puts(b, "sp_poly_to_s("); emit_expr(c, argv[a], b); buf_puts(b, ")"); }
       else if (vt == TY_POLY && et == TY_INT) { buf_puts(b, "sp_poly_to_i("); emit_expr(c, argv[a], b); buf_puts(b, ")"); }
       else if (vt == TY_POLY && et == TY_FLOAT) { buf_puts(b, "sp_poly_to_f("); emit_expr(c, argv[a], b); buf_puts(b, ")"); }
+      /* A shared-mutable string (#3227) reads as its sp_String* handle. A
+         typed array's element slot is a plain const char*, so the handle has
+         to be spent here -- pushed raw it went in as a struct pointer that the
+         C compiler only warned about, and the element read back as garbage
+         (#3400). The copy is the same one every other plain-String slot takes:
+         only a str_shared slot aliases. */
+      else if (vt == TY_STRBUF && et == TY_STRING) {
+        buf_puts(b, "sp_str_concat(sp_String_cstr(");
+        emit_expr(c, argv[a], b);
+        buf_puts(b, "), (&(\"\\xff\")[1]))");
+      }
       else emit_expr(c, argv[a], b);
       buf_puts(b, ");\n");
     }
