@@ -700,7 +700,7 @@ static inline mrb_int sp_int_clamp_range_ck(mrb_int v, sp_Range r) {
 }
 /* `:name`, or `:"name"` when the name needs quoting -- shares the
    name-string predicates in lib/sp_str.c with the hash-key short form. */
-static const char *sp_sym_inspect(sp_sym id) { if (id == (sp_sym)-1) return "nil"; /* nilable-symbol sentinel */ return sp_sym_inspect_name(sp_sym_to_s(id)); }
+static const char *sp_sym_inspect(sp_sym id) { if (id == (sp_sym)-1) return SPL("nil"); /* nilable-symbol sentinel */ return sp_sym_inspect_name(sp_sym_to_s(id)); }
 static const char*sp_gets(void){char buf[4096];if(!fgets(buf,sizeof(buf),stdin))return NULL;size_t l=strlen(buf);char*r=sp_str_alloc_raw(l+1);memcpy(r,buf,l+1);return r;}
 static sp_StrArray*sp_readlines(void){sp_StrArray*a=sp_StrArray_new();SP_GC_ROOT(a);char buf[4096];while(fgets(buf,sizeof(buf),stdin)){size_t l=strlen(buf);char*r=sp_str_alloc_raw(l+1);memcpy(r,buf,l+1);sp_StrArray_push(a,r);}return a;}
 const char*sp_sprintf(const char*fmt,...){char _sp_tmp[4096];va_list ap;va_start(ap,fmt);int _sp_n=vsnprintf(_sp_tmp,sizeof(_sp_tmp),fmt,ap);va_end(ap);if(_sp_n<0)_sp_n=0;char*b=sp_str_alloc((size_t)_sp_n);if(_sp_n<(int)sizeof(_sp_tmp)){memcpy(b,_sp_tmp,(size_t)_sp_n);}else{/* result didn't fit the stack temp; re-render at full width (sp_str_alloc gives _sp_n bytes + NUL) so long string interpolations aren't truncated. re-arm the va_list rather than va_copy so the common fast path pays nothing */va_start(ap,fmt);vsnprintf(b,(size_t)_sp_n+1,fmt,ap);va_end(ap);}return b;}
@@ -1635,7 +1635,7 @@ static const char *sp_poly_class_name(sp_RbVal v) {
         case SP_BUILTIN_RANGE: return SPL("Range");
         case SP_BUILTIN_FLOAT_RANGE: return SPL("Range");
         case SP_BUILTIN_TIME: return SPL("Time");
-    case SP_BUILTIN_STRBUF: return "String";   /* (#3227) */
+    case SP_BUILTIN_STRBUF: return SPL("String");   /* (#3227) */
         case SP_BUILTIN_COMPLEX: return SPL("Complex");
         case SP_BUILTIN_RATIONAL: return SPL("Rational");
         case SP_BUILTIN_BIG_RATIONAL: return SPL("Rational");
@@ -1878,7 +1878,7 @@ static mrb_bool sp_poly_has_binop(sp_RbVal recv, const char *op) {
 /* Method/UnboundMethod #inspect/#to_s: the compile-time rendering stamped on
    the object at construction; a target-unknown Method falls back to the name. */
 static const char *sp_method_desc_cstr(sp_BoundMethod *m) {
-  if (!m) return "#<Method>";
+  if (!m) return SPL("#<Method>");
   if (m->desc) return m->desc;
   return sp_sprintf("#<Method: %s>", m->name ? m->name : "?");
 }
@@ -1967,8 +1967,8 @@ static mrb_bool sp_poly_numeric_p(sp_RbVal v) { return v.tag == SP_TAG_INT || v.
 /* Display form of a value in a `can't convert %s into ...` TypeError:
    nil/true/false render lowercase, everything else by class name (CRuby). */
 static const char *sp_convert_src_name(sp_RbVal v) {
-  if (v.tag == SP_TAG_NIL) return "nil";
-  if (v.tag == SP_TAG_BOOL) return v.v.b ? "true" : "false";
+  if (v.tag == SP_TAG_NIL) return SPL("nil");
+  if (v.tag == SP_TAG_BOOL) return v.v.b ? SPL("true") : SPL("false");
   return sp_poly_class_name(v);
 }
 /* Kernel#Integer / Kernel#Float: STRICT coercion. Unlike the lenient
@@ -6970,7 +6970,7 @@ sp_Enumerator *sp_Enumerator_new_gen(void (*gen)(sp_Fiber *), void *cap, sp_RbVa
    materialized enumerator with a known source; a generator has no printable
    receiver and renders a Generator placeholder (CRuby shows its address). */
 static const char *sp_enum_inspect(sp_Enumerator *e) {
-  if (!e) return "nil";
+  if (!e) return SPL("nil");
   if (e->gen || e->gen_label)
     return sp_sprintf("#<Enumerator: #<Enumerator::Generator:0x%016llx>:each>",
                       (unsigned long long)(uintptr_t)e);
@@ -7409,7 +7409,7 @@ static inline const char *sp_poly_pack(sp_RbVal recv, const char *fmt) {
    so supply inert fallbacks that the optimizer prunes with everything else. */
 #ifdef SP_TU_NO_POLY_RENDER
 static const char *sp_sym_to_s(sp_sym id) { (void)id; return sp_str_empty; }
-static const char *sp_class_to_s(sp_Class c) { return c.name ? c.name : ""; }
+static const char *sp_class_to_s(sp_Class c) { return c.name ? c.name : sp_str_empty; }
 static sp_sym sp_sym_intern(const char *s) { (void)s; return (sp_sym)0; }
 #endif
 

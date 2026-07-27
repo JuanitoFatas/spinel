@@ -1578,7 +1578,7 @@ void emit_expr(Compiler *c, int id, Buf *b) {
     /* `OpenStruct` as a class value, matching what an OpenStruct's #class
        returns (name-keyed, cls_id -1); require "ostruct" gated (#3155). */
     if (nm && sp_streq(nm, "OpenStruct") && sp_feature_required("ostruct")) {
-      buf_puts(b, "((sp_Class){(mrb_int)-1, \"OpenStruct\"})");
+      buf_puts(b, "((sp_Class){(mrb_int)-1, SPL(\"OpenStruct\")})");
       return;
     }
     if (nm) {
@@ -1626,7 +1626,7 @@ void emit_expr(Compiler *c, int id, Buf *b) {
       snprintf(qbuf, sizeof qbuf, "%s::%s", par_nmc, nm);
       int qid = builtin_class_id(qbuf);
       if (qid != 0) {
-        buf_printf(b, "((sp_Class){(mrb_int)%d, \"%s\"})", qid, qbuf);
+        buf_printf(b, "((sp_Class){(mrb_int)%d, SPL(\"%s\")})", qid, qbuf);
         return;
       }
     }

@@ -5231,7 +5231,7 @@ int emit_grep_pred(Compiler *c, int pat, const char *ev, TyKind et, Buf *b) {
       int gcid = comp_class_index(c, cn);
       int gbid = builtin_class_id(cn);
       if (gcid >= 0) buf_printf(b, "sp_poly_is_a(%s, ((sp_Class){%d}))", ev, gcid);
-      else if (gbid != 0) buf_printf(b, "sp_poly_is_a(%s, ((sp_Class){%d, \"%s\"}))", ev, gbid, cn);
+      else if (gbid != 0) buf_printf(b, "sp_poly_is_a(%s, ((sp_Class){%d, SPL(\"%s\")}))", ev, gbid, cn);
       else return 0;
     }
     return 1;

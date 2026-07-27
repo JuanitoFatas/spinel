@@ -220,7 +220,7 @@ sp_Exception *sp_exc_exception(sp_Exception *e, const char *msg) {
    strip volatile internally for one access. */
 const char *sp_exc_class_name(volatile sp_Exception *ve) {
   sp_Exception *e = (sp_Exception *)ve;
-  return e ? e->cls_name : "RuntimeError";
+  return e ? e->cls_name : SPL("RuntimeError");
 }
 const char *sp_exc_message(volatile sp_Exception *ve) {
   sp_Exception *e = (sp_Exception *)ve;

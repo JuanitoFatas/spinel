@@ -7793,7 +7793,7 @@ int emit_value_recv_call(Compiler *c, int id, Buf *b) {
       else buf_printf(b, "sp_time_iso8601(%s)", r);
     }
     else if (sp_streq(name, "zone")) buf_printf(b, "sp_time_zone(%s)", r);
-    else if (sp_streq(name, "class")) buf_puts(b, "((sp_Class){(mrb_int)-1, \"Time\"})");
+    else if (sp_streq(name, "class")) buf_puts(b, "((sp_Class){(mrb_int)-1, SPL(\"Time\")})");
     else if (sp_streq(name, "getgm")) buf_printf(b, "sp_time_utc(%s)", r);  /* alias for getutc */
     else if (sp_streq(name, "xmlschema")) {
       if (argc == 1) { buf_printf(b, "sp_time_iso8601_frac(%s, ", r); emit_int_expr(c, argv[0], b); buf_puts(b, ")"); }

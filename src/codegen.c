@@ -5501,7 +5501,7 @@ char *codegen_program(const NodeTable *nt) {
     buf_puts(&b, "case -168:return SPL(\"TCPSocket\");case -169:return SPL(\"TCPServer\");");
     buf_puts(&b, "case -170:return SPL(\"UDPSocket\");case -171:return SPL(\"UNIXSocket\");");
     buf_puts(&b, "case -172:return SPL(\"UNIXServer\");case -173:return SPL(\"Socket\");");
-    buf_puts(&b, "default:return \"\";} }\n\n");
+    buf_puts(&b, "default:return sp_str_empty;} }\n\n");
     /* Inverse of the table above, for resolving a class carried by NAME back to
        its builtin id so the id-keyed hierarchy walks work on it (#3022). Cold
        path only (superclass/ancestors), so a linear scan is fine. */

@@ -1385,7 +1385,7 @@ int emit_lazy_class_expr(Compiler *c, int id, Buf *b) {
     if (ac != 0) return 0; }
   int recv = nt_ref(nt, id, "receiver");
   if (recv < 0 || !chain_is_lazy_valued(c, recv)) return 0;
-  buf_puts(b, "((sp_Class){(mrb_int)-1, \"Enumerator::Lazy\"})");
+  buf_puts(b, "((sp_Class){(mrb_int)-1, SPL(\"Enumerator::Lazy\")})");
   return 1;
 }
 
@@ -8261,7 +8261,7 @@ void emit_call(Compiler *c, int id, Buf *b) {
       }
       /* the remaining query/mutation surface (#2832) */
       if (enm && sp_streq(enm, "class") && eac == 0) {
-        buf_puts(b, "((sp_Class){(mrb_int)-116, \"Object\"})");   /* ENV is an Object singleton */
+        buf_puts(b, "((sp_Class){(mrb_int)-116, SPL(\"Object\")})");   /* ENV is an Object singleton */
         return;
       }
       if (enm && sp_streq(enm, "frozen?") && eac == 0) {
@@ -9445,7 +9445,7 @@ void emit_call(Compiler *c, int id, Buf *b) {
         const char *ocn = ocid >= 0 ? (class_ruby_name(c, ocid) ? class_ruby_name(c, ocid)
                                                                 : c->classes[ocid].name) : "Object";
         buf_printf(b, "((void)("); emit_expr(c, recv, b);
-        buf_printf(b, "), ((sp_Class){(mrb_int)-1, \"%s\"}))", ocn);
+        buf_printf(b, "), ((sp_Class){(mrb_int)-1, SPL(\"%s\")}))", ocn);
         return;
       }
       if (mrecv >= 0) {
@@ -9456,7 +9456,7 @@ void emit_call(Compiler *c, int id, Buf *b) {
                          : mrt == TY_RANGE ? "Range" : mrt == TY_TIME ? "Time" : NULL;
         if (mcls) {
           buf_printf(b, "((void)("); emit_expr(c, recv, b);
-          buf_printf(b, "), ((sp_Class){(mrb_int)-1, \"%s\"}))", mcls);
+          buf_printf(b, "), ((sp_Class){(mrb_int)-1, SPL(\"%s\")}))", mcls);
           return;
         }
       }
@@ -12218,7 +12218,7 @@ else { memcpy(dir, sf, n); dir[n] = 0; } }
       emit_indent(g_pre, g_indent);
       buf_printf(g_pre, "sp_Exception *_t%d = ", t);
       buf_puts(g_pre, rb.p ? rb.p : ""); buf_puts(g_pre, ";\n"); free(rb.p);
-      buf_printf(b, "((sp_Class){0, _t%d ? sp_exc_class_name(_t%d) : \"NilClass\"})", t, t);
+      buf_printf(b, "((sp_Class){0, _t%d ? sp_exc_class_name(_t%d) : SPL(\"NilClass\")})", t, t);
       return;
     }
     /* object identity: the same raised object compares equal to $! / a `=> e`
@@ -12717,7 +12717,7 @@ else { memcpy(dir, sf, n); dir[n] = 0; } }
   if (recv >= 0 && sp_streq(name, "class") && argc == 0 &&
       nt_type(nt, recv) && sp_streq(nt_type(nt, recv), "SelfNode") &&
       ({ Scope *_ss = comp_scope_of(c, id); !_ss || _ss->class_id < 0; })) {
-    buf_puts(b, "((sp_Class){(mrb_int)-116, \"Object\"})");
+    buf_puts(b, "((sp_Class){(mrb_int)-116, SPL(\"Object\")})");
     return;
   }
   if (recv >= 0 && sp_streq(name, "class") && argc == 0 &&
@@ -12739,8 +12739,8 @@ else { memcpy(dir, sf, n); dir[n] = 0; } }
     if (rt == TY_MATCHDATA) {
       int tm = ++g_tmp;
       buf_printf(b, "({ sp_MatchData *_t%d = ", tm); emit_expr(c, recv, b);
-      buf_printf(b, "; _t%d ? ((sp_Class){(mrb_int)-1, \"MatchData\"})"
-                    " : ((sp_Class){(mrb_int)-1, \"NilClass\"}); })", tm);
+      buf_printf(b, "; _t%d ? ((sp_Class){(mrb_int)-1, SPL(\"MatchData\")})"
+                    " : ((sp_Class){(mrb_int)-1, SPL(\"NilClass\")}); })", tm);
       return;
     }
     const char *cn = NULL;
@@ -12756,8 +12756,8 @@ else { memcpy(dir, sf, n); dir[n] = 0; } }
          Enumerator::Chain; every other enumerator is an Enumerator (#2545) */
       int te = ++g_tmp;
       buf_printf(b, "({ sp_Enumerator *_t%d = ", te); emit_expr(c, recv, b);
-      buf_printf(b, "; (_t%d && _t%d->is_chain) ? ((sp_Class){(mrb_int)-1, \"Enumerator::Chain\"})"
-                    " : ((sp_Class){(mrb_int)-1, \"Enumerator\"}); })", te, te);
+      buf_printf(b, "; (_t%d && _t%d->is_chain) ? ((sp_Class){(mrb_int)-1, SPL(\"Enumerator::Chain\")})"
+                    " : ((sp_Class){(mrb_int)-1, SPL(\"Enumerator\")}); })", te, te);
       return;
     }
     else if (rt == TY_DIR) cn = "Dir";
@@ -12780,7 +12780,7 @@ else { memcpy(dir, sf, n); dir[n] = 0; } }
       buf_printf(b, "({ sp_File *_t%d = ", tio); emit_expr(c, recv, b);
       buf_printf(b, "; const char *_k%d = (_t%d && _t%d->mode &&"
                     " (strcmp(_t%d->mode, \"stat\") == 0 || strcmp(_t%d->mode, \"lstat\") == 0))"
-                    " ? \"File::Stat\" : sp_io_kind_name(_t%d); ",
+                    " ? SPL(\"File::Stat\") : sp_io_kind_name(_t%d); ",
                  tio, tio, tio, tio, tio, tio);
       static const struct { const char *k; int id; } IO_KIND_CLS[] = {
         { "TCPSocket", -168 }, { "TCPServer", -169 }, { "UDPSocket", -170 },
@@ -12816,14 +12816,14 @@ else { memcpy(dir, sf, n); dir[n] = 0; } }
       const char *_ocn = _cidx >= 0 && _cidx < c->nclasses ? c->classes[_cidx].name : NULL;
       if (_ocn && (sp_streq(_ocn, "Object") || sp_streq(_ocn, "BasicObject"))) {
         buf_puts(b, "((void)("); emit_expr(c, recv, b);
-        buf_printf(b, "), ((sp_Class){(mrb_int)-1, \"%s\"}))", _ocn);
+        buf_printf(b, "), ((sp_Class){(mrb_int)-1, SPL(\"%s\")}))", _ocn);
         return;
       }
       /* a native-bound class's struct is opaque in the generated TU (no
          cls_id deref possible); its class is statically known */
       if (_cidx >= 0 && c->classes[_cidx].is_native_class) {
         buf_puts(b, "((void)("); emit_expr(c, recv, b);
-        buf_printf(b, "), ((sp_Class){(mrb_int)%d, \"%s\"}))", _cidx, c->classes[_cidx].name);
+        buf_printf(b, "), ((sp_Class){(mrb_int)%d, SPL(\"%s\")}))", _cidx, c->classes[_cidx].name);
         return;
       }
       /* an exception subclass shares sp_Exception's layout (no cls_id
@@ -12835,7 +12835,7 @@ else { memcpy(dir, sf, n); dir[n] = 0; } }
         Buf _eb = expr_buf(c, recv);
         emit_ctype(c, rt, g_pre); buf_printf(g_pre, " _t%d = ", _texc);
         buf_puts(g_pre, _eb.p ? _eb.p : ""); buf_puts(g_pre, ";\n"); free(_eb.p);
-        buf_printf(b, "((sp_Class){(mrb_int)-1, _t%d ? ((sp_Exception *)_t%d)->cls_name : \"NilClass\"})", _texc, _texc);
+        buf_printf(b, "((sp_Class){(mrb_int)-1, _t%d ? ((sp_Exception *)_t%d)->cls_name : SPL(\"NilClass\")})", _texc, _texc);
         return;
       }
       int _tobj = ++g_tmp;
@@ -12850,26 +12850,26 @@ else { memcpy(dir, sf, n); dir[n] = 0; } }
          missing key): report NilClass then, matching how p prints it */
       int tcv = ++g_tmp;
       buf_printf(b, "({ mrb_int _t%d = ", tcv); emit_expr(c, recv, b);
-      buf_printf(b, "; ((sp_Class){(mrb_int)-1, _t%d == SP_INT_NIL ? \"NilClass\" : \"Integer\"}); })", tcv);
+      buf_printf(b, "; ((sp_Class){(mrb_int)-1, _t%d == SP_INT_NIL ? SPL(\"NilClass\") : SPL(\"Integer\")}); })", tcv);
       return;
     }
     if (cn && rt == TY_FLOAT) {
       /* same for the float nil sentinel (NaN-boxed nil) */
       int tcv = ++g_tmp;
       buf_printf(b, "({ mrb_float _t%d = ", tcv); emit_expr(c, recv, b);
-      buf_printf(b, "; ((sp_Class){(mrb_int)-1, sp_float_is_nil(_t%d) ? \"NilClass\" : \"Float\"}); })", tcv);
+      buf_printf(b, "; ((sp_Class){(mrb_int)-1, sp_float_is_nil(_t%d) ? SPL(\"NilClass\") : SPL(\"Float\")}); })", tcv);
       return;
     }
     if (cn) {
       /* a first-class name-backed Class value; the receiver is side-effect-
          evaluated when it is not a plain read */
       buf_puts(b, "((void)("); emit_expr(c, recv, b);
-      buf_printf(b, "), ((sp_Class){(mrb_int)-1, \"%s\"}))", cn);
+      buf_printf(b, "), ((sp_Class){(mrb_int)-1, SPL(\"%s\")}))", cn);
       return;
     }
     if (rt == TY_BOOL) {
       buf_puts(b, "(("); emit_expr(c, recv, b);
-      buf_puts(b, ") ? ((sp_Class){(mrb_int)-1, \"TrueClass\"}) : ((sp_Class){(mrb_int)-1, \"FalseClass\"}))");
+      buf_puts(b, ") ? ((sp_Class){(mrb_int)-1, SPL(\"TrueClass\")}) : ((sp_Class){(mrb_int)-1, SPL(\"FalseClass\")}))");
       return;
     }
     if (rt == TY_POLY) {
@@ -12943,8 +12943,8 @@ else { memcpy(dir, sf, n); dir[n] = 0; } }
     if (sp_streq(name, "class")) {
       buf_printf(b, "({ sp_Class _cl%da = ", _clt); emit_expr(c, recv, b);
       buf_printf(b, "; sp_class_is_module_val(_cl%da)"
-                    "?((sp_Class){(mrb_int)-1, \"Module\"})"
-                    ":((sp_Class){(mrb_int)-1, \"Class\"}); })", _clt);
+                    "?((sp_Class){(mrb_int)-1, SPL(\"Module\")})"
+                    ":((sp_Class){(mrb_int)-1, SPL(\"Class\")}); })", _clt);
       return;
     }
     if (sp_streq(name, "superclass") && argc == 0) {
@@ -13112,7 +13112,7 @@ else { memcpy(dir, sf, n); dir[n] = 0; } }
           if (c->classes[k].parent != scid) continue;   /* defined subclasses, even if never .new'd */
           if (is_builtin_reopen(c->classes[k].name)) continue;
           const char *kn = class_ruby_name(c, k); if (!kn) kn = c->classes[k].name;
-          buf_printf(b, " sp_PolyArray_push(_t%d, sp_box_class(((sp_Class){%d, \"%s\"})));", ta, k, kn);
+          buf_printf(b, " sp_PolyArray_push(_t%d, sp_box_class(((sp_Class){%d, SPL(\"%s\")})));", ta, k, kn);
         }
         buf_printf(b, " _t%d; })", ta);
         return;

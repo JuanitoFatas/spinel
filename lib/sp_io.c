@@ -223,17 +223,17 @@ mrb_bool sp_File_closed_p(sp_File *f) {
 const char *sp_io_kind_name(sp_File *f) {
   /* a NULL handle IS nil (the readiness family answers nil on timeout), so it
      names NilClass -- both for #class and for the NoMethodError texts */
-  if (!f) return "NilClass";
+  if (!f) return SPL("NilClass");
   if (f->is_sock && f->mode) {
-    if (strcmp(f->mode, "tcpserver") == 0) return "TCPServer";
-    if (strcmp(f->mode, "tcp") == 0) return "TCPSocket";
-    if (strcmp(f->mode, "udp") == 0) return "UDPSocket";
-    if (strcmp(f->mode, "unix") == 0) return "UNIXSocket";
-    if (strcmp(f->mode, "unixserver") == 0) return "UNIXServer";
-    if (strcmp(f->mode, "socket") == 0) return "Socket";
+    if (strcmp(f->mode, "tcpserver") == 0) return SPL("TCPServer");
+    if (strcmp(f->mode, "tcp") == 0) return SPL("TCPSocket");
+    if (strcmp(f->mode, "udp") == 0) return SPL("UDPSocket");
+    if (strcmp(f->mode, "unix") == 0) return SPL("UNIXSocket");
+    if (strcmp(f->mode, "unixserver") == 0) return SPL("UNIXServer");
+    if (strcmp(f->mode, "socket") == 0) return SPL("Socket");
   }
-  if (f->path && f->path[0] && f->path[0] != '<') return "File";
-  return "IO";
+  if (f->path && f->path[0] && f->path[0] != '<') return SPL("File");
+  return SPL("IO");
 }
 
 /* The builtin superclass chain for a handle's class, mirroring the one the
