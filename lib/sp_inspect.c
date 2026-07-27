@@ -25,7 +25,7 @@ const char *sp_inspect_container(sp_RbVal v) {
       sp_String_append(s, sp_poly_inspect_fn(sp_json_aref_fn(v, i)));
     }
     sp_String_append(s, "]");
-    return s->data;
+    return sp_str_dup(s->data);
   }
   /* hash: {k => v, ...}, with the `sym: v` shorthand for a Symbol key. */
   sp_String *s = sp_String_new("{");
@@ -45,5 +45,5 @@ const char *sp_inspect_container(sp_RbVal v) {
     sp_String_append(s, sp_poly_inspect_fn(val));
   }
   sp_String_append(s, "}");
-  return s->data;
+  return sp_str_dup(s->data);
 }

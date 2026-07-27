@@ -2328,7 +2328,7 @@ const char *sp_argf_read(void) {
   sp_String *s = sp_String_new(""); SP_GC_ROOT(s);
   const char *line;
   while ((line = sp_argf_gets())) sp_String_append(s, line);
-  return s->data;
+  return sp_str_dup(s->data);
 }
 sp_StrArray *sp_argf_readlines(void) {
   sp_StrArray *a = sp_StrArray_new(); SP_GC_ROOT(a);

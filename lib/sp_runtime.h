@@ -1085,7 +1085,7 @@ static inline const char*sp_SymArray_inspect(sp_IntArray*a){return a?sp_inspect_
 /* Nested-array inspect: when codegen knows the ptr_array's element
    type is one of the four built-in T_array shapes, recurse into the
    matching primitive inspect . */
-static const char*sp_IntArrayPtrArray_inspect(sp_PtrArray*a){SP_GC_ROOT(a);sp_String*s=sp_String_new("[");SP_GC_ROOT(s);for(mrb_int i=0;i<a->len;i++){if(i>0)sp_String_append(s,", ");sp_String_append(s,sp_IntArray_inspect((sp_IntArray*)a->data[i]));}sp_String_append(s,"]");return s->data;}
+static const char*sp_IntArrayPtrArray_inspect(sp_PtrArray*a){SP_GC_ROOT(a);sp_String*s=sp_String_new("[");SP_GC_ROOT(s);for(mrb_int i=0;i<a->len;i++){if(i>0)sp_String_append(s,", ");sp_String_append(s,sp_IntArray_inspect((sp_IntArray*)a->data[i]));}sp_String_append(s,"]");return sp_str_dup(s->data);}
 /* Issue #742: Array#combination(k) on int_array -- emit all
    k-element ordered combinations as a PtrArray of IntArrays. */
 /* Array#combination / repeated_combination / permutation / repeated_permutation
@@ -1094,11 +1094,11 @@ sp_PtrArray *sp_IntArray_combination(sp_IntArray *a, mrb_int k);
 sp_PtrArray *sp_IntArray_repeated_combination(sp_IntArray *a, mrb_int k);
 sp_PtrArray *sp_IntArray_permutation(sp_IntArray *a, mrb_int k);
 sp_PtrArray *sp_IntArray_repeated_permutation(sp_IntArray *a, mrb_int k);
-static const char*sp_FloatArrayPtrArray_inspect(sp_PtrArray*a){SP_GC_ROOT(a);sp_String*s=sp_String_new("[");SP_GC_ROOT(s);for(mrb_int i=0;i<a->len;i++){if(i>0)sp_String_append(s,", ");sp_String_append(s,sp_FloatArray_inspect((sp_FloatArray*)a->data[i]));}sp_String_append(s,"]");return s->data;}
-static const char*sp_StrArrayPtrArray_inspect(sp_PtrArray*a){SP_GC_ROOT(a);sp_String*s=sp_String_new("[");SP_GC_ROOT(s);for(mrb_int i=0;i<a->len;i++){if(i>0)sp_String_append(s,", ");sp_String_append(s,sp_StrArray_inspect((sp_StrArray*)a->data[i]));}sp_String_append(s,"]");return s->data;}
+static const char*sp_FloatArrayPtrArray_inspect(sp_PtrArray*a){SP_GC_ROOT(a);sp_String*s=sp_String_new("[");SP_GC_ROOT(s);for(mrb_int i=0;i<a->len;i++){if(i>0)sp_String_append(s,", ");sp_String_append(s,sp_FloatArray_inspect((sp_FloatArray*)a->data[i]));}sp_String_append(s,"]");return sp_str_dup(s->data);}
+static const char*sp_StrArrayPtrArray_inspect(sp_PtrArray*a){SP_GC_ROOT(a);sp_String*s=sp_String_new("[");SP_GC_ROOT(s);for(mrb_int i=0;i<a->len;i++){if(i>0)sp_String_append(s,", ");sp_String_append(s,sp_StrArray_inspect((sp_StrArray*)a->data[i]));}sp_String_append(s,"]");return sp_str_dup(s->data);}
 /* sp_PolyArrayPtrArray_inspect lives below sp_PolyArray_inspect's
    forward declaration (sp_PolyArray isn't defined until ~2542). */
-static const char*sp_SymArrayPtrArray_inspect(sp_PtrArray*a){SP_GC_ROOT(a);sp_String*s=sp_String_new("[");SP_GC_ROOT(s);for(mrb_int i=0;i<a->len;i++){if(i>0)sp_String_append(s,", ");sp_String_append(s,sp_SymArray_inspect((sp_IntArray*)a->data[i]));}sp_String_append(s,"]");return s->data;}
+static const char*sp_SymArrayPtrArray_inspect(sp_PtrArray*a){SP_GC_ROOT(a);sp_String*s=sp_String_new("[");SP_GC_ROOT(s);for(mrb_int i=0;i<a->len;i++){if(i>0)sp_String_append(s,", ");sp_String_append(s,sp_SymArray_inspect((sp_IntArray*)a->data[i]));}sp_String_append(s,"]");return sp_str_dup(s->data);}
 /* issue #526: join for a sp_PtrArray of sp_String* (mutable_str_ptr_array).
    Sibling to sp_StrArray_join, but takes advantage of sp_String's known
    length: two-pass — sum the exact total, sp_str_alloc once, then memcpy
@@ -3782,7 +3782,7 @@ static sp_RbVal sp_PolyArray_sample(sp_PolyArray *a) { if (a->len <= 0) return s
    accumulator boxes each inner poly_array element), but the
    sp_PolyArray_inspect body lives a few lines below. */
 static const char *sp_PolyArray_inspect(sp_PolyArray *a);
-static const char*sp_PolyArrayPtrArray_inspect(sp_PtrArray*a){SP_GC_ROOT(a);sp_String*s=sp_String_new("[");SP_GC_ROOT(s);for(mrb_int i=0;i<a->len;i++){if(i>0)sp_String_append(s,", ");sp_String_append(s,sp_PolyArray_inspect((sp_PolyArray*)a->data[i]));}sp_String_append(s,"]");return s->data;}
+static const char*sp_PolyArrayPtrArray_inspect(sp_PtrArray*a){SP_GC_ROOT(a);sp_String*s=sp_String_new("[");SP_GC_ROOT(s);for(mrb_int i=0;i<a->len;i++){if(i>0)sp_String_append(s,", ");sp_String_append(s,sp_PolyArray_inspect((sp_PolyArray*)a->data[i]));}sp_String_append(s,"]");return sp_str_dup(s->data);}
 
 /* Poly-key/value hash inspect helpers are defined after sp_poly_inspect
    (they call back into it for their elements), so forward-declare them

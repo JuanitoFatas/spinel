@@ -114,7 +114,7 @@ const char*sp_StrIntHash_inspect(sp_StrIntHash*h){return h?sp_inspect_container(
 mrb_int sp_StrIntHash_proc_fn(void *cap, mrb_int argc, mrb_int *args) { if (argc < 1) return 0; return sp_StrIntHash_get((sp_StrIntHash *)cap, (const char *)(uintptr_t)args[0]); }
 const char*sp_StrStrHash_inspect(sp_StrStrHash*h){return h?sp_inspect_container(sp_box_obj(h,SP_BUILTIN_STR_STR_HASH)):"{}";}
 const char*sp_IntStrHash_inspect(sp_IntStrHash*h){return h?sp_inspect_container(sp_box_obj(h,SP_BUILTIN_INT_STR_HASH)):"{}";}
-const char*sp_IntIntHash_inspect(sp_IntIntHash*h){SP_GC_ROOT(h);sp_String*s=sp_String_new("{");SP_GC_ROOT(s);if(h){for(mrb_int i=0;i<h->len;i++){if(i>0)sp_String_append(s,", ");sp_String_append(s,sp_int_to_s(h->order[i]));sp_String_append(s," => ");sp_String_append(s,sp_int_to_s(sp_IntIntHash_get(h,h->order[i])));}}sp_String_append(s,"}");return s->data;}
+const char*sp_IntIntHash_inspect(sp_IntIntHash*h){SP_GC_ROOT(h);sp_String*s=sp_String_new("{");SP_GC_ROOT(s);if(h){for(mrb_int i=0;i<h->len;i++){if(i>0)sp_String_append(s,", ");sp_String_append(s,sp_int_to_s(h->order[i]));sp_String_append(s," => ");sp_String_append(s,sp_int_to_s(sp_IntIntHash_get(h,h->order[i])));}}sp_String_append(s,"}");return sp_str_dup(s->data);}
 
 /* Issue #738: Hash#to_a as poly_array of [key, value] poly_array pairs. */
 sp_PolyArray*sp_StrIntHash_to_a(sp_StrIntHash*h){sp_PolyArray*r=sp_PolyArray_new();if(!h)return r;for(mrb_int i=0;i<h->len;i++){sp_PolyArray*p=sp_PolyArray_new();sp_PolyArray_push(p,sp_box_str(h->order[i]));sp_PolyArray_push(p,sp_box_int(sp_StrIntHash_get(h,h->order[i])));sp_PolyArray_push(r,sp_box_poly_array(p));}return r;}

@@ -150,7 +150,7 @@ const char *sp_MatchData_inspect(sp_MatchData *m) {
     else sp_String_append(b, sp_str_inspect(sp_str_substr(m->source + m->caps[g * 2], 0, m->caps[g * 2 + 1] - m->caps[g * 2])));
   }
   sp_String_append(b, ">");
-  return sp_String_cstr(b);
+  return sp_str_dup(sp_String_cstr(b));
 }
 /* s[/re/] = val: replace the first match's byte span with val (taken
    literally, no template expansion); no match raises IndexError. */
