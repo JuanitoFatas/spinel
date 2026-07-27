@@ -120,6 +120,7 @@ int is_handler_proc_block(Compiler *c, int id);
 int builtin_class_id(const char *name);
 int builtin_object_method_known(const char *m);
 int class_inherits_builtin_exception(Compiler *c, int ci);
+int an_user_defines_or_reads(Compiler *c, const char *name);
 int an_re_has_captures(const char *src);
 const char *an_regex_lit_src(Compiler *c, int nid);
 int str_in(const char *s, const char *const *set);

@@ -3965,6 +3965,14 @@ static int emit_poly_method_dispatch(Compiler *c, int id, Buf *b) {
        `data[offset, 8].delete("\x00").upcase` WAD name fields). */
     int is_strdel = sp_streq(name, "delete") && argc == 1 &&
                     infer_type(c, argv[0]) == TY_STRING;
+    /* split(sep) on a TAG_STR receiver, when a user class also owns `split`
+       (the bundled Pathname does) and the dispatch therefore lost the String
+       arm. Same hole #3394 closed for the zero-arg form (#3401). */
+    int is_strsplit = sp_streq(name, "split") && argc == 1 &&
+                      nt_ref(nt, id, "block") < 0 &&
+                      (infer_type(c, argv[0]) == TY_STRING ||
+                       infer_type(c, argv[0]) == TY_NIL ||
+                       infer_type(c, argv[0]) == TY_REGEX);
     int is_pred = nt_ref(nt, id, "block") < 0 && poly_pred_kind(name, argc);
     /* A trailing KeywordHashNode carries the call's keyword arguments: split
        it off so the user-method arms match keyword params by NAME, not by
@@ -4098,6 +4106,20 @@ static int emit_poly_method_dispatch(Compiler *c, int id, Buf *b) {
         buf_printf(b, "if (_t%d.tag == SP_TAG_STR) { _t%d = ", tv, tr);
         if (ret == TY_POLY) buf_printf(b, "sp_box_str(sp_str_delete(_t%d.v.s, _t%d))", tv, atmp[0]);
         else buf_printf(b, "sp_str_delete(_t%d.v.s, _t%d)", tv, atmp[0]);
+        buf_puts(b, "; }\nelse ");
+      }
+      /* split(sep) on a TAG_STR receiver. A nil separator splits on
+         whitespace, as CRuby's does. */
+      if (is_strsplit && (ret == TY_STR_ARRAY || ret == TY_POLY_ARRAY || ret == TY_POLY)) {
+        TyKind sat = infer_type(c, argv[0]);
+        char call[192];
+        if (sat == TY_NIL) snprintf(call, sizeof call, "sp_str_split_ws(_t%d.v.s)", tv);
+        else if (sat == TY_REGEX) snprintf(call, sizeof call, "sp_re_split(_t%d, _t%d.v.s)", atmp[0], tv);
+        else snprintf(call, sizeof call, "sp_str_split_drop_trailing(_t%d.v.s, _t%d)", tv, atmp[0]);
+        buf_printf(b, "if (_t%d.tag == SP_TAG_STR) { _t%d = ", tv, tr);
+        if (ret == TY_STR_ARRAY) buf_puts(b, call);
+        else if (ret == TY_POLY_ARRAY) buf_printf(b, "sp_StrArray_to_poly_fmt(%s)", call);
+        else buf_printf(b, "sp_box_str_array(%s)", call);
         buf_puts(b, "; }\nelse ");
       }
       /* The builtin index/bit-ref arms use the index as a raw mrb_int; unbox it
@@ -4527,7 +4549,7 @@ else {
          so those names keep their existing answer rather than gain a
          mislabelled raise (#3394). */
       if (!is_pred && !is_strftime && !is_aref && !is_fetch && !is_include &&
-          !is_push && !is_cover && !is_gcdlcm && !is_strdel)
+          !is_push && !is_cover && !is_gcdlcm && !is_strdel && !is_strsplit)
         buf_printf(b, " default: sp_raise_nomethod(sp_nomethod_msg(\"%s\", _t%d)); break;", name, tv);
       buf_printf(b, " } _t%d; })", tr);
       free(atmp);

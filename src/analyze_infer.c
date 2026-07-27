@@ -30,7 +30,7 @@ static int an_nonblock_no_exception(Compiler *c, int id) {
   return e >= 0 && nt_type(nt, e) && sp_streq(nt_type(nt, e), "FalseNode");
 }
 
-static int an_user_defines_or_reads(Compiler *c, const char *name) {
+int an_user_defines_or_reads(Compiler *c, const char *name) {
   if (!name) return 0;
   for (int k = 0; k < c->nclasses; k++) {
     if (comp_method_in_chain(c, k, name, NULL) >= 0) return 1;
@@ -1007,9 +1007,22 @@ TyKind infer_call(Compiler *c, int id) {
     return TY_POLY;
   /* String#chars on a poly value (a String read out of a container / pair):
      an array of single-char strings (#2909). */
-  if (recv >= 0 && rt == TY_POLY && argc == 0 && sp_streq(name, "chars") &&
+  if (recv >= 0 && rt == TY_POLY && argc == 0 &&
+      (sp_streq(name, "chars") || sp_streq(name, "lines")) &&
       nt_ref(nt, id, "block") < 0)
     return an_user_defines_or_reads(c, name) ? TY_POLY : TY_STR_ARRAY;
+  /* poly.each_char { |c| }: the block param is a one-char String and the call
+     answers the receiver's string, as String#each_char answers self (#3402). */
+  if (recv >= 0 && rt == TY_POLY && argc == 0 && sp_streq(name, "each_char") &&
+      nt_ref(nt, id, "block") >= 0 && !an_user_defines_or_reads(c, "each_char") &&
+      !an_user_defines_or_reads(c, "chars")) {
+    int eb = nt_ref(nt, id, "block");
+    const char *ebp = block_param_name(c, eb, 0);
+    Scope *ebs = ebp ? comp_scope_of(c, eb) : NULL;
+    LocalVar *ebl = (ebs && ebp) ? scope_local(ebs, ebp) : NULL;
+    if (ebl && ebl->type != TY_STRING) ebl->type = TY_STRING;
+    return TY_STRING;
+  }
   /* poly.scan(re): a String read out of a container. Same shape as the
      rt==TY_STRING rule -- captures give an array of arrays (#3368). */
   if (recv >= 0 && rt == TY_POLY && argc == 1 && sp_streq(name, "scan") &&

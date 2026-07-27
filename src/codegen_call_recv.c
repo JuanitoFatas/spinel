@@ -9229,6 +9229,34 @@ int emit_poly_call(Compiler *c, int id, Buf *b) {
         buf_puts(b, "sp_str_chars(sp_poly_to_s("); emit_expr(c, recv, b); buf_puts(b, "))"); return 1;
       }
     }
+    /* poly.each_char { }: walk the same char array #chars answers. A String
+       receiver has its own emitter that does not materialize one; a poly
+       receiver only learns it is a String at run time, so it pays the array
+       and yields out of it. Answers the receiver's string, as String#each_char
+       answers self (#3402). */
+    if (sp_streq(name, "each_char") && argc == 0 && nt_ref(nt, id, "block") >= 0 &&
+        !user_defines_or_reads(c, "each_char") && !user_defines_or_reads(c, "chars")) {
+      int eblk = nt_ref(nt, id, "block");
+      const char *ebp = block_param_name(c, eblk, 0);
+      const char *ebpn = ebp ? rename_local(ebp) : NULL;
+      int ebody = nt_ref(nt, eblk, "body");
+      int ebn = 0; const int *ebb = ebody >= 0 ? nt_arr(nt, ebody, "body", &ebn) : NULL;
+      int ts = ++g_tmp, ta = ++g_tmp, ti = ++g_tmp;
+      buf_printf(b, "({ const char *_t%d = sp_poly_to_s(", ts); emit_expr(c, recv, b);
+      buf_printf(b, "); SP_GC_ROOT(_t%d);", ts);
+      buf_printf(b, " sp_StrArray *_t%d = sp_str_chars(_t%d); SP_GC_ROOT(_t%d);", ta, ts, ta);
+      buf_printf(b, " for (mrb_int _t%d = 0; _t%d < sp_StrArray_length(_t%d); _t%d++) {", ti, ti, ta, ti);
+      if (ebpn) buf_printf(b, " const char *lv_%s = sp_StrArray_get(_t%d, _t%d);", ebpn, ta, ti);
+      for (int k2 = 0; k2 < ebn; k2++) emit_stmt(c, ebb[k2], b, 0);
+      buf_printf(b, " } _t%d; })", ts);
+      return 1;
+    }
+    /* poly.lines -> TY_STR_ARRAY, the same shape as #chars above (#3403) */
+    if (sp_streq(name, "lines") && argc == 0 && nt_ref(nt, id, "block") < 0) {
+      if (!user_defines_or_reads(c, "lines")) {
+        buf_puts(b, "sp_str_lines(sp_poly_to_s("); emit_expr(c, recv, b); buf_puts(b, "))"); return 1;
+      }
+    }
     if (sp_streq(name, "freeze"))     { buf_puts(b, "sp_poly_freeze("); emit_expr(c, recv, b); buf_puts(b, ")"); return 1; }
   }
   /* poly.ljust/rjust/center(width[, pad]): a String read from a container
