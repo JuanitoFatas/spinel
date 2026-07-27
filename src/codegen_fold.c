@@ -5445,6 +5445,20 @@ void emit_arg_or_default(Compiler *c, Scope *m, int idx, int provided, Buf *out)
     if (pt == TY_POLY) emit_boxed(c, provided, out);   /* box into a poly param */
     else {
       TyKind at = comp_ntype(c, provided);
+      /* An int argument reaching a bigint parameter is promoted at the
+         boundary. That is the whole premise of ty_unify keeping int-and-bigint
+         at bigint rather than widening to poly -- but the promotion was only
+         wired into the arithmetic operands, so `def f(x) = x.to_s` called with
+         both 1 and 2**200 typed its parameter sp_Bigint* and then passed it a
+         raw mrb_int. */
+      if (pt == TY_BIGINT && at != TY_BIGINT && at != TY_POLY && ty_is_numeric(at)) {
+        buf_puts(out, "sp_bigint_new_int("); emit_int_expr(c, provided, out); buf_puts(out, ")");
+        return;
+      }
+      if (pt == TY_BIGINT && at == TY_POLY) {
+        buf_puts(out, "sp_poly_as_bigint("); emit_expr(c, provided, out); buf_puts(out, ")");
+        return;
+      }
       /* Bare call inside a class/module body: analyze may not have resolved the
          type because g_cbody_class_id is not set during fixpoint. Look it up now. */
       if (at == TY_UNKNOWN && g_class_body_id >= 0) {
@@ -5592,6 +5606,13 @@ else if (dty && sp_streq(dty, "NilNode")) {
     else buf_puts(out, pt == TY_RANGE ? "(sp_Range){0}" : default_value(pt));
   }
   else if (pt == TY_POLY) emit_boxed(c, dv, out);
+  /* Same boundary promotion the supplied-argument path does: an int DEFAULT
+     (`def f(x = 7)`) reaching a bigint parameter is an mrb_int in a
+     sp_Bigint* slot without it. */
+  else if (pt == TY_BIGINT && comp_ntype(c, dv) != TY_BIGINT &&
+           ty_is_numeric(comp_ntype(c, dv))) {
+    buf_puts(out, "sp_bigint_new_int("); emit_int_expr(c, dv, out); buf_puts(out, ")");
+  }
   else {
     /* Default empty `[]` literal: emit the correct array constructor for
        the parameter type rather than always sp_IntArray_new(). */
