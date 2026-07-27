@@ -6,7 +6,7 @@
    linked from libspinel_rt.a -- so the generated program's single translation
    unit and every standalone lib C file share ONE string heap. A cold runtime C file
    (marshal, pack, json, ...) can therefore allocate GC-tracked strings directly
-   without #including sp_runtime.h and inheriting its per-TU `static` heap state
+   without #including spinel_rt.h and inheriting its per-TU `static` heap state
    (which would otherwise create a second, never-swept string heap and leak).
 
    The hot allocators stay `static inline` here so each including TU still
@@ -89,7 +89,7 @@ extern const char sp_str_empty_data[];
 #define sp_str_empty (sp_str_empty_data + 1)
 
 /* UTF-8 char-length cache. Shared (extern) so sp_str_sweep flushes the same
-   table the length helpers in sp_runtime.h populate: a per-TU split would leave
+   table the length helpers in spinel_rt.h populate: a per-TU split would leave
    the generated TU's cache pointing at strings the archive-side sweep already
    freed. */
 #define SP_STR_LCACHE_BITS 5
@@ -250,7 +250,7 @@ static inline const char *sp_str_dup_external(const char *s) {
 }
 
 /* Integer / Float -> decimal string. Shared here (over the string heap) so cold
-   readers such as lib/sp_json.c can format numbers without sp_runtime.h. */
+   readers such as lib/sp_json.c can format numbers without spinel_rt.h. */
 /* Interpolation writers: append one part into a caller-provided buffer and
    return the new tail. emit_interp sizes the buffer from static bounds
    (SP_W_INT_MAX digits per int, literal lengths) plus strlen of the
@@ -293,7 +293,7 @@ const char *sp_float_to_s(mrb_float f);
 
 /* ---- object construction (shared so lib C files can build values) ----
    The built-in cls_id sentinels, the core sp_box_* constructors, the object
-   allocator, and sp_PolyArray. Moved here from sp_runtime.h so a standalone TU
+   allocator, and sp_PolyArray. Moved here from spinel_rt.h so a standalone TU
    (sp_pack.c, sp_strscan.c, ...) can allocate and box without the per-TU heap
    state. SP_BUILTIN_FOREIGN_PTR/COMPLEX/RATIONAL are in sp_gc.h. */
 #define SP_BUILTIN_ARRAY_OF(tag) (-(tag) - 1)
@@ -433,7 +433,7 @@ static inline sp_PolyArray *sp_PolyArray_new(void) {
 }
 static inline void sp_PolyArray_push(sp_PolyArray *a, sp_RbVal v) { if (!a) return; if (a->frozen) { sp_raise_frozen_array(); return; } if (a->len >= a->cap) { sp_gc_hdr *h = (sp_gc_hdr *)((char *)a - sizeof(sp_gc_hdr)); sp_gc_bytes_sub(sizeof(sp_RbVal) * a->cap); h->size -= sizeof(sp_RbVal) * a->cap; a->cap = (a->cap * 2) + 1; void *nd = realloc(a->data, sizeof(sp_RbVal) * a->cap); if (!nd) sp_oom_die(); a->data = (sp_RbVal *)nd; h->size += sizeof(sp_RbVal) * a->cap; sp_gc_bytes_add(sizeof(sp_RbVal) * a->cap); } a->data[a->len++] = v; }
 static inline sp_RbVal sp_PolyArray_get(sp_PolyArray *a, mrb_int i) { if (!a) return sp_box_nil(); if (i < 0) i += a->len; if (i < 0 || i >= a->len) return sp_box_nil(); return a->data[i]; }
-/* ---- relocated from sp_runtime.h: frozen-string check primitives used
+/* ---- relocated from spinel_rt.h: frozen-string check primitives used
    by lib/sp_cold.c's sp_str_setbyte_cow, and the SPL frozen-literal macro
    used by lib/sp_cold.c's sp_gc_stat. Pure textual move (still static
    inline / object-like macro), no codegen change. ---- */
@@ -451,7 +451,7 @@ static inline void sp_str_check_mutable(const char *s) {
   if (sp_str_is_frozen_val(s)) sp_raise_frozen_str(s);
 }
 
-/* ---- relocated from sp_runtime.h: integer add/sub/mul overflow-check
+/* ---- relocated from spinel_rt.h: integer add/sub/mul overflow-check
    helpers (still static inline, pure textual move) used by lib/sp_cold.c's
    sp_int_pow. ---- */
 #ifndef __has_builtin
@@ -530,8 +530,8 @@ mrb_int sp_float_to_i_checked(mrb_float f);
 
 /* ---- forward declarations for pointer-only box params (full types stay
    opaque to lib/sp_alloc.h -- these box functions only store the pointer). ---- */
-typedef struct sp_Bigint sp_Bigint;               /* full def: sp_runtime.h bigint block */
-typedef struct sp_OpenStruct_s sp_OpenStruct;      /* full def: sp_runtime.h (SymPolyHash-backed) */
+typedef struct sp_Bigint sp_Bigint;               /* full def: spinel_rt.h bigint block */
+typedef struct sp_OpenStruct_s sp_OpenStruct;      /* full def: spinel_rt.h (SymPolyHash-backed) */
 typedef struct { mrb_float utime, stime, cutime, cstime; } sp_Tms;
 /* Addrinfo: one resolved endpoint. Immutable; the strings are GC-managed. */
 typedef struct {
@@ -546,7 +546,7 @@ typedef struct {
    options only, so the payload is the int itself rather than a byte string. */
 typedef struct { mrb_int family, level, optname, value; } sp_SockOpt;
 
-/* ---- Box/Encoding helpers relocated from sp_runtime.h: hot-ish ones
+/* ---- Box/Encoding helpers relocated from spinel_rt.h: hot-ish ones
    (sp_box_class 7x / sp_box_nullable_obj 64x / sp_box_int_array 24x /
    sp_box_float_array 12x / sp_box_str_array 5x / sp_box_range 4x in
    optcarrot) stay static inline (pure textual move, no codegen change);
@@ -605,12 +605,12 @@ void sp_addrinfo_scan(void *p);
 sp_RbVal sp_box_openstruct(sp_OpenStruct *o);
 
 /* ---- class-frozen bitmap (Class#freeze / #frozen?): state stays
-   per-process like sp_argv, extern instead of sp_runtime.h-static. ---- */
+   per-process like sp_argv, extern instead of spinel_rt.h-static. ---- */
 extern unsigned char sp_class_frozen_map[4096];   /* one definition: lib/sp_cold.c */
 void sp_class_freeze_id(mrb_int cls_id);
 mrb_bool sp_class_frozen_id(mrb_int cls_id);
 
-/* ---- rounding helpers relocated from sp_runtime.h (0 optcarrot uses). ---- */
+/* ---- rounding helpers relocated from spinel_rt.h (0 optcarrot uses). ---- */
 double sp_round_half_even(double x);
 double sp_round_half_down(double x);
 
@@ -634,12 +634,12 @@ const char *sp_brat_inspect(sp_BigRational *r);
 mrb_float sp_brat_to_f(sp_BigRational *r);
 
 /* ---- Marshal.dump/load helpers (lib/sp_marshal.c calls these): 0
-   optcarrot uses. sp_marv_hash_new/set stay in sp_runtime.h instead of
+   optcarrot uses. sp_marv_hash_new/set stay in spinel_rt.h instead of
    moving here -- they need sp_PolyPolyHash_new/set, which are hot
    (called there dozens of times, e.g. via sp_PolyArray_tally) and
-   whose home is the struct's own definition deep in sp_runtime.h, not
+   whose home is the struct's own definition deep in spinel_rt.h, not
    this early header; de-static'ing them in place to reach two
-   one-line marv wrappers would grow sp_runtime.h's non-static-body
+   one-line marv wrappers would grow spinel_rt.h's non-static-body
    count for no real gain, so those two stay put instead. */
 sp_RbVal sp_marv_arr_new(void);
 void sp_marv_arr_push(sp_RbVal a, sp_RbVal v);
@@ -648,7 +648,7 @@ sp_RbVal sp_marv_box_rational(mrb_int n, mrb_int d);
 void sp_marv_raise(const char *cls, const char *msg);
 
 /* ---- FFI array data pointers, array-kind length probe, sp_Class
-   unboxing: relocated from sp_runtime.h (0 optcarrot uses). ---- */
+   unboxing: relocated from spinel_rt.h (0 optcarrot uses). ---- */
 const int64_t *sp_ffi_int_array_data(sp_RbVal v);
 const double *sp_ffi_float_array_data(sp_RbVal v);
 const int64_t *sp_PolyArray_ffi_int_data(sp_PolyArray *a);

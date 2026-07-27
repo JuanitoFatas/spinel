@@ -15,7 +15,7 @@
  *
  * sp_exc_sym_slot/sp_exc_recover_named (need sp_sym_intern, a REAL
  * program-generated function whose body differs per compiled program --
- * not a hook) and sp_exc_is_a (poly value-dispatch) stay in sp_runtime.h,
+ * not a hook) and sp_exc_is_a (poly value-dispatch) stay in spinel_rt.h,
  * along with sp_exc_reason_acc/sp_exc_tag_acc (the two accessors that
  * call sp_exc_sym_slot) and the raise/longjmp control flow
  * (sp_raise_exc/sp_raise_cls and friends), which threads through the
@@ -90,7 +90,7 @@ mrb_int sp_exc_signo_acc(sp_Exception *e);
 const char *sp_exc_signm_acc(sp_Exception *e);
 
 /* ---- Signal/Interrupt exception constructors: relocated from
-   sp_runtime.h (0 optcarrot uses). sp_signal_resolve/sp_signal_signame
+   spinel_rt.h (0 optcarrot uses). sp_signal_resolve/sp_signal_signame
    are already non-static (resolved at the final link). ---- */
 int sp_signal_resolve(sp_RbVal sig);
 const char *sp_signal_signame(mrb_int no);

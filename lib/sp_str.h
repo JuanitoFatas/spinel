@@ -6,8 +6,8 @@
  * partition, dump/undump, concat, repeat, ...) that depend only on the
  * shared string heap (sp_alloc.h) and the typed arrays (sp_array.h). The
  * The UTF-8 decode/advance/encode + length-cache lookup are inline here
- * (relocated from sp_runtime.h, codegen-neutral). The FNV hash cascade
- * (#282) and sp_str_eq stay inline in sp_runtime.h (optcarrot-sensitive).
+ * (relocated from spinel_rt.h, codegen-neutral). The FNV hash cascade
+ * (#282) and sp_str_eq stay inline in spinel_rt.h (optcarrot-sensitive).
  *
  * sp_sprintf / sp_raise_cls are provided by the generated TU and resolved
  * at the final link (same as lib/sp_core.c). */
@@ -15,7 +15,7 @@
 
 const char *sp_sprintf(const char *fmt, ...);  /* defined in the generated TU */
 
-/* ---- hot UTF-8 + length-cache inline core (relocated from sp_runtime.h;
+/* ---- hot UTF-8 + length-cache inline core (relocated from spinel_rt.h;
    each generated TU still inlines these identically). Length-cache state
    (sp_str_lcache / SP_STR_LCACHE_*) lives in sp_alloc.h / sp_alloc.c. ---- */
 static inline int sp_utf8_char_len(unsigned char c){if(c<0x80)return 1;if(c<0xC0)return 1;if(c<0xE0)return 2;if(c<0xF0)return 3;return 4;}
@@ -158,10 +158,10 @@ mrb_int sp_str_index_opt(const char *s, const char *sub);
 mrb_int sp_str_index_from_opt(const char *s, const char *sub, mrb_int start);
 mrb_int sp_str_rindex_opt(const char *s, const char *sub);
 
-/* ---- relocated from sp_runtime.h: hash key primitives (sp_str_hash /
+/* ---- relocated from spinel_rt.h: hash key primitives (sp_str_hash /
    sp_str_eq / _sp_istr_idx) used by lib/sp_hash.c's StrInt/StrStr/IntStr/
    IntIntHash accessors. Still static (inline / noinline) -- each including
-   TU (the single generated TU via sp_runtime.h, and sp_hash.c) gets its own
+   TU (the single generated TU via spinel_rt.h, and sp_hash.c) gets its own
    private copy, so this is a pure textual relocation with no codegen change. ---- */
 /* NULL-safe string equality. ENV[] returns NULL for unset vars
    (the dispatch is `sp_str_dup_external(getenv(...))`, which propagates
@@ -205,7 +205,7 @@ static inline uint64_t sp_str_hash(const char*s){
 }
 static inline mrb_int _sp_istr_idx(mrb_int mask,mrb_int k){return(mrb_int)(((uint64_t)(unsigned long long)k*11400714819323198485ULL)&(uint64_t)mask);}
 
-/* ---- more cold string ops relocated from sp_runtime.h (0 optcarrot
+/* ---- more cold string ops relocated from spinel_rt.h (0 optcarrot
    uses; deps already visible via sp_str.h's own sp_array.h include). ---- */
 mrb_bool sp_str_in_list(const char *m, const char *const *list);
 sp_RbVal sp_str_index_poly(const char *s, const char *sub);

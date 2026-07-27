@@ -1,6 +1,6 @@
 /* sp_str.c -- cold String transforms (see sp_str.h).
  *
- * Leaf `const char*` operations moved out of sp_runtime.h so they compile
+ * Leaf `const char*` operations moved out of spinel_rt.h so they compile
  * once into libspinel_rt.a instead of into every generated TU. They reach
  * the GC string heap via sp_alloc.h and the typed arrays via sp_array.h;
  * sp_str_crypt calls into lib/sp_crypto.c; sp_sprintf / sp_raise_* resolve
@@ -61,7 +61,7 @@ const char*sp_str_concat4(const char*a,const char*b,const char*c,const char*d){S
 /* Issue #760: NULL entries treated as empty strings. */
 const char*sp_str_concat_arr(const char *const *parts,int n){size_t total=0;for(int i=0;i<n;i++)total+=sp_str_byte_len(parts[i]?parts[i]:"");char*r=sp_str_alloc(total);char*p=r;for(int i=0;i<n;i++){const char*s=parts[i]?parts[i]:"";size_t sl=sp_str_byte_len(s);memcpy(p,s,sl);p+=sl;}return r;}
 /* The unresolved-call gate's raise. Deliberately NOT declared noreturn
-   (sp_runtime.h): gate arms sit inside hot dispatch functions and a noreturn
+   (spinel_rt.h): gate arms sit inside hot dispatch functions and a noreturn
    call restructures their CFG; as a plain value-returning extern call the
    arm keeps the sp_box_nil() shape it replaced. sp_raise_cls longjmps, so
    the return never executes. */

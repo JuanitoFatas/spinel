@@ -19,7 +19,7 @@ extern sp_Argf sp_argf_obj;            /* defined in the generated TU */
 
 /* the ARGV-as-poly-array materialization cache: allocated lazily by
    sp_get_ARGV (lib/sp_cold.c), read by sp_re_mark_globals's GC root scan
-   (sp_runtime.h) -- extern so both sides see the same object. */
+   (spinel_rt.h) -- extern so both sides see the same object. */
 extern sp_StrArray *sp_argv_array_cache;
 
 sp_StrArray *sp_get_ARGV(void);

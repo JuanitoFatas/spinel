@@ -126,7 +126,7 @@ static char *sc_substr(const char *src, int64_t start, int64_t len) {
 
 /* Byte length of the UTF-8 character starting at src[pos], clamped so a
    truncated or invalid lead byte near the end never reads past `len`.
-   Mirrors sp_utf8_advance in sp_runtime.h, which isn't visible from here
+   Mirrors sp_utf8_advance in spinel_rt.h, which isn't visible from here
    (this file includes only the shared headers via sp_alloc.h). */
 static int64_t sc_char_len(const char *src, int64_t pos, int64_t len) {
   unsigned char c = (unsigned char)src[pos];

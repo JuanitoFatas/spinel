@@ -1,6 +1,6 @@
 #ifndef SP_FORMAT_H
 #define SP_FORMAT_H
-/* sp_format.h -- cold value-type display helpers, split out of sp_runtime.h
+/* sp_format.h -- cold value-type display helpers, split out of spinel_rt.h
    into libspinel_rt.a.
 
    Each formats a small value type (Complex / Rational / Range) into a freshly
@@ -66,7 +66,7 @@ mrb_float sp_rational_to_f(sp_Rational a);
 sp_Rational sp_float_to_rational(mrb_float f);          /* Float#to_r (exact) */
 sp_Rational sp_float_rationalize(mrb_float f, mrb_float eps);  /* Float#rationalize(eps) */
 sp_Rational sp_float_rationalize0(mrb_float f);         /* Float#rationalize (no arg) */
-/* ---- more Complex ops relocated from sp_runtime.h (sp_box_int/float in
+/* ---- more Complex ops relocated from spinel_rt.h (sp_box_int/float in
    sp_alloc.h, sp_complex_abs/abs2 already declared above). ---- */
 sp_RbVal sp_complex_comp_v(mrb_float v, int is_f);
 sp_RbVal sp_complex_abs_v(sp_Complex a);

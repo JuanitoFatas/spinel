@@ -1,11 +1,11 @@
-/* sp_core.h -- runtime helpers split out of sp_runtime.h into
+/* sp_core.h -- runtime helpers split out of spinel_rt.h into
  * libspinel_rt.a so they are compiled once rather than re-parsed and
  * re-codegen'd in every generated translation unit.
  *
  * Signatures use intptr_t / double directly (== mrb_int / mrb_float)
  * to stay decoupled from the runtime's typedefs. These helpers call
  * sp_raise_cls / sp_sprintf, which live in the generated TU
- * (sp_runtime.h) and resolve at link time.
+ * (spinel_rt.h) and resolve at link time.
  */
 #ifndef SP_CORE_H
 #define SP_CORE_H

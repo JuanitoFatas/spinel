@@ -2,7 +2,7 @@
  * See sp_system.h.
  *
  * Self-contained (libc + OS process API only); does not include
- * sp_runtime.h, so it carries its own mrb_bool/TRUE/FALSE locally. */
+ * spinel_rt.h, so it carries its own mrb_bool/TRUE/FALSE locally. */
 #include "sp_system.h"
 #include <stdlib.h>
 #include <string.h>

@@ -204,12 +204,12 @@ def spinel_hdr_dir
   return "" if bin == "spinel"
   d = File.expand_path("..", bin)
   a = File.join(d, "lib")
-  return a if File.exist?(File.join(a, "sp_runtime.h"))
+  return a if File.exist?(File.join(a, "spinel_rt.h"))
   up = File.expand_path("..", d)
   b = File.join(up, "lib")
-  return b if File.exist?(File.join(b, "sp_runtime.h"))
+  return b if File.exist?(File.join(b, "spinel_rt.h"))
   c = File.join(up, "lib/spinel/lib")
-  return c if File.exist?(File.join(c, "sp_runtime.h"))
+  return c if File.exist?(File.join(c, "spinel_rt.h"))
   ""
 end
 

@@ -1,4 +1,4 @@
-/* sp_marshal.c -- Marshal.dump / Marshal.load, split out of sp_runtime.h.
+/* sp_marshal.c -- Marshal.dump / Marshal.load, split out of spinel_rt.h.
 
    A standalone translation unit. The read side uses the generic sp_json_* hooks
    (sp_gc.h); the construction side uses the sp_marshal_v vtable the generated TU
@@ -19,7 +19,7 @@ size_t sp_bigint_byte_len(sp_Bigint *b);
 size_t sp_bigint_to_le_bytes(sp_Bigint *b, unsigned char *out, size_t cap);
 sp_Bigint *sp_bigint_from_le_bytes(int negative, const unsigned char *bytes, size_t n);
 
-/* Inline sp_RbVal constructors (state-free; avoid pulling sp_runtime.h). Heap
+/* Inline sp_RbVal constructors (state-free; avoid pulling spinel_rt.h). Heap
    value types (array/hash/complex/rational) go through the vtable instead. */
 static sp_RbVal mk_nil(void)        { sp_RbVal r; r.tag = SP_TAG_NIL;  r.cls_id = 0; r.v.i = 0; return r; }
 static sp_RbVal mk_bool(mrb_bool b) { sp_RbVal r; r.tag = SP_TAG_BOOL; r.cls_id = 0; r.v.i = (b != 0); return r; }  /* full union word: bool equality reads v.i */

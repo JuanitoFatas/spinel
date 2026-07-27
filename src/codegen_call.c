@@ -1053,7 +1053,7 @@ void emit_proc_call_args(Compiler *c, int argc, const int *argv, Buf *b, int for
   }
   buf_printf(b, "%d, ", argc);
   if (any_poly) {
-    g_needs_proc_poly_argslot = 1;  /* channel array now lives in sp_runtime.h */
+    g_needs_proc_poly_argslot = 1;  /* channel array now lives in spinel_rt.h */
     /* Each argument is evaluated once into a natural-typed temp so it can be
        published both unboxed (the mrb_int[] slot, for a concrete parameter)
        and boxed (the side-channel, for a poly parameter). A nil/unknown arg

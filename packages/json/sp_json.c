@@ -1,4 +1,4 @@
-/* sp_json.c -- JSON.generate serialization, split out of sp_runtime.h.
+/* sp_json.c -- JSON.generate serialization, split out of spinel_rt.h.
 
    This is a standalone translation unit: it owns no typed-array/hash structs.
    It reaches the generated program's containers only through the generic hooks
@@ -12,7 +12,7 @@
 #include <stdlib.h>           /* strtoll, strtod */
 
 /* A 0xff-marked rodata literal, so sp_str_byte_len reads its length correctly
-   (matches sp_runtime.h's SPL). Used for the fixed tokens true/false/null. */
+   (matches spinel_rt.h's SPL). Used for the fixed tokens true/false/null. */
 #define JSPL(s) (&("\xff" s)[1])
 
 /* Off-GC-heap growable buffer; finalized into a GC string at the end. */

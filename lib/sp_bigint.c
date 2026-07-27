@@ -15,7 +15,7 @@
 #include <math.h>      /* isinf: early-exit once a limb fold overflows to Infinity */
 #include "sp_bigint.h"
 
-/* Defined in sp_runtime.h (linked into the final program); forward-declared
+/* Defined in spinel_rt.h (linked into the final program); forward-declared
    here so the bigint object can raise without pulling in the whole header. */
 extern __attribute__((noreturn)) void sp_raise_cls(const char *cls, const char *msg);
 const char *sp_sprintf(const char *fmt, ...);  /* defined in the generated TU */

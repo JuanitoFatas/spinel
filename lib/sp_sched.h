@@ -79,9 +79,9 @@ sp_thread *sp_Thread_raise(sp_thread *t, const char *cls, const char *msg, void 
 void       sp_Thread_pass(void);          /* Thread.pass: cooperative yield */
 /* Kernel#sleep(seconds): park the calling thread and free its OS worker for other
    green threads; a monitor thread wakes it after the duration. Falls back to a
-   plain blocking sleep only in the single-threaded build (sp_runtime.h). */
+   plain blocking sleep only in the single-threaded build (spinel_rt.h). */
 void       sp_sched_sleep(double seconds);
-void       sp_sleep(mrb_float s);   /* Kernel#sleep; relocated from sp_runtime.h to lib/sp_cold.c */
+void       sp_sleep(mrb_float s);   /* Kernel#sleep; relocated from spinel_rt.h to lib/sp_cold.c */
 /* Scheduler-aware blocking I/O: park the calling green thread until `fd` is ready
    for `events` (POLLIN/POLLOUT), freeing its OS worker for other threads; the
    monitor polls the fd and wakes it. Returns 1 to retry the syscall (fd ready or

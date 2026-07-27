@@ -3,15 +3,15 @@
 /* sp_proc.h -- sp_Proc / sp_Curry struct layouts + cold ops.
  *
  * sp_proc_call itself (the hot per-call dispatch) stays a plain
- * (non-static) function defined directly in sp_runtime.h -- like
+ * (non-static) function defined directly in spinel_rt.h -- like
  * sp_sprintf/sp_argv, its body is resolved at the final link against the
  * generated TU, so it doesn't need to move for lib/sp_proc.c to reach it.
  * _sp_proc_poly_args/_sp_proc_poly_ret (the boxed calling-convention side
  * channel) are likewise already non-static SP_TLS globals in
- * sp_runtime.h; only extern declarations are needed here.
+ * spinel_rt.h; only extern declarations are needed here.
  *
  * Proc#>>/<</compose and the Proc-return (non-local return via longjmp)
- * machinery stay in sp_runtime.h: sp_proc_compose_fn calls sp_poly_to_i
+ * machinery stay in spinel_rt.h: sp_proc_compose_fn calls sp_poly_to_i
  * (a value-dispatch function that's hot in optcarrot and excluded from
  * eviction), and proc-return threads through the TU-local exception-stack
  * globals (sp_exc_top / sp_unwind_kind / sp_proc_ret_head).

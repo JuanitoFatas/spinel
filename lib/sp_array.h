@@ -5,7 +5,7 @@
  * The struct layouts (sp_IntArray, ...) live in sp_types.h. The hot
  * accessors (new / push / pop / shift / get / set / length / empty) stay
  * inline here so every generated TU compiles them identically --
- * relocating them out of sp_runtime.h into this shared header is a pure
+ * relocating them out of spinel_rt.h into this shared header is a pure
  * textual move with no codegen change. The cold ops (sort / slice / dup /
  * set algebra / join / ...) are compiled once into libspinel_rt.a
  * (lib/sp_array.c); this header only declares them.
@@ -233,7 +233,7 @@ sp_FloatArray *sp_FloatArray_slice_bang(sp_FloatArray *a, mrb_int from, mrb_int 
 sp_StrArray *sp_StrArray_slice_bang(sp_StrArray *a, mrb_int from, mrb_int n);
 sp_PtrArray *sp_PtrArray_slice_bang(sp_PtrArray *a, mrb_int from, mrb_int n);
 
-/* ---- more cold StrArray ops relocated from sp_runtime.h (0 optcarrot
+/* ---- more cold StrArray ops relocated from spinel_rt.h (0 optcarrot
    uses). #include here (not near the top): by this point array.h's own
    hot inline core (sp_StrArray_push et al) is already defined, so
    sp_str.h's nested processing (it needs sp_StrArray_push for
@@ -243,7 +243,7 @@ const char *sp_StrArray_sum_str(sp_StrArray *a, const char *init);
 sp_RbVal sp_StrArray_uniq_bangq(sp_StrArray *a);
 mrb_bool sp_StrArray_eq(sp_StrArray*a,sp_StrArray*b);
 
-/* ---- sp_typed_arr_frozen relocated from sp_runtime.h (0 optcarrot uses). ---- */
+/* ---- sp_typed_arr_frozen relocated from spinel_rt.h (0 optcarrot uses). ---- */
 int sp_typed_arr_frozen(sp_RbVal v);
 
 #endif /* SP_ARRAY_H */

@@ -2531,7 +2531,7 @@ else if (orecv >= 0 && onm) {
          read the boxed value back, unboxing a float with sp_poly_to_f. The
          side-channel array holds 16 slots (the proc-call ABI cap). */
       if (k < 16) {
-        g_needs_proc_poly_argslot = 1;  /* channel array now lives in sp_runtime.h */
+        g_needs_proc_poly_argslot = 1;  /* channel array now lives in spinel_rt.h */
         if (pt == TY_FLOAT)
           buf_printf(pb, "(argc > %d) ? sp_poly_to_f(_sp_proc_poly_args[%d]) : sp_float_nil();\n", k, k);
         else
@@ -2599,7 +2599,7 @@ else if (orecv >= 0 && onm) {
      from the front, posts from the back, the remainder (possibly empty) is
      the rest; missing posts bind nil. */
   if ((restn && restn[0]) || nposts > 0 || nopts > 0 || nnumbered > 0) {
-    g_needs_proc_poly_argslot = 1;  /* channel array now lives in sp_runtime.h */
+    g_needs_proc_poly_argslot = 1;  /* channel array now lives in spinel_rt.h */
     for (int k = 0; k < nnumbered; k++) {
       buf_printf(pb, "    sp_RbVal lv__%d = (argc > %d) ? _sp_proc_poly_args[%d] : sp_box_nil();\n",
                  k + 1, k, k);
@@ -4507,7 +4507,7 @@ void emit_regex_section(Compiler *c, Buf *b) {
      equal the constructor-installed default, so it isn't emitted either. */
   if (g_has_user_global_marks)
     buf_puts(b, "  sp_gc_mark_globals_hook = sp_mark_user_globals;\n");
-  /* Install the Marshal vtable: the construction wrappers (sp_runtime.h) plus
+  /* Install the Marshal vtable: the construction wrappers (spinel_rt.h) plus
      the generated symbol interner and per-class object dump/load. */
   if (g_emit_sym_rt)
     buf_puts(b, "  sp_json_sym_intern_fn = sp_sym_intern;\n");
@@ -5292,7 +5292,7 @@ char *codegen_program(const NodeTable *nt) {
      this TU deliberately omits). */
   if (!g_emit_sym_rt)
     buf_puts(&b, "#define SP_TU_NO_POLY_RENDER 1\n");
-  buf_puts(&b, "#include \"sp_runtime.h\"\n");
+  buf_puts(&b, "#include \"spinel_rt.h\"\n");
   /* FFI extern declarations and buffer storage */
   {
     Compiler *cf = c;

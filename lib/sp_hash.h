@@ -6,13 +6,13 @@
  * The struct layouts already live in sp_types.h (shared). None of these
  * four hash types appear in optcarrot's hot loop (0 uses for 3 of them,
  * 4 non-hot uses for IntStrHash -- unlike SymPolyHash/PolyPolyHash, which
- * stay in sp_runtime.h because optcarrot calls their accessors hundreds of
+ * stay in spinel_rt.h because optcarrot calls their accessors hundreds of
  * times per frame), so the full CRUD surface -- not just the cold
  * materializers -- compiles once into libspinel_rt.a (lib/sp_hash.c)
  * instead of into every generated TU.
  *
  * inspect/to_a/invert functions that bridge to a poly-valued hash
- * (sp_StrPolyHash/sp_PolyPolyHash) or sp_PolyArray stay in sp_runtime.h --
+ * (sp_StrPolyHash/sp_PolyPolyHash) or sp_PolyArray stay in spinel_rt.h --
  * moving those would require exposing the poly cluster across the archive
  * boundary, which is excluded (de-inlining poly accessors regresses
  * optcarrot fps ~15%, per project_sp_runtime_lib_eviction).
@@ -112,11 +112,11 @@ sp_PolyArray*sp_StrIntHash_to_a(sp_StrIntHash*h);
 sp_PolyArray*sp_StrStrHash_to_a(sp_StrStrHash*h);
 sp_PolyArray*sp_IntStrHash_to_a(sp_IntStrHash*h);
 
-/* ---- sp_str_sub_str_str_hash relocated from sp_runtime.h (0 optcarrot uses). ---- */
+/* ---- sp_str_sub_str_str_hash relocated from spinel_rt.h (0 optcarrot uses). ---- */
 const char *sp_str_sub_str_str_hash(const char *str, const char *pat, sp_StrStrHash *h);
 
 /* ---- Regexp#gsub/#sub with a replacement Hash: relocated from
-   sp_runtime.h (0 optcarrot uses). Needs mrb_regexp_pattern/re_exec
+   spinel_rt.h (0 optcarrot uses). Needs mrb_regexp_pattern/re_exec
    (sp_re.h, included by lib/sp_cold.c already). ---- */
 const char *sp_re_gsub_str_str_hash(mrb_regexp_pattern *pat, const char *str, sp_StrStrHash *h);
 const char *sp_re_sub_str_str_hash(mrb_regexp_pattern *pat, const char *str, sp_StrStrHash *h);

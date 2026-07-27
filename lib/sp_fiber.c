@@ -93,7 +93,7 @@ void *sp_gc_alloc(size_t sz, void (*fin)(void *), void (*scn)(void *));
 SP_NORETURN void sp_raise_cls(const char *cls, const char *msg);
 
 /* Per-fiber exception/catch handler context (#1474): defined in the generated
-   TU (sp_runtime.h), reached here by name. A fiber's begin/rescue handlers and
+   TU (spinel_rt.h), reached here by name. A fiber's begin/rescue handlers and
    catch tags are saved/restored around each context switch so a raise/throw
    can't longjmp into a suspended fiber's stack frame, and an unhandled fiber
    raise is re-raised in the resumer's context rather than crossing stacks. */

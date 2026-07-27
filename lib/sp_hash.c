@@ -1,7 +1,7 @@
 /* sp_hash.c -- cold CRUD ops for the 4 non-poly-valued typed hashes (see
  * sp_hash.h). None of these types are hot in optcarrot, so the whole
  * surface -- not just materializers -- lives here rather than in
- * sp_runtime.h. sp_gc_alloc / sp_mark_string / sp_str_hash / sp_str_eq /
+ * spinel_rt.h. sp_gc_alloc / sp_mark_string / sp_str_hash / sp_str_eq /
  * sp_inspect_container are lib-visible. */
 #include "sp_hash.h"
 

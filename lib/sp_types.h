@@ -1,15 +1,15 @@
-/* sp_types.h -- core value-type definitions split out of sp_runtime.h.
+/* sp_types.h -- core value-type definitions split out of spinel_rt.h.
  *
  * Holds the primitive typedefs, the small leaf value structs, the GC
  * header, and the typed array / non-poly hash structs. Both
- * sp_runtime.h (which includes this near the top) and libspinel_rt.a
+ * spinel_rt.h (which includes this near the top) and libspinel_rt.a
  * sources can include it to see the layouts without pulling in the
  * header's static/inline function bodies. Pure type/macro definitions
  * only -- no function definitions, no global state.
  *
- * Reorganisation step toward slimming sp_runtime.h; sp_RbVal, the poly
+ * Reorganisation step toward slimming spinel_rt.h; sp_RbVal, the poly
  * containers, and the conditional Proc/Fiber/etc. types still live in
- * sp_runtime.h pending a later pass.
+ * spinel_rt.h pending a later pass.
  */
 #ifndef SP_TYPES_H
 #define SP_TYPES_H
@@ -23,7 +23,7 @@
    asm context switch runs on every Darwin arch (x86_64 / arm64), so the only
    <ucontext.h> include (sp_fiber_ctx.h's non-asm fallback) is never compiled
    there, and PR #1563 removed the stale unconditional include from
-   sp_runtime.h. */
+   spinel_rt.h. */
 #define _DARWIN_C_SOURCE
 #endif
 

@@ -47,7 +47,7 @@ const char sp_str_empty_data[] = "\xff";
 
 int sp_ffi_bin_len = 0;   /* see sp_alloc.h: byte count for :binstr / :cbinstr */
 
-/* Object-heap collection threshold (was per-TU static in sp_runtime.h; now
+/* Object-heap collection threshold (was per-TU static in spinel_rt.h; now
    shared so sp_gc_alloc can live in sp_alloc.h and lib TUs allocate too). */
 size_t sp_gc_threshold = 256 * 1024;
 size_t sp_gc_threshold_init = 256 * 1024;

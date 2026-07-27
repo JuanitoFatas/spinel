@@ -551,7 +551,7 @@ else {
 const char *sp_time_inspect_v(sp_Time t) { return sp_time_fmt(t, 1); }
 const char *sp_time_to_s_v(sp_Time t)    { return sp_time_fmt(t, 0); }
 
-/* ---- comparison + shifts (moved from sp_runtime.h; cold) ---- */
+/* ---- comparison + shifts (moved from spinel_rt.h; cold) ---- */
 int sp_time_cmp(sp_Time a, sp_Time b) {
   if (a.tv_sec < b.tv_sec) return -1;
   if (a.tv_sec > b.tv_sec) return 1;

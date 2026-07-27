@@ -4,7 +4,7 @@
  * (compiled into libspinel_rt.a), including the formatters, which now
  * return GC-heap strings directly (sp_time.c includes sp_alloc.h) — so
  * the generated TU calls them straight, with no buffer-copying
- * trampoline in sp_runtime.h.
+ * trampoline in spinel_rt.h.
  *
  * The value ops (constructors, accessors, shifts) use int64_t / double
  * directly, keeping that part decoupled from the runtime's typedefs.

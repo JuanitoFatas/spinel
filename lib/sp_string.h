@@ -5,7 +5,7 @@
 
    The hot core -- construction, append, and the sp_fd_* buffer mechanics that
    sit on the string concat / interpolation path -- stays `static inline` here so
-   every TU inlines it (no perf cost vs. living in sp_runtime.h). The rarely-used
+   every TU inlines it (no perf cost vs. living in spinel_rt.h). The rarely-used
    in-place mutators (prepend / insert / replace / dup) are cold, so they are
    compiled once into libspinel_rt.a (lib/sp_string.c). */
 #include "sp_alloc.h"   /* sp_gc_alloc, sp_gc_bytes/hdr, sp_str_hdr, sp_str_byte_len, sp_raise_cls */

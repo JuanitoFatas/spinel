@@ -470,33 +470,33 @@ PKG_TEST_TARGETS := $(foreach t,$(PKG_TESTS),build/test-results/pkg.$(call pkg_o
 TEST_WARN_SUPPRESS := -Wno-unused-value
 
 # ---- Precompiled runtime header for the per-test compiles ----
-# Every generated test TU includes the same lib/sp_runtime.h; the cc step is
+# Every generated test TU includes the same lib/spinel_rt.h; the cc step is
 # >99% of a test's cost and roughly half of that is parsing the header, so
 # the suite precompiles it once per make invocation (measured: gcc -15%,
 # clang -23% on the per-test compile). Two variants cover the two TU shapes
 # the emitter produces: plain, and `#define SP_TU_NO_POLY_RENDER 1` before
 # the include. gcc picks the .gch up implicitly from the include path; clang
 # ignores gcc-style implicit lookup and needs an explicit -include-pch.
-# Each variant dir also carries a copy of sp_runtime.h so gcc degrades to a
+# Each variant dir also carries a copy of spinel_rt.h so gcc degrades to a
 # normal textual include if the .gch is unusable. The PCH path is keyed on
 # compiler kind and $(OPT) because a PCH only loads under the exact flags
 # it was built with (for clang a mismatch is a hard error, not a fallback).
 CC_KIND  := $(if $(findstring clang,$(shell $(CC) --version 2>/dev/null | head -1)),clang,gcc)
 PCH_ROOT := build/pch/$(CC_KIND)$(subst -,,$(OPT))
 PCH_FLAGS = $(CFLAGS) $(SP_OV_DEFINE) -Werror $(TEST_WARN_SUPPRESS) $(SEC_FLAGS)
-PCH_PLAIN  := $(PCH_ROOT)/plain/sp_runtime.h.gch
-PCH_NOPOLY := $(PCH_ROOT)/nopoly/sp_runtime.h.gch
+PCH_PLAIN  := $(PCH_ROOT)/plain/spinel_rt.h.gch
+PCH_NOPOLY := $(PCH_ROOT)/nopoly/spinel_rt.h.gch
 SP_LIB_HDRS := $(wildcard lib/*.h)
 
 $(PCH_PLAIN): $(SP_LIB_HDRS)
 	@mkdir -p $(@D)
-	@cp lib/sp_runtime.h $(@D)/sp_runtime.h
-	@$(CC) $(PCH_FLAGS) -Ilib -x c-header $(@D)/sp_runtime.h -o $@
+	@cp lib/spinel_rt.h $(@D)/spinel_rt.h
+	@$(CC) $(PCH_FLAGS) -Ilib -x c-header $(@D)/spinel_rt.h -o $@
 
 $(PCH_NOPOLY): $(SP_LIB_HDRS)
 	@mkdir -p $(@D)
-	@cp lib/sp_runtime.h $(@D)/sp_runtime.h
-	@$(CC) $(PCH_FLAGS) -DSP_TU_NO_POLY_RENDER=1 -Ilib -x c-header $(@D)/sp_runtime.h -o $@
+	@cp lib/spinel_rt.h $(@D)/spinel_rt.h
+	@$(CC) $(PCH_FLAGS) -DSP_TU_NO_POLY_RENDER=1 -Ilib -x c-header $(@D)/spinel_rt.h -o $@
 
 ifeq ($(CC_KIND),clang)
 PCH_USE_PLAIN  = -include-pch $(PCH_PLAIN)
@@ -965,7 +965,7 @@ optcarrot: $(SPINEL) $(SP_RT_LIB)
 # to spawn its own pool → oversubscription).
 
 # Fast pre-commit: rebuild the compiler and run the suite. OPT=-O1 compiles
-# the sp_runtime.h-heavy per-test C ~3x faster than -O0 (the optimizer prunes
+# the spinel_rt.h-heavy per-test C ~3x faster than -O0 (the optimizer prunes
 # the 800+ unreferenced static fns before codegen). Skips bench/optcarrot —
 # run `make gate` before pushing for those.
 check:
@@ -1014,7 +1014,7 @@ install: all bin/spin
 	fi
 	install -m 644 lib/libspinel_rt.a    $(SPNLDIR)/lib/
 	install -m 644 lib/libspinel_rt_mt.a $(SPNLDIR)/lib/
-	install -m 644 lib/sp_runtime.h      $(SPNLDIR)/lib/
+	install -m 644 lib/spinel_rt.h      $(SPNLDIR)/lib/
 	install -m 644 lib/sp_types.h        $(SPNLDIR)/lib/
 	install -m 644 lib/sp_core.h         $(SPNLDIR)/lib/
 	install -m 644 lib/sp_system.h       $(SPNLDIR)/lib/

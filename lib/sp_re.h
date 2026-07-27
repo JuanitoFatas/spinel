@@ -10,7 +10,7 @@
  * them in its whole-program GC root hook, so they are extern here and
  * defined once in lib/sp_re.c.
  *
- * Kept in sp_runtime.h (TU-coupled): the whole-program GC root hook
+ * Kept in spinel_rt.h (TU-coupled): the whole-program GC root hook
  * sp_re_mark_globals, the startup-error handler (longjmps through a
  * TU-local jmp_buf), and the hash-replacement gsub/sub variants (await
  * the typed-hash batch). */
@@ -125,8 +125,8 @@ const char *sp_MatchData_pre_match(sp_MatchData *m);
 const char *sp_MatchData_post_match(sp_MatchData *m);
 void sp_re_default_error_handler(const char *msg);
 
-/* ---- sp_str_re_match_p_at relocated from sp_runtime.h (0 optcarrot uses).
-   Lives here (not sp_str.h) because sp_runtime.h includes sp_re.h before
+/* ---- sp_str_re_match_p_at relocated from spinel_rt.h (0 optcarrot uses).
+   Lives here (not sp_str.h) because spinel_rt.h includes sp_re.h before
    sp_str.h -- placing it in sp_str.h would see mrb_regexp_pattern
    undeclared on that first (nested) pass. ---- */
 mrb_bool sp_str_re_match_p_at(mrb_regexp_pattern *pat, const char *str, mrb_int cpos);

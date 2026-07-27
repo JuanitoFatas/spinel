@@ -1,6 +1,6 @@
 /* sp_re.c -- regexp wrappers + MatchData (see sp_re.h).
  *
- * Moved out of sp_runtime.h so this layer compiles once into
+ * Moved out of spinel_rt.h so this layer compiles once into
  * libspinel_rt.a. It calls the regexp engine (re_*) and the shared string
  * heap / arrays; sp_sprintf / sp_raise_cls resolve at the final link. */
 #include <stdlib.h>

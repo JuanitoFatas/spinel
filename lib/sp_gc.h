@@ -1,6 +1,6 @@
 /* sp_gc.h -- the mark/sweep collector's shared surface.
  *
- * Included by both the generated translation unit (via sp_runtime.h) and
+ * Included by both the generated translation unit (via spinel_rt.h) and
  * lib/sp_gc.c, which holds the collector's non-inline machinery (mark,
  * sweep, collect, the memory-limit governor, and the SPINEL_GC_VERIFY
  * support). The hot inline mark helpers stay here so both sides inline
@@ -29,7 +29,7 @@
 /* SP_TAG_OBJ cls_id sentinel for an opaque foreign/FFI pointer (e.g. a
    ffi_read_ptr / ffi func ptr return). It is NOT a sp_gc_alloc allocation, so
    the collector must not trace it -- sp_mark_rbval skips it. Kept here (not with
-   the other SP_BUILTIN_* in sp_runtime.h) so the inline mark helper can see it.
+   the other SP_BUILTIN_* in spinel_rt.h) so the inline mark helper can see it.
    Value is the next free slot below SP_BUILTIN_METHOD (-24). */
 #define SP_BUILTIN_FOREIGN_PTR (-25)
 /* a compiled Regexp: malloc-owned (never GC heap), so like FOREIGN_PTR the
@@ -72,7 +72,7 @@ extern SP_TLS int sp_gc_nroots;
 
 /* GC root tracking. SP_GC_ROOT registers a stack-resident root with a
    cleanup-attribute sentinel so it auto-pops when its declaring scope ends.
-   Shared here (was in sp_runtime.h) so standalone lib C files -- e.g. the
+   Shared here (was in spinel_rt.h) so standalone lib C files -- e.g. the
    Marshal loader, which builds GC arrays/hashes across a recursive parse --
    can root their in-flight objects too. Helpers touch only the extern root
    stack above, so relocating them is layout-neutral. */

@@ -3,7 +3,7 @@
  * sp_File is a stdio FILE* plus its (GC-managed) path/mode strings,
  * shared between the generated translation unit and lib/sp_io.c, which
  * holds the allocation-free handle ops. The string-returning readers
- * (sp_File_gets / _read / _read_n / _path) stay inline in sp_runtime.h
+ * (sp_File_gets / _read / _read_n / _path) stay inline in spinel_rt.h
  * because they allocate via the hot static sp_str_alloc; moving them
  * would split the per-TU string heap. */
 #ifndef SP_IO_H
@@ -123,7 +123,7 @@ void sp_file_rename(const char *from, const char *to);
 /* Dir handle (Dir.open / Dir.each_child ...): ops live in lib/sp_cold.c. */
 typedef struct { DIR *dp; const char *path; } sp_Dir;
 
-/* ---- sp_io_pipe/sysopen relocated from sp_runtime.h (0 optcarrot uses). ---- */
+/* ---- sp_io_pipe/sysopen relocated from spinel_rt.h (0 optcarrot uses). ---- */
 sp_PolyArray *sp_io_pipe(void);
 mrb_int sp_io_sysopen(const char *path);
 

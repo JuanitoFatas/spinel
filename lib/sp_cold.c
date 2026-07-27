@@ -1,13 +1,13 @@
-/* Cold, out-of-line helpers extracted from sp_runtime.h.
+/* Cold, out-of-line helpers extracted from spinel_rt.h.
  *
  * Functions that are large and not on any hot path were `static` in
- * sp_runtime.h, so every translation unit that includes the header (every
+ * spinel_rt.h, so every translation unit that includes the header (every
  * generated program, plus each lib TU) compiled its own copy. Moving them here
  * -- a single TU that includes the full runtime header -- gives one linked copy
- * and shrinks per-TU compile work. sp_runtime.h keeps an `extern` declaration
+ * and shrinks per-TU compile work. spinel_rt.h keeps an `extern` declaration
  * so all callers still resolve. Only functions that call no program-generated
  * static (sp_sym_to_s / sp_sym_intern / ...) can live here, and each includes
- * only the low-level headers its dependencies need -- NOT sp_runtime.h, which
+ * only the low-level headers its dependencies need -- NOT spinel_rt.h, which
  * is a monolithic definition header meant to be compiled once (into the
  * generated program), so including it here would multiply-define the runtime. */
 #ifndef _GNU_SOURCE
@@ -230,7 +230,7 @@ const char *sp_file_readlink(const char *path) {
   return out;
 }
 
-/* ---- String#to_c parse + Dir.glob (cold; moved from sp_runtime.h) ---- */
+/* ---- String#to_c parse + Dir.glob (cold; moved from spinel_rt.h) ---- */
 
 sp_Complex sp_str_to_c(const char *s) {
   double re = 0, im = 0;
@@ -1041,7 +1041,7 @@ sp_PolyArray *sp_str_chars_poly(const char *s) {
 }
 
 /* ---- Native backtrace formatting (spinel --debug) ----
-   Moved from sp_runtime.h. The capture itself (backtrace() at raise time)
+   Moved from spinel_rt.h. The capture itself (backtrace() at raise time)
    stays in the header next to sp_raise_cls; only the cold symbol->Ruby-frame
    formatting lives here. The two flag globals are defined here so the
    debug-build main() (generated TU) and the header callers share one copy. */
@@ -1166,7 +1166,7 @@ sp_StrArray *sp_bt_format(void **buf, int n) {
 #include <pwd.h>
 #include <sys/wait.h>
 
-/* ---- File / Dir surface ops moved from sp_runtime.h ----
+/* ---- File / Dir surface ops moved from spinel_rt.h ----
    Path-level libc wrappers (stat family, Dir handle ops, FileTest
    helpers): cold, and every dependency is lib-visible. Prototypes
    first: the bodies keep their original header order, but a few
@@ -1680,7 +1680,7 @@ const char *sp_dir_home_user(const char *user) {
 sp_StrArray *sp_dir_children(const char *path) { return sp_dir_entries_impl(path, 1); }
 
 /* ---- Signal trap machinery + Enumerator cursor/generator ops moved from
-   sp_runtime.h ----
+   spinel_rt.h ----
    Only tiny TU-defined helpers are linked from here (sp_proc_call, the boxed
    proc constructor, the trap state, the proc argument/return slots): the heavy
    poly/hash/render helpers (sp_enum_items_from, sp_poly_each_elem, ...) stay
@@ -1837,7 +1837,7 @@ sp_Enumerator *sp_Enumerator_new_gen(void (*gen)(sp_Fiber *), void *cap, sp_RbVa
   return e;
 }
 /* Blockless Kernel#loop: an infinite Enumerator that yields nil forever (#3236).
-   The generator is internal; only sp_loop_enum is exposed (sp_runtime.h). */
+   The generator is internal; only sp_loop_enum is exposed (spinel_rt.h). */
 static void sp_loop_gen(sp_Fiber *f) {
   (void)f;
   for (;;) sp_Fiber_yield(sp_box_nil());
@@ -1864,7 +1864,7 @@ mrb_int sp_io_copy_stream(const char *src, const char *dst) {
 }
 
 /* Array#combination / permutation over an int array (lib-only; the recursion
-   helpers stay file-static, the four entry points are declared in sp_runtime.h). */
+   helpers stay file-static, the four entry points are declared in spinel_rt.h). */
 static void sp_int_combination_recur(sp_IntArray*src,mrb_int start,mrb_int k,sp_IntArray*acc,sp_PtrArray*out){if(k==0){sp_IntArray*cp=sp_IntArray_new();for(mrb_int i=0;i<acc->len;i++)sp_IntArray_push(cp,acc->data[acc->start+i]);sp_PtrArray_push(out,cp);return;}for(mrb_int i=start;i<=src->len-k;i++){sp_IntArray_push(acc,src->data[src->start+i]);sp_int_combination_recur(src,i+1,k-1,acc,out);acc->len--;}}
 sp_PtrArray*sp_IntArray_combination(sp_IntArray*a,mrb_int k){SP_GC_ROOT(a);sp_PtrArray*out=sp_PtrArray_new();SP_GC_ROOT(out);if(!a||k<0||k>a->len)return out;sp_IntArray*acc=sp_IntArray_new();SP_GC_ROOT(acc);sp_int_combination_recur(a,0,k,acc,out);return out;}
 static void sp_int_repeated_combination_recur(sp_IntArray*src,mrb_int start,mrb_int k,sp_IntArray*acc,sp_PtrArray*out){if(k==0){sp_IntArray*cp=sp_IntArray_new();for(mrb_int i=0;i<acc->len;i++)sp_IntArray_push(cp,acc->data[acc->start+i]);sp_PtrArray_push(out,cp);return;}for(mrb_int i=start;i<src->len;i++){sp_IntArray_push(acc,src->data[src->start+i]);sp_int_repeated_combination_recur(src,i,k-1,acc,out);acc->len--;}}
@@ -2025,7 +2025,7 @@ sp_RbVal sp_Enumerator_size(sp_Enumerator *e) {
 }
 
 /* ---- ENV core (StrStrHash-backed, #2832/#2842) + GC.stat + String#setbyte
-   COW -- relocated from sp_runtime.h. All reach only lib-visible helpers
+   COW -- relocated from spinel_rt.h. All reach only lib-visible helpers
    (sp_StrStrHash_*, sp_str_alloc/_raw, sp_str_check_mutable in sp_alloc.h,
    SP_HEAP_LOCK/UNLOCK, sp_gc_* counters in sp_gc.h). ---- */
 #include "sp_hash.h"
@@ -2170,7 +2170,7 @@ const char *sp_str_setbyte_cow(const char *s, mrb_int i, mrb_int v) {
   return r;
 }
 
-/* ---- Range#include?/#cover? + Range#to_s -- relocated from sp_runtime.h.
+/* ---- Range#include?/#cover? + Range#to_s -- relocated from spinel_rt.h.
    0 optcarrot uses; reach only sp_range.h's inline core + sp_sprintf
    (resolved at final link against the generated TU). ---- */
 #include "sp_range.h"
@@ -2202,7 +2202,7 @@ const char *sp_range_str(sp_Range r) {
 }
 
 /* ---- Integer leaf ops (chr/digits/bit_length/bit_range/to_s_base/opt
-   variants/pow) -- relocated from sp_runtime.h. All reach only lib-visible
+   variants/pow) -- relocated from spinel_rt.h. All reach only lib-visible
    helpers (sp_str_alloc_raw/sp_str_set_len/sp_int_to_s in sp_alloc.h,
    sp_utf8_encode in sp_str.h, the overflow_p trio now also in sp_alloc.h).
    ---- */
@@ -2285,7 +2285,7 @@ mrb_int sp_int_pow(mrb_int base, mrb_int exp) {
   return r;
 }
 
-/* ---- ARGV cache + ARGF cold ops -- relocated from sp_runtime.h. sp_argv /
+/* ---- ARGV cache + ARGF cold ops -- relocated from spinel_rt.h. sp_argv /
    sp_argf_obj are extern (sp_argf.h), defined by the generated main(). ---- */
 #include "sp_argf.h"
 
@@ -2342,7 +2342,7 @@ const char *sp_argf_filename(void) {
 }
 mrb_bool sp_argf_eof(void) { return !sp_argf_ensure(); }
 
-/* ---- Float/String Range value-type ops -- relocated from sp_runtime.h.
+/* ---- Float/String Range value-type ops -- relocated from spinel_rt.h.
    0 optcarrot uses; reach only sp_range.h + lib-visible sp_float_to_s/
    sp_str_inspect/sp_str_eq/sp_StrArray_from_string_range/sp_sprintf. ---- */
 
@@ -2411,7 +2411,7 @@ sp_RbVal sp_box_srange(sp_StrRange v) {
 }
 
 /* ---- Float leaf ops (opt_inspect/opt_to_s/denominator/numerator/
-   to_i_checked) -- relocated from sp_runtime.h. 0 optcarrot uses; reach
+   to_i_checked) -- relocated from spinel_rt.h. 0 optcarrot uses; reach
    only lib-visible sp_float_is_nil (sp_types.h)/sp_float_to_s (sp_alloc.h)/
    sp_float_to_rational (sp_format.h)/sp_raise_cls/sp_sprintf. ---- */
 
@@ -2440,7 +2440,7 @@ mrb_int sp_float_to_i_checked(mrb_float f) {
   return (mrb_int)f;
 }
 
-/* ---- Box helpers (0 optcarrot uses) -- relocated from sp_runtime.h. ---- */
+/* ---- Box helpers (0 optcarrot uses) -- relocated from spinel_rt.h. ---- */
 
 /* Boxing a nullable-int value (int?): SP_INT_NIL is the reserved nil sentinel
    and never a legitimate integer, so a sentinel must surface as Ruby nil rather
@@ -2489,7 +2489,7 @@ sp_RbVal sp_box_tms(sp_Tms v) {
 }
 sp_RbVal sp_box_openstruct(sp_OpenStruct *o){ return sp_box_obj(o, SP_BUILTIN_OPENSTRUCT); }
 
-/* ---- More cold String/StrArray ops -- relocated from sp_runtime.h. ---- */
+/* ---- More cold String/StrArray ops -- relocated from spinel_rt.h. ---- */
 #include "sp_re.h"   /* mrb_regexp_pattern/re_exec for sp_str_re_match_p_at */
 
 /* respond_to? on a poly value that turns out to hold a BUILTIN. The compile
@@ -2579,7 +2579,7 @@ sp_RbVal sp_StrArray_uniq_bangq(sp_StrArray *a) {
    immediately, before the next call can reuse its buffer. */
 mrb_bool sp_StrArray_eq(sp_StrArray*a,sp_StrArray*b){if(!a||!b)return a==b;if(a->len!=b->len)return FALSE;for(mrb_int i=0;i<a->len;i++)if(!sp_str_eq(a->data[i],b->data[i]))return FALSE;return TRUE;}
 
-/* ---- Complex ops / class-frozen bitmap -- relocated from sp_runtime.h. ---- */
+/* ---- Complex ops / class-frozen bitmap -- relocated from spinel_rt.h. ---- */
 
 /* An Integer-classed (fl bit clear) whole component boxes as an Integer;
    anything else keeps the Float class. The INTPTR guard mirrors
@@ -2613,7 +2613,7 @@ mrb_bool sp_class_frozen_id(mrb_int cls_id) {
 }
 
 /* ---- Round helpers / typed-array frozen-check / IO.pipe / sysopen --
-   relocated from sp_runtime.h. ---- */
+   relocated from spinel_rt.h. ---- */
 
 /* Float#round(half:) tie-breaking: :even is banker's rounding (rint under
    the default FE_TONEAREST), :down rounds ties toward zero. (:up is the
@@ -2735,7 +2735,7 @@ mrb_int sp_io_sysopen(const char *path) {
   return (mrb_int)fd;
 }
 
-/* ---- Kernel#sleep -- relocated from sp_runtime.h. 0 optcarrot uses;
+/* ---- Kernel#sleep -- relocated from spinel_rt.h. 0 optcarrot uses;
    sp_sched_sleep already lib-visible (sp_sched.h, included transitively
    via sp_io.h/sp_time.h -> check explicitly below). ---- */
 #include "sp_sched.h"
@@ -2761,7 +2761,7 @@ void sp_sleep(mrb_float s) {
 #endif
 }
 
-/* ---- BigRational box/scan/format ops -- relocated from sp_runtime.h.
+/* ---- BigRational box/scan/format ops -- relocated from spinel_rt.h.
    0 optcarrot uses. ---- */
 #include "sp_str.h"   /* sp_str_concat for brat_to_s/inspect */
 
@@ -2835,11 +2835,11 @@ mrb_float sp_brat_to_f(sp_BigRational *r) {
   return sp_bigint_to_double(r->num) / sp_bigint_to_double(r->den);
 }
 
-/* ---- Marshal.dump/load helpers -- relocated from sp_runtime.h. 0 optcarrot
+/* ---- Marshal.dump/load helpers -- relocated from spinel_rt.h. 0 optcarrot
    uses. ---- */
 
 /* Marshal implementation moved to lib/sp_marshal.c. These small wrappers give
-   the standalone serializer construction primitives that need sp_runtime.h
+   the standalone serializer construction primitives that need spinel_rt.h
    types; sp_re_init (codegen) installs them into sp_marshal_v along with the
    generated sym_intern / obj_dump / obj_load. */
 sp_RbVal sp_marv_arr_new(void) { return sp_box_poly_array(sp_PolyArray_new()); }
@@ -2849,7 +2849,7 @@ sp_RbVal sp_marv_box_rational(mrb_int n, mrb_int d) { return sp_box_rational(sp_
 void sp_marv_raise(const char *cls, const char *msg) { sp_raise_cls(cls, msg); }
 
 /* ---- Regexp gsub/sub-with-Hash + Signal/Interrupt exception ctors --
-   relocated from sp_runtime.h. 0 optcarrot uses. ---- */
+   relocated from spinel_rt.h. 0 optcarrot uses. ---- */
 #include "sp_exc.h"
 
 /* String#gsub(regex, hash) — per-match hash lookup form. CRuby's
@@ -2957,7 +2957,7 @@ sp_Exception *sp_interrupt_new(const char *msg) {
 }
 
 /* ---- FFI array data / array-kind length / sp_Class unbox -- relocated
-   from sp_runtime.h. 0 optcarrot uses. ---- */
+   from spinel_rt.h. 0 optcarrot uses. ---- */
 
 /* FFI array hand-off from a POLY slot: dispatch on the RUNTIME storage kind.
    A poly value may hold any array variant -- an int array that poly-collapsed

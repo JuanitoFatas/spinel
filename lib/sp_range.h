@@ -5,7 +5,7 @@
  * sp_range_new / _to_ia are called from optcarrot's hot path (range
  * literals / iteration), so they stay `static inline` here -- each
  * generated TU still compiles its own copy, identical to when they lived
- * directly in sp_runtime.h. sp_range_new_step / _eq are trivial
+ * directly in spinel_rt.h. sp_range_new_step / _eq are trivial
  * single-expression constructors; marking them inline too is effectively a
  * no-op (GCC already inlines such leaf functions at -O2) and keeps the
  * whole small cluster together instead of splitting by a usage-count

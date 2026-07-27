@@ -2,10 +2,10 @@
  *
  * The allocation-free handle ops (open / pipe / fdopen / write / close /
  * closed? / puts / print / flush / eof?); the string-returning readers
- * (gets / read / read_n / path) stay inline in sp_runtime.h.
+ * (gets / read / read_n / path) stay inline in spinel_rt.h.
  *
  * Self-contained: includes sp_io.h (the sp_File layout) + sp_gc.h
- * (sp_mark_string), not sp_runtime.h. */
+ * (sp_mark_string), not spinel_rt.h. */
 #include "sp_io.h"
 #include "sp_gc.h"   /* sp_mark_string */
 #include <stdlib.h>
@@ -742,7 +742,7 @@ mrb_int sp_File_rewind(sp_File *f) {
 
 /* ---- File metadata predicates ----
    libc / WinAPI only, no spinel-string allocation and no shared mutable
-   state, so they live here rather than inline in sp_runtime.h. */
+   state, so they live here rather than inline in spinel_rt.h. */
 mrb_bool sp_file_directory(const char *path) {
   struct stat st;
   return path && stat(path, &st) == 0 && S_ISDIR(st.st_mode);

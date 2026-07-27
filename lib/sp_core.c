@@ -1,4 +1,4 @@
-/* sp_core.c -- runtime helpers split out of sp_runtime.h into
+/* sp_core.c -- runtime helpers split out of spinel_rt.h into
  * libspinel_rt.a. See sp_core.h for the rationale. */
 #include "sp_core.h"
 #include "sp_alloc.h"   /* sp_str_byte_len: embedded-NUL detection in Integer()/Float() */
@@ -28,7 +28,7 @@ typedef double  mrb_float;
 #define SP_INT_POW10_LIMIT 19
 #endif
 
-/* Defined in the generated translation unit (sp_runtime.h); referenced
+/* Defined in the generated translation unit (spinel_rt.h); referenced
    here and resolved at link time. */
 __attribute__((noreturn)) void sp_raise_cls(const char *cls, const char *msg);
 const char *sp_sprintf(const char *fmt, ...);
@@ -386,7 +386,7 @@ int sp_snprintf_c_float(char *buf, size_t size, const char *fmt, double v) {
   return snprintf(buf, size, fmt, v);
 }
 
-/* Cold integer-math and String#oct helpers, moved out of sp_runtime.h
+/* Cold integer-math and String#oct helpers, moved out of spinel_rt.h
  * so they're compiled once into libspinel_rt.a rather than re-parsed
  * in every generated translation unit. Leaf functions: arithmetic +
  * libc + sp_raise_cls only. */

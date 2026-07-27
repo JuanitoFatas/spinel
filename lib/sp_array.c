@@ -56,7 +56,7 @@ sp_IntArray*sp_IntArray_dup(sp_IntArray*a){SP_GC_ROOT(a);sp_IntArray*b=sp_IntArr
    out-of-bounds start; we return an empty IntArray since this typed
    collection has no nullable form. */
 /* Slice length clamp, shared shape across every *_slice below and in
-   sp_str.c / sp_runtime.h: written as `len > N - start`, never
+   sp_str.c / spinel_rt.h: written as `len > N - start`, never
    `start + len > N`. Ruby hands the length straight through from user code,
    so `a[1, 2**63-1]` reaches here with len == INT64_MAX; the sum then
    overflows, wraps negative, the guard reads FALSE, and the clamp is skipped
