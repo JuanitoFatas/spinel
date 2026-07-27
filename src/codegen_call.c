@@ -3680,6 +3680,18 @@ static int emit_poly_method_dispatch(Compiler *c, int id, Buf *b) {
           buf_puts(b, "; }\nelse ");
           break;
         }
+        /* #split is the same shape but answers an ARRAY, so it needs the slot
+           conversion the table above cannot express: a user class owning
+           `split` (Pathname does) turned `str.split.join(" ")` into a switch
+           with no String arm, and the NULL that fell out joined to "" (#3394). */
+        if (sp_streq(name, "split") &&
+            (ret == TY_STR_ARRAY || ret == TY_POLY_ARRAY || ret == TY_POLY)) {
+          buf_printf(b, "if (_t%d.tag == SP_TAG_STR) { _t%d = ", tv, tr);
+          if (ret == TY_STR_ARRAY) buf_printf(b, "sp_str_split_ws(_t%d.v.s)", tv);
+          else if (ret == TY_POLY_ARRAY) buf_printf(b, "sp_StrArray_to_poly_fmt(sp_str_split_ws(_t%d.v.s))", tv);
+          else buf_printf(b, "sp_box_str_array(sp_str_split_ws(_t%d.v.s))", tv);
+          buf_puts(b, "; }\nelse ");
+        }
       }
       /* class 0 emits a `case 0:` arm here when it defines/inherits the method
          (nrequired 0) or exposes it as a reader; the dispatch key is then guarded
@@ -3898,6 +3910,7 @@ static int emit_poly_method_dispatch(Compiler *c, int id, Buf *b) {
         if (ret == TY_POLY) buf_printf(b, "sp_box_str(%s(_t%d))", pfn, tv);
         else buf_printf(b, "%s(_t%d)", pfn, tv);
         buf_puts(b, "; break;");
+        obj_default_done = 1;
       }
       /* frozen?/nil? on a builtin-scalar (or un-overridden object) poly value:
          the switch default answers via the runtime predicate. */
@@ -3907,7 +3920,16 @@ static int emit_poly_method_dispatch(Compiler *c, int id, Buf *b) {
         if (ret == TY_POLY) { buf_puts(b, "sp_box_bool("); emit_poly_pred_value(c, id, tvref, NULL, b); buf_puts(b, ")"); }
         else emit_poly_pred_value(c, id, tvref, NULL, b);
         buf_puts(b, "; break;");
+        obj_default_done = 1;
       }
+      /* Nothing claimed the fallthrough: the value is not one of the enumerated
+         classes and no pre-arm recognised its tag, so it does not answer this
+         method. Raise, as every other unresolved call does. Leaving the slot at
+         its zero handed callers a NULL container that read back as empty --
+         `str.split.join(" ")` answered "" once a user class owned `split`
+         (#3394), which is the silent form of the same gap. */
+      if (!obj_default_done)
+        buf_printf(b, " default: sp_raise_nomethod(sp_nomethod_msg(\"%s\", _t%d)); break;", name, tv);
       buf_printf(b, " } _t%d; })", tr);
       return 1;
     }
@@ -4498,6 +4520,15 @@ else {
         buf_puts(b, "; break;");
         free(ab.p);
       }
+      /* Same fallthrough rule as the zero-arg dispatch, but only when the
+         switch is made of user-class arms alone. Where a builtin pre-arm is in
+         play the fallthrough can mean "right receiver, wrong argument" --
+         `"abc".include?(:x)` is a TypeError in CRuby, not a NoMethodError --
+         so those names keep their existing answer rather than gain a
+         mislabelled raise (#3394). */
+      if (!is_pred && !is_strftime && !is_aref && !is_fetch && !is_include &&
+          !is_push && !is_cover && !is_gcdlcm && !is_strdel)
+        buf_printf(b, " default: sp_raise_nomethod(sp_nomethod_msg(\"%s\", _t%d)); break;", name, tv);
       buf_printf(b, " } _t%d; })", tr);
       free(atmp);
       free(atmp_ty);
