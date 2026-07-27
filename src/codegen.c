@@ -5430,10 +5430,19 @@ char *codegen_program(const NodeTable *nt) {
     /* dynamic intern pool: symbols minted at runtime (Symbol#upcase,
        :"interp", String#to_sym) get ids >= the static count. */
     buf_puts(&b, "static const char *sp_dyn_syms[SP_DYN_SYMS_MAX]; static int sp_ndyn = 0;\n");
+    /* Every arm must hand back a MARKED string. sp_sym_names[] entries
+       carry the 0xff rodata marker, but a bare "" literal does not, and
+       callers root the result (`const char *t = sp_sym_to_s(x);
+       SP_GC_ROOT(t);`). sp_gc_mark then reads the arbitrary rodata byte
+       before the literal, fails to recognise a marker, treats it as a
+       heap object and writes its mark word. A nil Symbol lands on the
+       out-of-range arm (id -1), so this was reachable from ordinary
+       Ruby. sp_str_empty is the marked empty string. */
     buf_printf(&b, "static const char *sp_sym_to_s(sp_sym id){"
                    "if(id>=0&&id<%d)return %s;"
                    "if(id>=%d&&id<%d+sp_ndyn)return sp_dyn_syms[id-%d];"
-                   "return \"\";}\n", ns, ns > 0 ? "sp_sym_names[id]" : "\"\"", ns, ns, ns);
+                   "return sp_str_empty;}\n",
+                   ns, ns > 0 ? "sp_sym_names[id]" : "sp_str_empty", ns, ns, ns);
     buf_printf(&b, "static sp_sym sp_sym_intern(const char *s){"
                    "for(int i=0;i<%d;i++)if(strcmp(%s,s)==0)return (sp_sym)i;"
                    "for(int i=0;i<sp_ndyn;i++)if(strcmp(sp_dyn_syms[i],s)==0)return (sp_sym)(%d+i);"
