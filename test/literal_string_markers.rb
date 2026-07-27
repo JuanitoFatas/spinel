@@ -52,3 +52,8 @@ class Holder
 end
 p through_gc(Holder.new(nil).label.to_s).length
 p through_gc(:named.to_s)
+
+# $0 is argv[0], which lives in the process's argument block rather than the
+# string heap; it is an ordinary Ruby String all the same
+p through_gc($0).class.to_s
+p through_gc($PROGRAM_NAME).length > 0

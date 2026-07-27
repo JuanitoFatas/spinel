@@ -6290,7 +6290,10 @@ char *codegen_program(const NodeTable *nt) {
   if (g_uses_argv)
     buf_puts(body, "    { sp_argv.len = argc - 1; sp_argv.data = (const char**)malloc(sizeof(const char*) * (size_t)(argc > 1 ? argc - 1 : 1)); for (int _ai = 0; _ai < argc - 1; _ai++) sp_argv.data[_ai] = sp_str_dup_external(argv[_ai + 1]); }\n");
   if (g_uses_program_name)
-    buf_puts(body, "    sp_program_name = argc > 0 ? argv[0] : \"\";\n");
+    /* argv[0] lives in the process's argument block, not the string heap, so it
+     carries no marker byte -- and `$0` is an ordinary Ruby String the caller
+     roots. Copy it in. */
+    buf_puts(body, "    sp_program_name = argc > 0 ? sp_str_dup_external(argv[0]) : sp_str_empty;\n");
   /* Enable the backtrace substrate (Exception#backtrace, Kernel#caller) in
      debug builds only: --debug compiles at -O0 with non-inlined methods, so
      the captured frames demangle to Class#method. Optimized/release builds

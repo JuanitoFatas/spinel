@@ -220,7 +220,13 @@ sp_Exception *sp_exc_exception(sp_Exception *e, const char *msg) {
    strip volatile internally for one access. */
 const char *sp_exc_class_name(volatile sp_Exception *ve) {
   sp_Exception *e = (sp_Exception *)ve;
-  return e ? e->cls_name : SPL("RuntimeError");
+  /* cls_name points into rodata (see sp_exc_gc_scan) and it comes from the
+     raise site's bare literal, so it carries no marker byte. This name reaches
+     Ruby as `e.class.to_s`, where the caller roots it and the collector reads
+     that byte -- hand back a string of our own instead. Every caller is a cold
+     path (a render, a cross-thread re-raise), so the copy costs nothing that
+     matters. */
+  return e && e->cls_name ? sp_str_dup_external(e->cls_name) : SPL("RuntimeError");
 }
 const char *sp_exc_message(volatile sp_Exception *ve) {
   sp_Exception *e = (sp_Exception *)ve;

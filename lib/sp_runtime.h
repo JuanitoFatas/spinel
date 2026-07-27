@@ -1141,7 +1141,7 @@ static const char*sp_SymArrayPtrArray_inspect(sp_PtrArray*a){SP_GC_ROOT(a);sp_St
    bug surfaces non-deterministically by string length), but the
    underlying issue is unconditional. */
 sp_Argv sp_argv;   /* type in sp_argf.h; storage here, populated by main() */
-static const char *sp_program_name = "";
+static const char *sp_program_name = SPL("");
 
 /* ARGF: a pseudo-IO that reads the files named in ARGV in sequence, or stdin
    when ARGV is empty (a `-` filename also means stdin). The state is a single

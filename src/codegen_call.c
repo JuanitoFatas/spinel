@@ -12170,7 +12170,7 @@ else { memcpy(dir, sf, n); dir[n] = 0; } }
       const char *fn = exc_has_user_msg_override(c)
         ? (sp_streq(name, "message") ? "sp_user_exc_message" : "sp_user_exc_to_s")
         : "sp_exc_message";
-      buf_printf(b, "(_t%d ? %s(_t%d) : \"\")", t, fn, t);
+      buf_printf(b, "(_t%d ? %s(_t%d) : sp_str_empty)", t, fn, t);
       return;
     }
     if (sp_streq(name, "cause")) {
@@ -12835,7 +12835,7 @@ else { memcpy(dir, sf, n); dir[n] = 0; } }
         Buf _eb = expr_buf(c, recv);
         emit_ctype(c, rt, g_pre); buf_printf(g_pre, " _t%d = ", _texc);
         buf_puts(g_pre, _eb.p ? _eb.p : ""); buf_puts(g_pre, ";\n"); free(_eb.p);
-        buf_printf(b, "((sp_Class){(mrb_int)-1, _t%d ? ((sp_Exception *)_t%d)->cls_name : SPL(\"NilClass\")})", _texc, _texc);
+        buf_printf(b, "((sp_Class){(mrb_int)-1, _t%d ? sp_exc_class_name((sp_Exception *)_t%d) : SPL(\"NilClass\")})", _texc, _texc);
         return;
       }
       int _tobj = ++g_tmp;
