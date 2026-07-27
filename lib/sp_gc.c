@@ -14,6 +14,8 @@
 #endif
 #include <unistd.h>
 #include "sp_gc.h"
+#include <signal.h>
+#include <unistd.h>
 #include "sp_marshal.h"   /* sp_marshal_vt -- the instance lives here (always linked) */
 
 /* ---- Globals shared with the generated TU (declared extern in sp_gc.h) ---- */
@@ -93,8 +95,36 @@ static void sp_gc_verify_fail(void *obj, sp_gc_hdr *h){
     (void*)(uintptr_t)h->scan, (size_t)h->size);
   abort();
 }
+/* Under verify, a fault ON the mark path is the interesting case and the one
+   the existing check cannot reach: sp_gc_mark reads the marker byte BEFORE it
+   can ask whether the object is registered, so a pointer whose [-1] is
+   unreadable (a bare literal at the start of a rodata page, an interior
+   pointer into an unmapped neighbour) takes the process down with nothing said.
+   Name the root slot the collector was walking, which is what turns an
+   unreproducible crash into a variable. Re-raises so the core dump is still
+   produced. */
+static void sp_gc_fault_report(int sig) {
+  static const char hex[] = "0123456789abcdef";
+  char buf[256]; size_t o = 0;
+  const char *m1 = "\n*** SPINEL_GC_VERIFY: fault on the GC mark path (signal ";
+  for (const char *p = m1; *p; p++) buf[o++] = *p;
+  buf[o++] = (char)('0' + (sig / 10) % 10); buf[o++] = (char)('0' + sig % 10);
+  const char *m2 = ")\n  phase = ";
+  for (const char *p = m2; *p; p++) buf[o++] = *p;
+  for (const char *p = sp_gc_dbg_phase ? sp_gc_dbg_phase : "?"; *p && o < 200; p++) buf[o++] = *p;
+  const char *m3 = "\n  root slot = 0x";
+  for (const char *p = m3; *p; p++) buf[o++] = *p;
+  uintptr_t v = (uintptr_t)sp_gc_dbg_ctx;
+  for (int i = (int)(sizeof(v) * 2) - 1; i >= 0; i--) buf[o++] = hex[(v >> (i * 4)) & 0xf];
+  const char *m4 = "\n  The slot's value is the pointer the collector could not read.\n";
+  for (const char *p = m4; *p; p++) buf[o++] = *p;
+  ssize_t wr = write(2, buf, o); (void)wr;
+  signal(sig, SIG_DFL);
+  raise(sig);
+}
 __attribute__((constructor)) static void sp_gc_debug_env(void){
   const char *v=getenv("SPINEL_GC_VERIFY"); sp_gc_verify=(v&&*v&&*v!='0');
+  if (sp_gc_verify) { signal(SIGSEGV, sp_gc_fault_report); signal(SIGBUS, sp_gc_fault_report); }
 }
 
 /* Tag byte preceding `obj`: 0xfe heap-unmarked -> 0xfc; 0xfc/0xff/0xfd/0xf1

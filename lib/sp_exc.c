@@ -10,9 +10,9 @@ const char *const *(*sp_user_exc_modules_fn)(const char *) = 0;
    fold them together or `rescue Errno::EWOULDBLOCK` would miss an EAGAIN. */
 const char *sp_exc_canonical_name(const char *cls) {
   if (!cls) return cls;
-  if (!strcmp(cls, "Errno::EWOULDBLOCK")) return "Errno::EAGAIN";
-  if (!strcmp(cls, "IO::EWOULDBLOCKWaitReadable")) return "IO::EAGAINWaitReadable";
-  if (!strcmp(cls, "IO::EWOULDBLOCKWaitWritable")) return "IO::EAGAINWaitWritable";
+  if (!strcmp(cls, "Errno::EWOULDBLOCK")) return SPL("Errno::EAGAIN");
+  if (!strcmp(cls, "IO::EWOULDBLOCKWaitReadable")) return SPL("IO::EAGAINWaitReadable");
+  if (!strcmp(cls, "IO::EWOULDBLOCKWaitWritable")) return SPL("IO::EAGAINWaitWritable");
   return cls;
 }
 
@@ -302,7 +302,7 @@ const char *sp_exc_parent_of_name(const char *cls) {
      sp_file_raise_errno picks one from errno at run time -- so this is a
      prefix rule rather than a table row, and `rescue SystemCallError` catches
      the whole family. */
-  if (!strncmp(cls, "Errno::", 7)) return "SystemCallError";
+  if (!strncmp(cls, "Errno::", 7)) return SPL("SystemCallError");
   return NULL;
 }
 /* NameError#name (NoMethodError inherits it): the carried missing name.

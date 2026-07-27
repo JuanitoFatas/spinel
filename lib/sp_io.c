@@ -241,17 +241,17 @@ const char *sp_io_kind_name(sp_File *f) {
    answers #is_a? from its kind, which is a runtime property, so the walk lives
    here rather than in the emitted switch. */
 static const char *sp_io_super_of(const char *k) {
-  if (strcmp(k, "TCPServer") == 0)   return "TCPSocket";
-  if (strcmp(k, "TCPSocket") == 0)   return "IPSocket";
-  if (strcmp(k, "UDPSocket") == 0)   return "IPSocket";
-  if (strcmp(k, "IPSocket") == 0)    return "BasicSocket";
-  if (strcmp(k, "UNIXServer") == 0)  return "UNIXSocket";
-  if (strcmp(k, "UNIXSocket") == 0)  return "BasicSocket";
-  if (strcmp(k, "Socket") == 0)      return "BasicSocket";
-  if (strcmp(k, "BasicSocket") == 0) return "IO";
-  if (strcmp(k, "File") == 0)        return "IO";
-  if (strcmp(k, "IO") == 0)          return "Object";
-  if (strcmp(k, "Object") == 0)      return "BasicObject";
+  if (strcmp(k, "TCPServer") == 0)   return SPL("TCPSocket");
+  if (strcmp(k, "TCPSocket") == 0)   return SPL("IPSocket");
+  if (strcmp(k, "UDPSocket") == 0)   return SPL("IPSocket");
+  if (strcmp(k, "IPSocket") == 0)    return SPL("BasicSocket");
+  if (strcmp(k, "UNIXServer") == 0)  return SPL("UNIXSocket");
+  if (strcmp(k, "UNIXSocket") == 0)  return SPL("BasicSocket");
+  if (strcmp(k, "Socket") == 0)      return SPL("BasicSocket");
+  if (strcmp(k, "BasicSocket") == 0) return SPL("IO");
+  if (strcmp(k, "File") == 0)        return SPL("IO");
+  if (strcmp(k, "IO") == 0)          return SPL("Object");
+  if (strcmp(k, "Object") == 0)      return SPL("BasicObject");
   return NULL;
 }
 mrb_bool sp_io_is_a(sp_File *f, const char *cls) {
