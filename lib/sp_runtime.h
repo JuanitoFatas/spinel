@@ -7389,7 +7389,10 @@ static inline const char *sp_poly_pack(sp_RbVal recv, const char *fmt) {
     return sp_PolyArray_pack((sp_PolyArray *)recv.v.p, fmt);
   if (recv.tag == SP_TAG_OBJ && recv.cls_id == SP_BUILTIN_STR_ARRAY)
     return sp_StrArray_pack((sp_StrArray *)recv.v.p, fmt);
-  return "";
+  /* Marked, like every other string this can return: a bare "" literal
+     has no 0xff marker byte, and a caller that roots the result would
+     have the collector mark a rodata pointer. */
+  return sp_str_empty;
 }
 
 /* StringScanner is a native-bound spin package (packages/strscan). */
@@ -7405,7 +7408,7 @@ static inline const char *sp_poly_pack(sp_RbVal recv, const char *fmt) {
    referenced-but-undefined static even when the referring function is dead --
    so supply inert fallbacks that the optimizer prunes with everything else. */
 #ifdef SP_TU_NO_POLY_RENDER
-static const char *sp_sym_to_s(sp_sym id) { (void)id; return ""; }
+static const char *sp_sym_to_s(sp_sym id) { (void)id; return sp_str_empty; }
 static const char *sp_class_to_s(sp_Class c) { return c.name ? c.name : ""; }
 static sp_sym sp_sym_intern(const char *s) { (void)s; return (sp_sym)0; }
 #endif
