@@ -105,9 +105,20 @@ static void aw_build(Compiler *c) {
   if (!aw_next || !aw_head) { aw_buckets = 0; return; }
   for (int i = 0; i < aw_buckets; i++) aw_head[i] = -1;
   for (int id = 0; id < n; id++) {
-    if (nt_kind(nt, id) != NK_CallNode) continue;
-    const char *nm = nt_str(nt, id, "name");
-    if (!nm || !sp_streq(nm, "[]=")) continue;
+    int k = nt_kind(nt, id);
+    /* `recv[k] = v` plus the read-modify-write forms, which key the same slot:
+       `recv[k] ||= v` is as much a key write as `recv[k] = v`, and a variant
+       decision that ignores it defaults on incomplete evidence (#3397).
+       Their key is arguments[0] and their VALUE is a `value` ref rather than
+       arguments[1], so aset_value_type_ex's `an < 2` guard skips them and its
+       answer is unchanged. */
+    int is_owr = (k == NK_IndexOrWriteNode || k == NK_IndexAndWriteNode ||
+                  k == NK_IndexOperatorWriteNode);
+    if (k != NK_CallNode && !is_owr) continue;
+    if (!is_owr) {
+      const char *nm = nt_str(nt, id, "name");
+      if (!nm || !sp_streq(nm, "[]=")) continue;
+    }
     int wr = nt_ref(nt, id, "receiver");
     if (wr < 0) continue;
     int wk = nt_kind(nt, wr);
@@ -195,7 +206,12 @@ TyKind local_aset_key_type(Compiler *c, Scope *sc, const char *name, int *nwrite
     int args = nt_ref(nt, id, "arguments");
     int an = 0;
     const int *av = args >= 0 ? nt_arr(nt, args, "arguments", &an) : NULL;
-    if (an < 2) continue;
+    /* `[]=` carries key and value in arguments; the read-modify-write forms
+       carry only the key there. Either way the key is arguments[0]. */
+    int wk = nt_kind(nt, id);
+    int min_args = (wk == NK_IndexOrWriteNode || wk == NK_IndexAndWriteNode ||
+                    wk == NK_IndexOperatorWriteNode) ? 1 : 2;
+    if (an < min_args) continue;
     if (nwrites) (*nwrites)++;
     acc = ty_unify(acc, infer_type(c, av[0]));
   }

@@ -62,3 +62,33 @@ class Blk
 end
 y = Blk.new
 p y.single { |v| v % 2 }
+
+# the read-modify-write forms key the slot just as `[]=` does, so the variant
+# decision has to see them too (they carry the key in arguments[0] and the
+# value in a `value` ref, which is why the write index used to miss them)
+class Counter
+  def tally
+    out = {}
+    k = yield 5
+    out[k] ||= 0
+    out[k] += 1
+    out
+  end
+
+  def anded
+    out = {}
+    k = yield 4
+    out[k] = 1
+    out[k] &&= 9
+    out
+  end
+end
+p Counter.new.tally { |v| v % 3 }
+p Counter.new.anded { |v| v % 3 }
+
+def string_keyed_or_write
+  h = {}
+  h["a"] ||= 1
+  h
+end
+p string_keyed_or_write
