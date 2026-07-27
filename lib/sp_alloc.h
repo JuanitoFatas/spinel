@@ -624,6 +624,7 @@ sp_Bigint *sp_bigint_sub(sp_Bigint *a, sp_Bigint *b);
 sp_Bigint *sp_bigint_new_int(int64_t v);
 sp_Bigint *sp_bigint_gcd(sp_Bigint *a, sp_Bigint *b);
 sp_Bigint *sp_bigint_div(sp_Bigint *a, sp_Bigint *b);
+char *sp_str_alloc_ext(size_t len);   /* non-inline sp_str_alloc; see sp_alloc.c */
 const char *sp_bigint_to_s(sp_Bigint *b);
 double sp_bigint_to_double(sp_Bigint *b);
 void sp_brat_scan(void *p);

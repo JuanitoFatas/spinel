@@ -357,6 +357,12 @@ static void sp_str_sweep_gated(void) {
   sp_str_retune(before, promoted);
 }
 
+/* Non-inline sp_str_alloc, for a TU that cannot include sp_alloc.h.
+   lib/sp_bigint.c is the one: it pulls mruby_shim.h, whose mrb_bool disagrees
+   with sp_types.h's, so the header cannot be added alongside. Its Integer#to_s
+   still has to answer a string-heap string like every other producer (#3396). */
+char *sp_str_alloc_ext(size_t len) { return sp_str_alloc(len); }
+
 /* Wire string sweep into the object collector. Runs before main, so the hook is
    set before the first allocation can trigger a collection. */
 __attribute__((constructor)) static void sp_alloc_install_hooks(void) {

@@ -18,6 +18,7 @@
 /* Defined in spinel_rt.h (linked into the final program); forward-declared
    here so the bigint object can raise without pulling in the whole header. */
 extern __attribute__((noreturn)) void sp_raise_cls(const char *cls, const char *msg);
+extern char *sp_str_alloc_ext(size_t len);   /* string heap; sp_alloc.h cannot be included here */
 const char *sp_sprintf(const char *fmt, ...);  /* defined in the generated TU */
 
 #define DIG_SIZE (MPZ_DIG_SIZE)
@@ -5548,13 +5549,15 @@ sp_Bigint *sp_bigint_not(sp_Bigint *a) {
 }
 
 const char *sp_bigint_to_s(sp_Bigint *b) {
-  if (!b) {   /* defensive: a NULL bigint surfaces as "0" rather than segfaulting.
-                 Heap-allocate it (not a string literal) so every return value of
-                 this function has one uniform owner-frees contract -- callers
-                 cannot otherwise tell a malloc'd "0" (a real zero bigint) from a
-                 literal one, so a literal here would make freeing unsafe. */
-    char *z = (char*)malloc(2);
-    z[0] = '0'; z[1] = '\0';
+  /* Every return is a STRING-HEAP string, marker byte and all. It has to be:
+     the result reaches Ruby as an ordinary String (Integer#to_s, poly #to_s /
+     #inspect, BigRational#to_s), and sp_str_byte_len reads the byte BEFORE it.
+     A bare malloc'd buffer has no such byte, so the length came out of whatever
+     preceded the chunk and the next concat memcpy'd that many bytes (#3396).
+     Callers must not free it -- the GC owns it. */
+  if (!b) {   /* defensive: a NULL bigint surfaces as "0" rather than segfaulting */
+    char *z = sp_str_alloc_ext(1);
+    z[0] = '0';
     return z;
   }
   sp_bigint_init_ctx();
@@ -5570,8 +5573,11 @@ const char *sp_bigint_to_s(sp_Bigint *b) {
      past 2^63.) */
   if (z->sz <= 1 || (z->sz == 2 && (z->p[1] >> (DIG_SIZE - 1)) == 0)) {
     int64_t v = sp_bigint_to_int(b);
-    char *s = (char*)malloc(24);
-    snprintf(s, 24, "%lld", (long long)v);
+    char tmp[24];
+    int n = snprintf(tmp, sizeof tmp, "%lld", (long long)v);
+    if (n < 0) n = 0;
+    char *s = sp_str_alloc_ext((size_t)n);
+    memcpy(s, tmp, (size_t)n);
     return s;
   }
   /* Use mpz_get_str which dispatches to:
@@ -5583,8 +5589,8 @@ const char *sp_bigint_to_s(sp_Bigint *b) {
   mpz_get_str(sp_mpz_ctx, buf, (mrb_int)est, 10, z);
   /* mpz_get_str writes into buf; return a trimmed copy */
   size_t len = strlen(buf);
-  char *result = (char*)malloc(len + 1);
-  memcpy(result, buf, len + 1);
+  char *result = sp_str_alloc_ext(len);
+  memcpy(result, buf, len);
   free(buf);
   return result;
 }
@@ -5633,10 +5639,9 @@ const char *sp_bigint_to_s_base(sp_Bigint *b, mrb_int base) {
 
 int sp_bigint_even_p(sp_Bigint *b) {
   if (!b) return 1;
-  const char *s10 = sp_bigint_to_s(b);
+  const char *s10 = sp_bigint_to_s(b);   /* string heap: the GC owns it */
   size_t n = strlen(s10);
   int last = n ? s10[n - 1] - '0' : 0;
-  free((void *)s10);
   return (last % 2) == 0;
 }
 

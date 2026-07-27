@@ -33,7 +33,7 @@ void emit_puts_one(Compiler *c, int arg, Buf *b, int indent) {
   }
   else if (t == TY_BIGINT) {
     buf_puts(b, "{ const char *_bs = sp_bigint_to_s("); emit_expr(c, arg, b);
-    buf_puts(b, "); if (_bs) { fputs(_bs, stdout); free((void *)_bs); } putchar('\\n'); }\n");
+    buf_puts(b, "); if (_bs) fputs(_bs, stdout); putchar('\\n'); }\n");
   }
   else if (t == TY_MATCHDATA) {
     /* puts uses to_s: the full matched substring; nil (NULL) prints blank */
@@ -232,7 +232,7 @@ void emit_print_one(Compiler *c, int arg, Buf *b, int indent) {
   }
   else if (t == TY_BIGINT) {
     buf_puts(b, "{ const char *_bs = sp_bigint_to_s((sp_Bigint *)("); emit_expr(c, arg, b);
-    buf_puts(b, ")); if (_bs) { fputs(_bs, stdout); free((void *)_bs); } }\n");
+    buf_puts(b, ")); if (_bs) fputs(_bs, stdout); }\n");
   }
   else if (t == TY_BOOL) {
     buf_puts(b, "fputs(("); emit_expr(c, arg, b); buf_puts(b, ") ? \"true\" : \"false\", stdout);\n");
@@ -485,7 +485,7 @@ void emit_p_one(Compiler *c, int arg, Buf *b, int indent) {
   else if (t == TY_BIGINT) {
     /* Integer#inspect == #to_s, so a bignum prints the same as puts/print. */
     buf_puts(b, "{ const char *_bs = sp_bigint_to_s("); emit_expr(c, arg, b);
-    buf_puts(b, "); if (_bs) { fputs(_bs, stdout); free((void *)_bs); } putchar('\\n'); }\n");
+    buf_puts(b, "); if (_bs) fputs(_bs, stdout); putchar('\\n'); }\n");
   }
   else if (t == TY_NIL || t == TY_VOID) {
     buf_puts(b, "(void)("); emit_expr(c, arg, b); buf_puts(b, "); fputs(\"nil\\n\", stdout);\n");
