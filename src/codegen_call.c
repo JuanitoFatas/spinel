@@ -10523,7 +10523,10 @@ void emit_call(Compiler *c, int id, Buf *b) {
       buf_printf(b, "sp_Dir_entries_h(%s, %d)", dr, sp_streq(name, "children") ? 1 : 0);
       free(drb.p); return;
     }
-    if ((sp_streq(name, "each") || sp_streq(name, "each_child")) &&
+    /* each_entry is Enumerable's, and on a Dir it walks exactly what #each
+       walks -- same entries, dots included, receiver as the value (#3395). */
+    if ((sp_streq(name, "each") || sp_streq(name, "each_child") ||
+         sp_streq(name, "each_entry")) &&
         nt_ref(nt, id, "block") >= 0) {
       int dblk2 = nt_ref(nt, id, "block");
       const char *dbp = block_param_name(c, dblk2, 0);

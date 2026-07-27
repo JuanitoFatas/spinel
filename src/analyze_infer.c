@@ -876,9 +876,12 @@ TyKind infer_call(Compiler *c, int id) {
     }
     int enumerable_recv = ty_is_array(rt) || ty_is_hash(rt) ||
                           rt == TY_RANGE || rt == TY_ENUMERATOR;
+    /* each_entry belongs here too: Enumerable#each_entry answers the receiver
+       exactly as #each does, and typing it nil left `arr.each_entry { }.class`
+       reading NilClass (#3395). */
     if (enumerable_recv &&
         (sp_streq(name, "each") || sp_streq(name, "each_with_index") ||
-         sp_streq(name, "reverse_each")))
+         sp_streq(name, "reverse_each") || sp_streq(name, "each_entry")))
       return rt;
     if (ty_is_hash(rt) &&
         (sp_streq(name, "each_value") || sp_streq(name, "each_key") ||
@@ -2786,7 +2789,10 @@ else {
     if (sp_streq(name, "pos=")) return TY_INT;        /* -> assigned value (#2968) */
     if (sp_streq(name, "close")) return TY_POLY;   /* nil */
     if (sp_streq(name, "rewind") || sp_streq(name, "seek")) return TY_DIR;
-    if (sp_streq(name, "each") || sp_streq(name, "each_child")) {
+    /* Enumerable#each_entry yields what #each yields (dots included) and
+       answers the receiver, so on a Dir it IS #each (#3395). */
+    if (sp_streq(name, "each") || sp_streq(name, "each_child") ||
+        sp_streq(name, "each_entry")) {
       int dblk3 = nt_ref(nt, id, "block");
       if (dblk3 >= 0) {
         const char *dbp3 = block_param_name(c, dblk3, 0);

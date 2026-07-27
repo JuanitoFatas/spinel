@@ -3920,6 +3920,34 @@ int desugar_enum_method_recv(Compiler *c) {
         }
       }
     }
+    /* Enumerable#each_entry on a receiver whose #each yields ONE value per
+       element is #each: same elements, same receiver as the value. That is
+       every builtin enumerable -- an Array/Range/Enumerator element, a Hash
+       pair (already packed), a Dir entry -- so rename and let the #each
+       emitters serve it. Without this the call had no emitter at all for a
+       Hash or a Range, and answered nil for an Array or a Dir (#3395).
+
+       A user Enumerable is deliberately NOT rewritten: its #each may `yield a,
+       b`, and there each_entry packs the pair where each spreads it. That path
+       keeps its own machinery.
+
+       Type-aware, hence here and not in the one-shot pre-pass; while the
+       receiver type is still unsettled g_infer_optimistic holds the rewrite
+       back rather than guessing. */
+    if (nm && sp_streq(nm, "each_entry") && nt_ref(nt, id, "block") >= 0) {
+      int erecv = nt_ref(nt, id, "receiver");
+      if (erecv >= 0) {
+        TyKind ert = infer_type(c, erecv);
+        if (ert == TY_UNKNOWN) {
+          if (!g_infer_optimistic) { /* settled and still unknown: leave it */ }
+        }
+        else if (ty_is_array(ert) || ty_is_hash(ert) || ert == TY_RANGE ||
+                 ert == TY_ENUMERATOR || ert == TY_DIR) {
+          nt_node_set_str(nt, id, "name", "each");
+          changed = 1;
+        }
+      }
+    }
     /* enum.to_set == Set.new(enum.to_a) whenever the set package's Set class
        is in the program (an in-place rewrite; Set's initialize adds each
        element, deduplicating).

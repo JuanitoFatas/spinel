@@ -532,6 +532,15 @@ void emit_p_one(Compiler *c, int arg, Buf *b, int indent) {
     buf_puts(b, "{ sp_Random *_pr = ("); emit_expr(c, arg, b);
     buf_puts(b, "); fputs(sp_Random_inspect(_pr), stdout); putchar('\\n'); }\n");
   }
+  else if (t == TY_DIR) {
+    /* #<Dir:PATH>, the same rendering Dir#inspect emits (#3395: reachable now
+       that each/each_entry answer the receiver rather than nil) */
+    int dv = ++g_tmp;
+    buf_printf(b, "{ sp_Dir *_t%d = (", dv); emit_expr(c, arg, b);
+    buf_printf(b, "); if (_t%d) { const char *_dp = sp_Dir_path(_t%d);"
+                  " printf(\"#<Dir:%%s>\\n\", _dp ? _dp : \"\"); }"
+                  " else fputs(\"nil\\n\", stdout); }\n", dv, dv);
+  }
   else if (t == TY_OPENSTRUCT) {
     buf_puts(b, "{ sp_OpenStruct *_po = ("); emit_expr(c, arg, b);
     buf_puts(b, "); fputs(_po ? sp_OpenStruct_inspect(_po) : \"nil\", stdout); putchar('\\n'); }\n");
