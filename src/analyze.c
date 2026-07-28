@@ -469,6 +469,24 @@ else {
     else {
       TyKind rt = infer_type(c, recv);
       if (ty_is_object(rt)) mi = comp_method_in_chain(c, ty_object_class(rt), name, NULL);
+      /* A poly receiver dispatches on the runtime class, and the dispatch
+         materializes the block as a real proc once, ahead of the switch, for
+         any candidate that takes a real &block or is served by a proc-form
+         clone. That proc is as escaping as any other, so its captures need
+         cells -- which nothing here decided, because no single `mi` names the
+         target. Codegen then met a capture with no storage and refused the
+         whole call. Reachable only since a yielding method became
+         poly-dispatchable at all (#3408). */
+      else if (rt == TY_POLY) {
+        /* not filtered by `instantiated`: that is decided after this runs, and
+           a spurious cell is only a missed optimization */
+        for (int k = 0; k < c->nclasses; k++) {
+          int ci2 = comp_method_in_chain(c, k, name, NULL);
+          if (ci2 < 0) continue;
+          Scope *cm2 = &c->scopes[ci2];
+          if (cm2->yields || (cm2->blk_param && cm2->blk_param[0])) return 1;
+        }
+      }
     }
   }
   if (mi < 0) return 0;
@@ -7365,7 +7383,13 @@ int make_yield_proc_forms(Compiler *c) {
         dst->pdefault[p] = src->pdefault[p];
       }
     }
-    dst->blk_param = strdup("__pf_blk");
+    /* A method that already declares `&blk` binds its block under THAT name,
+       and the cloned body reads it under that name. Renaming the parameter to
+       the synthetic one left the body reading a `blk` that nothing assigns --
+       a nil proc call, silently answering the slot default. Only a method with
+       no declared block param needs a name invented for it. */
+    dst->blk_param = (src->blk_param && src->blk_param[0]) ? strdup(src->blk_param)
+                                                           : strdup("__pf_blk");
     dst->is_proc_form = 1;
     if (getenv("SP_DBG_PF")) fprintf(stderr, "[pf] made %s scope %d cls %d\n", pfname, di, dst->class_id);
     walk_scope(c, nb, di, dst->class_id);

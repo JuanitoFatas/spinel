@@ -1589,7 +1589,15 @@ TyKind infer_call(Compiler *c, int id) {
      of yield. Its value is the call-site block's value (resolved like yield). */
   {
     int emi = (int)(comp_scope_of(c, id) - c->scopes);
-    if (emi > 0 && is_blk_param_call(c, id, emi)) return yield_value_type(c, emi);
+    if (emi > 0 && is_blk_param_call(c, id, emi)) {
+      /* In a proc form the block is a real proc supplied per call site, so the
+         call answers poly uniformly -- the same reason the YieldNode arm does.
+         Resolving it against one site's block fixes the clone to that site,
+         and a method declaring `&blk` reaches the dispatch this way rather
+         than through a yield (#3408). */
+      if (c->scopes[emi].is_proc_form) return TY_POLY;
+      return yield_value_type(c, emi);
+    }
   }
 
   /* __dir__ -> the source directory (a string) */
@@ -1857,8 +1865,13 @@ TyKind infer_call(Compiler *c, int id) {
      Proc#=== (case/when dispatch) IS a call in CRuby */
   if (recv >= 0 && rt == TY_PROC &&
       (sp_streq(name, "call") || sp_streq(name, "()") || sp_streq(name, "[]") ||
-       (sp_streq(name, "===") && argc == 1)))
+       (sp_streq(name, "===") && argc == 1))) {
+    /* In a proc form, a call on the block parameter is the yield: the block is
+       a real proc supplied per call site, so its result is poly uniformly --
+       the same reason the YieldNode arm answers poly there. Typing it from any
+       one site's block fixes the clone to that site (#3408). */
     return proc_call_ret(c, recv);
+  }
 
   /* Proc composition: proc << proc / proc >> proc -> a new Proc. */
   if (recv >= 0 && rt == TY_PROC && argc == 1 &&
