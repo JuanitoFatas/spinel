@@ -80,6 +80,11 @@ typedef struct {
   int reachable;    /* method name is referenced somewhere (else dead code) */
   int is_cmethod;   /* `def self.foo`: a class (singleton) method, no instance self */
   int is_transplanted_source; /* method was copied into another class via include/prepend */
+  int is_proc_form;  /* a clone of a yielding method whose `yield` is a call on
+                        a real &blk parameter, for the poly dispatch. Its body
+                        is typed independently of the inlined original: the
+                        yield answers poly, so everything it feeds widens with
+                        it and one body serves every call site (#3399). */
   int is_lowered_yield; /* self-recursive yield method lowered to &block (sp_Proc) form */
   int lowered_lifted_yield; /* lowered because a yield sits in a Thread/Fiber
                                body: the method's value is its own tail, not

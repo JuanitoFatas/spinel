@@ -895,27 +895,6 @@ static TyKind pf_yield_ty(Compiler *c, int id, int *found) {
   }
   return TY_UNKNOWN;
 }
-/* A yield nested inside a block of its own method cannot take the proc form:
-   the code around it was typed from the inlined view, where the yield has a
-   concrete type, and inside a nested block the emitters that consume it do not
-   go through the one place that could unbox. Rejecting keeps the old
-   NoMethodError for those, which is a loud wrong answer rather than a quiet
-   one. (#3399) */
-static int subtree_yields_under_block(const NodeTable *nt, int id, int in_block) {
-  if (id < 0) return 0;
-  if (in_block && nt_kind(nt, id) == NK_YieldNode) return 1;
-  int nb = in_block || nt_kind(nt, id) == NK_BlockNode;
-  int nr = nt_num_refs(nt, id);
-  for (int i = 0; i < nr; i++)
-    if (subtree_yields_under_block(nt, nt_ref_at(nt, id, i), nb)) return 1;
-  int na = nt_num_arrs(nt, id);
-  for (int i = 0; i < na; i++) {
-    int n = 0; const int *ids = nt_arr_at(nt, id, i, &n);
-    for (int j = 0; j < n; j++)
-      if (subtree_yields_under_block(nt, ids[j], nb)) return 1;
-  }
-  return 0;
-}
 void emit_method_signature(Compiler *c, Scope *s, Buf *b) {
   /* In a debug build, give instance/class methods external linkage so
      -rdynamic exposes sp_<Class>_<method> to backtrace_symbols and the
@@ -1067,6 +1046,17 @@ static void inherit_transplant_locals(Compiler *c, Scope *s) {
 }
 
 void emit_method(Compiler *c, Scope *s, Buf *b) {
+  /* A proc form holds its block in a real parameter, so its `yield`s are calls
+     on that proc rather than an inline splice (#3399). */
+  const char *sv_ypr9 = g_yield_proc_ref;
+  TyKind sv_yst9 = g_yield_slot_ty;
+  char ypr9[64];
+  if (s->is_proc_form && s->blk_param) {
+    snprintf(ypr9, sizeof ypr9, "lv_%s", s->blk_param);
+    g_yield_proc_ref = ypr9;
+    g_yield_slot_ty = TY_POLY;
+  }
+
   if (s->cs_synth) { emit_compiler_state_method(c, s, b); return; }
   /* instance_eval/exec trampolines are inlined at every call site; the
      method body itself is an unreachable stub (matches the legacy compiler). */
@@ -1199,6 +1189,7 @@ void emit_method(Compiler *c, Scope *s, Buf *b) {
   g_current_scope_is_lowered = saved_lowered;
   g_lowered_blk_name = saved_lbn;
   g_brk_ser_var = saved_bser; g_brk_skip_id = saved_bskip;
+  g_yield_proc_ref = sv_ypr9; g_yield_slot_ty = sv_yst9;
   buf_puts(b, "}\n");
 }
 
@@ -6067,51 +6058,11 @@ char *codegen_program(const NodeTable *nt) {
     buf_puts(&b, "static const char *sp_obj_inspect_sw(int cls_id, void *p) __attribute__((cold, noinline));\n");
     buf_puts(&b, "static const char *sp_obj_to_s_sw(int cls_id, void *p) __attribute__((cold, noinline));\n");
   }
-  /* Which yielding methods a poly dispatch will name. Decided here, before the
-     prototypes, because the dispatch itself is emitted later (inside a method
-     body) and C wants the declaration first. Over-approximates on purpose: a
-     block call on a poly receiver marks every instantiated class's method of
-     that name that yields. An unused proc form DCEs as an unreferenced
-     static. (#3399) */
-  TyKind *pf_first_bt = (TyKind *)calloc((size_t)(c->nscopes > 0 ? c->nscopes : 1), sizeof(TyKind));
-  for (int nid = 0; pf_first_bt && nid < c->nt->count; nid++) {
-    if (nt_kind(c->nt, nid) != NK_CallNode) continue;
-    if (nt_ref(c->nt, nid, "block") < 0) continue;
-    int prec = nt_ref(c->nt, nid, "receiver");
-    if (prec < 0 || comp_ntype(c, prec) != TY_POLY) continue;
-    const char *pnm = nt_str(c->nt, nid, "name");
-    if (!pnm) continue;
-    for (int k = 0; k < c->nclasses; k++) {
-      if (!c->classes[k].instantiated) continue;
-      int pmi = comp_method_in_chain(c, k, pnm, NULL);
-      if (pmi < 0 || !c->scopes[pmi].yields) continue;
-      if (subtree_yields_under_block(c->nt, c->scopes[pmi].def_node, 0)) continue;
-      /* One proc form serves every poly call site, and its body was typed
-         against ONE of them -- the yield unboxes to that type. A site whose
-         block answers something else would read the boxed value as the wrong
-         thing and hand back garbage, so require agreement. Where the sites
-         disagree the method keeps its old NoMethodError: a loud wrong answer
-         beats a quiet one. */
-      { TyKind bt = pf_block_result_ty(c, nt_ref(c->nt, nid, "block"));
-        if (pf_first_bt[pmi] == TY_UNKNOWN) pf_first_bt[pmi] = bt;
-        else if (pf_first_bt[pmi] != bt) {
-          scope_veto_proc_form(c, pmi);   /* sticky: an earlier site already marked it */
-          continue;
-        } }
-      scope_mark_proc_form(c, pmi);
-    }
-  }
-  free(pf_first_bt);
   /* method prototypes (scope 0 is top-level) */
-  for (int s = 1; s < c->nscopes; s++) { if (c->scopes[s].yields || !c->scopes[s].reachable || scope_is_shadowed(c, s) || c->scopes[s].is_transplanted_source) continue; emit_method_signature(c, &c->scopes[s], &b); buf_puts(&b, ";\n"); }
-  /* Proc-form prototypes for the yielding methods a poly dispatch needs (see
-     emit_proc_form_methods). */
-  for (int s = 1; s < c->nscopes; s++) {
-    if (!scope_needs_proc_form(c, s)) continue;
-    scope_proc_form_begin(c, s);
-    emit_method_signature(c, &c->scopes[s], &b); buf_puts(&b, ";\n");
-    scope_proc_form_end(c, s);
-  }
+  /* A proc form is named only by a poly dispatch, which is emitted later, so
+     the reachability pass cannot see it. Emit it and let the C compiler drop
+     it if no arm ends up calling it (#3399). */
+  for (int s = 1; s < c->nscopes; s++) { if (c->scopes[s].yields || (!c->scopes[s].reachable && !c->scopes[s].is_proc_form) || scope_is_shadowed(c, s) || c->scopes[s].is_transplanted_source) continue; emit_method_signature(c, &c->scopes[s], &b); buf_puts(&b, ";\n"); }
 
   /* User exception #message / #to_s overrides: a cls_name-keyed dispatcher so
      the default message path yields the user-overridden text. Ruby's #message
@@ -6346,19 +6297,7 @@ char *codegen_program(const NodeTable *nt) {
   emit_obj_to_a_dispatch(c, body);
   emit_obj_with_dispatch(c, body);
   for (int s = 1; s < c->nscopes; s++) {
-    if (c->scopes[s].yields || !c->scopes[s].reachable || scope_is_shadowed(c, s) || c->scopes[s].is_transplanted_source) continue; EMIT_COLLECT_UNIT(emit_method(c, &c->scopes[s], body));
-  }
-  /* A yielding method is normally inlined at each call site with the block
-     spliced in, so it has no symbol -- which is why a poly dispatch could not
-     reach it (#3399). For the ones a dispatch names, emit a second, ordinary
-     function that takes the block as an sp_Proc * and lowers `yield` to a call
-     on it. Monomorphic call sites keep the splice; only the poly path pays for
-     the closure. */
-  for (int s = 1; s < c->nscopes; s++) {
-    if (!scope_needs_proc_form(c, s)) continue;
-    scope_proc_form_begin(c, s);
-    EMIT_COLLECT_UNIT(emit_method(c, &c->scopes[s], body));
-    scope_proc_form_end(c, s);
+    if (c->scopes[s].yields || (!c->scopes[s].reachable && !c->scopes[s].is_proc_form) || scope_is_shadowed(c, s) || c->scopes[s].is_transplanted_source) continue; EMIT_COLLECT_UNIT(emit_method(c, &c->scopes[s], body));
   }
   /* Comparable cmp-hook dispatcher (after the user `<=>` definitions it calls). */
   if (g_has_user_cmp) emit_obj_cmp_dispatch(c, body);

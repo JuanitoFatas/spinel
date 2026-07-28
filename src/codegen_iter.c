@@ -469,6 +469,22 @@ void emit_yield_proc_call(Compiler *c, int args_node, TyKind result_ty, Buf *b, 
   buf_printf(&cb, "((void)sp_proc_call(%s, ", g_yield_proc_ref);
   emit_proc_call_args(c, yargc, yargv, &cb, 1);
   buf_puts(&cb, ", _sp_proc_poly_ret)");
+  /* The result rides a single global, so two yields in one expression race:
+     C does not sequence a call's arguments, and `yield(1) + yield(2)` could
+     run both calls before either read _sp_proc_poly_ret. Capture each into
+     its own temp in the statement prelude, where the call and the read stay
+     adjacent. (#3399) */
+  if (g_pre) {
+    int yt = ++g_tmp;
+    emit_indent(g_pre, g_indent);
+    buf_printf(g_pre, "sp_RbVal _t%d = %s; SP_GC_ROOT_RBVAL(_t%d);\n",
+               yt, cb.p ? cb.p : "sp_box_nil()", yt);
+    char tref[24]; snprintf(tref, sizeof tref, "_t%d", yt);
+    if (result_ty == TY_POLY || result_ty == TY_UNKNOWN) buf_puts(b, tref);
+    else emit_unbox_text(c, result_ty, tref, b);
+    free(cb.p);
+    return;
+  }
   if (result_ty == TY_POLY || result_ty == TY_UNKNOWN) buf_puts(b, cb.p ? cb.p : "");
   else emit_unbox_text(c, result_ty, cb.p ? cb.p : "", b);
   free(cb.p);

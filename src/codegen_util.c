@@ -1449,12 +1449,21 @@ void scope_veto_proc_form(Compiler *c, int s) {
   if (!g_pf_flag || s < 0 || s >= g_pf_cap || s >= c->nscopes) return;
   g_pf_flag[s] = (char *)2;   /* sticky: a later marking pass must not revive it */
 }
-int scope_needs_proc_form(Compiler *c, int s) {
-  if (!g_pf_flag || s < 0 || s >= g_pf_cap || s >= c->nscopes) return 0;
-  if (g_pf_flag[s] != (char *)1) return 0;   /* unset, or vetoed */
+/* The proc-form clone of scope `s`, or -1. Made in analyze (make_yield_proc_forms):
+   a second scope named "<name>#pf" on the same class, holding an independently
+   typed copy of the body whose yields answer poly. */
+int scope_proc_form_of(Compiler *c, int s) {
+  if (s < 0 || s >= c->nscopes) return -1;
   Scope *sc = &c->scopes[s];
-  return sc->yields && sc->reachable && !scope_is_shadowed(c, s) &&
-         !sc->is_transplanted_source;
+  if (!sc->name || sc->class_id < 0 || !sc->yields) return -1;
+  char pfname[192];
+  snprintf(pfname, sizeof pfname, "%s#pf", sc->name);
+  int pi = comp_method_in_class(c, sc->class_id, pfname);
+  if (pi < 0 || !c->scopes[pi].is_proc_form) return -1;
+  return pi;
+}
+int scope_needs_proc_form(Compiler *c, int s) {
+  return scope_proc_form_of(c, s) >= 0;
 }
 static int g_pf_saved_yields;
 static char *g_pf_saved_blk;

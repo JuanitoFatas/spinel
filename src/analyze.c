@@ -7309,6 +7309,90 @@ static int scope_yields_inside_lifted_body(Compiler *c, int mi) {
   return 0;
 }
 
+/* Does any call with a block have a poly receiver and this method's name? */
+static int pf_wanted(Compiler *c, const char *name) {
+  const NodeTable *nt = c->nt;
+  for (int id = 0; id < nt->count; id++) {
+    if (nt_kind(nt, id) != NK_CallNode) continue;
+    if (nt_ref(nt, id, "block") < 0) continue;
+    const char *nm = nt_str(nt, id, "name");
+    if (!nm || !sp_streq(nm, name)) continue;
+    int recv = nt_ref(nt, id, "receiver");
+    if (recv >= 0 && infer_type(c, recv) == TY_POLY) return 1;
+  }
+  return 0;
+}
+
+int make_yield_proc_forms(Compiler *c) {
+  NodeTable *nt = (NodeTable *)c->nt;
+  int n0 = c->nscopes;
+  int made = 0;
+  for (int s = 1; s < n0; s++) {
+    Scope *src = &c->scopes[s];
+    /* reachability is decided after this pass, so do not consult it: an
+       unused clone is a static function the C compiler drops. */
+    if (!src->yields || src->class_id < 0) continue;
+    if (src->is_transplanted_source || !src->name) continue;
+    if (src->body < 0) continue;
+    if (!pf_wanted(c, src->name)) continue;
+    /* `#` cannot appear in a Ruby method name, so the clone is invisible to
+       the by-name lookups while still mangling to a valid C identifier. */
+    char pfname[192];
+    snprintf(pfname, sizeof pfname, "%s#pf", src->name);
+    if (comp_method_in_class(c, src->class_id, pfname) >= 0) continue;
+    int nb = nt_clone_subtree(nt, src->body);
+    if (nb < 0) continue;
+    comp_scope_new(c, pfname, src->def_node);
+    int di = c->nscopes - 1;
+    comp_grow_node_arrays(c);
+    src = &c->scopes[s];
+    Scope *dst = &c->scopes[di];
+    dst->class_id = src->class_id;
+    dst->is_cmethod = src->is_cmethod;
+    dst->body = nb;
+    dst->reachable = 1;
+    dst->yields = 0;
+    dst->nparams = src->nparams;
+    dst->nrequired = src->nrequired;
+    dst->rest_idx = src->rest_idx;
+    dst->kwrest_idx = src->kwrest_idx;
+    if (src->nparams > 0) {
+      dst->pnames = (char **)calloc((size_t)src->nparams, sizeof(char *));
+      dst->pdefault = (int *)malloc(sizeof(int) * (size_t)src->nparams);
+      if (!dst->pnames || !dst->pdefault) { dst->nparams = 0; }
+      else for (int p = 0; p < src->nparams; p++) {
+        dst->pnames[p] = src->pnames[p] ? strdup(src->pnames[p]) : NULL;
+        dst->pdefault[p] = src->pdefault[p];
+      }
+    }
+    dst->blk_param = strdup("__pf_blk");
+    dst->is_proc_form = 1;
+    if (getenv("SP_DBG_PF")) fprintf(stderr, "[pf] made %s scope %d cls %d\n", pfname, di, dst->class_id);
+    walk_scope(c, nb, di, dst->class_id);
+    made = 1;
+  }
+  if (made) {
+    register_locals(c);
+    /* register_locals interns the body's names as plain locals; the clone's
+       parameters must be marked as such or the prologue declares them a second
+       time on top of the C parameters. The block parameter is the proc. */
+    for (int s = 1; s < c->nscopes; s++) {
+      Scope *d = &c->scopes[s];
+      if (!d->is_proc_form) continue;
+      for (int p = 0; p < d->nparams; p++) {
+        if (!d->pnames[p]) continue;
+        LocalVar *lv = scope_local_intern(d, d->pnames[p]);
+        if (lv) lv->is_param = 1;
+      }
+      if (d->blk_param) {
+        LocalVar *bl = scope_local_intern(d, d->blk_param);
+        if (bl) { bl->is_param = 1; bl->type = TY_PROC; }
+      }
+    }
+  }
+  return made;
+}
+
 void analyze_program(Compiler *c) {
   comp_scope_index_set_frozen(0);  /* scope shape changes during the passes below */
   /* scope 0 = top level */
@@ -7788,6 +7872,12 @@ void analyze_program(Compiler *c) {
      hottest (called per node, every fixpoint iteration). */
   comp_scope_index_set_frozen(1);
 
+  /* Two rounds. The proc-form clones are made between them: knowing which
+     methods a poly dispatch will name needs settled receiver types, and the
+     clones' own bodies then need inferring like any other. The second round is
+     a no-op when nothing was cloned. (#3399) */
+  for (int pf_round = 0; pf_round < 2; pf_round++) {
+  if (pf_round == 1 && !make_yield_proc_forms(c)) break;
   g_infer_optimistic = 1;
   for (int iter = 0; iter < 128; iter++) {
     int ch = 0;
@@ -7888,6 +7978,7 @@ void analyze_program(Compiler *c) {
     }
   }
   g_infer_optimistic = 0;
+  }
 
   /* Optimistic re-narrow: the monotonic fixpoint locks a slot to poly the
      first time it sees a transient poly (a value read before its type settled,

@@ -3794,7 +3794,10 @@ static int emit_poly_method_dispatch(Compiler *c, int id, Buf *b) {
           else if (c->classes[defcls].is_value_type)
             snprintf(_dself, sizeof _dself, "*(sp_%s *)_t%d.v.p", _dcn, tv);
           else snprintf(_dself, sizeof _dself, "(sp_%s *)_t%d.v.p", _dcn, tv);
-          buf_printf(&cb, "sp_%s_%s(%s", _dcn, mc(c->scopes[mi].name), _dself);
+          /* a yielding candidate is called through its proc-form clone (#3399) */
+          int pfi9 = scope_proc_form_of(c, mi);
+          buf_printf(&cb, "sp_%s_%s(%s", _dcn,
+                     mc(pfi9 >= 0 ? c->scopes[pfi9].name : c->scopes[mi].name), _dself);
           if (c->scopes[mi].nparams > 0) {
             const char *saved_self = g_self;
             char selfpbuf[64];  /* stack-local: nested inlines each need their own receiver buffer */
@@ -3821,12 +3824,13 @@ static int emit_poly_method_dispatch(Compiler *c, int id, Buf *b) {
           buf_puts(&cb, ")");
           const char *call = cb.p ? cb.p : "";
           buf_printf(b, " case %d: ", k);
-          /* A proc form answers POLY whatever the scope's own return type says
-             -- the scope has none worth reading, since an inlined-only method
-             never needed one (#3399). */
-          int pf9 = scope_needs_proc_form(c, mi);
-          TyKind cret9 = pf9 ? TY_POLY : c->scopes[mi].ret;
-          if (!pf9 && method_is_void(&c->scopes[mi])) buf_puts(b, call);  /* void: no usable value */
+          /* A proc form is a separately inferred clone, so its own return type
+             is the one to read -- not the original's, which an inlined-only
+             method never needed (#3399). */
+          int pf9 = pfi9 >= 0;
+          TyKind cret9 = pf9 ? c->scopes[pfi9].ret : c->scopes[mi].ret;
+          if (!(pf9 ? method_is_void(&c->scopes[pfi9]) : method_is_void(&c->scopes[mi]))) { }
+          if ((pf9 ? method_is_void(&c->scopes[pfi9]) : method_is_void(&c->scopes[mi]))) buf_puts(b, call);  /* void: no usable value */
           else {
             TyKind slotty = is_scalar_ret(ret) ? ret : TY_INT;
             buf_printf(b, "_t%d = ", tr);
@@ -4293,8 +4297,10 @@ static int emit_poly_method_dispatch(Compiler *c, int id, Buf *b) {
         TyKind mret = c->scopes[mi].ret;
         int mnp = c->scopes[mi].nparams;
         Buf cb; memset(&cb, 0, sizeof cb);
+        int pfi8 = scope_proc_form_of(c, mi);   /* yielding: call the clone (#3399) */
         buf_printf(&cb, "sp_%s_%s((sp_%s *)_t%d.v.p", c->classes[defcls].c_name,
-                   mc(c->scopes[mi].name), c->classes[defcls].c_name, tv);
+                   mc(pfi8 >= 0 ? c->scopes[pfi8].name : c->scopes[mi].name),
+                   c->classes[defcls].c_name, tv);
         const char *saved_self = g_self;
         char selfpbuf2[64];  /* stack-local: nested inlines each need their own receiver buffer */
         snprintf(selfpbuf2, sizeof selfpbuf2, "(sp_%s *)_t%d.v.p", c->classes[defcls].c_name, tv);
@@ -4402,10 +4408,11 @@ else {
         else emit_cmethod_block_arg(c, id, &c->scopes[mi], blk_tmp2, &cb);
         buf_puts(&cb, ")");
         buf_printf(b, " case %d: ", k);
-        /* a proc form answers POLY; see the zero-arg dispatch (#3399) */
-        int pf8 = scope_needs_proc_form(c, mi);
-        TyKind mret8 = pf8 ? TY_POLY : mret;
-        if (!pf8 && (mret == TY_VOID || mret == TY_NIL || method_is_void(&c->scopes[mi]))) buf_puts(b, cb.p);  /* no usable value */
+        /* a proc form carries its own inferred return type (#3399) */
+        int pf8 = pfi8 >= 0;
+        TyKind mret8 = pf8 ? c->scopes[pfi8].ret : mret;
+        if ((mret8 == TY_VOID || mret8 == TY_NIL ||
+             method_is_void(&c->scopes[pf8 ? pfi8 : mi]))) buf_puts(b, cb.p);  /* no usable value */
         else {
           buf_printf(b, "_t%d = ", tr);
           if (ret == TY_POLY && mret8 != TY_POLY) emit_boxed_text(c, mret8, cb.p, b);

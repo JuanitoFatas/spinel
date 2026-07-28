@@ -10,10 +10,10 @@
 # an sp_Proc *, with `yield` lowered to a call on it. Monomorphic call sites
 # keep the splice; only the poly path pays for the closure.
 #
-# Two shapes are deliberately NOT served, and keep raising rather than answer
-# wrongly (see docs/limitations.md): a yield nested inside a block of its own
-# method, and a method whose poly call sites pass blocks of differing result
-# type -- one shared function cannot carry both.
+# The clone is typed independently of the inlined original: its yield answers
+# poly, so everything the yield feeds widens with it and one body serves every
+# call site. That is what lets a yield nested inside a block work, and what
+# lets two sites pass blocks of differing result type.
 
 class A
   def go
@@ -84,3 +84,32 @@ p pick(2).twice { |v| v * 3 }
 a = A.new
 p a.go { |v| v + 1 }
 p a.twice { |v| v }
+
+# a yield nested inside a block of the method's own body: the clone's locals
+# widen with the yield, so `t` is a boxed carrier rather than an mrb_int
+class Looper
+  def looped
+    t = 0
+    3.times { |i| t += yield(i) }
+    t
+  end
+end
+
+class NoLoop
+  def looped
+    -2
+  end
+end
+
+def pick_l(n)
+  n == 1 ? Looper.new : NoLoop.new
+end
+
+p pick_l(1).looped { |i| i * 2 }
+p pick_l(2).looped { |i| i * 2 }
+
+# two poly call sites whose blocks answer different types: one clone serves
+# both, because its yield is poly and each site unboxes into its own slot
+p pick(1).go { |v| v % 2 }
+p pick(1).go { |v| "s#{v}" }
+p pick(2).go { |v| "s#{v}" }

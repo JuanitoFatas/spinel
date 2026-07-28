@@ -1005,6 +1005,19 @@ TyKind infer_call(Compiler *c, int id) {
       (sp_streq(name, "real") || sp_streq(name, "imaginary") || sp_streq(name, "imag")) &&
       !an_user_defines_method(c, name))
     return TY_POLY;
+  /* A block call on a poly receiver whose candidates include a YIELDING method
+     is served by that method's proc-form clone, which answers poly uniformly
+     (its yield is a call on a real proc). Typing the call site from the inlined
+     view instead fixes it to whichever site inference visited, and a second
+     site with a differently-typed block then reads the boxed value as the wrong
+     thing (#3399). */
+  if (recv >= 0 && rt == TY_POLY && nt_ref(nt, id, "block") >= 0 && name) {
+    for (int k = 0; k < c->nclasses; k++) {
+      if (!c->classes[k].instantiated) continue;
+      int ymi = comp_method_in_chain(c, k, name, NULL);
+      if (ymi >= 0 && c->scopes[ymi].yields) return TY_POLY;
+    }
+  }
   /* String#chars on a poly value (a String read out of a container / pair):
      an array of single-char strings (#2909). */
   if (recv >= 0 && rt == TY_POLY && argc == 0 &&
@@ -6505,6 +6518,12 @@ TyKind infer_uncached(Compiler *c, int id) {
   }
   if (nk == NK_YieldNode) {
     int ymi = (int)(comp_scope_of(c, id) - c->scopes);
+    /* In a proc form the block is a real proc, so the yield is a call on it:
+       poly, uniformly, whatever any individual call site's block answers. That
+       is the whole point of the clone -- everything the yield feeds widens with
+       it, so one body serves every site (#3399). */
+    if (getenv("SP_DBG_PF2")) fprintf(stderr, "[y] node=%d scope=%d pf=%d name=%s\n", id, ymi, (ymi>=0&&ymi<c->nscopes)?c->scopes[ymi].is_proc_form:-1, (ymi>=0&&ymi<c->nscopes&&c->scopes[ymi].name)?c->scopes[ymi].name:"?");
+    if (ymi >= 0 && ymi < c->nscopes && c->scopes[ymi].is_proc_form) return TY_POLY;
     /* When the block value diverges across call sites (string block at one,
        int at another) AND this yield is the value of an assignment (its result
        flows into a LOCAL), the local settles its type from the first site and
