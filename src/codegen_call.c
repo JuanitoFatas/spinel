@@ -233,6 +233,8 @@ int emit_ctor_yield_inline(Compiler *c, int id, int ci, Buf *b) {
   return 1;
 }
 
+static void emit_cmethod_block_arg(Compiler *c, int id, Scope *cm, int blk_tmp, Buf *b);
+
 /* Emit `node` as a `sp_Bigint *` for a mixed bigint operand (arithmetic or
    comparison where the other side is bigint): a bigint stays itself, a poly is
    narrowed with sp_poly_as_bigint, and anything else (a plain int) is promoted
@@ -3696,6 +3698,31 @@ static int emit_poly_method_dispatch(Compiler *c, int id, Buf *b) {
       /* class 0 emits a `case 0:` arm here when it defines/inherits the method
          (nrequired 0) or exposes it as a reader; the dispatch key is then guarded
          so a boxed scalar (cls_id 0) does not alias it (issue #1576). */
+      /* A candidate whose method takes `&blk` needs the call's block passed
+         to it. Materialize the proc ONCE, ahead of the switch, and hand the
+         same temp to every arm -- only one arm runs, and building it per arm
+         would allocate a proc per candidate class (#3399). Mirrors the
+         class-method cascade, which already does this. */
+      int blk_tmp0 = -1;
+      { int cblk0 = resolve_forwarded_block(c, nt_ref(nt, id, "block"));
+        if (cblk0 >= 0) {
+          for (int k = 0; k < c->nclasses && blk_tmp0 < 0; k++) {
+            if (!c->classes[k].instantiated) continue;
+            int mi0 = comp_method_in_chain(c, k, name, NULL);
+            if (mi0 < 0 || !scope_has_callable_symbol(c, mi0)) continue;
+            Scope *cm0 = &c->scopes[mi0];
+            if (cm0->blk_param && cm0->blk_param[0] && !cm0->yields) {
+              blk_tmp0 = ++g_tmp;
+              Buf pb0; memset(&pb0, 0, sizeof pb0);
+              emit_proc_literal(c, cblk0, &pb0);
+              emit_indent(g_pre, g_indent);
+              buf_printf(g_pre, "sp_Proc *_t%d = %s;\n", blk_tmp0, pb0.p ? pb0.p : "NULL");
+              emit_indent(g_pre, g_indent);
+              buf_printf(g_pre, "SP_GC_ROOT(_t%d);\n", blk_tmp0);
+              free(pb0.p);
+            }
+          }
+        } }
       int cls0_d = -1, cls0_rd = -1;
       int cls0_mi = c->nclasses > 0 ? comp_method_in_chain(c, 0, name, &cls0_d) : -1;
       int cls0_cand = ((cls0_mi >= 0 && c->scopes[cls0_mi].nrequired == 0) ||
@@ -3769,6 +3796,13 @@ static int emit_poly_method_dispatch(Compiler *c, int id, Buf *b) {
             }
             g_self = saved_self;
           }
+          /* self is always the first argument here, so a zero-param method
+             still needs the separator the helper only adds after a real
+             parameter list. */
+          if (c->scopes[mi].nparams == 0 && c->scopes[mi].blk_param &&
+              c->scopes[mi].blk_param[0] && !c->scopes[mi].yields)
+            buf_puts(&cb, ", ");
+          emit_cmethod_block_arg(c, id, &c->scopes[mi], blk_tmp0, &cb);
           buf_puts(&cb, ")");
           const char *call = cb.p ? cb.p : "";
           buf_printf(b, " case %d: ", k);
@@ -4146,6 +4180,27 @@ static int emit_poly_method_dispatch(Compiler *c, int id, Buf *b) {
       /* class 0 emits a `case 0:` arm here when it defines/inherits the method
          with its arity satisfied; guard the key so a boxed scalar (cls_id 0)
          cannot alias it (issue #1576). */
+      /* Same shared-proc materialization the zero-arg dispatch does (#3399). */
+      int blk_tmp2 = -1;
+      { int cblk2 = resolve_forwarded_block(c, nt_ref(nt, id, "block"));
+        if (cblk2 >= 0) {
+          for (int k = 0; k < c->nclasses && blk_tmp2 < 0; k++) {
+            if (!c->classes[k].instantiated) continue;
+            int mi2 = comp_method_in_chain(c, k, name, NULL);
+            if (mi2 < 0 || !scope_has_callable_symbol(c, mi2)) continue;
+            Scope *cm2 = &c->scopes[mi2];
+            if (cm2->blk_param && cm2->blk_param[0] && !cm2->yields) {
+              blk_tmp2 = ++g_tmp;
+              Buf pb2; memset(&pb2, 0, sizeof pb2);
+              emit_proc_literal(c, cblk2, &pb2);
+              emit_indent(g_pre, g_indent);
+              buf_printf(g_pre, "sp_Proc *_t%d = %s;\n", blk_tmp2, pb2.p ? pb2.p : "NULL");
+              emit_indent(g_pre, g_indent);
+              buf_printf(g_pre, "SP_GC_ROOT(_t%d);\n", blk_tmp2);
+              free(pb2.p);
+            }
+          }
+        } }
       int cls0_mi2 = c->nclasses > 0 ? comp_method_in_chain(c, 0, name, NULL) : -1;
       int cls0_cand2 = cls0_mi2 >= 0 && argc >= c->scopes[cls0_mi2].nrequired &&
                        c->classes[0].instantiated;
@@ -4315,6 +4370,10 @@ else {
           }
         }
         g_self = saved_self;
+        if (c->scopes[mi].nparams == 0 && c->scopes[mi].blk_param &&
+            c->scopes[mi].blk_param[0] && !c->scopes[mi].yields)
+          buf_puts(&cb, ", ");   /* self is the first argument; see the zero-arg dispatch */
+        emit_cmethod_block_arg(c, id, &c->scopes[mi], blk_tmp2, &cb);
         buf_puts(&cb, ")");
         buf_printf(b, " case %d: ", k);
         if (mret == TY_VOID || mret == TY_NIL || method_is_void(&c->scopes[mi])) buf_puts(b, cb.p);  /* no usable value */
