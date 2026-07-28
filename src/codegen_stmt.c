@@ -9202,6 +9202,88 @@ int emit_array_mutate_stmt(Compiler *c, int id, Buf *b, int indent) {
 
 /* h[k] op= v  /  a[i] op= v  (IndexOperatorWriteNode). Receiver and key
    are evaluated once into temps. */
+/* The receiver / key of an IndexOperatorWriteNode, already evaluated into C
+   temps by the caller. The value form of `h[k] op= v` needs the SAME two for
+   the write and the read-back that follows it; re-emitting the nodes would
+   evaluate a method-call key twice, which is why that form used to decline
+   anything but a variable or a literal (#3417). NULL when nothing hoisted. */
+const char *g_iow_recv_ref = NULL;
+const char *g_iow_key_ref = NULL;
+static char g_iow_recv_buf[32], g_iow_key_buf[32];
+
+enum { IOW_KEY_HASH, IOW_KEY_INT, IOW_KEY_RAW, IOW_KEY_BOXED };
+
+static void iow_emit_recv(Compiler *c, int recv, Buf *b) {
+  if (g_iow_recv_ref) { buf_puts(b, g_iow_recv_ref); return; }
+  emit_expr(c, recv, b);
+}
+static void iow_emit_key(Compiler *c, int key, Buf *b, int kind, TyKind kt) {
+  if (g_iow_key_ref) { buf_puts(b, g_iow_key_ref); return; }
+  switch (kind) {
+    case IOW_KEY_HASH:  emit_hash_key(c, key, kt, b); return;
+    case IOW_KEY_INT:   emit_int_expr(c, key, b); return;
+    case IOW_KEY_BOXED: emit_boxed(c, key, b); return;
+    default:            emit_expr(c, key, b); return;
+  }
+}
+
+/* Evaluate the receiver and key once into prelude temps and point the two
+   emitters above at them. Returns 0 for a receiver shape the write paths do
+   not handle, leaving nothing hoisted. */
+int emit_index_opw_hoist(Compiler *c, int id, Buf *pre, int indent) {
+  const NodeTable *nt = c->nt;
+  int recv = nt_ref(nt, id, "receiver");
+  int args = nt_ref(nt, id, "arguments");
+  int argc = 0;
+  const int *argv = args >= 0 ? nt_arr(nt, args, "arguments", &argc) : NULL;
+  if (recv < 0 || argc != 1 || !pre) return 0;
+  TyKind rt = comp_ntype(c, recv);
+  Buf kb; memset(&kb, 0, sizeof kb);
+  const char *ktype = NULL;
+  int key_is_ptr = 0;
+  if (ty_is_hash(rt) && ty_hash_cname(rt)) {
+    TyKind kt = ty_hash_key(rt);
+    ktype = c_type_name(kt);
+    key_is_ptr = (kt == TY_STRING || kt == TY_POLY);
+    emit_hash_key(c, argv[0], kt, &kb);
+  }
+  else if (ty_is_array(rt) && (rt == TY_POLY_ARRAY || array_kind(rt))) {
+    ktype = "mrb_int"; emit_int_expr(c, argv[0], &kb);
+  }
+  else if (rt == TY_POLY) {
+    TyKind kt = comp_ntype(c, argv[0]);
+    if (kt == TY_SYMBOL)      { ktype = "sp_sym";      emit_expr(c, argv[0], &kb); }
+    else if (kt == TY_STRING) { ktype = "const char *"; key_is_ptr = 1; emit_expr(c, argv[0], &kb); }
+    else if (kt == TY_INT)    { ktype = "mrb_int";     emit_int_expr(c, argv[0], &kb); }
+    else                      { ktype = "sp_RbVal";    key_is_ptr = 1; emit_boxed(c, argv[0], &kb); }
+  }
+  else { free(kb.p); return 0; }
+  Buf rb; memset(&rb, 0, sizeof rb);
+  emit_expr(c, recv, &rb);
+  int ta = ++g_tmp, tb = ++g_tmp;
+  emit_indent(pre, indent);
+  buf_printf(pre, "%s _t%d = %s;\n", c_type_name(rt), ta, rb.p ? rb.p : "0");
+  /* a receiver or key that allocates has no other root while the fold below
+     runs, and the fold can collect */
+  if (subtree_may_allocate(nt, recv)) {
+    emit_indent(pre, indent);
+    buf_printf(pre, rt == TY_POLY ? "SP_GC_ROOT_RBVAL(_t%d);\n" : "SP_GC_ROOT(_t%d);\n", ta);
+  }
+  emit_indent(pre, indent);
+  buf_printf(pre, "%s _t%d = %s;\n", ktype, tb, kb.p ? kb.p : "0");
+  if (key_is_ptr && subtree_may_allocate(nt, argv[0])) {
+    emit_indent(pre, indent);
+    buf_printf(pre, sp_streq(ktype, "sp_RbVal") ? "SP_GC_ROOT_RBVAL(_t%d);\n" : "SP_GC_ROOT(_t%d);\n", tb);
+  }
+  free(rb.p); free(kb.p);
+  snprintf(g_iow_recv_buf, sizeof g_iow_recv_buf, "_t%d", ta);
+  snprintf(g_iow_key_buf, sizeof g_iow_key_buf, "_t%d", tb);
+  g_iow_recv_ref = g_iow_recv_buf;
+  g_iow_key_ref = g_iow_key_buf;
+  return 1;
+}
+void emit_index_opw_unhoist(void) { g_iow_recv_ref = NULL; g_iow_key_ref = NULL; }
+
 void emit_index_op_write(Compiler *c, int id, Buf *b, int indent) {
   const NodeTable *nt = c->nt;
   int recv = nt_ref(nt, id, "receiver");
@@ -9221,8 +9303,8 @@ void emit_index_op_write(Compiler *c, int id, Buf *b, int indent) {
     TyKind vt = ty_hash_val(rt);
     if (!hn) unsupported(c, id, "index operator assignment (hash)");
     emit_indent(b, indent);
-    buf_printf(b, "{ %s _t%d = ", c_type_name(rt), ta); emit_expr(c, recv, b);
-    buf_printf(b, "; %s _t%d = ", c_type_name(ty_hash_key(rt)), tb); emit_hash_key(c, argv[0], ty_hash_key(rt), b);
+    buf_printf(b, "{ %s _t%d = ", c_type_name(rt), ta); iow_emit_recv(c, recv, b);
+    buf_printf(b, "; %s _t%d = ", c_type_name(ty_hash_key(rt)), tb); iow_emit_key(c, argv[0], b, IOW_KEY_HASH, ty_hash_key(rt));
     buf_puts(b, "; ");
     /* Build the new value (which reads the slot and evaluates the RHS) BEFORE
        the frozen check: Ruby desugars `h[k] += v` to `h[k] = h[k] + v`, so the
@@ -9271,9 +9353,9 @@ void emit_index_op_write(Compiler *c, int id, Buf *b, int indent) {
        sp_str_plus/repeat) can trigger a collection before the closing
        sp_*Array_set. A bare local/ivar read is already rooted at its slot,
        so it skips the push (keeps hot emissions byte-identical). */
-    buf_printf(b, "{ %s _t%d = ", c_type_name(rt), ta); emit_expr(c, recv, b);
+    buf_printf(b, "{ %s _t%d = ", c_type_name(rt), ta); iow_emit_recv(c, recv, b);
     if (subtree_may_allocate(nt, recv)) buf_printf(b, "; SP_GC_ROOT(_t%d)", ta);
-    buf_printf(b, "; mrb_int _t%d = ", tb); emit_int_expr(c, argv[0], b);
+    buf_printf(b, "; mrb_int _t%d = ", tb); iow_emit_key(c, argv[0], b, IOW_KEY_INT, TY_INT);
     buf_puts(b, "; ");
     if (rt == TY_POLY_ARRAY) {
       /* poly slot: fold via the tag-dispatching operator on boxed operands,
@@ -9332,16 +9414,16 @@ void emit_index_op_write(Compiler *c, int id, Buf *b, int indent) {
     emit_indent(b, indent);
     if (kt == TY_SYMBOL) {
       int tc = ++g_tmp;
-      buf_printf(b, "{ sp_RbVal _t%d = ", ta); emit_expr(c, recv, b);
-      buf_printf(b, "; sp_sym _t%d = ", tb); emit_expr(c, argv[0], b); buf_puts(b, "; ");
+      buf_printf(b, "{ sp_RbVal _t%d = ", ta); iow_emit_recv(c, recv, b);
+      buf_printf(b, "; sp_sym _t%d = ", tb); iow_emit_key(c, argv[0], b, IOW_KEY_RAW, TY_UNKNOWN); buf_puts(b, "; ");
       buf_printf(b, "sp_RbVal _t%d = sp_poly_get_sym(_t%d, _t%d);", tc, ta, tb);
       buf_printf(b, " sp_poly_set_sym(_t%d, _t%d, sp_box_int(_t%d.v.i %s (", ta, tb, tc, op);
       emit_expr(c, v, b); buf_puts(b, "))); }\n");
     }
     else if (kt == TY_STRING) {
       int tc = ++g_tmp;
-      buf_printf(b, "{ sp_RbVal _t%d = ", ta); emit_expr(c, recv, b);
-      buf_printf(b, "; const char *_t%d = ", tb); emit_expr(c, argv[0], b); buf_puts(b, "; ");
+      buf_printf(b, "{ sp_RbVal _t%d = ", ta); iow_emit_recv(c, recv, b);
+      buf_printf(b, "; const char *_t%d = ", tb); iow_emit_key(c, argv[0], b, IOW_KEY_RAW, TY_UNKNOWN); buf_puts(b, "; ");
       buf_printf(b, "sp_RbVal _t%d = sp_poly_get_str(_t%d, _t%d);", tc, ta, tb);
       buf_printf(b, " sp_poly_set_str(_t%d, _t%d, sp_box_int(_t%d.v.i %s (", ta, tb, tc, op);
       emit_expr(c, v, b); buf_puts(b, "))); }\n");
@@ -9361,15 +9443,15 @@ void emit_index_op_write(Compiler *c, int id, Buf *b, int indent) {
       if (!pf) unsupported(c, id, "index operator assignment (poly-recv, operator)");
       int tc = ++g_tmp;
       if (kt == TY_INT) {
-        buf_printf(b, "{ sp_RbVal _t%d = ", ta); emit_expr(c, recv, b);
-        buf_printf(b, "; mrb_int _t%d = ", tb); emit_int_expr(c, argv[0], b); buf_puts(b, "; ");
+        buf_printf(b, "{ sp_RbVal _t%d = ", ta); iow_emit_recv(c, recv, b);
+        buf_printf(b, "; mrb_int _t%d = ", tb); iow_emit_key(c, argv[0], b, IOW_KEY_INT, TY_INT); buf_puts(b, "; ");
         buf_printf(b, "sp_RbVal _t%d = sp_poly_arr_get_hash(_t%d, _t%d);", tc, ta, tb);
         buf_printf(b, " sp_poly_arr_set_hash(_t%d, _t%d, %s(_t%d, ", ta, tb, pf, tc);
         emit_boxed(c, v, b); buf_puts(b, ")); }\n");
       }
       else {
-        buf_printf(b, "{ sp_RbVal _t%d = ", ta); emit_expr(c, recv, b);
-        buf_printf(b, "; sp_RbVal _t%d = ", tb); emit_boxed(c, argv[0], b); buf_puts(b, "; ");
+        buf_printf(b, "{ sp_RbVal _t%d = ", ta); iow_emit_recv(c, recv, b);
+        buf_printf(b, "; sp_RbVal _t%d = ", tb); iow_emit_key(c, argv[0], b, IOW_KEY_BOXED, TY_POLY); buf_puts(b, "; ");
         buf_printf(b, "sp_RbVal _t%d = sp_poly_index_poly(_t%d, _t%d);", tc, ta, tb);
         buf_printf(b, " sp_poly_set_poly(_t%d, _t%d, %s(_t%d, ", ta, tb, pf, tc);
         emit_boxed(c, v, b); buf_puts(b, ")); }\n");

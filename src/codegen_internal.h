@@ -767,4 +767,12 @@ void emit_class_new(Compiler *c, ClassInfo *ci, Buf *b);
 int emit_super_inline(Compiler *c, int id, Buf *b, int indent, int as_expr);
 void emit_super(Compiler *c, int id, Buf *b);
 void emit_regex_section(Compiler *c, Buf *b);
+/* IndexOperatorWriteNode in value position: evaluate the receiver and key
+   once into prelude temps so the write and the read-back that follows share
+   them (#3417). Returns 0 when nothing was hoisted. */
+int emit_index_opw_hoist(Compiler *c, int id, Buf *pre, int indent);
+void emit_index_opw_unhoist(void);
+extern const char *g_iow_recv_ref;
+extern const char *g_iow_key_ref;
+
 #endif

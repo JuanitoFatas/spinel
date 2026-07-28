@@ -541,16 +541,18 @@ static void emit_index_get(Compiler *c, int recv, int key, Buf *b) {
   TyKind rt = comp_ntype(c, recv);
   if (ty_is_hash(rt) && ty_hash_cname(rt)) {
     buf_printf(b, "sp_%sHash_get(", ty_hash_cname(rt));
-    emit_expr(c, recv, b); buf_puts(b, ", ");
-    emit_hash_key(c, key, ty_hash_key(rt), b);
+    if (g_iow_recv_ref) buf_puts(b, g_iow_recv_ref); else emit_expr(c, recv, b);
+    buf_puts(b, ", ");
+    if (g_iow_key_ref) buf_puts(b, g_iow_key_ref); else emit_hash_key(c, key, ty_hash_key(rt), b);
     buf_puts(b, ")");
     return;
   }
   if (ty_is_array(rt)) {
     const char *k = (rt == TY_POLY_ARRAY) ? "Poly" : array_kind(rt);
     buf_printf(b, "sp_%sArray_get(", k ? k : "Poly");
-    emit_expr(c, recv, b); buf_puts(b, ", ");
-    emit_int_expr(c, key, b);
+    if (g_iow_recv_ref) buf_puts(b, g_iow_recv_ref); else emit_expr(c, recv, b);
+    buf_puts(b, ", ");
+    if (g_iow_key_ref) buf_puts(b, g_iow_key_ref); else emit_int_expr(c, key, b);
     buf_puts(b, ")");
     return;
   }
@@ -560,8 +562,10 @@ static void emit_index_get(Compiler *c, int recv, int key, Buf *b) {
                    kt == TY_STRING ? "sp_poly_get_str" :
                    kt == TY_INT    ? "sp_poly_arr_get_hash" : "sp_poly_index_poly";
   buf_printf(b, "%s(", fn);
-  emit_expr(c, recv, b); buf_puts(b, ", ");
-  if (kt == TY_SYMBOL || kt == TY_STRING) emit_expr(c, key, b);
+  if (g_iow_recv_ref) buf_puts(b, g_iow_recv_ref); else emit_expr(c, recv, b);
+  buf_puts(b, ", ");
+  if (g_iow_key_ref) buf_puts(b, g_iow_key_ref);
+  else if (kt == TY_SYMBOL || kt == TY_STRING) emit_expr(c, key, b);
   else if (kt == TY_INT) emit_int_expr(c, key, b);
   else emit_boxed(c, key, b);
   buf_puts(b, ")");
@@ -2777,11 +2781,22 @@ else {
     int ir = nt_ref(nt, id, "receiver");
     int ia = nt_ref(nt, id, "arguments");
     int iac = 0; const int *iav = ia >= 0 ? nt_arr(nt, ia, "arguments", &iac) : NULL;
-    if (ir >= 0 && iac == 1 &&
-        idx_opw_node_is_cheap(nt, ir) && idx_opw_node_is_cheap(nt, iav[0])) {
+    if (ir >= 0 && iac == 1) {
+      /* A variable or a literal can simply be re-emitted for the read-back; a
+         method-call receiver or key cannot, because CRuby evaluates each once
+         and re-emitting would run it twice. Hoist those into temps that both
+         the write and the read then share. Without this the value form
+         declined outright, which is what `v[s.tag] += 1` as a block's last
+         expression hit (#3417). */
+      int cheap = idx_opw_node_is_cheap(nt, ir) && idx_opw_node_is_cheap(nt, iav[0]);
       if (g_pre) {
-        emit_index_op_write(c, id, g_pre, g_indent);
-        emit_index_get(c, ir, iav[0], b);
+        int hoisted = cheap ? 0 : emit_index_opw_hoist(c, id, g_pre, g_indent);
+        if (cheap || hoisted) {
+          emit_index_op_write(c, id, g_pre, g_indent);
+          emit_index_get(c, ir, iav[0], b);
+          if (hoisted) emit_index_opw_unhoist();
+          return;
+        }
       }
       else {
         /* No prelude buffer: statement-expression fallback. The RHS inside
@@ -2792,16 +2807,22 @@ else {
         Buf stmt; memset(&stmt, 0, sizeof stmt);
         int sv_ind = g_indent;
         g_pre = &pre; g_indent = 0;
-        emit_index_op_write(c, id, &stmt, 0);
+        int hoisted = cheap ? 0 : emit_index_opw_hoist(c, id, &pre, 0);
+        if (cheap || hoisted) {
+          emit_index_op_write(c, id, &stmt, 0);
+          g_pre = NULL; g_indent = sv_ind;
+          buf_puts(b, "({ ");
+          if (pre.p) buf_puts(b, pre.p);
+          if (stmt.p) buf_puts(b, stmt.p);
+          emit_index_get(c, ir, iav[0], b);
+          buf_puts(b, "; })");
+          free(pre.p); free(stmt.p);
+          if (hoisted) emit_index_opw_unhoist();
+          return;
+        }
         g_pre = NULL; g_indent = sv_ind;
-        buf_puts(b, "({ ");
-        if (pre.p) buf_puts(b, pre.p);
-        if (stmt.p) buf_puts(b, stmt.p);
-        emit_index_get(c, ir, iav[0], b);
-        buf_puts(b, "; })");
         free(pre.p); free(stmt.p);
       }
-      return;
     }
   }
 
