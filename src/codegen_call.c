@@ -17379,6 +17379,24 @@ else { memcpy(dir, sf, n); dir[n] = 0; } }
     else if (sp_streq(name, "%")) pfn = "sp_poly_mod";
     else if (sp_streq(name, "**")) pfn = "sp_poly_pow";
     if (pfn) {
+      /* The receiver's value is a C temporary until the call runs, and the
+         ARGUMENT is evaluated in between. When that argument can allocate, a
+         collection lands with the receiver held nowhere the root scan can see
+         it -- and a chained `a + b + c` makes the receiver a freshly built
+         string, so it is swept and the concat reads freed memory (#3396).
+         Hoist it into a rooted temp first. Only when the argument can
+         allocate: otherwise nothing can collect in the window. */
+      if (subtree_may_allocate(nt, argv[0])) {
+        int th = ++g_tmp;
+        Buf rb; memset(&rb, 0, sizeof rb);
+        emit_boxed(c, recv, &rb);
+        emit_indent(g_pre, g_indent);
+        buf_printf(g_pre, "sp_RbVal _t%d = %s; SP_GC_ROOT_RBVAL(_t%d);\n",
+                   th, rb.p ? rb.p : "sp_box_nil()", th);
+        free(rb.p);
+        buf_printf(b, "%s(_t%d, ", pfn, th); emit_boxed(c, argv[0], b); buf_puts(b, ")");
+        return;
+      }
       buf_printf(b, "%s(", pfn); emit_boxed(c, recv, b); buf_puts(b, ", "); emit_boxed(c, argv[0], b); buf_puts(b, ")");
       return;
     }
