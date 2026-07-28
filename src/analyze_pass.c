@@ -4244,9 +4244,39 @@ static int subtree_has_any_kind(const NodeTable *nt, int root, const NodeKind *k
 }
 
 /* Does the subtree read local `nm` under a proc-create (a capture)? */
+/* A block that may be materialized as a real proc rather than spliced: its
+   call name is one an instantiated user class owns as a yielding or
+   &blk-taking method, so a poly receiver there dispatches and the block is
+   lifted. Decided from the name alone because this runs before the types
+   settle; over-answering only costs a wrapper the emitter would otherwise not
+   need. */
+static int block_may_lift_by_name(Compiler *c, int id) {
+  const NodeTable *nt = c->nt;
+  if (nt_kind(nt, id) != NK_CallNode) return 0;
+  if (nt_ref(nt, id, "block") < 0) return 0;
+  const char *nm = nt_str(nt, id, "name");
+  if (!nm || !poly_enum_op_for(nm)) return 0;
+  for (int k = 0; k < c->nclasses; k++) {
+    int mi = comp_method_in_chain(c, k, nm, NULL);
+    if (mi < 0) continue;
+    Scope *m = &c->scopes[mi];
+    if (m->yields || (m->blk_param && m->blk_param[0])) return 1;
+  }
+  return 0;
+}
+
 static int subtree_proc_captures_name(Compiler *c, int root, const char *nm, int in_proc, int depth) {
   const NodeTable *nt = c->nt;
   if (root < 0 || root >= nt->count || depth > 200) return 0;
+  /* Only the BLOCK of a liftable call becomes a proc; its receiver and
+     arguments are evaluated in the enclosing frame, so a name read there is
+     not a capture. Descending into the whole call as if it were a proc made
+     `x.flatten.each { }` count as capturing `x` and wrapped a loop that never
+     needed it. */
+  if (!in_proc && block_may_lift_by_name(c, root)) {
+    int lblk = nt_ref(nt, root, "block");
+    if (lblk >= 0 && subtree_proc_captures_name(c, lblk, nm, 1, depth + 1)) return 1;
+  }
   int now_proc = in_proc || is_proc_create(c, root);
   if (now_proc && nt_kind(nt, root) == NK_LocalVariableReadNode) {
     const char *rn = nt_str(nt, root, "name");

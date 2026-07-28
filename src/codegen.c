@@ -1953,7 +1953,9 @@ void emit_fiber_new(Compiler *c, int id, Buf *b, int as_gen, int size_node) {
     for (int i = 0; i < ncap; i++) {
       LocalVar *lv = encl ? scope_local(encl, caps.v[i]) : NULL;
       emit_indent(g_pre, g_indent);
-      if (lv && lv->is_cell)
+      if (g_cap_struct && g_cap_names && nameset_has(g_cap_names, caps.v[i]))
+        buf_printf(g_pre, "_t%d->%s = ((%s *)_cap)->%s;\n", tc, caps.v[i], g_cap_struct, caps.v[i]);
+      else if (lv && lv->is_cell)
         buf_printf(g_pre, "_t%d->%s = _cell_%s;\n", tc, caps.v[i], caps.v[i]);   /* the shared cell pointer */
       else
         buf_printf(g_pre, "_t%d->%s = lv_%s;\n", tc, caps.v[i], rename_local(caps.v[i]));
@@ -2886,7 +2888,17 @@ else if (orecv >= 0 && onm) {
          struct before the box adopts it. */
       emit_indent(g_pre, g_indent);
       buf_printf(g_pre, "SP_GC_ROOT(_capv_%d);\n", pid);
-      for (int i = 0; i < ncap; i++) { emit_indent(g_pre, g_indent); buf_printf(g_pre, "_capv_%d->%s = _cell_%s;\n", pid, caps.v[i], caps.v[i]); }
+      /* The cell pointer, as named where this proc is BUILT. Inside another
+         proc that captures the same name, no `_cell_<n>` is in scope -- the
+         cell arrived through that proc's own capture struct, and the nested
+         proc has to forward it from there (#3416). */
+      for (int i = 0; i < ncap; i++) {
+        emit_indent(g_pre, g_indent);
+        if (g_cap_struct && g_cap_names && nameset_has(g_cap_names, caps.v[i]))
+          buf_printf(g_pre, "_capv_%d->%s = ((%s *)_cap)->%s;\n", pid, caps.v[i], g_cap_struct, caps.v[i]);
+        else
+          buf_printf(g_pre, "_capv_%d->%s = _cell_%s;\n", pid, caps.v[i], caps.v[i]);
+      }
       /* Capture the enclosing instance self: by value for a value-type class
          (deref if the enclosing method holds self as a pointer, e.g. an
          initialize body), else by pointer (#1436). */
