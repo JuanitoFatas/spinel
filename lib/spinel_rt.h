@@ -5824,11 +5824,21 @@ extern void sp_re_set_error_handler(void (*fn)(const char *msg));
 static void sp_mark_in_flight_exceptions(void) {
   /* <=: a rescue arm pops its frame (sp_exc_top--) BEFORE materializing the
      exception from the popped slot, and that materialization allocates -- the
-     just-consumed message/object at [sp_exc_top] must survive it. Frame
-     pushes zero the slot, so a covered entry is never a dangling pointer. */
+     just-consumed message/object at [sp_exc_top] must survive it. */
   for (int i = 0; i <= sp_exc_top && i < SP_EXC_STACK_MAX; i++) {
     sp_mark_string(sp_exc_msg[i]);
     if (sp_exc_obj[i]) sp_gc_mark(sp_exc_obj[i]);  /* carried subclass object + its ivars */
+  }
+  /* Everything ABOVE the window is dead by definition, so drop it here rather
+     than trust every pop site to. The window follows sp_exc_top up and down,
+     and a slot that leaves it keeps its pointer: pop below a used slot, collect
+     (the object is now unreferenced and is freed), then push back over it, and
+     the window covers a dangling pointer again. Clearing at the one place that
+     defines the window makes that sequence impossible -- after any collection,
+     a slot outside it holds nothing (#3404). */
+  for (int i = sp_exc_top + 1; i < SP_EXC_STACK_MAX; i++) {
+    sp_exc_obj[i] = NULL;
+    sp_exc_msg[i] = NULL;
   }
   if (sp_pending_exc_obj) sp_gc_mark(sp_pending_exc_obj);
   if (sp_pending_cause) sp_gc_mark(sp_pending_cause);
