@@ -77,6 +77,15 @@ grep -q '^err$' test/streams_test.rb.expected || fail "test --regen dropped stde
 expect "test (regen round-trip)" "1/1 passed" "$("$SPIN" test streams_test.rb 2>&1 | tail -1)"
 rm -f test/streams_test.rb test/streams_test.rb.expected
 
+# the compiler beside spin has to be an executable FILE. A checkout of the
+# compiler repo cloned next to the project is a DIRECTORY of that name, and
+# spin used to try to run it (#3407).
+mkdir -p "$WORK/sib/spinel"
+cp "$SPIN" "$WORK/sib/spin"
+printf 'puts "sib"\n' > test/sib_test.rb        # fresh: must actually compile
+expect "test (sibling spinel dir)" "1/1 passed" "$("$WORK/sib/spin" test sib_test.rb 2>&1 | tail -1)"
+rm -rf "$WORK/sib"; rm -f test/sib_test.rb test/sib_test.rb.expected
+
 # a large test/ directory: enumerating ~60 entries allocates enough to GC
 # mid-glob, which swept the unrooted result array (heap corruption before
 # any child spawned, #2178)

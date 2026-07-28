@@ -48,10 +48,14 @@ def find_root(dir)
 end
 
 def spinel_bin
-  # spin ships beside the compiler: <dir-of-$0>/spinel
+  # spin ships beside the compiler: <dir-of-$0>/spinel. It has to be an
+  # executable FILE: a checkout of the compiler repo cloned next to the project
+  # is a DIRECTORY of that name, and File.exist? said yes to it -- spin then
+  # tried to run the directory ("Permission denied", or "is a directory" on
+  # macOS) instead of falling through to the installed binary (#3407).
   me = File.expand_path($0)
   cand = File.join(File.expand_path("..", me), "spinel")
-  return cand if File.exist?(cand)
+  return cand if File.file?(cand) && File.executable?(cand)
   "spinel"  # PATH fallback
 end
 
