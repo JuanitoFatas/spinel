@@ -1002,40 +1002,14 @@ sp_RbVal sp_File_putc(sp_File *f, sp_RbVal v);
 /* IO.copy_stream(src, dst): both path strings (#2815); returns bytes copied */
 /* IO.copy_stream(src_path, dst_path): defined out-of-line in sp_cold.c. */
 mrb_int sp_io_copy_stream(const char *src, const char *dst);
+const char *sp_slurp_stream(FILE *fp);
 static inline const char *sp_File_read(sp_File *f) {
   if (!f || !f->fp) return sp_str_empty;
   if (f->is_sock) sp_sock_wait_readable(f);
-  long pos = ftell(f->fp);
-  if (pos >= 0 && fseek(f->fp, 0, SEEK_END) == 0) {
-    long end = ftell(f->fp);
-    fseek(f->fp, pos, SEEK_SET);
-    long n = (end > pos) ? (end - pos) : 0;
-    if (n <= 0) return sp_str_empty;
-    char *r = sp_str_alloc((size_t)n);
-    size_t got = fread(r, 1, (size_t)n, f->fp);
-    r[got] = 0;
-    return r;
-  }
-  /* Non-seekable stream (IO.pipe end, socket): read to EOF in chunks. */
-  size_t cap = 256, len = 0;
-  char *buf = (char *)malloc(cap);
-  if (!buf) return sp_str_empty;
-  for (;;) {
-    if (len + 4096 + 1 > cap) {
-      cap = (len + 4096 + 1) * 2;
-      char *nb = (char *)realloc(buf, cap);
-      if (!nb) { free(buf); return sp_str_empty; }
-      buf = nb;
-    }
-    size_t got = fread(buf + len, 1, 4096, f->fp);
-    len += got;
-    if (got < 4096) break;
-  }
-  char *r = sp_str_alloc(len);
-  memcpy(r, buf, len);
-  r[len] = 0;
-  free(buf);
-  return r;
+  /* One reader for every stream: the seek size is a hint, so a seekable file
+     reporting 0 (a /proc entry) and a non-seekable one (a pipe end, a socket,
+     a FIFO) both read to EOF (#3411). */
+  return sp_slurp_stream(f->fp);
 }
 /* IO#read(n): read up to n bytes from the current position. Returns NULL
    (nil) at EOF for a positive n, "" for n == 0, and the whole rest for a

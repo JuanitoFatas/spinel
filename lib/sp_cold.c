@@ -498,6 +498,45 @@ sp_PolyArray *sp_math_lgamma(double x) {
   return r;
 }
 
+/* Read from the stream's current position to EOF.
+   The seek size is a HINT, never the length: /proc and /sys entries, FIFOs and
+   character devices all report 0 and still yield bytes, and an ordinary file
+   can grow between the size query and the read. Sizing the buffer from it and
+   stopping there answered "" for the whole of /proc -- silently, since a short
+   read is indistinguishable from an empty file (#3411). The hint only picks
+   the initial capacity, so the common case is still one allocation and one
+   fread. */
+const char *sp_slurp_stream(FILE *fp) {
+  if (!fp) return &("\xff" "")[1];
+  size_t cap = 8192;
+  long pos = ftell(fp);
+  if (pos >= 0 && fseek(fp, 0, SEEK_END) == 0) {
+    long end = ftell(fp);
+    if (fseek(fp, pos, SEEK_SET) != 0) { /* unseekable after all: start over */ }
+    if (end > pos) cap = (size_t)(end - pos) + 1;
+  }
+  char *buf = (char *)malloc(cap);
+  if (!buf) return &("\xff" "")[1];
+  size_t len = 0;
+  for (;;) {
+    if (len + 1 >= cap) {
+      size_t ncap = cap * 2;
+      char *nb = (char *)realloc(buf, ncap);
+      if (!nb) { free(buf); return &("\xff" "")[1]; }
+      buf = nb; cap = ncap;
+    }
+    size_t got = fread(buf + len, 1, cap - len - 1, fp);
+    len += got;
+    if (got == 0) break;
+  }
+  char *r = sp_str_alloc(len);
+  if (len) memcpy(r, buf, len);
+  r[len] = 0;
+  sp_str_set_len(r, len);
+  free(buf);
+  return r;
+}
+
 const char *sp_file_read(const char *path) {
   if (sp_file_directory(path)) {
     sp_raise_cls("Errno::EISDIR", sp_sprintf("Is a directory @ io_fread - %s", path));
@@ -508,18 +547,9 @@ const char *sp_file_read(const char *path) {
                  sp_sprintf("%s @ rb_sysopen - %s", strerror(errno), path));
     return &("\xff" "")[1];
   }
-  fseek(f, 0, SEEK_END);
-  long sz = ftell(f);
-  fseek(f, 0, SEEK_SET);
-  char *buf = sp_str_alloc(sz);
-  size_t n = 0;
-  if (sz > 0) {
-    n = fread(buf, 1, sz, f);
-  }
-  buf[n] = 0;
-  sp_str_set_len(buf, n);  /* a short read must not leave the size as length */
+  const char *r = sp_slurp_stream(f);
   fclose(f);
-  return buf;
+  return r;
 }
 
 sp_Time sp_file_atime(const char *path) {
