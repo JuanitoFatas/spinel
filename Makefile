@@ -690,6 +690,14 @@ rbs-seed-test: $(SPINEL) $(RBS_EXTRACT_BIN) $(SP_RT_LIB)
 	  "$$tmp/yu" > "$$tmp/yu.out" 2>/dev/null; \
 	  cmp -s "$$tmp/yu.out" test/rbs-seed/yield_union_hash_obj.expected || { echo "rbs-seed-test: FAIL (#3278 yield-union output mismatch)"; diff -u test/rbs-seed/yield_union_hash_obj.expected "$$tmp/yu.out" || true; ok=0; }; \
 	else echo "rbs-seed-test: FAIL (#3278 yield-union: C did not compile)"; ok=0; fi; \
+	$(SPINEL) test/rbs-seed/nilable_scalar_ivar.rb --rbs test/rbs-seed/sig \
+	  -c --no-line-map -o "$$tmp/ns.c" 2>/dev/null; \
+	grep -Eq 'sp_RbVal[[:space:]]+iv_f;' "$$tmp/ns.c" || { echo "rbs-seed-test: FAIL (#3412: bool? pinned a slot with no nil)"; ok=0; }; \
+	grep -Eq 'sp_RbVal[[:space:]]+iv_y;' "$$tmp/ns.c" || { echo "rbs-seed-test: FAIL (#3412: Symbol? pinned a slot with no nil)"; ok=0; }; \
+	if $(CC) -O0 -Ilib "$$tmp/ns.c" $(SP_RT_LIB) $(LDFLAGS) -lm -o "$$tmp/ns" 2>"$$tmp/ns.err"; then \
+	  "$$tmp/ns" > "$$tmp/ns.out" 2>/dev/null; \
+	  cmp -s "$$tmp/ns.out" test/rbs-seed/nilable_scalar_ivar.expected || { echo "rbs-seed-test: FAIL (#3412 nilable-scalar ivar output mismatch)"; diff -u test/rbs-seed/nilable_scalar_ivar.expected "$$tmp/ns.out" || true; ok=0; }; \
+	else echo "rbs-seed-test: FAIL (#3412 nilable-scalar ivar: C did not compile)"; ok=0; fi; \
 	rm -rf "$$tmp"; \
 	if [ $$ok -eq 1 ]; then echo "rbs-seed-test: pass"; else exit 1; fi
 endif

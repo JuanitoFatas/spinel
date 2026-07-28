@@ -1740,14 +1740,21 @@ static TyKind parse_seed_type(Compiler *c, const char *tok) {
   char buf[128];
   if (n >= sizeof buf) return TY_UNKNOWN;
   memcpy(buf, tok, n + 1);
-  /* A trailing nullable '?' has no C scalar kind (objects are NULL-nullable
-     already); pin to the base type. */
-  if (n > 0 && buf[n - 1] == '?') buf[--n] = '\0';
+  /* A trailing '?' is RBS's nilable form (`Integer?`, `bool?`). Pinning it to
+     the base type is right only where that type's C slot still has an
+     inhabitant left to spell nil with: a pointer kind uses NULL, and int /
+     float / string carry a reserved sentinel every nil? / to_s / boxing site
+     already tests for. `mrb_bool` and `sp_sym` have none -- 0 is `false`, and
+     symbol 0 is a real symbol -- so a `bool?` / `Symbol?` pin has nowhere to
+     put nil and collapses it onto false / :"" (#3412). Those pin to the tagged
+     union, which is what `bool | nil` means anyway. */
+  int nilable = 0;
+  if (n > 0 && buf[n - 1] == '?') { buf[--n] = '\0'; nilable = 1; }
   if (sp_streq(buf, "int"))    return TY_INT;
   if (sp_streq(buf, "float"))  return TY_FLOAT;
   if (sp_streq(buf, "string") || sp_streq(buf, "str")) return TY_STRING;
-  if (sp_streq(buf, "symbol") || sp_streq(buf, "sym")) return TY_SYMBOL;
-  if (sp_streq(buf, "bool"))   return TY_BOOL;
+  if (sp_streq(buf, "symbol") || sp_streq(buf, "sym")) return nilable ? TY_POLY : TY_SYMBOL;
+  if (sp_streq(buf, "bool"))   return nilable ? TY_POLY : TY_BOOL;
   if (sp_streq(buf, "nil"))    return TY_NIL;
   if (sp_streq(buf, "void"))   return TY_VOID;
   /* heterogeneous unions map to the bare poly tag (#1255); accepting the

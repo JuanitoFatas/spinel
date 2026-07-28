@@ -5922,10 +5922,13 @@ else {
       buf_puts(b, "sp_bigint_new_int("); emit_int_expr(c, v, b); buf_puts(b, ")");
     }
     else if (ivt != TY_POLY && ivt != TY_UNKNOWN && comp_ntype(c, v) == TY_POLY) {
-      /* poly rhs assigned to a typed ivar: unbox to the concrete type */
+      /* poly rhs assigned to a typed ivar: unbox to the concrete type. The
+         nil-preserving form -- the RHS is a tagged union whose nil-ness is not
+         ruled out here, and an --rbs `Integer?` / `Float?` pin makes this
+         exactly the slot a nil is expected to survive in (#3412). */
       Buf _rb; memset(&_rb, 0, sizeof _rb);
       emit_expr(c, v, &_rb);
-      emit_unbox_text(c, ivt, _rb.p ? _rb.p : "sp_box_nil()", b);
+      emit_unbox_nilable_text(c, ivt, _rb.p ? _rb.p : "sp_box_nil()", b);
       free(_rb.p);
     }
     else if (ivt != TY_POLY && ivt != TY_UNKNOWN && comp_ntype(c, v) == TY_UNKNOWN) {

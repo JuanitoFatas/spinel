@@ -120,6 +120,26 @@ ivar <name> <type>
 
 Lines whose first token isn't a keyword are treated as comments.
 
+### How the analyzer reads a `<T>?` token
+
+`parse_seed_type` pins a nilable token to the base type only where that
+type's C slot still has an inhabitant left to spell nil with:
+
+| Token                         | Pinned to        | nil is        |
+|-------------------------------|------------------|---------------|
+| `int?`                        | `mrb_int`        | `SP_INT_NIL`  |
+| `float?`                      | `mrb_float`      | a NaN payload |
+| `string?`, `obj_X?`, `*_array?`, `*_hash?` | the pointer | `NULL`   |
+| `bool?`, `symbol?`            | `sp_RbVal`       | `SP_TAG_NIL`  |
+
+`mrb_bool` and `sp_sym` have no spare inhabitant — `0` is `false`, and
+symbol `0` is a real symbol — so `bool?` and `Symbol?` pin to the boxed
+tagged union rather than collapsing nil onto `false` / `:""` (#3412).
+A poly value narrowed into one of the sentinel-carrying slots goes
+through `sp_poly_as_int_or_nil` / `sp_poly_as_float_or_nil`, which map
+the nil tag to the sentinel instead of reading the zero payload beneath
+it.
+
 ## Follow-up
 
 Tracked as out-of-scope for the initial spike (see matz/spinel#7 +

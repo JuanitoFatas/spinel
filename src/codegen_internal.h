@@ -433,6 +433,9 @@ void emit_frozen_obj_guard(Compiler *c, int cid, const char *selfexpr, Buf *b);
    Such a value must box via sp_box_nullable_obj so a NULL becomes SP_TAG_NIL. */
 const char *ty_nullable_builtin_id(TyKind t);
 void emit_unbox_text(Compiler *c, TyKind t, const char *expr, Buf *b);
+/* emit_unbox_text, but a nil-tagged poly lands on the slot's own nil (an int?
+   or float? sentinel) instead of the zero payload under the tag (#3412). */
+void emit_unbox_nilable_text(Compiler *c, TyKind t, const char *expr, Buf *b);
 void emit_proc_literal(Compiler *c, int create, Buf *b);
 int proc_slot_is_direct(TyKind t);
 const char *proc_rest_name(Compiler *c, int create);
