@@ -542,6 +542,13 @@ const char *bigint_arith_fn(const char *op);
 const char *mc(const char *name);
 const char *iv_c(const char *name);  /* ivar/member name -> valid C field id (#3110) */
 int scope_is_shadowed(Compiler *c, int s);
+#define SP_MAX_PROC_FORM 4096
+extern int g_pf_emitting;   /* inside a proc-form body (#3399) */
+void scope_mark_proc_form(Compiler *c, int s);
+void scope_veto_proc_form(Compiler *c, int s);
+int  scope_needs_proc_form(Compiler *c, int s);
+void scope_proc_form_begin(Compiler *c, int s);
+void scope_proc_form_end(Compiler *c, int s);
 int scope_has_callable_symbol(Compiler *c, int s);
 int struct_kwarg_value(Compiler *c, int kwh, const char *name);
 int eq_family(TyKind t);

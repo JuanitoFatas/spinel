@@ -3709,9 +3709,12 @@ static int emit_poly_method_dispatch(Compiler *c, int id, Buf *b) {
           for (int k = 0; k < c->nclasses && blk_tmp0 < 0; k++) {
             if (!c->classes[k].instantiated) continue;
             int mi0 = comp_method_in_chain(c, k, name, NULL);
-            if (mi0 < 0 || !scope_has_callable_symbol(c, mi0)) continue;
+            if (mi0 < 0) continue;
             Scope *cm0 = &c->scopes[mi0];
-            if (cm0->blk_param && cm0->blk_param[0] && !cm0->yields) {
+            /* a yielding candidate is reachable through its proc form */
+            if (!scope_has_callable_symbol(c, mi0) && !scope_needs_proc_form(c, mi0)) continue;
+            if ((cm0->blk_param && cm0->blk_param[0] && !cm0->yields) ||
+                scope_needs_proc_form(c, mi0)) {
               blk_tmp0 = ++g_tmp;
               Buf pb0; memset(&pb0, 0, sizeof pb0);
               emit_proc_literal(c, cblk0, &pb0);
@@ -3767,7 +3770,10 @@ static int emit_poly_method_dispatch(Compiler *c, int id, Buf *b) {
            call sites because it yields. Emitting a `case` arm that calls the
            absent `sp_Class_method` symbol dangles at link (issue #1583). The
            class can never be the receiver of this poly value anyway. */
-        if (mi >= 0 && c->scopes[mi].nrequired == 0 && scope_has_callable_symbol(c, mi)) {
+        /* A yielding candidate has a proc form emitted for exactly this
+           dispatch (#3399); it is as callable as any other symbol here. */
+        if (mi >= 0 && c->scopes[mi].nrequired == 0 &&
+            (scope_has_callable_symbol(c, mi) || scope_needs_proc_form(c, mi))) {
           /* Build the call; append default values for any optional params
              not provided by the (zero-arg) call site. */
           Buf cb; memset(&cb, 0, sizeof cb);
@@ -3802,18 +3808,29 @@ static int emit_poly_method_dispatch(Compiler *c, int id, Buf *b) {
           if (c->scopes[mi].nparams == 0 && c->scopes[mi].blk_param &&
               c->scopes[mi].blk_param[0] && !c->scopes[mi].yields)
             buf_puts(&cb, ", ");
-          emit_cmethod_block_arg(c, id, &c->scopes[mi], blk_tmp0, &cb);
+          if (scope_needs_proc_form(c, mi)) {
+            /* the proc form always takes the block, and its scope still reads
+               as yielding, so the helper declines it (#3399) */
+            if (blk_tmp0 >= 0) buf_printf(&cb, ", _t%d", blk_tmp0);
+            else buf_puts(&cb, ", NULL");
+          }
+          else emit_cmethod_block_arg(c, id, &c->scopes[mi], blk_tmp0, &cb);
           buf_puts(&cb, ")");
           const char *call = cb.p ? cb.p : "";
           buf_printf(b, " case %d: ", k);
-          if (method_is_void(&c->scopes[mi])) buf_puts(b, call);  /* void: no usable value */
+          /* A proc form answers POLY whatever the scope's own return type says
+             -- the scope has none worth reading, since an inlined-only method
+             never needed one (#3399). */
+          int pf9 = scope_needs_proc_form(c, mi);
+          TyKind cret9 = pf9 ? TY_POLY : c->scopes[mi].ret;
+          if (!pf9 && method_is_void(&c->scopes[mi])) buf_puts(b, call);  /* void: no usable value */
           else {
             TyKind slotty = is_scalar_ret(ret) ? ret : TY_INT;
             buf_printf(b, "_t%d = ", tr);
-            if (ret == TY_POLY && c->scopes[mi].ret != TY_POLY) emit_boxed_text(c, c->scopes[mi].ret, call, b);
+            if (ret == TY_POLY && cret9 != TY_POLY) emit_boxed_text(c, cret9, call, b);
             /* The slot is scalar (e.g. a length dispatch fixed to mrb_int) but
                this class's method widened its return to poly: coerce down. */
-            else if (ret != TY_POLY && c->scopes[mi].ret == TY_POLY) emit_unbox_text(c, slotty, call, b);
+            else if (ret != TY_POLY && cret9 == TY_POLY) emit_unbox_text(c, slotty, call, b);
             else buf_puts(b, call);
           }
           buf_puts(b, "; break;");
@@ -4187,9 +4204,11 @@ static int emit_poly_method_dispatch(Compiler *c, int id, Buf *b) {
           for (int k = 0; k < c->nclasses && blk_tmp2 < 0; k++) {
             if (!c->classes[k].instantiated) continue;
             int mi2 = comp_method_in_chain(c, k, name, NULL);
-            if (mi2 < 0 || !scope_has_callable_symbol(c, mi2)) continue;
+            if (mi2 < 0) continue;
             Scope *cm2 = &c->scopes[mi2];
-            if (cm2->blk_param && cm2->blk_param[0] && !cm2->yields) {
+            if (!scope_has_callable_symbol(c, mi2) && !scope_needs_proc_form(c, mi2)) continue;
+            if ((cm2->blk_param && cm2->blk_param[0] && !cm2->yields) ||
+                scope_needs_proc_form(c, mi2)) {
               blk_tmp2 = ++g_tmp;
               Buf pb2; memset(&pb2, 0, sizeof pb2);
               emit_proc_literal(c, cblk2, &pb2);
@@ -4222,7 +4241,7 @@ static int emit_poly_method_dispatch(Compiler *c, int id, Buf *b) {
            `sp_Class_method` symbol would dangle at link. The class can't be
            this poly value's receiver anyway -- that is why it was pruned, and a
            yielding method's value-position dispatch is moot here (issue #1583). */
-        if (!scope_has_callable_symbol(c, mi)) continue;
+        if (!scope_has_callable_symbol(c, mi) && !scope_needs_proc_form(c, mi)) continue;
         /* A candidate whose concrete key parameter type is incompatible with the
            concrete call-site key cannot be this poly value's receiver for that
            key -- e.g. a Symbol-keyed user `[]` reached by a String key, where the
@@ -4373,13 +4392,22 @@ else {
         if (c->scopes[mi].nparams == 0 && c->scopes[mi].blk_param &&
             c->scopes[mi].blk_param[0] && !c->scopes[mi].yields)
           buf_puts(&cb, ", ");   /* self is the first argument; see the zero-arg dispatch */
-        emit_cmethod_block_arg(c, id, &c->scopes[mi], blk_tmp2, &cb);
+        if (scope_needs_proc_form(c, mi)) {
+          if (blk_tmp2 >= 0) buf_printf(&cb, ", _t%d", blk_tmp2);
+          else buf_puts(&cb, ", NULL");
+        }
+        else emit_cmethod_block_arg(c, id, &c->scopes[mi], blk_tmp2, &cb);
         buf_puts(&cb, ")");
         buf_printf(b, " case %d: ", k);
-        if (mret == TY_VOID || mret == TY_NIL || method_is_void(&c->scopes[mi])) buf_puts(b, cb.p);  /* no usable value */
+        /* a proc form answers POLY; see the zero-arg dispatch (#3399) */
+        int pf8 = scope_needs_proc_form(c, mi);
+        TyKind mret8 = pf8 ? TY_POLY : mret;
+        if (!pf8 && (mret == TY_VOID || mret == TY_NIL || method_is_void(&c->scopes[mi]))) buf_puts(b, cb.p);  /* no usable value */
         else {
           buf_printf(b, "_t%d = ", tr);
-          if (ret == TY_POLY && mret != TY_POLY) emit_boxed_text(c, mret, cb.p, b);
+          if (ret == TY_POLY && mret8 != TY_POLY) emit_boxed_text(c, mret8, cb.p, b);
+          else if (ret != TY_POLY && mret8 == TY_POLY)
+            emit_unbox_text(c, is_scalar_ret(ret) ? ret : TY_INT, cb.p, b);
           else buf_puts(b, cb.p);
         }
         buf_puts(b, "; break;");
@@ -11565,6 +11593,12 @@ else { memcpy(dir, sf, n); dir[n] = 0; } }
     }
     else if (g_current_scope_is_lowered) {
       buf_puts(b, "("); emit_yblk_ref(b); buf_puts(b, " != NULL)");
+    }
+    /* A proc form receives its block as a parameter, so the question is a
+       runtime one about that parameter -- folding to 0 answered `false` inside
+       a method the caller had plainly given a block to (#3399). */
+    else if (g_yield_proc_ref) {
+      buf_printf(b, "(%s != NULL)", g_yield_proc_ref);
     }
     else {
       buf_puts(b, "0");

@@ -347,6 +347,14 @@ void emit_boxed(Compiler *c, int node, Buf *b) {
      type is whichever site inference visited (a string-block site poisoned an
      int-block site into sp_box_str(int) -- a segfault). Box by the CURRENT
      block's inferred result instead. */
+  /* A proc-form body has no inline block by construction -- the block arrives
+     as an sp_Proc * parameter -- so the yield lowers to a call on it, not to
+     the no-block raise (#3399). */
+  if (g_yield_proc_ref && nt_type(c->nt, node) && sp_streq(nt_type(c->nt, node), "YieldNode")) {
+    /* This helper's callers want a BOXED value, so ask for the poly form. */
+    emit_yield_proc_call(c, nt_ref(c->nt, node, "arguments"), TY_POLY, b, 0, 1);
+    return;
+  }
   if (nt_type(c->nt, node) && sp_streq(nt_type(c->nt, node), "YieldNode") && g_block_id < 0) {
     /* An unguarded yield with no block raises LocalJumpError. A guarded yield
        folds its guard to a compile-time false and sits inside an `if (0)`, so
@@ -861,6 +869,53 @@ void emit_poly_iter_obj_normalize(Compiler *c, int tv, Buf *b) {
   free(arms.p);
 }
 
+/* The result type of a block literal: its body's last statement. */
+static TyKind pf_block_result_ty(Compiler *c, int blk) {
+  if (blk < 0) return TY_UNKNOWN;
+  int body = nt_ref(c->nt, blk, "body");
+  int n = 0; const int *bb = body >= 0 ? nt_arr(c->nt, body, "body", &n) : NULL;
+  return n > 0 ? comp_ntype(c, bb[n - 1]) : TY_NIL;
+}
+/* The type the method's own yield nodes were compiled against. */
+static TyKind pf_yield_ty(Compiler *c, int id, int *found) {
+  if (id < 0) return TY_UNKNOWN;
+  if (nt_kind(c->nt, id) == NK_YieldNode) { *found = 1; return comp_ntype(c, id); }
+  int nr = nt_num_refs(c->nt, id);
+  for (int i = 0; i < nr; i++) {
+    TyKind t = pf_yield_ty(c, nt_ref_at(c->nt, id, i), found);
+    if (*found) return t;
+  }
+  int na = nt_num_arrs(c->nt, id);
+  for (int i = 0; i < na; i++) {
+    int n = 0; const int *ids = nt_arr_at(c->nt, id, i, &n);
+    for (int j = 0; j < n; j++) {
+      TyKind t = pf_yield_ty(c, ids[j], found);
+      if (*found) return t;
+    }
+  }
+  return TY_UNKNOWN;
+}
+/* A yield nested inside a block of its own method cannot take the proc form:
+   the code around it was typed from the inlined view, where the yield has a
+   concrete type, and inside a nested block the emitters that consume it do not
+   go through the one place that could unbox. Rejecting keeps the old
+   NoMethodError for those, which is a loud wrong answer rather than a quiet
+   one. (#3399) */
+static int subtree_yields_under_block(const NodeTable *nt, int id, int in_block) {
+  if (id < 0) return 0;
+  if (in_block && nt_kind(nt, id) == NK_YieldNode) return 1;
+  int nb = in_block || nt_kind(nt, id) == NK_BlockNode;
+  int nr = nt_num_refs(nt, id);
+  for (int i = 0; i < nr; i++)
+    if (subtree_yields_under_block(nt, nt_ref_at(nt, id, i), nb)) return 1;
+  int na = nt_num_arrs(nt, id);
+  for (int i = 0; i < na; i++) {
+    int n = 0; const int *ids = nt_arr_at(nt, id, i, &n);
+    for (int j = 0; j < n; j++)
+      if (subtree_yields_under_block(nt, ids[j], nb)) return 1;
+  }
+  return 0;
+}
 void emit_method_signature(Compiler *c, Scope *s, Buf *b) {
   /* In a debug build, give instance/class methods external linkage so
      -rdynamic exposes sp_<Class>_<method> to backtrace_symbols and the
@@ -6012,8 +6067,51 @@ char *codegen_program(const NodeTable *nt) {
     buf_puts(&b, "static const char *sp_obj_inspect_sw(int cls_id, void *p) __attribute__((cold, noinline));\n");
     buf_puts(&b, "static const char *sp_obj_to_s_sw(int cls_id, void *p) __attribute__((cold, noinline));\n");
   }
+  /* Which yielding methods a poly dispatch will name. Decided here, before the
+     prototypes, because the dispatch itself is emitted later (inside a method
+     body) and C wants the declaration first. Over-approximates on purpose: a
+     block call on a poly receiver marks every instantiated class's method of
+     that name that yields. An unused proc form DCEs as an unreferenced
+     static. (#3399) */
+  TyKind *pf_first_bt = (TyKind *)calloc((size_t)(c->nscopes > 0 ? c->nscopes : 1), sizeof(TyKind));
+  for (int nid = 0; pf_first_bt && nid < c->nt->count; nid++) {
+    if (nt_kind(c->nt, nid) != NK_CallNode) continue;
+    if (nt_ref(c->nt, nid, "block") < 0) continue;
+    int prec = nt_ref(c->nt, nid, "receiver");
+    if (prec < 0 || comp_ntype(c, prec) != TY_POLY) continue;
+    const char *pnm = nt_str(c->nt, nid, "name");
+    if (!pnm) continue;
+    for (int k = 0; k < c->nclasses; k++) {
+      if (!c->classes[k].instantiated) continue;
+      int pmi = comp_method_in_chain(c, k, pnm, NULL);
+      if (pmi < 0 || !c->scopes[pmi].yields) continue;
+      if (subtree_yields_under_block(c->nt, c->scopes[pmi].def_node, 0)) continue;
+      /* One proc form serves every poly call site, and its body was typed
+         against ONE of them -- the yield unboxes to that type. A site whose
+         block answers something else would read the boxed value as the wrong
+         thing and hand back garbage, so require agreement. Where the sites
+         disagree the method keeps its old NoMethodError: a loud wrong answer
+         beats a quiet one. */
+      { TyKind bt = pf_block_result_ty(c, nt_ref(c->nt, nid, "block"));
+        if (pf_first_bt[pmi] == TY_UNKNOWN) pf_first_bt[pmi] = bt;
+        else if (pf_first_bt[pmi] != bt) {
+          scope_veto_proc_form(c, pmi);   /* sticky: an earlier site already marked it */
+          continue;
+        } }
+      scope_mark_proc_form(c, pmi);
+    }
+  }
+  free(pf_first_bt);
   /* method prototypes (scope 0 is top-level) */
   for (int s = 1; s < c->nscopes; s++) { if (c->scopes[s].yields || !c->scopes[s].reachable || scope_is_shadowed(c, s) || c->scopes[s].is_transplanted_source) continue; emit_method_signature(c, &c->scopes[s], &b); buf_puts(&b, ";\n"); }
+  /* Proc-form prototypes for the yielding methods a poly dispatch needs (see
+     emit_proc_form_methods). */
+  for (int s = 1; s < c->nscopes; s++) {
+    if (!scope_needs_proc_form(c, s)) continue;
+    scope_proc_form_begin(c, s);
+    emit_method_signature(c, &c->scopes[s], &b); buf_puts(&b, ";\n");
+    scope_proc_form_end(c, s);
+  }
 
   /* User exception #message / #to_s overrides: a cls_name-keyed dispatcher so
      the default message path yields the user-overridden text. Ruby's #message
@@ -6249,6 +6347,18 @@ char *codegen_program(const NodeTable *nt) {
   emit_obj_with_dispatch(c, body);
   for (int s = 1; s < c->nscopes; s++) {
     if (c->scopes[s].yields || !c->scopes[s].reachable || scope_is_shadowed(c, s) || c->scopes[s].is_transplanted_source) continue; EMIT_COLLECT_UNIT(emit_method(c, &c->scopes[s], body));
+  }
+  /* A yielding method is normally inlined at each call site with the block
+     spliced in, so it has no symbol -- which is why a poly dispatch could not
+     reach it (#3399). For the ones a dispatch names, emit a second, ordinary
+     function that takes the block as an sp_Proc * and lowers `yield` to a call
+     on it. Monomorphic call sites keep the splice; only the poly path pays for
+     the closure. */
+  for (int s = 1; s < c->nscopes; s++) {
+    if (!scope_needs_proc_form(c, s)) continue;
+    scope_proc_form_begin(c, s);
+    EMIT_COLLECT_UNIT(emit_method(c, &c->scopes[s], body));
+    scope_proc_form_end(c, s);
   }
   /* Comparable cmp-hook dispatcher (after the user `<=>` definitions it calls). */
   if (g_has_user_cmp) emit_obj_cmp_dispatch(c, body);

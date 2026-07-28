@@ -1329,7 +1329,12 @@ void emit_expr(Compiler *c, int id, Buf *b) {
       /* Forwarded real-proc block (caller nil-checks its &block): call the proc.
          Unbox to the inline's return-slot type (g_yield_slot_ty), which the
          analyzer may have typed concretely even though sp_proc_call is poly. */
-      emit_yield_proc_call(c, nt_ref(nt, id, "arguments"), g_yield_slot_ty, b, 0, 1);
+      /* In a proc form the code AROUND the yield was typed from the inlined
+         view -- `yield(1) + yield(2)` compiled its operands as mrb_int -- so
+         unbox to this node's own type. A tail/boxed position goes through the
+         boxing helper instead, which asks for the poly form. */
+      emit_yield_proc_call(c, nt_ref(nt, id, "arguments"),
+                           g_pf_emitting ? comp_ntype(c, id) : g_yield_slot_ty, b, 0, 1);
       return;
     }
     if (g_block_id < 0) {
@@ -1353,7 +1358,12 @@ void emit_expr(Compiler *c, int id, Buf *b) {
     /* A forwarded real proc (caller nil-checks its &block): <blk>.call(args)
        invokes the proc. Otherwise it is a genuinely dead path (no block). */
     if (g_yield_proc_ref)
-      emit_yield_proc_call(c, nt_ref(nt, id, "arguments"), g_yield_slot_ty, b, 0, 1);
+      /* In a proc form the code AROUND the yield was typed from the inlined
+         view -- `yield(1) + yield(2)` compiled its operands as mrb_int -- so
+         unbox to this node's own type. A tail/boxed position goes through the
+         boxing helper instead, which asks for the poly form. */
+      emit_yield_proc_call(c, nt_ref(nt, id, "arguments"),
+                           g_pf_emitting ? comp_ntype(c, id) : g_yield_slot_ty, b, 0, 1);
     else
       buf_puts(b, default_value(comp_ntype(c, id)));
     return;
