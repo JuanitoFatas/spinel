@@ -1,0 +1,7 @@
+class NilRow
+  attr_accessor n: Integer?
+  attr_accessor r: Float?
+  attr_accessor s: String?
+  attr_accessor f: bool?
+  attr_accessor y: Symbol?
+end

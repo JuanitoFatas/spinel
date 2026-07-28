@@ -359,6 +359,19 @@ static inline sp_RbVal sp_box_obj(void *p, int cls_id) { sp_RbVal r; r.tag = SP_
 static inline sp_RbVal sp_box_sym(sp_sym v)     { if (v == (sp_sym)-1) { sp_RbVal n; n.tag = SP_TAG_NIL; n.cls_id = 0; n.v.i = 0; return n; } sp_RbVal r; r.tag = SP_TAG_SYM;  r.cls_id = 0; r.v.i = (mrb_int)v; return r; }  /* (sp_sym)-1 is the nilable-symbol sentinel: box it as nil, never as :"" */
 static inline sp_RbVal sp_box_poly_array(void *p) { return sp_box_obj(p, SP_BUILTIN_POLY_ARRAY); }
 
+/* The inverse of sp_box_int_or_nil / the float sentinel: unbox a poly into a
+   flat int / float slot that may hold nil. Reading `.v.i` straight off a
+   nil-tagged value yields the payload underneath the tag -- 0, an ordinary
+   Integer -- so nil silently becomes 0 (or 0.0). These map the nil tag to the
+   slot's reserved sentinel instead, which is what every nil? / to_s / boxing
+   site on a nullable int or float already tests for. */
+static inline mrb_int sp_poly_as_int_or_nil(sp_RbVal v) {
+  return v.tag == SP_TAG_NIL ? SP_INT_NIL : v.v.i;
+}
+static inline mrb_float sp_poly_as_float_or_nil(sp_RbVal v) {
+  return v.tag == SP_TAG_NIL ? sp_float_nil() : v.v.f;
+}
+
 /* GC object allocator. The threshold/stress state is extern (defined in
    sp_alloc.c) so every TU shares it -- the same model as sp_gc_heap/bytes.
    sp_gc_alloc itself is an external function (defined in sp_alloc.c) so the

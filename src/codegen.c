@@ -124,6 +124,24 @@ void emit_unbox_text(Compiler *c, TyKind t, const char *expr, Buf *b) {
   else buf_printf(b, "(%s).v.i", expr);
 }
 
+/* Emit `expr` (a poly value that MAY be nil) unboxed into a slot of type `t`,
+   keeping nil as the slot's own nil rather than as the union payload sitting
+   under the nil tag. `.v.i` / `.v.f` on a boxed nil read 0 / 0.0 -- ordinary
+   values -- so the plain unbox turns nil into zero, silently: the C is
+   well-formed and nothing downstream can tell the two apart (#3412).
+
+   Only int and float need the guard. A pointer-backed slot takes NULL from the
+   zeroed payload, which IS its nil; bool and symbol have no nil inhabitant at
+   all, so a slot that must hold nil is never given those types (see
+   parse_seed_type). Use this wherever a poly whose nil-ness is not already
+   ruled out is narrowed to a concrete slot; emit_unbox_text stays the
+   unguarded form for the many sites that have. */
+void emit_unbox_nilable_text(Compiler *c, TyKind t, const char *expr, Buf *b) {
+  if (t == TY_INT)   { buf_printf(b, "sp_poly_as_int_or_nil(%s)", expr); return; }
+  if (t == TY_FLOAT) { buf_printf(b, "sp_poly_as_float_or_nil(%s)", expr); return; }
+  emit_unbox_text(c, t, expr, b);
+}
+
 /* An unresolved constant read lowers to a runtime NameError raise whose C
    value is an sp_Class struct (the class-position shape). In a scalar slot
    that struct fails the C compile ("incompatible types"), so the scalar
