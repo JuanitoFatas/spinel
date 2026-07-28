@@ -1986,9 +1986,7 @@ TyKind infer_call(Compiler *c, int id) {
        defining it (poly on disagreement). A constant/accessor receiver keeps
        its existing dispatch, so only fire for a variable receiver (#2445). */
     {
-      const char *rvty = nt_type(nt, recv);
-      int recv_is_var = rvty && (sp_streq(rvty, "LocalVariableReadNode") ||
-                                 sp_streq(rvty, "InstanceVariableReadNode"));
+      int recv_is_var = class_recv_is_dynamic(c, recv);
       TyKind uret = TY_UNKNOWN; int nc = recv_is_var ? 0 : -1000, set = 0;
       for (int k = 0; recv_is_var && k < c->nclasses; k++) {
         if (is_builtin_reopen(c->classes[k].name)) continue;

@@ -1108,3 +1108,28 @@ const char *poly_enum_op_for(const char *name) {
   return NULL;
 }
 
+
+/* A Class-valued receiver that carries its class only at run time: a variable,
+   or a call whose result is a class (`Job.set(1).run(2)` -- ActiveJob's chained
+   `set`). Excludes a constant receiver and an accessor call, which resolve
+   statically through their own dispatch. A method returning a class value was
+   left with nowhere to dispatch, so the chained call was rejected outright
+   even though the value at run time was right (#3415). */
+int class_recv_is_dynamic(Compiler *c, int recv) {
+  const NodeTable *nt = c->nt;
+  const char *rty = recv >= 0 ? nt_type(nt, recv) : NULL;
+  if (!rty) return 0;
+  if (sp_streq(rty, "LocalVariableReadNode") || sp_streq(rty, "InstanceVariableReadNode"))
+    return 1;
+  if (!sp_streq(rty, "CallNode")) return 0;
+  /* `self.class` resolves to the enclosing class statically and has its own
+     arms on both sides; treating it as dynamic would steal them. */
+  { const char *cn = nt_str(nt, recv, "name");
+    int cr = nt_ref(nt, recv, "receiver");
+    if (cn && sp_streq(cn, "class") && cr >= 0 && nt_type(nt, cr) &&
+        sp_streq(nt_type(nt, cr), "SelfNode")) return 0; }
+  if (comp_sg_reader_const(c, recv) >= 0) return 0;
+  { int cand[4]; if (comp_sg_reader_candidates(c, recv, cand, 4) >= 2) return 0; }
+  return 1;
+}
+

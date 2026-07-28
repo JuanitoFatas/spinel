@@ -13514,9 +13514,7 @@ else { memcpy(dir, sf, n); dir[n] = 0; } }
        define (or inherit) the name get an arm; the result unifies their return
        types (poly when they disagree). (#2445) */
     {
-      const char *rvty9 = nt_type(nt, recv);
-      int recv_is_var9 = rvty9 && (sp_streq(rvty9, "LocalVariableReadNode") ||
-                                   sp_streq(rvty9, "InstanceVariableReadNode"));
+      int recv_is_var9 = class_recv_is_dynamic(c, recv);
       int ncand9 = 0, defmi9 = -1;
       if (!recv_is_var9) goto skip_cls_cmethod9;
       TyKind uret9 = TY_UNKNOWN; int uret_set9 = 0;
@@ -14363,6 +14361,53 @@ else { memcpy(dir, sf, n); dir[n] = 0; } }
         }
       }
     }
+  }
+
+  /* .new WITH arguments on a Class value whose class is only known at run time.
+     A local statically holding one class folds to that class and never gets
+     here; a call returning a class cannot fold, so it had no emitter at all
+     (#3415). Same shape as the poly-receiver form below: one arm per class
+     whose constructor takes exactly these positional args, each argument
+     hoisted once and coerced per arm. */
+  if (recv >= 0 && sp_streq(name, "new") && comp_ntype(c, recv) == TY_CLASS &&
+      argc > 0 && nt_ref(nt, id, "block") < 0 && class_recv_is_dynamic(c, recv) &&
+      comp_ntype(c, id) == TY_POLY) {
+    int kt = ++g_tmp, rt2 = ++g_tmp;
+    int *atmp = calloc((size_t)argc, sizeof(int));
+    buf_printf(b, "({ sp_Class _t%d = ", kt); emit_expr(c, recv, b); buf_puts(b, "; ");
+    for (int a = 0; a < argc; a++) {
+      atmp[a] = ++g_tmp;
+      buf_printf(b, "sp_RbVal _t%d = ", atmp[a]); emit_boxed(c, argv[a], b);
+      buf_printf(b, "; SP_GC_ROOT_RBVAL(_t%d); ", atmp[a]);
+    }
+    buf_printf(b, "sp_RbVal _t%d = sp_box_nil(); switch(_t%d.cls_id){", rt2, kt);
+    for (int ci = 0; ci < c->nclasses; ci++) {
+      if (is_builtin_reopen(c->classes[ci].name) || c->classes[ci].is_struct ||
+          c->classes[ci].is_native_class) continue;
+      int initm = comp_method_in_chain(c, ci, "initialize", NULL);
+      int np = initm >= 0 ? c->scopes[initm].nparams : 0;
+      int nreq = initm >= 0 ? c->scopes[initm].nrequired : 0;
+      if (argc != np || nreq != np) continue;   /* only an exact all-required match */
+      buf_printf(b, "case %d: _t%d=", ci, rt2);
+      if (c->classes[ci].is_value_type)
+        buf_printf(b, "sp_box_vobj_%s(sp_%s_new(", c->classes[ci].c_name, c->classes[ci].c_name);
+      else
+        buf_printf(b, "sp_box_obj(sp_%s_new(", c->classes[ci].c_name);
+      Scope *is2 = initm >= 0 ? &c->scopes[initm] : NULL;
+      for (int j = 0; j < np; j++) {
+        if (j) buf_puts(b, ", ");
+        LocalVar *pp = is2 ? scope_local(is2, is2->pnames[j]) : NULL;
+        TyKind pt = (pp && pp->type != TY_UNKNOWN) ? pp->type : TY_POLY;
+        char tn[24]; snprintf(tn, sizeof tn, "_t%d", atmp[j]);
+        if (pt == TY_POLY) buf_puts(b, tn);
+        else emit_unbox_text(c, pt, tn, b);
+      }
+      if (c->classes[ci].is_value_type) buf_printf(b, "));break;");
+      else buf_printf(b, "),%d);break;", ci);
+    }
+    buf_printf(b, "} _t%d; })", rt2);
+    free(atmp);
+    return;
   }
 
   /* TY_CLASS variable .new -> runtime switch over user classes, returns TY_POLY */

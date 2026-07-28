@@ -604,4 +604,9 @@ static inline int comp_ty_value_obj(const Compiler *c, TyKind t) {
    because that arm can take it (#3409). */
 const char *poly_enum_op_for(const char *name);
 
+/* 1 for a Class-valued receiver whose class is only known at run time (a
+   variable, or a call returning a class); 0 for a constant or accessor
+   receiver, which resolve statically (#3415). */
+int class_recv_is_dynamic(Compiler *c, int recv);
+
 #endif
