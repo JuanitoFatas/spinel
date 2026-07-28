@@ -9719,5 +9719,29 @@ void analyze_program(Compiler *c) {
     }
   }
 
+  /* A proc form holds its block as a real parameter, so a nested block that
+     yields and is itself lifted to a standalone proc has to capture it -- the
+     same shape a lowered yield method has, and the same cell it needs. The
+     YieldNode is not a local read, so the capture pass cannot see it; mark the
+     parameter here and codegen's force adds it to the capture set. */
+  for (int s = 1; s < c->nscopes; s++) {
+    Scope *d = &c->scopes[s];
+    if (!d->is_proc_form || !d->blk_param || !d->blk_param[0]) continue;
+    for (int id = 0; id < c->nt->count; id++) {
+      if (c->nscope[id] != s || !a_proc_create_or_lifted(c, id)) continue;
+      int pb = a_proc_body(c, id);
+      if (pb < 0 || !subtree_has_yield_node(c, pb, 0)) continue;
+      LocalVar *bl = scope_local_intern(d, d->blk_param);
+      if (bl) bl->is_cell = 1;
+      break;
+    }
+  }
+
+  /* Last: the capture pass again, on the settled types. a_block_is_lifted asks
+     whether the receiver is poly, and a receiver that widened after the
+     earlier run answered no then and yes now -- so codegen routes the call to
+     the cls_id dispatch (a real proc) while analyze left its captures
+     uncelled, and the emit refuses. Only sets is_cell, and is idempotent. */
+  mark_proc_captures(c);
 }
 

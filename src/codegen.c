@@ -1111,9 +1111,13 @@ void emit_method(Compiler *c, Scope *s, Buf *b) {
   int saved_emcls = g_emitting_class_id; g_emitting_class_id = s->class_id;
   const char *saved_dmn = g_dm_subst_name; int saved_dmnode = g_dm_subst_node;
   g_dm_subst_name = s->dm_subst_name; g_dm_subst_node = s->dm_subst_node;
-  int saved_lowered = g_current_scope_is_lowered; g_current_scope_is_lowered = s->is_lowered_yield;
+  /* A proc form holds its block as a real parameter and lowers `yield` to a
+     call on it, exactly as a lowered yield method does -- so a nested lifted
+     proc containing a `yield` has to capture that parameter the same way. */
+  int scope_blk_is_param = s->is_lowered_yield || s->is_proc_form;
+  int saved_lowered = g_current_scope_is_lowered; g_current_scope_is_lowered = scope_blk_is_param;
   const char *saved_lbn = g_lowered_blk_name;
-  g_lowered_blk_name = s->is_lowered_yield ? s->blk_param : NULL;
+  g_lowered_blk_name = scope_blk_is_param ? s->blk_param : NULL;
   /* a method body is a fresh break context: a stray enclosing serial must
      not leak into it (its own wrapped iterators re-establish scopes) */
   const char *saved_bser = g_brk_ser_var; g_brk_ser_var = NULL;

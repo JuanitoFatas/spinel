@@ -747,6 +747,30 @@ TyKind infer_call(Compiler *c, int id) {
   if (!g_infer_ignore_brk && call_breaks(c, id)) return TY_POLY;
 
   TyKind rt = recv >= 0 ? infer_type(c, recv) : TY_UNKNOWN;
+  /* A block call on a poly receiver whose candidates include a YIELDING method
+     is served by that method's proc-form clone, which answers poly uniformly
+     (its yield is a call on a real proc). This has to precede every
+     `poly.<builtin name> { }` rule below: those type the call from the builtin
+     alone, so a candidate answering an Integer array landed in a generic-array
+     slot with no conversion and the value was read as the wrong container
+     (#3399, #3409). */
+  if (recv >= 0 && rt == TY_POLY && nt_ref(nt, id, "block") >= 0 &&
+      poly_enum_op_for(name)) {
+    for (int k = 0; k < c->nclasses; k++) {
+      if (!c->classes[k].instantiated) continue;
+      if (comp_method_in_chain(c, k, name, NULL) >= 0) return TY_POLY;
+    }
+  }
+  /* Same, for a name outside that surface: only a yielding candidate makes
+     the call a dispatch there, since a non-yielding one leaves a
+     block-carrying call on the builtin path entirely. */
+  if (recv >= 0 && rt == TY_POLY && nt_ref(nt, id, "block") >= 0) {
+    for (int k = 0; k < c->nclasses; k++) {
+      if (!c->classes[k].instantiated) continue;
+      int ymi = comp_method_in_chain(c, k, name, NULL);
+      if (ymi >= 0 && c->scopes[ymi].yields) return TY_POLY;
+    }
+  }
   /* A Float range (1.0..3.0) is a distinct type with float endpoints; it is
      not iterable, so its whole method face reduces to endpoint queries,
      membership tests, and the sole materializing method, step. */
@@ -1005,19 +1029,6 @@ TyKind infer_call(Compiler *c, int id) {
       (sp_streq(name, "real") || sp_streq(name, "imaginary") || sp_streq(name, "imag")) &&
       !an_user_defines_method(c, name))
     return TY_POLY;
-  /* A block call on a poly receiver whose candidates include a YIELDING method
-     is served by that method's proc-form clone, which answers poly uniformly
-     (its yield is a call on a real proc). Typing the call site from the inlined
-     view instead fixes it to whichever site inference visited, and a second
-     site with a differently-typed block then reads the boxed value as the wrong
-     thing (#3399). */
-  if (recv >= 0 && rt == TY_POLY && nt_ref(nt, id, "block") >= 0 && name) {
-    for (int k = 0; k < c->nclasses; k++) {
-      if (!c->classes[k].instantiated) continue;
-      int ymi = comp_method_in_chain(c, k, name, NULL);
-      if (ymi >= 0 && c->scopes[ymi].yields) return TY_POLY;
-    }
-  }
   /* String#chars on a poly value (a String read out of a container / pair):
      an array of single-char strings (#2909). */
   if (recv >= 0 && rt == TY_POLY && argc == 0 &&

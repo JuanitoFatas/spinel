@@ -1696,6 +1696,11 @@ int emit_iteration_stmt(Compiler *c, int id, Buf *b, int indent) {
   const char *name = nt_str(nt, id, "name");
   int recv = nt_ref(nt, id, "receiver");
   if (!name) return 0;
+  /* A poly receiver whose name a user class also owns as a block-taking
+     method: the loops below walk the receiver as a builtin container, which
+     answers empty when the value is the user object. The cls_id dispatch is
+     the only emitter with arms for both (#3409). */
+  if (poly_block_call_needs_dispatch(c, id)) return 0;
 
   /* loop { ... } -- infinite loop, exited by break */
   if (recv < 0 && sp_streq(name, "loop")) {

@@ -448,6 +448,48 @@ static int warn_unresolved_pos(Compiler *c, int id) {
   return 1;
 }
 
+/* A block-carrying call on a POLY receiver whose name an instantiated user
+   class also owns as a block-taking method (it yields, or keeps a real &blk).
+   The element-loop emitters assume the receiver is a builtin container and
+   walk it as one, which answers empty when the value is the user object --
+   the mirror of the dispatch dropping the builtin arm. Only the cls_id
+   dispatch can serve both, so those emitters decline here and let it. Limited
+   to the names the dispatch has a builtin arm for: declining any other would
+   trade a wrong answer for a NoMethodError on a container receiver. */
+int poly_block_call_needs_dispatch(Compiler *c, int id) {
+  const NodeTable *nt = c->nt;
+  if (nt_ref(nt, id, "block") < 0) return 0;
+  int recv = nt_ref(nt, id, "receiver");
+  /* Both views have to say poly. comp_ntype is what the element-loop emitters
+     themselves consult, so declining on anything else keeps a Range or a typed
+     array on its own path; infer_type is what a_block_is_lifted used to decide
+     the capture cells, and a call routed here whose captures analyze left
+     uncelled cannot be emitted at all. */
+  if (recv < 0 || comp_ntype(c, recv) != TY_POLY ||
+      infer_type(c, recv) != TY_POLY) return 0;
+  const char *name = nt_str(nt, id, "name");
+  if (!poly_enum_op_for(name)) return 0;
+  /* A block whose body yields can only be SPLICED: routing it to the dispatch
+     lifts it to a standalone proc, where the enclosing method's block is not
+     in scope and the yield lowers to a LocalJumpError. That is the shape of a
+     yielding method's own body (`@a.each { |x| yield x }`), which is inlined
+     at its call sites. A proc form is the exception: there the block is a real
+     parameter and the lifted proc captures it. */
+  { int blk = nt_ref(nt, id, "block");
+    int bb = blk >= 0 ? nt_ref(nt, blk, "body") : -1;
+    Scope *es = comp_scope_of(c, id);
+    if (bb >= 0 && proc_body_has_yield(c, bb) &&
+        !(es && (es->is_proc_form || es->is_lowered_yield))) return 0; }
+  for (int k = 0; k < c->nclasses; k++) {
+    if (!c->classes[k].instantiated) continue;
+    int mi = comp_method_in_chain(c, k, name, NULL);
+    if (mi < 0) continue;
+    Scope *m = &c->scopes[mi];
+    if (m->yields || (m->blk_param && m->blk_param[0])) return 1;
+  }
+  return 0;
+}
+
 /* Emit the switch key for a poly method dispatch. An SP_TAG_OBJ value uses its
    real cls_id; a boxed scalar maps to its reopened primitive class index (so a
    reopened Integer/Float/String/Symbol/nil method still dispatches), else to a
@@ -3728,6 +3770,46 @@ static int emit_poly_method_dispatch(Compiler *c, int id, Buf *b) {
               free(pb0.p);
             }
           }
+        } }
+      /* A builtin Array receiver reaching a dispatch that exists only because
+         a USER class defines this name. Without an arm it falls to the raise:
+         `NoMethodError: undefined method 'map' for an instance of Array` at a
+         site where the block-carrying call is plainly Array#map. The builtin
+         is normally served by splicing the block inline, which is not
+         available here -- the block was materialized once as a proc and shared
+         by every arm, and a second spliced copy would disagree with whichever
+         arm ran. Drive the same proc over the elements instead (#3409).
+
+         Only reachable at all since a yielding method became dispatchable: a
+         non-yielding user `map` leaves a block-carrying call to the builtin
+         path entirely, which is why the same shape is correct without the
+         yield. */
+      { const char *pen_op = argc == 0 && nt_ref(nt, id, "block") >= 0
+                           ? poly_enum_op_for(name) : NULL;
+        /* A candidate that neither yields nor keeps a real &blk left no proc
+           materialized -- it ignores the block. The builtin arm still needs
+           one, so build it here; only one arm runs either way. */
+        if (pen_op && blk_tmp0 < 0) {
+          int cblk1 = resolve_forwarded_block(c, nt_ref(nt, id, "block"));
+          if (cblk1 < 0) pen_op = NULL;
+          else {
+            blk_tmp0 = ++g_tmp;
+            Buf pb1; memset(&pb1, 0, sizeof pb1);
+            emit_proc_literal(c, cblk1, &pb1);
+            emit_indent(g_pre, g_indent);
+            buf_printf(g_pre, "sp_Proc *_t%d = %s;\n", blk_tmp0, pb1.p ? pb1.p : "NULL");
+            emit_indent(g_pre, g_indent);
+            buf_printf(g_pre, "SP_GC_ROOT(_t%d);\n", blk_tmp0);
+            free(pb1.p);
+          }
+        }
+        if (pen_op) {
+          char pcall[160];
+          snprintf(pcall, sizeof pcall, "sp_poly_enum_proc(_t%d, %s, _t%d)", tv, pen_op, blk_tmp0);
+          buf_printf(b, "if (_t%d.tag == SP_TAG_OBJ && (sp_poly_is_array_kind(_t%d.cls_id) || sp_poly_is_hash_kind(_t%d.cls_id))) { _t%d = ", tv, tv, tv, tr);
+          if (ret == TY_POLY) buf_puts(b, pcall);
+          else emit_unbox_text(c, ret, pcall, b);
+          buf_puts(b, "; }\nelse ");
         } }
       int cls0_d = -1, cls0_rd = -1;
       int cls0_mi = c->nclasses > 0 ? comp_method_in_chain(c, 0, name, &cls0_d) : -1;
@@ -7885,6 +7967,12 @@ void emit_call(Compiler *c, int id, Buf *b) {
       return;
     }
   }
+  /* A poly receiver whose name a user class also owns as a block-taking
+     method: every element-loop emitter below walks the receiver as a builtin
+     container, which answers empty when the value is the user object. Skip
+     the whole chain and let the cls_id dispatch -- the only emitter with arms
+     for both -- serve it (#3409). */
+  if (!poly_block_call_needs_dispatch(c, id)) {
   if (emit_lazy_size_expr(c, id, b)) return;
   if (emit_lazy_class_expr(c, id, b)) return;
   if (emit_lazy_pipeline_expr(c, id, b)) return;
@@ -7924,6 +8012,7 @@ void emit_call(Compiler *c, int id, Buf *b) {
   if (emit_each_with_object_expr(c, id, b)) return;
   if (emit_tap_then_expr(c, id, b)) return;
   if (emit_group_by_expr(c, id, b)) return;
+  }
   if (emit_inline_expr(c, id, b)) return;  /* value-returning yield method */
   const char *name = nt_str(nt, id, "name");
   int recv = nt_ref(nt, id, "receiver");

@@ -1082,3 +1082,29 @@ const char *comp_prep_user_name(const char *name) {
   while (*p >= '0' && *p <= '9') p++;
   return (*p == '_') ? p + 1 : name;
 }
+
+/* The sp_poly_enum_proc op for a block-carrying Enumerable name, or NULL.
+   These are the names a poly dispatch can serve from a builtin Array/Hash
+   receiver by driving the materialized block proc over the elements; only the
+   one-value-per-element family, since the runtime helper passes one. */
+const char *poly_enum_op_for(const char *name) {
+  static const struct { const char *nm, *op; } PEN[] = {
+    {"each","SP_PENUM_EACH"}, {"each_with_index","SP_PENUM_EACH_WITH_INDEX"},
+    {"map","SP_PENUM_MAP"}, {"collect","SP_PENUM_MAP"},
+    {"flat_map","SP_PENUM_FLAT_MAP"}, {"collect_concat","SP_PENUM_FLAT_MAP"},
+    {"select","SP_PENUM_SELECT"}, {"filter","SP_PENUM_SELECT"},
+    {"find_all","SP_PENUM_SELECT"}, {"reject","SP_PENUM_REJECT"},
+    {"find","SP_PENUM_FIND"}, {"detect","SP_PENUM_FIND"},
+    {"find_index","SP_PENUM_FIND_INDEX"},
+    {"group_by","SP_PENUM_GROUP_BY"}, {"sort_by","SP_PENUM_SORT_BY"},
+    {"min_by","SP_PENUM_MIN_BY"}, {"max_by","SP_PENUM_MAX_BY"},
+    {"partition","SP_PENUM_PARTITION"}, {"count","SP_PENUM_COUNT"},
+    {"sum","SP_PENUM_SUM"}, {"any?","SP_PENUM_ANY"}, {"all?","SP_PENUM_ALL"},
+    {"none?","SP_PENUM_NONE"}, {"take_while","SP_PENUM_TAKE_WHILE"},
+    {"drop_while","SP_PENUM_DROP_WHILE"}, {NULL,NULL}
+  };
+  if (!name) return NULL;
+  for (int i = 0; PEN[i].nm; i++) if (sp_streq(name, PEN[i].nm)) return PEN[i].op;
+  return NULL;
+}
+

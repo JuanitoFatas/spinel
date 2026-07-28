@@ -598,4 +598,10 @@ static inline int comp_ty_value_obj(const Compiler *c, TyKind t) {
   return cid >= 0 && cid < c->nclasses && c->classes[cid].is_value_type;
 }
 
+/* The sp_poly_enum_proc op for a block-carrying Enumerable name, or NULL.
+   One list, two readers: codegen emits the poly dispatch's builtin arm for
+   these names, and analyze keeps a block passed to such a call poly-typed
+   because that arm can take it (#3409). */
+const char *poly_enum_op_for(const char *name);
+
 #endif

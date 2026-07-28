@@ -7029,6 +7029,22 @@ int infer_block_params(Compiler *c) {
             ndef++; found = km;
           }
           if (ndef == 1) mi = found;
+          /* ...but a name the builtin Enumerable surface also owns can reach
+             a container at run time, through the dispatch's builtin arm. The
+             adopted method's yield types describe only the user arm, so a
+             block typed from them binds the wrong thing on the other one
+             (a String element into an Integer slot). Widen instead (#3409). */
+          if (mi >= 0 && poly_enum_op_for(name)) {
+            Scope *bs2 = comp_scope_of(c, block);
+            for (int k = 0; ; k++) {
+              const char *bp2 = block_param_name(c, block, k);
+              if (!bp2) break;
+              LocalVar *lv2 = scope_local_intern(bs2, bp2);
+              lv2->is_block_param = 1;
+              if (lv2->type != TY_POLY) { lv2->type = TY_POLY; changed = 1; }
+            }
+            continue;
+          }
         }
       }
       /* A block passed to a pure `...` forwarder is really consumed by the

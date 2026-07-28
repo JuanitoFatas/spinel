@@ -7075,6 +7075,203 @@ SP_TLS sp_RbVal _sp_proc_poly_args[16];
    consumes (and clears) it. Same discipline as _sp_proc_poly_args (#2648). */
 static SP_TLS sp_Proc *_sp_proc_blk;
 mrb_int sp_proc_call(sp_Proc *p, mrb_int argc, mrb_int *args) { if (!p || !p->fn) return 0; if (!args) { mrb_int noargs[16] = {0}; return ((mrb_int (*)(void *, mrb_int, mrb_int *))p->fn)(p->cap, 0, noargs); } return ((mrb_int (*)(void *, mrb_int, mrb_int *))p->fn)(p->cap, argc, args); }
+
+/* ---- Enumerable on a builtin Array receiver, driven by a real sp_Proc ----
+
+   A poly dispatch normally serves a builtin receiver from a pre-arm that
+   splices the block inline. It cannot when a user class defines a YIELDING
+   method of the same name: the block is then materialized once as a proc and
+   shared by every arm, and a second, spliced copy of the body would both
+   duplicate the code and disagree with the arm that ran. These drive the same
+   materialized proc over the elements instead, so an Array receiver reaching a
+   dispatch built for `Relation#map` still runs Array#map (#3409).
+
+   Only the one-value-per-element family lives here; a name whose block takes a
+   second argument (each_with_object, inject) is not dispatched this way. */
+enum {
+  SP_PENUM_EACH, SP_PENUM_MAP, SP_PENUM_SELECT, SP_PENUM_REJECT,
+  SP_PENUM_FIND, SP_PENUM_GROUP_BY, SP_PENUM_SORT_BY, SP_PENUM_MIN_BY,
+  SP_PENUM_MAX_BY, SP_PENUM_FLAT_MAP, SP_PENUM_COUNT, SP_PENUM_SUM,
+  SP_PENUM_ANY, SP_PENUM_ALL, SP_PENUM_NONE, SP_PENUM_PARTITION,
+  SP_PENUM_FIND_INDEX, SP_PENUM_TAKE_WHILE, SP_PENUM_DROP_WHILE,
+  SP_PENUM_EACH_WITH_INDEX
+};
+/* Call `blk` with one element. Both channels are filled, as every other
+   proc-driving site does: a poly parameter reads the boxed side-channel, a
+   concrete-typed one reads the mrb_int slot -- as a pointer for a heap value,
+   since its truncated int projection would be garbage (#2650). */
+static sp_RbVal sp_penum_call2(sp_Proc *blk, sp_RbVal v, sp_RbVal w);
+static sp_RbVal sp_penum_call1(sp_Proc *blk, sp_RbVal v) {
+  /* Autosplat, as a block (never a lambda) does: a 2-parameter block over a
+     pair element -- a Hash entry, or an array of pairs -- binds |k, v|. */
+  if (blk && blk->arity == 2 && !blk->lambda_p &&
+      v.tag == SP_TAG_OBJ && sp_poly_is_array_kind(v.cls_id) && sp_poly_arr_len(v) == 2)
+    return sp_penum_call2(blk, sp_poly_arr_get(v, 0), sp_poly_arr_get(v, 1));
+  mrb_int a[16] = {0};
+  a[0] = (v.tag == SP_TAG_OBJ || v.tag == SP_TAG_STR) ? (mrb_int)(uintptr_t)v.v.p
+                                                      : sp_poly_to_i(v);
+  _sp_proc_poly_args[0] = v;
+  _sp_proc_poly_ret = sp_box_nil();
+  sp_proc_call(blk, 1, a);
+  return _sp_proc_poly_ret;
+}
+static sp_RbVal sp_penum_call2(sp_Proc *blk, sp_RbVal v, sp_RbVal w) {
+  mrb_int a[16] = {0};
+  a[0] = (v.tag == SP_TAG_OBJ || v.tag == SP_TAG_STR) ? (mrb_int)(uintptr_t)v.v.p
+                                                      : sp_poly_to_i(v);
+  a[1] = (w.tag == SP_TAG_OBJ || w.tag == SP_TAG_STR) ? (mrb_int)(uintptr_t)w.v.p
+                                                      : sp_poly_to_i(w);
+  _sp_proc_poly_args[0] = v;
+  _sp_proc_poly_args[1] = w;
+  _sp_proc_poly_ret = sp_box_nil();
+  sp_proc_call(blk, 2, a);
+  return _sp_proc_poly_ret;
+}
+static sp_RbVal sp_poly_enum_proc(sp_RbVal recv, int op, sp_Proc *blk) {
+  SP_GC_ROOT_RBVAL(recv);
+  /* sp_poly_arr_len_ex / sp_poly_each_elem, the pair the spliced poly-each
+     loop uses: they render a Hash entry as a boxed [k, v] pair, so a hash
+     receiver walks its entries here exactly as it would there. */
+  mrb_int n = sp_poly_arr_len_ex(recv);
+  sp_PolyArray *src = sp_PolyArray_new(); SP_GC_ROOT(src);
+  for (mrb_int i = 0; i < n; i++) sp_PolyArray_push(src, sp_poly_each_elem(recv, i));
+  switch (op) {
+    case SP_PENUM_EACH:
+      for (mrb_int i = 0; i < n; i++) sp_penum_call1(blk, src->data[i]);
+      return recv;   /* Array#each answers the receiver */
+    case SP_PENUM_EACH_WITH_INDEX:
+      for (mrb_int i = 0; i < n; i++) sp_penum_call2(blk, src->data[i], sp_box_int(i));
+      return recv;
+    case SP_PENUM_MAP: case SP_PENUM_FLAT_MAP: {
+      sp_PolyArray *out = sp_PolyArray_new(); SP_GC_ROOT(out);
+      for (mrb_int i = 0; i < n; i++) {
+        sp_RbVal r = sp_penum_call1(blk, src->data[i]);
+        /* flat_map splices a returned array one level deep */
+        if (op == SP_PENUM_FLAT_MAP && r.tag == SP_TAG_OBJ && sp_poly_is_array_kind(r.cls_id)) {
+          mrb_int m = sp_poly_arr_len(r);
+          for (mrb_int j = 0; j < m; j++) sp_PolyArray_push(out, sp_poly_arr_get(r, j));
+        }
+        else sp_PolyArray_push(out, r);
+      }
+      return sp_box_poly_array(out);
+    }
+    case SP_PENUM_SELECT: case SP_PENUM_REJECT: {
+      /* Hash#select / #reject answer a Hash, not the pair array every other
+         name here answers. */
+      if (recv.tag == SP_TAG_OBJ && sp_poly_is_hash_kind(recv.cls_id)) {
+        sp_PolyPolyHash *h = sp_PolyPolyHash_new(); SP_GC_ROOT(h);
+        for (mrb_int i = 0; i < n; i++) {
+          sp_RbVal e = src->data[i];
+          if (sp_poly_truthy(sp_penum_call1(blk, e)) != (op == SP_PENUM_SELECT)) continue;
+          sp_PolyPolyHash_set(h, sp_poly_arr_get(e, 0), sp_poly_arr_get(e, 1));
+        }
+        return sp_box_obj(h, SP_BUILTIN_POLY_POLY_HASH);
+      }
+    }
+    /* fall through to the array form */
+    /* FALLTHROUGH */
+    case SP_PENUM_TAKE_WHILE:
+    case SP_PENUM_DROP_WHILE: {
+      sp_PolyArray *out = sp_PolyArray_new(); SP_GC_ROOT(out);
+      int dropping = 1;
+      for (mrb_int i = 0; i < n; i++) {
+        int t = sp_poly_truthy(sp_penum_call1(blk, src->data[i]));
+        if (op == SP_PENUM_TAKE_WHILE) { if (!t) break; sp_PolyArray_push(out, src->data[i]); continue; }
+        if (op == SP_PENUM_DROP_WHILE) {
+          if (dropping && t) continue;
+          dropping = 0;
+          sp_PolyArray_push(out, src->data[i]);
+          continue;
+        }
+        if (t == (op == SP_PENUM_SELECT)) sp_PolyArray_push(out, src->data[i]);
+      }
+      return sp_box_poly_array(out);
+    }
+    case SP_PENUM_PARTITION: {
+      sp_PolyArray *yes = sp_PolyArray_new(); SP_GC_ROOT(yes);
+      sp_PolyArray *no = sp_PolyArray_new(); SP_GC_ROOT(no);
+      for (mrb_int i = 0; i < n; i++)
+        sp_PolyArray_push(sp_poly_truthy(sp_penum_call1(blk, src->data[i])) ? yes : no, src->data[i]);
+      sp_PolyArray *out = sp_PolyArray_new(); SP_GC_ROOT(out);
+      sp_PolyArray_push(out, sp_box_poly_array(yes));
+      sp_PolyArray_push(out, sp_box_poly_array(no));
+      return sp_box_poly_array(out);
+    }
+    case SP_PENUM_FIND:
+      for (mrb_int i = 0; i < n; i++)
+        if (sp_poly_truthy(sp_penum_call1(blk, src->data[i]))) return src->data[i];
+      return sp_box_nil();
+    case SP_PENUM_FIND_INDEX:
+      for (mrb_int i = 0; i < n; i++)
+        if (sp_poly_truthy(sp_penum_call1(blk, src->data[i]))) return sp_box_int(i);
+      return sp_box_nil();
+    case SP_PENUM_ANY: case SP_PENUM_ALL: case SP_PENUM_NONE: {
+      for (mrb_int i = 0; i < n; i++) {
+        int t = sp_poly_truthy(sp_penum_call1(blk, src->data[i]));
+        if (op == SP_PENUM_ANY && t) return sp_box_bool(TRUE);
+        if (op == SP_PENUM_ALL && !t) return sp_box_bool(FALSE);
+        if (op == SP_PENUM_NONE && t) return sp_box_bool(FALSE);
+      }
+      return sp_box_bool(op != SP_PENUM_ANY);
+    }
+    case SP_PENUM_COUNT: {
+      mrb_int k = 0;
+      for (mrb_int i = 0; i < n; i++) if (sp_poly_truthy(sp_penum_call1(blk, src->data[i]))) k++;
+      return sp_box_int(k);
+    }
+    case SP_PENUM_SUM: {
+      sp_RbVal acc = sp_box_int(0);
+      for (mrb_int i = 0; i < n; i++) acc = sp_poly_add(acc, sp_penum_call1(blk, src->data[i]));
+      return acc;
+    }
+    case SP_PENUM_GROUP_BY: {
+      sp_PolyPolyHash *h = sp_PolyPolyHash_new(); SP_GC_ROOT(h);
+      for (mrb_int i = 0; i < n; i++) {
+        sp_RbVal k = sp_penum_call1(blk, src->data[i]);
+        sp_RbVal cur = sp_PolyPolyHash_get(h, k);
+        sp_PolyArray *bucket;
+        if (cur.tag == SP_TAG_OBJ && cur.cls_id == SP_BUILTIN_POLY_ARRAY) bucket = (sp_PolyArray *)cur.v.p;
+        else { bucket = sp_PolyArray_new(); sp_PolyPolyHash_set(h, k, sp_box_poly_array(bucket)); }
+        sp_PolyArray_push(bucket, src->data[i]);
+      }
+      return sp_box_obj(h, SP_BUILTIN_POLY_POLY_HASH);
+    }
+    case SP_PENUM_MIN_BY: case SP_PENUM_MAX_BY: {
+      sp_RbVal best = sp_box_nil(), bestk = sp_box_nil();
+      for (mrb_int i = 0; i < n; i++) {
+        sp_RbVal k = sp_penum_call1(blk, src->data[i]);
+        if (i == 0) { best = src->data[i]; bestk = k; continue; }
+        mrb_bool ok = FALSE;
+        mrb_int cmp = sp_poly_cmp(k, bestk, &ok);
+        if (!ok) sp_poly_cmp_fail(k, bestk);
+        if (op == SP_PENUM_MIN_BY ? cmp < 0 : cmp > 0) { best = src->data[i]; bestk = k; }
+      }
+      return best;
+    }
+    case SP_PENUM_SORT_BY: {
+      /* keys computed once per element, as CRuby does, then a stable insertion
+         sort carrying keys and elements together. This is a runtime array
+         reached through a dispatch, not a hot path. */
+      sp_PolyArray *keys = sp_PolyArray_new(); SP_GC_ROOT(keys);
+      sp_PolyArray *out = sp_PolyArray_new(); SP_GC_ROOT(out);
+      for (mrb_int i = 0; i < n; i++) {
+        sp_RbVal k = sp_penum_call1(blk, src->data[i]);
+        mrb_int pos = out->len;
+        while (pos > 0) {
+          mrb_bool ok = FALSE;
+          mrb_int cmp = sp_poly_cmp(keys->data[pos - 1], k, &ok);
+          if (!ok) sp_poly_cmp_fail(keys->data[pos - 1], k);
+          if (cmp <= 0) break;   /* <= keeps equal keys in input order */
+          pos--;
+        }
+        sp_PolyArray_insert(keys, pos, k);
+        sp_PolyArray_insert(out, pos, src->data[i]);
+      }
+      return sp_box_poly_array(out);
+    }
+  }
+  return sp_box_nil();
+}
 /* <proc>.call(*arr): spread a runtime array into the mrb_int[16] / boxed
    side-channel ABI. Each element rides the side-channel (a poly parameter reads
    it there) and its unboxed projection fills the mrb_int slot (a concrete-typed
