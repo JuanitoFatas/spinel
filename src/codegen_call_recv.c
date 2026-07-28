@@ -3080,10 +3080,31 @@ else {
           return 1;
         }
       }
-      if (sp_streq(name, "intersect?") && argc == 1 && (a0 == rt || a0 == TY_UNKNOWN)) {
-        buf_printf(b, "sp_%sArray_intersect_p(", k); emit_expr(c, recv, b); buf_puts(b, ", ");
-        if (a0 == TY_UNKNOWN) buf_puts(b, "NULL"); else emit_expr(c, argv[0], b);
-        buf_puts(b, ")");
+      if (sp_streq(name, "intersect?") && argc == 1 &&
+          (a0 == rt || a0 == TY_UNKNOWN || ty_is_array(a0) || a0 == TY_POLY)) {
+        /* Ruby has one Array; the storage kinds are ours. A receiver and an
+           argument of different kinds -- a mapped String array against a
+           poly-array constant, the shape this turned up in -- go through the
+           generic comparison rather than declining to a NoMethodError. */
+        if (a0 == rt) {
+          buf_printf(b, "sp_%sArray_intersect_p(", k); emit_expr(c, recv, b); buf_puts(b, ", ");
+          emit_expr(c, argv[0], b);
+          buf_puts(b, ")");
+          return 1;
+        }
+        if (a0 == TY_UNKNOWN) {
+          buf_printf(b, "sp_%sArray_intersect_p(", k); emit_expr(c, recv, b); buf_puts(b, ", NULL)");
+          return 1;
+        }
+        buf_puts(b, "sp_PolyArray_intersect_p(sp_poly_to_poly_array(");
+        { Buf rb2; memset(&rb2, 0, sizeof rb2); emit_expr(c, recv, &rb2);
+          emit_boxed_text(c, rt, rb2.p ? rb2.p : "NULL", b); free(rb2.p); }
+        buf_puts(b, "), sp_poly_to_poly_array(");
+        { Buf ab2; memset(&ab2, 0, sizeof ab2); emit_expr(c, argv[0], &ab2);
+          if (a0 == TY_POLY) buf_puts(b, ab2.p ? ab2.p : "sp_box_nil()");
+          else emit_boxed_text(c, a0, ab2.p ? ab2.p : "NULL", b);
+          free(ab2.p); }
+        buf_puts(b, "))");
         return 1;
       }
       if (sp_streq(name, "union") && argc == 0) {
@@ -3224,9 +3245,20 @@ else {
           return 1;
         }
       }
-      if (sp_streq(name, "intersect?") && argc == 1 && (a0 == TY_POLY_ARRAY || a0 == TY_UNKNOWN)) {
+      if (sp_streq(name, "intersect?") && argc == 1 &&
+          (a0 == TY_POLY_ARRAY || a0 == TY_UNKNOWN || ty_is_array(a0) || a0 == TY_POLY)) {
         buf_puts(b, "sp_PolyArray_intersect_p("); emit_expr(c, recv, b); buf_puts(b, ", ");
-        if (a0 == TY_UNKNOWN) buf_puts(b, "NULL"); else emit_expr(c, argv[0], b);
+        if (a0 == TY_UNKNOWN) buf_puts(b, "NULL");
+        else if (a0 == TY_POLY_ARRAY) emit_expr(c, argv[0], b);
+        else {
+          /* a differently-stored Array argument coerces; Ruby has one Array */
+          buf_puts(b, "sp_poly_to_poly_array(");
+          Buf ab3; memset(&ab3, 0, sizeof ab3); emit_expr(c, argv[0], &ab3);
+          if (a0 == TY_POLY) buf_puts(b, ab3.p ? ab3.p : "sp_box_nil()");
+          else emit_boxed_text(c, a0, ab3.p ? ab3.p : "NULL", b);
+          free(ab3.p);
+          buf_puts(b, ")");
+        }
         buf_puts(b, ")");
         return 1;
       }

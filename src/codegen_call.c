@@ -4093,6 +4093,12 @@ static int emit_poly_method_dispatch(Compiler *c, int id, Buf *b) {
                     infer_type(c, argv[0]) == TY_POLY || infer_type(c, argv[0]) == TY_UNKNOWN);
     int is_include = (sp_streq(name, "include?") || sp_streq(name, "member?") ||
                       sp_streq(name, "has_key?") || sp_streq(name, "key?")) && argc == 1;
+    /* intersect? on a poly value that is a builtin array. The typed-receiver
+       forms resolve, so only the union receiver was missing an arm and the
+       call raised NoMethodError naming Array -- which is what the receiver
+       was (#3414). Every array kind coerces to a poly array, so one arm
+       covers them all rather than one per element type. */
+    int is_intersect = sp_streq(name, "intersect?") && argc == 1;
     /* push/<</append on a poly value that is actually a builtin array: the
        array-mutate statement path skips it when a user class also defines the
        name (the value could be that object), so the switch needs a builtin-array
@@ -4151,7 +4157,7 @@ static int emit_poly_method_dispatch(Compiler *c, int id, Buf *b) {
        receiver (#3234): builtin pre-arms, no user candidates required */
     int is_cover = sp_streq(name, "cover?") && argc == 1 && !diag_user_defines(c, name);
     int is_gcdlcm = sp_streq(name, "gcdlcm") && argc == 1 && !diag_user_defines(c, name);
-    if (ncand > 0 || is_index || is_include || is_fetch || is_push || is_pred || is_strftime || is_cover || is_gcdlcm) {
+    if (ncand > 0 || is_index || is_include || is_fetch || is_push || is_pred || is_strftime || is_intersect || is_cover || is_gcdlcm) {
       TyKind ret = comp_ntype(c, id);
       int tv = ++g_tmp, tr = ++g_tmp;
       int *atmp = malloc(sizeof(int) * argc);
@@ -4579,6 +4585,26 @@ else {
           emit_boxed_text(c, at, tn, b);
           buf_printf(b, "; _t%d = sp_PolyPolyHash_has_key((sp_PolyPolyHash *)_t%d.v.p, _t%d); break; }", tr, tv, tbox);
         }
+      }
+      if (is_intersect) {
+        TyKind at2 = infer_type(c, argv[0]);
+        char abox[96];
+        if (at2 == TY_POLY) snprintf(abox, sizeof abox, "_t%d", atmp[0]);
+        else {
+          Buf ab2; memset(&ab2, 0, sizeof ab2);
+          char tn2[32]; snprintf(tn2, sizeof tn2, "_t%d", atmp[0]);
+          emit_boxed_text(c, at2, tn2, &ab2);
+          snprintf(abox, sizeof abox, "%s", ab2.p ? ab2.p : "sp_box_nil()");
+          free(ab2.p);
+        }
+        buf_puts(b, " case SP_BUILTIN_INT_ARRAY: case SP_BUILTIN_STR_ARRAY:"
+                    " case SP_BUILTIN_FLT_ARRAY: case SP_BUILTIN_SYM_ARRAY:"
+                    " case SP_BUILTIN_POLY_ARRAY: ");
+        buf_printf(b, "_t%d = ", tr);
+        if (ret == TY_POLY) buf_puts(b, "sp_box_bool(");
+        buf_printf(b, "sp_PolyArray_intersect_p(sp_poly_to_poly_array(_t%d), sp_poly_to_poly_array(%s))", tv, abox);
+        if (ret == TY_POLY) buf_puts(b, ")");
+        buf_puts(b, "; break;");
       }
       /* strftime on a poly value that is really a Time: format it; nil or any
          other runtime class raises NoMethodError as CRuby does. */
