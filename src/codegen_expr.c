@@ -1512,8 +1512,19 @@ void emit_expr(Compiler *c, int id, Buf *b) {
     /* predefined punctuation globals: $/ is the record separator "\n"; $! / $; /
        $, read nil (spinel doesn't honor the split/print-sep defaults) */
     if (nm && sp_streq(nm, "$stdin")) { buf_puts(b, "sp_io_stdin()"); return; }
-    if (nm && sp_streq(nm, "$stdout")) { buf_puts(b, "sp_io_stdout()"); return; }
-    if (nm && sp_streq(nm, "$stderr")) { buf_puts(b, "sp_io_stderr()"); return; }
+    /* A program that REASSIGNS $stdout / $stderr gets a real global for it
+       (gv_stdout / gv_stderr, NULL until the assignment runs). Reading the
+       stream has to consult that global, or `$stderr = $stdout` writes to the
+       real stderr anyway and `$stderr == $stdout` answers false (#3406).
+       A program that never assigns has no such global and emits as before. */
+    if (nm && (sp_streq(nm, "$stdout") || sp_streq(nm, "$stderr"))) {
+      const char *base = sp_streq(nm, "$stdout") ? "sp_io_stdout()" : "sp_io_stderr()";
+      const char *gv = sp_streq(nm, "$stdout") ? "gv_stdout" : "gv_stderr";
+      LocalVar *sv = comp_gvar(c, nm + 1);
+      if (sv && sv->type == TY_IO) buf_printf(b, "(%s ? %s : %s)", gv, gv, base);
+      else buf_puts(b, base);
+      return;
+    }
     if (nm && sp_streq(nm, "$/")) { emit_str_literal(b, "\n"); return; }
     if (nm && sp_streq(nm, "$?")) { buf_puts(b, "sp_last_status"); return; }
     if (nm && (sp_streq(nm, "$PROGRAM_NAME") || sp_streq(nm, "$0"))) { buf_puts(b, "sp_program_name"); return; }
