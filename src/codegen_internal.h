@@ -516,6 +516,7 @@ const char *ffi_cb_arg_ctype(const char *spec);
 int ty_is_struct_valued(TyKind t);   /* see codegen_util.c: struct passed by value */
 const char *native_c_type(const char *spec);
 const char *default_value(TyKind t);
+void emit_bigint_operand_ext(Compiler *c, int node, Buf *b);
 const char *nil_value(TyKind t);
 const char *local_init_value(Compiler *c, LocalVar *lv);
 int local_nil_test(Compiler *c, LocalVar *lv, const char *ref, Buf *out);

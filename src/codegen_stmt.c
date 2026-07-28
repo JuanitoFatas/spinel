@@ -5911,6 +5911,16 @@ else {
       /* a poly ivar slot needs a boxed RHS */
       emit_boxed(c, v, b);
     }
+    /* An int RHS into a bigint ivar is promoted at the boundary, the same way
+       the local assignment and the argument binding do it. Without it `@n = 0`
+       on an ivar that elsewhere sees a Bignum wrote the integer 0 into an
+       sp_Bigint * slot -- a null pointer constant, so the C compiled clean and
+       the first sp_bigint_add on it segfaulted (#3399 sibling; found while
+       fixing the argument side). */
+    else if (ivt == TY_BIGINT && comp_ntype(c, v) != TY_BIGINT &&
+             ty_is_numeric(comp_ntype(c, v))) {
+      buf_puts(b, "sp_bigint_new_int("); emit_int_expr(c, v, b); buf_puts(b, ")");
+    }
     else if (ivt != TY_POLY && ivt != TY_UNKNOWN && comp_ntype(c, v) == TY_POLY) {
       /* poly rhs assigned to a typed ivar: unbox to the concrete type */
       Buf _rb; memset(&_rb, 0, sizeof _rb);
@@ -5943,7 +5953,10 @@ else {
     if (idx >= 0) ct = c->classes[sc].cvar_types[idx];
     emit_indent(b, indent);
     buf_printf(b, "cvar_%s_%s = ", c->classes[sc].name, nm + 2);
-    if (ct == TY_POLY) emit_boxed(c, v, b); else emit_expr(c, v, b);
+    if (ct == TY_POLY) emit_boxed(c, v, b);
+    /* an int into a bigint slot promotes at the boundary, as everywhere else */
+    else if (ct == TY_BIGINT && comp_ntype(c, v) != TY_BIGINT) emit_bigint_operand_ext(c, v, b);
+    else emit_expr(c, v, b);
     buf_puts(b, ";\n");
     return;
   }
@@ -6032,7 +6045,17 @@ else {
     else
       snprintf(ref, sizeof ref, "%s%siv_%s", g_self, g_self_deref, iv_c(nm + 1));
     emit_indent(b, indent);
-    if (vt == TY_STRING && op && sp_streq(op, "+")) {
+    /* A bigint ivar has no C operator: `@n += 1` emitted pointer arithmetic on
+       an incomplete struct. Route it through the bigint helpers, promoting an
+       int operand at the boundary like every other bigint slot. */
+    if (vt == TY_BIGINT && op && (sp_streq(op, "+") || sp_streq(op, "-") || sp_streq(op, "*"))) {
+      const char *fn = sp_streq(op, "+") ? "sp_bigint_add"
+                     : sp_streq(op, "-") ? "sp_bigint_sub" : "sp_bigint_mul";
+      buf_printf(b, "%s = %s(%s, ", ref, fn, ref);
+      emit_bigint_operand_ext(c, nt_ref(nt, id, "value"), b);
+      buf_puts(b, ");\n");
+    }
+    else if (vt == TY_STRING && op && sp_streq(op, "+")) {
       buf_printf(b, "%s = sp_str_concat(%s, ", ref, ref);
       emit_expr(c, nt_ref(nt, id, "value"), b); buf_puts(b, ");\n");
     }

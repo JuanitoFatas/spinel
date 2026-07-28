@@ -55,3 +55,60 @@ class Box
 end
 p Box.new(9).show
 p Box.new(2**90).show
+
+# The same boundary on the SLOT side: an ivar or class variable that elsewhere
+# holds a Bignum takes an int write through the same promotion. Without it
+# `@n = 0` wrote the integer 0 into an sp_Bigint * slot -- a null pointer
+# constant, so the C compiled clean and the first sp_bigint_add segfaulted.
+class Acc
+  attr_reader :n
+
+  def initialize(seed = 0)
+    @n = seed
+  end
+
+  def add(v)
+    @n = @n + v
+    @n
+  end
+
+  def bump
+    @n += 1     # no C operator exists for a bigint slot
+    @n
+  end
+
+  def reset
+    @n = 0
+  end
+end
+
+a = Acc.new
+p a.add(1)
+p a.add(2**80)
+p a.bump
+p a.n
+p a.reset
+p a.add(2**64)
+p Acc.new(5).add(2**70)
+
+class Tally
+  @@total = 0
+
+  def self.bump(x)
+    @@total = @@total + x
+    @@total
+  end
+end
+p Tally.bump(1)
+p Tally.bump(2**80)
+
+# a conditional whose arms are an int and a Bignum
+class Either
+  def initialize(f)
+    @v = f ? 0 : 2**90
+  end
+
+  def show = @v.to_s
+end
+p Either.new(true).show
+p Either.new(false).show

@@ -240,12 +240,15 @@ static void emit_cmethod_block_arg(Compiler *c, int id, Scope *cm, int blk_tmp, 
    narrowed with sp_poly_as_bigint, and anything else (a plain int) is promoted
    with sp_bigint_new_int. Not for the int64 exponent/shift argument of pow or
    the shift operators, which stays an int. */
+void emit_bigint_operand_ext(Compiler *c, int node, Buf *b);
 static void emit_bigint_operand(Compiler *c, int node, Buf *b) {
   TyKind t = comp_ntype(c, node);
   if (t == TY_BIGINT) { emit_expr(c, node, b); return; }
   if (t == TY_POLY) { buf_puts(b, "sp_poly_as_bigint("); emit_expr(c, node, b); buf_puts(b, ")"); return; }
   buf_puts(b, "sp_bigint_new_int("); emit_expr(c, node, b); buf_puts(b, ")");
 }
+/* Same, reachable from the other emitters (the ivar op-assign). */
+void emit_bigint_operand_ext(Compiler *c, int node, Buf *b) { emit_bigint_operand(c, node, b); }
 
 /* Emit re_compile's internal-flag argument from Regexp.new/compile's optional
    second argument: an Integer of public option bits (translated), a truthy
