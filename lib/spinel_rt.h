@@ -1178,17 +1178,32 @@ static void sp_mark_brk_vals(void);
    Fiber runtime block. */
 /* External linkage: lib/sp_gc.c's sp_gc_mark_all reaches this by name. */
 static void sp_re_mark_globals(void) {
+  /* The sub-markers below are static and inline away, so a fault in one of
+     them reports as this frame with nothing to distinguish them. Under verify,
+     name the group being walked: `phase=globals` alone cannot say whether the
+     bad pointer came from the regex registers, the exception stack, a
+     proc-return home, a break value or fiber storage (#3404). Costs a store
+     per group and only when verify is on. */
+#define SP_GLB_PHASE(x) do { if (sp_gc_verify_on()) sp_gc_dbg_phase = (x); } while (0)
+  SP_GLB_PHASE("globals:regex");
   sp_mark_string(sp_re_last_str);
   for (int i = 0; i < 10; i++) sp_mark_string(sp_re_captures[i]);
   sp_mark_string(sp_re_match_str);
   sp_mark_string(sp_re_match_pre);
   sp_mark_string(sp_re_match_post);
+  SP_GLB_PHASE("globals:argv");
   for (mrb_int i = 0; i < sp_argv.len; i++) sp_mark_string(sp_argv.data[i]);
   if (sp_argv_array_cache) sp_gc_mark(sp_argv_array_cache);
+  SP_GLB_PHASE("globals:exceptions");
   sp_mark_in_flight_exceptions();
+  SP_GLB_PHASE("globals:proc-homes");
   sp_mark_proc_homes();
+  SP_GLB_PHASE("globals:break-values");
   sp_mark_brk_vals();
+  SP_GLB_PHASE("globals:fiber-storage");
   sp_mark_fiber_root_storage();
+  SP_GLB_PHASE("globals");
+#undef SP_GLB_PHASE
 }
 
 /* Hand the collector (lib/sp_gc.c) this TU's root-marking and string-heap
