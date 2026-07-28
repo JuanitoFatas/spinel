@@ -68,6 +68,15 @@ expect "test (CRuby parity)" "1/1 passed" "$("$SPIN" test 2>&1 | tail -1)"
 [ -s test/color_test.rb.expected ] || fail "test --regen wrote no snapshot"
 expect "test (snapshot)" "1/1 passed" "$("$SPIN" test 2>&1 | tail -1)"
 
+# a snapshot has to round-trip: `test --regen` then `test` must agree. regen
+# took stdout alone while the comparison takes stdout+stderr, so any program
+# writing to stderr regenerated a snapshot the next run could not match (#3405).
+printf '$stderr.puts "err"\nputs "out"\n' > test/streams_test.rb
+"$SPIN" test --regen streams_test.rb >/dev/null 2>&1
+grep -q '^err$' test/streams_test.rb.expected || fail "test --regen dropped stderr"
+expect "test (regen round-trip)" "1/1 passed" "$("$SPIN" test streams_test.rb 2>&1 | tail -1)"
+rm -f test/streams_test.rb test/streams_test.rb.expected
+
 # a large test/ directory: enumerating ~60 entries allocates enough to GC
 # mid-glob, which swept the unrooted result array (heap corruption before
 # any child spawned, #2178)

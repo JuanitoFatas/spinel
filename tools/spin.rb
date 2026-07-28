@@ -1000,10 +1000,14 @@ def cmd_test(prj, files, regen)
     spin_die("no such test: test/#{t}") unless File.exist?(File.join(prj.root, "test", t))
   end
   # regen rewrites each snapshot from CRuby; kept serial (it only runs ruby).
+  # Both streams, merged: that is what a run is compared against below, and
+  # what the no-snapshot path already captures from CRuby. Taking stdout alone
+  # here wrote a snapshot the very next `spin test` could not match, for any
+  # program that writes to stderr (#3405).
   if regen
     tests.each do |t|
       src = File.join(prj.root, "test", t)
-      system("ruby#{inc} #{src} > #{src}.expected 2>/dev/null")
+      system("ruby#{inc} #{src} > #{src}.expected 2>&1")
       puts "regen #{t}"
     end
     return
