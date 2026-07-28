@@ -9,6 +9,7 @@
 #include "sp_io.h"
 #include "sp_gc.h"   /* sp_mark_string */
 #include <stdlib.h>
+#include <stddef.h>   /* offsetof, for the static-stream layout assertion */
 #include <string.h>
 #include <unistd.h>   /* pipe, isatty */
 #include <sys/stat.h> /* stat() for the File predicates */
@@ -187,22 +188,39 @@ sp_IntArray *sp_File_winsize(sp_File *f) {
   return a;
 }
 
+/* The standard streams are singletons in static storage, not GC allocations.
+   Reads of $stdout / $stderr compile straight to these calls and only ever
+   dereference the result, so nothing scanned ever held one -- until
+   `$stderr = $stdout` stored it into a real global slot, which the generated
+   globals hook marks. sp_gc_mark decides what a pointer is from the byte
+   before it, finds whatever .bss happens to sit there, fabricates a header at
+   obj - sizeof(sp_gc_hdr) and calls the scan pointer read out of it (#3410).
+
+   Give them the tag the collector already reads as "static storage, leave it
+   alone", the same one a rodata string literal carries. The mark then returns
+   before it can walk a header that was never written. The eight-byte lead-in
+   puts that byte immediately before the struct; sp_File begins with a pointer,
+   so the compiler adds no padding of its own, and the assertion pins it. */
+typedef struct { unsigned char lead[8]; sp_File f; } sp_StaticFile;
+_Static_assert(offsetof(sp_StaticFile, f) == 8, "the skip tag must sit immediately before the sp_File");
+#define SP_STATIC_FILE_LEAD { 0, 0, 0, 0, 0, 0, 0, 0xff }
+
 sp_File *sp_io_stdout(void) {
-  static sp_File f = { NULL, "<STDOUT>", "w" };
-  if (!f.fp) f.fp = stdout;
-  return &f;
+  static sp_StaticFile s = { SP_STATIC_FILE_LEAD, { NULL, "<STDOUT>", "w" } };
+  if (!s.f.fp) s.f.fp = stdout;
+  return &s.f;
 }
 
 sp_File *sp_io_stderr(void) {
-  static sp_File f = { NULL, "<STDERR>", "w" };
-  if (!f.fp) f.fp = stderr;
-  return &f;
+  static sp_StaticFile s = { SP_STATIC_FILE_LEAD, { NULL, "<STDERR>", "w" } };
+  if (!s.f.fp) s.f.fp = stderr;
+  return &s.f;
 }
 
 sp_File *sp_io_stdin(void) {
-  static sp_File f = { NULL, "<STDIN>", "r" };
-  if (!f.fp) f.fp = stdin;
-  return &f;
+  static sp_StaticFile s = { SP_STATIC_FILE_LEAD, { NULL, "<STDIN>", "r" } };
+  if (!s.f.fp) s.f.fp = stdin;
+  return &s.f;
 }
 
 mrb_int sp_File_close(sp_File *f) {
