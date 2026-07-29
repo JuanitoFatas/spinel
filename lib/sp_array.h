@@ -193,6 +193,8 @@ sp_StrArray *sp_StrArray_difference(sp_StrArray *a, sp_StrArray *b);
 mrb_int sp_StrArray_index(sp_StrArray *a, const char *v);
 mrb_int sp_StrArray_rindex(sp_StrArray *a, const char *v);
 sp_StrArray *sp_StrArray_compact(sp_StrArray *a);
+sp_IntArray *sp_IntArray_compact(sp_IntArray *a);
+sp_FloatArray *sp_FloatArray_compact(sp_FloatArray *a);
 const char *sp_StrArray_delete_at(sp_StrArray *a, mrb_int i);
 const char *sp_StrArray_delete(sp_StrArray *a, const char *v);
 void sp_StrArray_insert(sp_StrArray *a, mrb_int i, const char *v);

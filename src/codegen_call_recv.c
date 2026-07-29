@@ -1890,10 +1890,16 @@ int emit_array_call(Compiler *c, int id, Buf *b) {
     }
     if (k) {
       if ((sp_streq(name, "to_a") || sp_streq(name, "to_ary") || sp_streq(name, "entries") ||
-           sp_streq(name, "deconstruct") ||
-           sp_streq(name, "flatten") || sp_streq(name, "compact")) && argc == 0) {
-        /* a scalar-element array can't nest or hold nil: these are identity */
+           sp_streq(name, "deconstruct") || sp_streq(name, "flatten")) && argc == 0) {
+        /* a scalar-element array can't nest: these are identity */
         emit_expr(c, recv, b); return 1;
+      }
+      /* compact is NOT identity: a scalar array still holds the nil sentinel a
+         nullable read leaves behind, so `["a".rindex("/"), 1].compact` has to
+         drop that first element rather than keep it. */
+      if (sp_streq(name, "compact") && argc == 0) {
+        buf_printf(b, "sp_%sArray_compact(", k); emit_expr(c, recv, b); buf_puts(b, ")");
+        return 1;
       }
       if (sp_streq(name, "[]") && argc == 1 && nt_type(nt, argv[0]) && sp_streq(nt_type(nt, argv[0]), "RangeNode")) {
         /* arr[a..b] / arr[a...b] -> subarray */

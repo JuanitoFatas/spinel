@@ -61,9 +61,19 @@ void emit_boxed_text(Compiler *c, TyKind t, const char *expr, Buf *b) {
   if (ty_is_hash(t) && hash_box_cls(t)) { buf_printf(b, "sp_box_obj(%s, %s)", expr, hash_box_cls(t)); return; }
   /* a shared-mutable string HANDLE (#3227 phase 3) */
   if (t == TY_STRBUF) { buf_printf(b, "sp_box_obj(%s, SP_BUILTIN_STRBUF)", expr); return; }
+  /* An mrb_int slot can hold the nil sentinel a nullable read left behind
+     (`"a".rindex("/")`), so boxing it has to yield nil rather than a boxed
+     INTPTR_MIN that then answers every Integer method. The temp keeps
+     a side-effecting expr evaluated once. */
+  if (t == TY_INT) {
+    int tb = ++g_tmp;
+    buf_printf(b, "({ mrb_int _t%d = (%s); _t%d == SP_INT_NIL ? sp_box_nil() : sp_box_int(_t%d); })",
+               tb, expr, tb, tb);
+    return;
+  }
   const char *fn = NULL;
   switch (t) {
-    case TY_INT: fn = "sp_box_int"; break;       case TY_FLOAT: fn = "sp_box_float"; break;
+    case TY_FLOAT: fn = "sp_box_float"; break;
     case TY_BIGINT: fn = "sp_box_bigint"; break;
     case TY_STRING: fn = "sp_box_str"; break;     case TY_BOOL: fn = "sp_box_bool"; break;
     case TY_SYMBOL: fn = "sp_box_sym"; break;     case TY_RANGE: fn = "sp_box_range"; break;
