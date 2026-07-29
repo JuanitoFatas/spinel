@@ -3706,7 +3706,7 @@ static int emit_poly_method_dispatch(Compiler *c, int id, Buf *b) {
                    tv, tv, tv, tr);
         if (ret == TY_POLY) buf_printf(b, "sp_box_poly_array(sp_poly_to_a_arr(_t%d))", tv);
         else buf_printf(b, "sp_poly_to_a_arr(_t%d)", tv);
-        buf_puts(b, "; } else ");
+        buf_puts(b, "; }\nelse ");
       }
       /* rewind on a runtime IO / StringIO stream (#3257); value is the seed
          (rewind's return is rarely consumed through a poly union) */
@@ -4263,7 +4263,7 @@ static int emit_poly_method_dispatch(Compiler *c, int id, Buf *b) {
         if (atmp_ty[0] == TY_POLY) snprintf(ix, sizeof ix, "sp_poly_to_i(_t%d)", atmp[0]);
         else snprintf(ix, sizeof ix, "_t%d", atmp[0]);
         buf_printf(b, "if (_t%d.tag == SP_TAG_OBJ && _t%d.cls_id == SP_BUILTIN_RANGE)"
-                      " { _t%d = %ssp_range_include((sp_Range *)_t%d.v.p, %s)%s; } else ",
+                      " { _t%d = %ssp_range_include((sp_Range *)_t%d.v.p, %s)%s; }\nelse ",
                    tv, tv, tr,
                    ret == TY_POLY ? "sp_box_bool(" : "", tv, ix,
                    ret == TY_POLY ? ")" : "");
@@ -4281,7 +4281,7 @@ static int emit_poly_method_dispatch(Compiler *c, int id, Buf *b) {
         if (ret == TY_POLY) buf_printf(b, "sp_box_int_array(_t%d)", tg2);
         else if (ret == TY_INT_ARRAY) buf_printf(b, "_t%d", tg2);
         else buf_printf(b, "(mrb_int)(uintptr_t)_t%d", tg2);
-        buf_puts(b, "; } else ");
+        buf_puts(b, "; }\nelse ");
       }
       /* include? on a TAG_STR receiver: check tag before entering cls_id switch */
       if (is_include && infer_type(c, argv[0]) == TY_STRING)

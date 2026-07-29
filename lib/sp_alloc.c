@@ -433,14 +433,17 @@ const char *sp_float_to_s(mrb_float f) {
   if(decpt>0&&(decpt<=15||dlen>decpt)){
     if(decpt<dlen){memcpy(out+o,digits,decpt);o+=decpt;out[o++]='.';memcpy(out+o,digits+decpt,dlen-decpt);o+=(dlen-decpt);}
     else{memcpy(out+o,digits,dlen);o+=dlen;for(int i=dlen;i<decpt;i++)out[o++]='0';out[o++]='.';out[o++]='0';}
-  }else if(decpt<=0&&decpt>-4){
+  }
+  else if(decpt<=0&&decpt>-4){
     out[o++]='0';out[o++]='.';for(int i=decpt;i<0;i++)out[o++]='0';memcpy(out+o,digits,dlen);o+=dlen;
-  }else{
+  }
+  else{
     out[o++]=digits[0];out[o++]='.';
     if(dlen==1)out[o++]='0';else{memcpy(out+o,digits+1,dlen-1);o+=(dlen-1);}
     out[o++]='e';int e=decpt-1;
     if(e>=0)out[o++]='+';else{out[o++]='-';e=-e;}
-    if(e<10){out[o++]='0';out[o++]=(char)('0'+e);}else o+=snprintf(out+o,16,"%d",e);
+    if(e<10){out[o++]='0';out[o++]=(char)('0'+e);}
+    else o+=snprintf(out+o,16,"%d",e);
   }
   out[o]=0;sp_str_set_len(out,(size_t)o);return out;
 }

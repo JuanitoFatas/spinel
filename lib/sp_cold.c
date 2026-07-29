@@ -2288,7 +2288,9 @@ mrb_int sp_int_bit_range(mrb_int n, mrb_int start, mrb_int len) {
    as the empty string (CRuby interpolates nil as ""), every other value as its
    decimal. */
 const char*sp_int_interp(mrb_int n){return n==SP_INT_NIL?sp_str_empty:sp_int_to_s(n);}
-const char*sp_int_to_s_base(mrb_int n,mrb_int base){if(base<2||base>36)sp_raise_cls("ArgumentError",sp_sprintf("invalid radix %lld",(long long)base));char*b=sp_str_alloc_raw(72);char tmp[72];int i=0;int neg=0;uint64_t u;if(n<0){neg=1;u=(uint64_t)(-(n+1))+1;}else{u=(uint64_t)n;}if(u==0){tmp[i++]='0';}else{while(u>0){mrb_int d=u%base;tmp[i++]=d<10?'0'+d:'a'+d-10;u/=base;}}int j=0;if(neg)b[j++]='-';while(i>0)b[j++]=tmp[--i];b[j]=0;sp_str_set_len(b,(size_t)j);return b;}
+const char*sp_int_to_s_base(mrb_int n,mrb_int base){if(base<2||base>36)sp_raise_cls("ArgumentError",sp_sprintf("invalid radix %lld",(long long)base));char*b=sp_str_alloc_raw(72);char tmp[72];int i=0;int neg=0;uint64_t u;if(n<0){neg=1;u=(uint64_t)(-(n+1))+1;}
+else{u=(uint64_t)n;}if(u==0){tmp[i++]='0';}
+else{while(u>0){mrb_int d=u%base;tmp[i++]=d<10?'0'+d:'a'+d-10;u/=base;}}int j=0;if(neg)b[j++]='-';while(i>0)b[j++]=tmp[--i];b[j]=0;sp_str_set_len(b,(size_t)j);return b;}
 /* Inspect / to_s for an int? value. CRuby distinguishes the two on
    nil: `nil.to_s` is "" while `nil.inspect` is "nil". For a real
    integer they agree (Integer#to_s and #inspect are both the decimal
