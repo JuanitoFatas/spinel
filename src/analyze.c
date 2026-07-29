@@ -7713,6 +7713,39 @@ void analyze_program(Compiler *c) {
       if (self_or_none && nm && sp_streq(nm, "block_given?")) comp_scope_of(c, id)->yields = 1;
     }
   }
+  /* A method whose `super` lands on a yielding parent yields too. The parent
+     has no real function -- it is inlined at every call site -- so the child
+     must be inlined as well, or the caller's block never reaches the parent
+     and the call is left referencing a function nobody emitted. Iterate: a
+     chain of supers settles in a few rounds. */
+  {
+    int ns = c->nscopes;
+    char *has_super = (char *)calloc(ns > 0 ? (size_t)ns : 1, 1);
+    if (has_super) {
+      for (int id = 0; id < c->nt->count; id++) {
+        const char *ty = nt_type(c->nt, id);
+        if (!ty || (!sp_streq(ty, "SuperNode") && !sp_streq(ty, "ForwardingSuperNode"))) continue;
+        Scope *sc = comp_scope_of(c, id);
+        if (!sc) continue;
+        int idx = (int)(sc - c->scopes);
+        if (idx >= 0 && idx < ns) has_super[idx] = 1;
+      }
+      for (int round = 0; round < 8; round++) {
+        int changed = 0;
+        for (int i = 0; i < ns; i++) {
+          Scope *s = &c->scopes[i];
+          if (s->yields || !has_super[i] || s->class_id < 0 || !s->name) continue;
+          int p = c->classes[s->class_id].parent;
+          if (p < 0) continue;
+          int mi = s->is_cmethod ? comp_cmethod_in_chain(c, p, s->name, NULL)
+                                 : comp_method_in_chain(c, p, s->name, NULL);
+          if (mi >= 0 && mi < ns && c->scopes[mi].yields) { s->yields = 1; changed = 1; }
+        }
+        if (!changed) break;
+      }
+      free(has_super);
+    }
+  }
 
   /* Bare-Enumerable-via-#each: synthesize a per-class `__enum_to_a` helper that
      materializes #each into an array, used by desugar_enum_method_recv for bare

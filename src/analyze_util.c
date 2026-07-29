@@ -660,8 +660,8 @@ TyKind scan_throw_type(Compiler *c, const char *tag) {
    O(methods * nodes * iterations). The structural shape is stable across the
    pass; the callee resolution below still runs fresh. */
 static const NodeTable *yvt_nt = NULL;
-static int yvt_ntc = -1, yvt_n = 0;
-static int *yvt_ids = NULL;
+static int yvt_ntc = -1, yvt_n = 0, yvt_sup_n = 0;
+static int *yvt_ids = NULL, *yvt_sup_ids = NULL;
 static int yvt_call_forwards_block(const NodeTable *nt, int cid) {
   int a = nt_ref(nt, cid, "arguments");
   int an = 0; const int *av = a >= 0 ? nt_arr(nt, a, "arguments", &an) : NULL;
@@ -671,14 +671,22 @@ static int yvt_call_forwards_block(const NodeTable *nt, int cid) {
 static void yvt_build(Compiler *c) {
   const NodeTable *nt = c->nt;
   int n = nt->count;
-  free(yvt_ids);
+  free(yvt_ids); free(yvt_sup_ids);
   yvt_ids = malloc((size_t)(n > 0 ? n : 1) * sizeof(int));
-  yvt_n = 0;
+  yvt_sup_ids = malloc((size_t)(n > 0 ? n : 1) * sizeof(int));
+  yvt_n = 0; yvt_sup_n = 0;
   yvt_nt = nt; yvt_ntc = n;
-  if (!yvt_ids) return;
+  if (!yvt_ids || !yvt_sup_ids) return;
   for (int cid = 0; cid < n; cid++) {
     const char *cty = nt_type(nt, cid);
-    if (!cty || !sp_streq(cty, "CallNode")) continue;
+    if (!cty) continue;
+    /* a `super` reaching a yielding parent is a call site of that parent: the
+       block that arrives is the child's own */
+    if (sp_streq(cty, "SuperNode") || sp_streq(cty, "ForwardingSuperNode")) {
+      yvt_sup_ids[yvt_sup_n++] = cid;
+      continue;
+    }
+    if (!sp_streq(cty, "CallNode")) continue;
     if (nt_ref(nt, cid, "block") < 0 && !yvt_call_forwards_block(nt, cid)) continue;
     yvt_ids[yvt_n++] = cid;
   }
@@ -776,6 +784,39 @@ else {
        block -> poly). */
     if ((c->scopes[mi].yields || c->scopes[mi].is_lowered_yield) && !g_yvt_unify_all) { result = bt; break; }
     result = ty_unify(result, bt);
+  }
+  g_yvt_depth--;
+  return result;
+}
+/* The block value that reaches `mi` from BELOW: a child method whose `super`
+   lands on mi forwards its own caller's block down. Only the middle link of a
+   super chain needs this -- its own call sites are all `super`, so the site
+   scan above finds none and its value would come out void. Kept separate from
+   yield_value_type so that a method with real call sites keeps its per-site
+   specialization instead of being pinned to a sibling's block type. */
+TyKind yield_value_type_via_super(Compiler *c, int mi) {
+  for (int i = 0; i < g_yvt_depth; i++)
+    if (g_yvt_mi[i] == mi) return TY_UNKNOWN;
+  if (g_yvt_depth >= MAX_YVT_DEPTH) return TY_UNKNOWN;
+  g_yvt_mi[g_yvt_depth++] = mi;
+  const NodeTable *nt = c->nt;
+  if (yvt_nt != nt || yvt_ntc != nt->count) yvt_build(c);
+  TyKind result = TY_UNKNOWN;
+  for (int ii = 0; ii < yvt_sup_n; ii++) {
+    Scope *cs = comp_scope_of(c, yvt_sup_ids[ii]);
+    if (!cs || cs->class_id < 0 || !cs->name) continue;
+    int cmi = (int)(cs - c->scopes);
+    if (cmi == mi) continue;
+    int p = c->classes[cs->class_id].parent;
+    if (p < 0) continue;
+    int rmi = cs->is_cmethod ? comp_cmethod_in_chain(c, p, cs->name, NULL)
+                             : comp_method_in_chain(c, p, cs->name, NULL);
+    if (rmi != mi) continue;
+    TyKind ft = yield_value_type(c, cmi);
+    if (ft == TY_UNKNOWN) ft = yield_value_type_via_super(c, cmi);
+    if (ft == TY_VOID) ft = TY_NIL;
+    if (ft == TY_UNKNOWN) continue;
+    result = (result == TY_UNKNOWN) ? ft : ty_unify(result, ft);
   }
   g_yvt_depth--;
   return result;

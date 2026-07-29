@@ -3884,11 +3884,18 @@ int emit_super_inline(Compiler *c, int id, Buf *b, int indent, int as_expr) {
   if (s->class_id < 0 || !s->name) return 0;
   int p = c->classes[s->class_id].parent;
   int defcls = -1;
-  int mi = p >= 0 ? comp_method_in_chain(c, p, s->name, &defcls) : -1;
+  /* `super` inside a class method resolves through the parent's CLASS-method
+     chain; the instance chain would miss `def self.x` entirely. */
+  int mi = p < 0 ? -1
+         : s->is_cmethod ? comp_cmethod_in_chain(c, p, s->name, &defcls)
+                         : comp_method_in_chain(c, p, s->name, &defcls);
   if (mi < 0) return 0;
   Scope *m = &c->scopes[mi];
   if (!m->yields || scope_has_return(c, mi)) return 0;
   int block = nt_ref(c->nt, id, "block");
+  /* A bare `super` forwards the caller's block, which is the one currently
+     being spliced into this (inlined) method. */
+  if (block < 0) block = g_block_id;
   if (block < 0) return 0;
   if (g_nren + m->nlocals >= MAX_RENAME) return 0;
   for (int i = 0; i < m->nlocals; i++) {
@@ -3949,7 +3956,17 @@ int emit_super_inline(Compiler *c, int id, Buf *b, int indent, int as_expr) {
     buf_printf(b, "lv__y%d_%s = ", tag, m->pnames[i]);
     int sv = g_nren; g_nren = saved_nren;
     if (is_forwarding) {
-      if (i < s->nparams) buf_printf(b, "lv_%s", rename_local(s->pnames[i]));
+      if (i < s->nparams) {
+        /* the forwarded local carries the CHILD's type; box it when the
+           parent's slot is boxed, as the ordinary inline binder does */
+        LocalVar *ep = scope_local(s, s->pnames[i]);
+        LocalVar *mp = scope_local(m, m->pnames[i]);
+        TyKind et = ep ? ep->type : TY_POLY;
+        TyKind mt = mp ? mp->type : TY_POLY;
+        char txt[128]; snprintf(txt, sizeof txt, "lv_%s", rename_local(s->pnames[i]));
+        if (mt == TY_POLY && et != TY_POLY) emit_boxed_text(c, et, txt, b);
+        else buf_puts(b, txt);
+      }
       else { g_nren = sv; emit_arg_or_default(c, m, i, -1, b); sv = g_nren; }
     }
     else {

@@ -224,6 +224,22 @@ as on CRuby. In a few cases CRuby's behavior depends on a feature Spinel does
 not implement, and silently returning a wrong value would be worse than a
 visible error. Those deliberate divergences are listed here.
 
+#### A `super` chain whose callers pass differently-typed blocks
+
+A method that yields is inlined at every call site, so it is specialized to
+the block it is given there. A `super` reaching such a parent carries the
+child's own caller block down, and the chain is inlined the same way -- a
+three-link chain, several yields under the super, a class-method `super` and
+`super(args)` all work.
+
+What does not is a chain of three or more links where two callers pass blocks
+whose *values* have different types (one returning an Integer, another a
+String) and both routes meet at the same yielding ancestor: the middle link
+carries a single type, so one of the two sites gets the wrong one and the
+generated C is rejected. Two links are fine -- the parent is specialized per
+call site there. Give the ancestor its own parameter, or make the block values
+agree, if a chain that deep needs both.
+
 #### Comparisons and predicates on a `nil` read out of an Integer container
 
 A missing key on an Integer-valued Hash, or an out-of-range index on an

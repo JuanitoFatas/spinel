@@ -669,7 +669,12 @@ int strbuf_slot_ref(Compiler *c, int recv, char *out, size_t cap) {
   return 1;
 }
 const char *rename_local(const char *nm) {
-  for (int i = 0; i < g_nren; i++)
+  /* Innermost first. A nested inline pushes its own locals above the caller's,
+     and a same-named local belongs to the inner one -- scanning forward gave
+     the parent's `yield a` the child's `a` in a super chain. The park
+     mechanism bounds visibility by truncating g_nren, so a backward scan sees
+     exactly the same entries. */
+  for (int i = g_nren - 1; i >= 0; i--)
     if (sp_streq(g_ren_from[i], nm)) return g_ren_to[i];
   return nm;
 }

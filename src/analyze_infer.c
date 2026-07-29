@@ -6641,7 +6641,19 @@ TyKind infer_uncached(Compiler *c, int id) {
        chain (the instance chain would miss `def self.x` entirely). */
     int mi = s->is_cmethod ? comp_cmethod_in_chain(c, p, uname, NULL)
                            : comp_method_in_chain(c, p, uname, NULL);
-    return mi >= 0 ? c->scopes[mi].ret : TY_UNKNOWN;
+    if (mi < 0) return TY_UNKNOWN;
+    TyKind sret = (TyKind)c->scopes[mi].ret;
+    /* A yielding parent's return is whatever its yield produces, decided per
+       call site, so its own `ret` stays unknown. The block reaching it is the
+       one this method is called with, so take that value's type. */
+    if ((sret == TY_UNKNOWN || sret == TY_VOID) && c->scopes[mi].yields) {
+      int smi = (int)(s - c->scopes);
+      TyKind yt = yield_value_type(c, smi);
+      /* a middle link in a super chain has no call sites of its own */
+      if (yt == TY_UNKNOWN || yt == TY_VOID) yt = yield_value_type_via_super(c, smi);
+      if (yt != TY_UNKNOWN && yt != TY_VOID) return yt;
+    }
+    return sret;
   }
   if (nk == NK_AndNode || nk == NK_OrNode) {
     TyKind lt = infer_type(c, nt_ref(nt, id, "left"));
