@@ -104,8 +104,10 @@ does, which costs a few megabytes of retained garbage and removes most
 of the multi-worker penalty. On one allocation-bound benchmark that took
 eight workers from 1.7x **slower** than a single worker to roughly par.
 
-Roughly par, not eight times faster. CPU-bound threads scale nearly
-linearly (measured 8.25x on eight workers); allocation-bound ones do not
-yet, because the mark phase is serial and every other worker idles
-through it. Raising `SPINEL_GC_THRESHOLD_KB` further is the lever
+CPU-bound threads scale nearly linearly (measured 8.25x on eight
+workers). Allocation-bound ones now improve with the worker count rather
+than getting worse, but only modestly: a profile puts the remaining time
+in the C allocator itself (malloc and free are 56% of the samples at
+eight workers), which per-worker pooled allocation would address and
+nothing else will. Raising `SPINEL_GC_THRESHOLD_KB` is the lever
 available today.

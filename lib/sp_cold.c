@@ -2155,8 +2155,8 @@ sp_StrIntHash*sp_gc_stat(void){
      misses a just-pushed one (benign undercount for an introspection stat). */
   { int nw = sp_active_workers; if (nw < 1) nw = 1; if (nw > SP_MAX_WORKERS) nw = SP_MAX_WORKERS;
     for (int wi = 0; wi < nw; wi++) {
-      for(sp_str_hdr*sh=sp_str_heap_w[wi]; sh; sh=sh->next){ str_bytes+=sh->size; str_count++; }
-      for(sp_str_hdr*sh=sp_str_old_w[wi]; sh; sh=sh->next){ str_bytes+=sh->size; str_count++; } } }
+      for(sp_str_hdr*sh=sp_str_wslot[wi].young; sh; sh=sh->next){ str_bytes+=sh->size; str_count++; }
+      for(sp_str_hdr*sh=sp_str_wslot[wi].old; sh; sh=sh->next){ str_bytes+=sh->size; str_count++; } } }
 #else
   SP_HEAP_LOCK();
   /* Both generations: the split is an internal sweep optimization, so the

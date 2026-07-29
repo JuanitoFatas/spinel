@@ -66,10 +66,22 @@ extern pthread_mutex_t sp_heap_lock;
    old generation has itself grown past a threshold. */
 #ifdef SP_THREADS
 /* sp_worker_id / sp_active_workers / SP_MAX_WORKERS: sp_types.h */
-extern sp_str_hdr *sp_str_heap_w[SP_MAX_WORKERS];  /* per-worker young lists */
-extern size_t sp_str_heap_bytes_w[SP_MAX_WORKERS]; /* per-worker young bytes */
-extern sp_str_hdr *sp_str_old_w[SP_MAX_WORKERS];   /* per-worker old lists */
-extern size_t sp_str_old_bytes_w[SP_MAX_WORKERS];  /* per-worker old bytes */
+/* One cache-line-padded slot per worker. The list head is written on EVERY
+   string allocation and the byte counter read on every one, so as four bare
+   [SP_MAX_WORKERS] arrays the per-worker slots sat 8 bytes apart: eight
+   workers shared a single line per array, and every allocation invalidated it
+   for all of them. The object heap already learned this -- sp_gc_wslot_t
+   exists for exactly this reason and its comment calls the padding essential
+   -- and the string heap never got the same treatment, which left it the
+   dominant cost of allocation-heavy parallel work. */
+typedef struct {
+  sp_str_hdr *young;        /* per-worker young list head */
+  size_t      young_bytes;  /* live bytes on that list */
+  sp_str_hdr *old;          /* per-worker old list head (swept on a major) */
+  size_t      old_bytes;
+  char _pad[SP_CACHELINE - 2 * sizeof(sp_str_hdr *) - 2 * sizeof(size_t)];
+} sp_str_wslot_t;
+extern sp_str_wslot_t sp_str_wslot[SP_MAX_WORKERS];
 #else
 extern sp_str_hdr *sp_str_heap;          /* young list head */
 extern size_t sp_str_heap_bytes;         /* young string-heap bytes */
@@ -152,7 +164,7 @@ static inline char *sp_str_alloc(size_t len) {
      per worker independent of N. A shared aggregate check (threshold/N) instead
      multiplied the collection count by N and left allocation-heavy parallel
      workloads STW-bound; this keeps them flat. */
-  if (SP_GC_CTR_GET(sp_str_heap_bytes_w[wid]) > sp_str_threshold) sp_stw_collect();
+  if (SP_GC_CTR_GET(sp_str_wslot[wid].young_bytes) > sp_str_threshold) sp_stw_collect();
   h = (sp_str_hdr *)malloc(total);
   if (!h) sp_oom_die();
   h->size = (uint32_t)total;
@@ -161,9 +173,9 @@ static inline char *sp_str_alloc(size_t len) {
   /* Publish h->next before the head store so a concurrent GC.stat walk that
      observes the new head reaches a fully-linked node (only pushes touch the
      head; the sweep runs under stop-the-world). */
-  h->next = sp_str_heap_w[wid];
-  sp_str_heap_w[wid] = h;
-  SP_GC_CTR_ADD(sp_str_heap_bytes_w[wid], total);
+  h->next = sp_str_wslot[wid].young;
+  sp_str_wslot[wid].young = h;
+  SP_GC_CTR_ADD(sp_str_wslot[wid].young_bytes, total);
 #else
   SP_HEAP_LOCK();
   if (!sp_str_stress_checked) { sp_str_stress_checked = 1; const char *e = getenv("SPINEL_GC_STRESS"); if (e && *e && *e != '0') { SP_GC_CTR_SET(sp_str_threshold, 2048); sp_str_threshold_init = 2048; } }

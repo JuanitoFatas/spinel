@@ -7,16 +7,13 @@
 #include "sp_dtoa.h"   /* sp_format_float for locale-independent Float#to_s */
 
 #ifdef SP_THREADS
-sp_str_hdr *sp_str_heap_w[SP_MAX_WORKERS];       /* zero-init: NULL lists */
-size_t sp_str_heap_bytes_w[SP_MAX_WORKERS];      /* zero-init: 0 bytes */
-sp_str_hdr *sp_str_old_w[SP_MAX_WORKERS];        /* zero-init: NULL lists */
-size_t sp_str_old_bytes_w[SP_MAX_WORKERS];       /* zero-init: 0 bytes */
+sp_str_wslot_t sp_str_wslot[SP_MAX_WORKERS];     /* zero-init: NULL lists, 0 bytes */
 /* Aggregate live string bytes across every worker's list. Called only off the
    fast path (collection trigger uses the per-worker slice; sweep/retune here). */
 static size_t sp_str_bytes_total(void) {
   size_t s = 0;
   int n = sp_active_workers; if (n < 1) n = 1; if (n > SP_MAX_WORKERS) n = SP_MAX_WORKERS;
-  for (int i = 0; i < n; i++) s += SP_GC_CTR_GET(sp_str_heap_bytes_w[i]);
+  for (int i = 0; i < n; i++) s += SP_GC_CTR_GET(sp_str_wslot[i].young_bytes);
   return s;
 }
 #else
@@ -33,7 +30,7 @@ static size_t sp_str_old_total(void) {
 #ifdef SP_THREADS
   size_t t = 0;
   int n = sp_active_workers; if (n < 1) n = 1; if (n > SP_MAX_WORKERS) n = SP_MAX_WORKERS;
-  for (int i = 0; i < n; i++) t += SP_GC_CTR_GET(sp_str_old_bytes_w[i]);
+  for (int i = 0; i < n; i++) t += SP_GC_CTR_GET(sp_str_wslot[i].old_bytes);
   return t;
 #else
   return SP_GC_CTR_GET(sp_str_old_bytes);
@@ -318,9 +315,9 @@ static size_t sp_str_sweep_gen(int major) {
 #ifdef SP_THREADS
   int n = sp_active_workers; if (n < 1) n = 1; if (n > SP_MAX_WORKERS) n = SP_MAX_WORKERS;
   for (int i = 0; i < n; i++) {
-    if (major) sp_str_sweep_old(&sp_str_old_w[i], &sp_str_old_bytes_w[i]);
-    sp_str_sweep_young(&sp_str_heap_w[i], &sp_str_heap_bytes_w[i],
-                       &sp_str_old_w[i], &sp_str_old_bytes_w[i], &promoted);
+    if (major) sp_str_sweep_old(&sp_str_wslot[i].old, &sp_str_wslot[i].old_bytes);
+    sp_str_sweep_young(&sp_str_wslot[i].young, &sp_str_wslot[i].young_bytes,
+                       &sp_str_wslot[i].old, &sp_str_wslot[i].old_bytes, &promoted);
   }
 #else
   if (major) sp_str_sweep_old(&sp_str_old, &sp_str_old_bytes);
