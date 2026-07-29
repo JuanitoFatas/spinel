@@ -615,6 +615,9 @@ int emit_grep_pred(Compiler *c, int pat, const char *ev, TyKind et, Buf *b);
 void emit_obj_alloc_expr(Compiler *c, int cid, Buf *b);
 int emit_grep_expr(Compiler *c, int id, Buf *b);
 void emit_arg_or_default(Compiler *c, Scope *m, int idx, int provided, Buf *out);
+/* `(sp_Parent *)` when an object value flows into an ancestor-typed slot; the
+   layouts match by construction, but C needs the cast spelled (#3418). */
+void emit_obj_upcast_prefix(Compiler *c, TyKind slot, TyKind val, Buf *b);
 int kwh_lookup(const NodeTable *nt, int kwh, const char *kname);
 int callee_has_kwarg(Compiler *c, Scope *m, const char *name);
 int emit_ds_hash_materialize(Compiler *c, int kwh, TyKind *out_type);

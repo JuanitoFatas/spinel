@@ -5434,6 +5434,23 @@ int emit_grep_expr(Compiler *c, int id, Buf *b) {
 
 /* Emit the value for callee param `idx`: the provided arg node if any,
    else the param's default (a nil default becomes the type's default). */
+/* An object pointer flowing into a slot declared as one of its ANCESTOR
+   classes. Each class gets its own C struct, and a subclass replicates its
+   parent's fields in order at the same offsets, so the pointer is layout-
+   compatible and the conversion is a no-op at run time -- but C still requires
+   it spelled out. Clang only warns; GCC 14 made -Wincompatible-pointer-types an
+   error by default, so the same emitted C built on one host and not the other
+   (#3418). Emits nothing when the two types are unrelated: a cast there would
+   paper over a real mismatch. */
+void emit_obj_upcast_prefix(Compiler *c, TyKind slot, TyKind val, Buf *b) {
+  if (!ty_is_object(slot) || !ty_is_object(val)) return;
+  int sc = ty_object_class(slot), vc = ty_object_class(val);
+  if (sc < 0 || vc < 0 || sc == vc) return;
+  if (c->classes[sc].is_value_type || c->classes[vc].is_value_type) return;
+  for (int k = c->classes[vc].parent; k >= 0; k = c->classes[k].parent)
+    if (k == sc) { buf_printf(b, "(sp_%s *)", c->classes[sc].c_name); return; }
+}
+
 void emit_arg_or_default(Compiler *c, Scope *m, int idx, int provided, Buf *out) {
   LocalVar *p = scope_local(m, m->pnames[idx]);
   TyKind pt = p ? p->type : TY_INT;
@@ -5647,7 +5664,7 @@ void emit_arg_or_default(Compiler *c, Scope *m, int idx, int provided, Buf *out)
            token (`html_escape(obj.details)` on an unknown receiver): emit_str_expr
            passes a real string through and coerces the token to the slot. */
         else if (pt == TY_STRING) emit_str_expr(c, provided, out);
-        else emit_expr(c, provided, out);
+        else { emit_obj_upcast_prefix(c, pt, at, out); emit_expr(c, provided, out); }
       }
     }
     return;
@@ -5942,7 +5959,9 @@ static void emit_arg_rooted(Compiler *c, Scope *m, int idx, int provided, Buf *o
   int t = ++g_tmp;
   emit_indent(g_pre, g_indent);
   emit_ctype(c, pt, g_pre);
-  buf_printf(g_pre, " _t%d = %s;\n", t, ab.p ? ab.p : default_value(pt));
+  buf_printf(g_pre, " _t%d = ", t);
+  if (provided >= 0) emit_obj_upcast_prefix(c, pt, comp_ntype(c, provided), g_pre);
+  buf_printf(g_pre, "%s;\n", ab.p ? ab.p : default_value(pt));
   emit_indent(g_pre, g_indent);
   if (poly) buf_printf(g_pre, "SP_GC_ROOT_RBVAL(_t%d);\n", t);
   else buf_printf(g_pre, "SP_GC_ROOT(_t%d);\n", t);

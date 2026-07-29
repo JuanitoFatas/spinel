@@ -1,0 +1,13 @@
+class Holder
+  def initialize: (Base rec) -> void
+  def swap: (Base other) -> Holder
+  def pick: (bool f) -> Base
+end
+
+class Box
+  attr_accessor slot: Base
+end
+
+class Object
+  def make: () -> Base
+end

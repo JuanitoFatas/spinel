@@ -1023,7 +1023,11 @@ void emit_expr(Compiler *c, int id, Buf *b) {
       emit_unbox_text(c, ivt2, _rb.p ? _rb.p : "sp_box_nil()", b);
       free(_rb.p);
     }
-    else emit_expr(c, v, b);
+    else {
+      /* a subclass instance stored into an ancestor-typed ivar slot (#3418) */
+      emit_obj_upcast_prefix(c, ivt2, comp_ntype(c, v), b);
+      emit_expr(c, v, b);
+    }
     buf_printf(b, "; %s; })", ref2e);
     return;
   }

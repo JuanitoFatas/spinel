@@ -4606,7 +4606,11 @@ void emit_return(Compiler *c, int id, Buf *b, int indent) {
        method(:sym) target pinned to mrb_int that returns a poly @ivar, or an
        RBS-typed String/object method whose body yields poly -- needs coercing. */
     else if (tail_needs_unbox(r0, g_ret_type)) emit_unbox_node(c, g_ret_type, a[0], b);
-    else emit_tail_value(c, a[0], b);   /* coerces an unresolved TY_UNKNOWN token */
+    else {
+      /* an explicit `return <subclass>` through an ancestor-typed slot (#3418) */
+      emit_obj_upcast_prefix(c, g_ret_type, r0, b);
+      emit_tail_value(c, a[0], b);   /* coerces an unresolved TY_UNKNOWN token */
+    }
     buf_puts(b, ";\n");
   }
   else if (g_ret_type == TY_POLY) buf_puts(b, "return sp_box_nil();\n");
@@ -5939,6 +5943,8 @@ else {
       emit_unresolved_coerced(c, v, ivt, b);
     }
     else {
+      /* a subclass instance stored into an ancestor-typed ivar slot (#3418) */
+      emit_obj_upcast_prefix(c, ivt, comp_ntype(c, v), b);
       emit_expr(c, v, b);
     }
     buf_puts(b, ";\n");
@@ -8332,7 +8338,14 @@ void emit_stmt_tail_inner(Compiler *c, int id, Buf *b, int indent) {
       buf_printf(b, ", %s)", default_value(g_result_ty));
     else buf_printf(b, ", (__typeof__(%s))0)", g_result_var);
   }
-  else emit_tail_value(c, id, b);
+  else {
+    /* An object tail value returned through an ANCESTOR-typed slot (an RBS
+       signature declaring the base class, an override widened to the parent):
+       the layouts match by construction, but C needs the cast spelled (#3418). */
+    if (!g_result_var) emit_obj_upcast_prefix(c, g_ret_type, vty, b);
+    else if (g_result_ty != TY_UNKNOWN) emit_obj_upcast_prefix(c, g_result_ty, vty, b);
+    emit_tail_value(c, id, b);
+  }
   buf_puts(b, ";\n");
 }
 
