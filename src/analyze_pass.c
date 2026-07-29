@@ -250,7 +250,22 @@ int infer_param_hash_value(Compiler *c) {
          narrowing exists for: an empty `{}` at the caller, still UNKNOWN, that
          the reverse binding then coerces to whatever this settles on. */
       int seedable = cur == TY_UNKNOWN || cur == TY_POLY;
-      if (!seedable || lv->rbs_seeded) continue;
+      /* ...and a parameter whose default is an empty `{}`. Such a hash is
+         created HERE, not handed in, so narrowing it converts nothing and
+         reinterprets nobody. Without this an `acc = {}` default settled on the
+         symbol-keyed variant and the body's `acc[key.to_s] = v` wrote a String
+         through an sp_sym slot (#3433). Restricted below to a disagreeing KEY
+         type: a key mismatch is a wrong slot, not the value-narrowing hazard
+         the guard above exists for. */
+      int empty_hash_default = 0;
+      if (!seedable && ty_is_hash(cur) && p < sc->nparams && sc->pdefault[p] >= 0) {
+        int dn = sc->pdefault[p];
+        const char *dty = nt_type(nt, dn);
+        int den = 0;
+        if (dty && (sp_streq(dty, "HashNode") || sp_streq(dty, "KeywordHashNode")))
+          { nt_arr(nt, dn, "elements", &den); empty_hash_default = (den == 0); }
+      }
+      if ((!seedable && !empty_hash_default) || lv->rbs_seeded) continue;
       /* An int-keyed `p[i] = v` is normally excluded: it is ambiguous with
          array-element assignment (an int_array RAM param filled by `ram[i]=b`).
          But when the param is already KNOWN to be a hash (its current type is a
@@ -280,6 +295,15 @@ int infer_param_hash_value(Compiler *c) {
       if (!saw || ambiguous) continue;
       TyKind hv = ty_hash_of(kt, vt);
       if (hv == TY_UNKNOWN) continue;
+      if (empty_hash_default && !seedable) {
+        /* only the key mismatch, and keep whatever value type is already
+           settled unless the writes are more specific */
+        if (ty_hash_key(cur) != kt) {
+          TyKind want = ty_hash_of(kt, ty_hash_val(cur) != TY_UNKNOWN ? ty_hash_val(cur) : vt);
+          if (want != TY_UNKNOWN && want != cur) { lv->type = want; changed = 1; }
+        }
+        continue;
+      }
       if (hv != cur && ty_hash_val(hv) != TY_POLY) { lv->type = hv; changed = 1; }
     }
   }

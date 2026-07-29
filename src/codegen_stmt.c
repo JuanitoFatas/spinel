@@ -7089,7 +7089,12 @@ else {
           else if (sp_streq(lty, "LocalVariableTargetNode")) {
             emit_indent(b, indent);
             const char *lvn = nt_str(nt, lefts[i], "name");
-            buf_printf(b, "lv_%s = ", rename_local(lvn));
+            /* Through emit_local_ref: a target captured by a later block lives
+               in a heap cell, and writing `lv_<name>` there names a variable
+               that was never declared -- the C compilation aborts on the
+               assignment while the cell sits right beside it (#3424). */
+            emit_local_ref(c, lefts[i], lvn, b);
+            buf_puts(b, " = ");
             LocalVar *llv = lvn ? scope_local(rt_scope, lvn) : NULL;
             TyKind ltt = llv ? llv->type : comp_ntype(c, lefts[i]);
             char gx[64]; snprintf(gx, sizeof gx, "sp_%sArray_get(_t%d, %dLL)", k, tarr, i);

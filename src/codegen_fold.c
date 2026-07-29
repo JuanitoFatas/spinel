@@ -299,7 +299,18 @@ int emit_hash_collect_expr(Compiler *c, int id, Buf *b) {
     char *vb = emit_hash_block_eval(c, block, rt, hn, trecv, ti, 0, NULL);
     emit_indent(g_pre, g_indent + 1);
     TyKind vtt = ty_hash_val(rt);
-    buf_printf(g_pre, "if (%s(%s)) { ", is_rej ? "!" : "", vb ? vb : "0"); free(vb);
+    /* Ruby truthiness on the block's value. A boxed one -- the block calls a
+       Proc held as the hash value, so its result is only known at run time --
+       is a struct, and `!(struct)` does not compile at all (#3426). */
+    { int bn2 = 0; int bbody = nt_ref(nt, block, "body");
+      const int *bb2 = bbody >= 0 ? nt_arr(nt, bbody, "body", &bn2) : NULL;
+      TyKind bvt2 = bn2 > 0 ? comp_ntype(c, bb2[bn2 - 1]) : TY_UNKNOWN;
+      if (bvt2 == TY_POLY || bvt2 == TY_UNKNOWN)
+        buf_printf(g_pre, "if (%ssp_poly_truthy(%s)) { ", is_rej ? "!" : "", vb ? vb : "sp_box_nil()");
+      else
+        buf_printf(g_pre, "if (%s(%s)) { ", is_rej ? "!" : "", vb ? vb : "0");
+    }
+    free(vb);
     if (rt == TY_POLY_POLY_HASH) {
       buf_printf(g_pre, "sp_%sHash_set(_t%d, _t%d->keys[_t%d->order[_t%d]], _t%d->vals[_t%d->order[_t%d]]); }",
                  hn, tres, trecv, trecv, ti, trecv, trecv, ti);
