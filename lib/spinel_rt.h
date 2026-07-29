@@ -3568,7 +3568,30 @@ static sp_RbVal sp_poly_reverse(sp_RbVal v) {
   }
   return sp_box_str(sp_str_reverse(sp_poly_to_s(v)));
 }
-static void sp_PolyArray_rotate_bang(sp_PolyArray*a,mrb_int n){if(!a)return;if(a->frozen){sp_raise_frozen_array_at(a, SP_BUILTIN_POLY_ARRAY);return;}if(a->len<=0)return;n=((n%a->len)+a->len)%a->len;if(n==0)return;sp_RbVal*d=a->data;mrb_int lo=0,hi=n-1;while(lo<hi){sp_RbVal t=d[lo];d[lo]=d[hi];d[hi]=t;lo++;hi--;}lo=n;hi=a->len-1;while(lo<hi){sp_RbVal t=d[lo];d[lo]=d[hi];d[hi]=t;lo++;hi--;}lo=0;hi=a->len-1;while(lo<hi){sp_RbVal t=d[lo];d[lo]=d[hi];d[hi]=t;lo++;hi--;}}
+static void sp_PolyArray_rotate_bang(sp_PolyArray*a,mrb_int n){
+  if(!a)return;
+  if(a->frozen){sp_raise_frozen_array_at(a, SP_BUILTIN_POLY_ARRAY);return;}
+  if(a->len<=0)return;
+  n=((n%a->len)+a->len)%a->len;
+  if(n==0)return;
+  sp_RbVal*d=a->data;
+  mrb_int rest=a->len-n;
+  mrb_int keep=n<rest?n:rest;
+  sp_RbVal stackbuf[32];
+  sp_RbVal*t=keep<=32?stackbuf:(sp_RbVal*)malloc(sizeof(sp_RbVal)*(size_t)keep);
+  if(!t)sp_oom_die();
+  if(n<=rest){
+    memcpy(t,d,sizeof(sp_RbVal)*(size_t)n);
+    memmove(d,d+n,sizeof(sp_RbVal)*(size_t)rest);
+    memcpy(d+rest,t,sizeof(sp_RbVal)*(size_t)n);
+  }
+  else{
+    memcpy(t,d+n,sizeof(sp_RbVal)*(size_t)rest);
+    memmove(d+rest,d,sizeof(sp_RbVal)*(size_t)n);
+    memcpy(d,t,sizeof(sp_RbVal)*(size_t)rest);
+  }
+  if(t!=stackbuf)free(t);
+}
 static sp_PolyArray *sp_PolyArray_shuffle(sp_PolyArray *a) { sp_PolyArray *b = sp_PolyArray_dup(a); sp_PolyArray_shuffle_bang(b); return b; }
 /* When sort hits an incomparable pair the result is discarded and we raise
    ArgumentError, matching CRuby. The comparator cannot raise (it would longjmp

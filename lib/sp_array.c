@@ -204,7 +204,35 @@ void sp_PolyArray_splice(sp_PolyArray*a,mrb_int start,mrb_int len,sp_RbVal src){
   free(sb);
 }
 void sp_IntArray_reverse_bang(sp_IntArray*a){if(!a)return;if(a->frozen){sp_raise_frozen_array_at(a, SP_BUILTIN_INT_ARRAY);return;}for(mrb_int i=0,j=a->len-1;i<j;i++,j--){mrb_int t=a->data[a->start+i];a->data[a->start+i]=a->data[a->start+j];a->data[a->start+j]=t;}}
-void sp_IntArray_rotate_bang(sp_IntArray*a,mrb_int n){if(!a)return;if(a->frozen){sp_raise_frozen_array_at(a, SP_BUILTIN_INT_ARRAY);return;}if(a->len<=0)return;n=((n%a->len)+a->len)%a->len;if(n==0)return;mrb_int*d=a->data+a->start;mrb_int lo=0,hi=n-1;while(lo<hi){mrb_int t=d[lo];d[lo]=d[hi];d[hi]=t;lo++;hi--;}lo=n;hi=a->len-1;while(lo<hi){mrb_int t=d[lo];d[lo]=d[hi];d[hi]=t;lo++;hi--;}lo=0;hi=a->len-1;while(lo<hi){mrb_int t=d[lo];d[lo]=d[hi];d[hi]=t;lo++;hi--;}}
+/* Array#rotate!: move the first n elements to the end. Two block moves --
+   save the smaller side, slide the rest, write the saved side back -- rather
+   than the triple-reverse's ~1.5n element swaps. The saved side is at most
+   half the array, so a small stack buffer covers the sizes that matter (a
+   16-element PPU pixel row is rotated once per tile fetch). */
+void sp_IntArray_rotate_bang(sp_IntArray*a,mrb_int n){
+  if(!a)return;
+  if(a->frozen){sp_raise_frozen_array_at(a, SP_BUILTIN_INT_ARRAY);return;}
+  if(a->len<=0)return;
+  n=((n%a->len)+a->len)%a->len;
+  if(n==0)return;
+  mrb_int*d=a->data+a->start;
+  mrb_int rest=a->len-n;
+  mrb_int keep=n<rest?n:rest;          /* the side we buffer */
+  mrb_int stackbuf[32];
+  mrb_int*t=keep<=32?stackbuf:(mrb_int*)malloc(sizeof(mrb_int)*(size_t)keep);
+  if(!t)sp_oom_die();
+  if(n<=rest){                          /* buffer the head, slide the tail down */
+    memcpy(t,d,sizeof(mrb_int)*(size_t)n);
+    memmove(d,d+n,sizeof(mrb_int)*(size_t)rest);
+    memcpy(d+rest,t,sizeof(mrb_int)*(size_t)n);
+  }
+  else{                                 /* buffer the tail, slide the head up */
+    memcpy(t,d+n,sizeof(mrb_int)*(size_t)rest);
+    memmove(d+rest,d,sizeof(mrb_int)*(size_t)n);
+    memcpy(d,t,sizeof(mrb_int)*(size_t)rest);
+  }
+  if(t!=stackbuf)free(t);
+}
 static int _sp_int_cmp(const void*a,const void*b){mrb_int va=*(const mrb_int*)a,vb=*(const mrb_int*)b;return(va>vb)-(va<vb);}
 sp_IntArray*sp_IntArray_sort(sp_IntArray*a){sp_IntArray*b=sp_IntArray_dup(a);qsort(b->data+b->start,b->len,sizeof(mrb_int),_sp_int_cmp);return b;}
 void sp_IntArray_sort_bang(sp_IntArray*a){if(!a)return;if(a->frozen){sp_raise_frozen_array_at(a, SP_BUILTIN_INT_ARRAY);return;}qsort(a->data+a->start,a->len,sizeof(mrb_int),_sp_int_cmp);}
@@ -304,7 +332,30 @@ void sp_FloatArray_replace(sp_FloatArray*dst,sp_FloatArray*src){dst->len=0;if(sr
 sp_FloatArray*sp_FloatArray_slice(sp_FloatArray*a,mrb_int start,mrb_int len){SP_GC_ROOT(a);if(start<0)start+=a->len;if(start<0)start=0;sp_FloatArray*b=sp_FloatArray_new();if(start>=a->len||len<=0)return b;if(len>a->len-start)len=a->len-start;if(len>b->cap){sp_gc_hdr*h=(sp_gc_hdr*)((char*)b-sizeof(sp_gc_hdr));sp_gc_bytes_sub(sizeof(mrb_float)*b->cap);h->size-=sizeof(mrb_float)*b->cap;b->cap=len;b->data=(mrb_float*)realloc(b->data,sizeof(mrb_float)*b->cap);h->size+=sizeof(mrb_float)*b->cap;sp_gc_bytes_add(sizeof(mrb_float)*b->cap);}memcpy(b->data,a->data+start,sizeof(mrb_float)*len);b->len=len;return b;}
 sp_FloatArray*sp_FloatArray_slice_range(sp_FloatArray*a,mrb_int start,mrb_int end_,mrb_int excl){if(end_<0)end_+=a->len;if(start<0)start+=a->len;mrb_int n=end_-start+(excl?0:1);if(n<0||start<0)n=0;return sp_FloatArray_slice(a,start,n);}
 void sp_FloatArray_reverse_bang(sp_FloatArray*a){if(!a)return;if(a->frozen){sp_raise_frozen_array_at(a, SP_BUILTIN_FLT_ARRAY);return;}for(mrb_int i=0,j=a->len-1;i<j;i++,j--){mrb_float t=a->data[i];a->data[i]=a->data[j];a->data[j]=t;}}
-void sp_FloatArray_rotate_bang(sp_FloatArray*a,mrb_int n){if(!a)return;if(a->frozen){sp_raise_frozen_array_at(a, SP_BUILTIN_FLT_ARRAY);return;}if(a->len<=0)return;n=((n%a->len)+a->len)%a->len;if(n==0)return;mrb_float*d=a->data;mrb_int lo=0,hi=n-1;while(lo<hi){mrb_float t=d[lo];d[lo]=d[hi];d[hi]=t;lo++;hi--;}lo=n;hi=a->len-1;while(lo<hi){mrb_float t=d[lo];d[lo]=d[hi];d[hi]=t;lo++;hi--;}lo=0;hi=a->len-1;while(lo<hi){mrb_float t=d[lo];d[lo]=d[hi];d[hi]=t;lo++;hi--;}}
+void sp_FloatArray_rotate_bang(sp_FloatArray*a,mrb_int n){
+  if(!a)return;
+  if(a->frozen){sp_raise_frozen_array_at(a, SP_BUILTIN_FLT_ARRAY);return;}
+  if(a->len<=0)return;
+  n=((n%a->len)+a->len)%a->len;
+  if(n==0)return;
+  mrb_float*d=a->data;
+  mrb_int rest=a->len-n;
+  mrb_int keep=n<rest?n:rest;
+  mrb_float stackbuf[32];
+  mrb_float*t=keep<=32?stackbuf:(mrb_float*)malloc(sizeof(mrb_float)*(size_t)keep);
+  if(!t)sp_oom_die();
+  if(n<=rest){
+    memcpy(t,d,sizeof(mrb_float)*(size_t)n);
+    memmove(d,d+n,sizeof(mrb_float)*(size_t)rest);
+    memcpy(d+rest,t,sizeof(mrb_float)*(size_t)n);
+  }
+  else{
+    memcpy(t,d+n,sizeof(mrb_float)*(size_t)rest);
+    memmove(d+rest,d,sizeof(mrb_float)*(size_t)n);
+    memcpy(d,t,sizeof(mrb_float)*(size_t)rest);
+  }
+  if(t!=stackbuf)free(t);
+}
 static int _sp_float_cmp(const void*a,const void*b){mrb_float va=*(const mrb_float*)a,vb=*(const mrb_float*)b;return(va>vb)-(va<vb);}
 void sp_FloatArray_sort_bang(sp_FloatArray*a){if(!a)return;if(a->frozen){sp_raise_frozen_array_at(a, SP_BUILTIN_FLT_ARRAY);return;}qsort(a->data,a->len,sizeof(mrb_float),_sp_float_cmp);}
 void sp_FloatArray_shuffle_bang(sp_FloatArray*a){if(!a)return;if(a->frozen){sp_raise_frozen_array_at(a, SP_BUILTIN_FLT_ARRAY);return;}for(mrb_int i=a->len-1;i>0;i--){mrb_int j=sp_krand_below(i+1);mrb_float t=a->data[i];a->data[i]=a->data[j];a->data[j]=t;}}
@@ -325,7 +376,29 @@ sp_FloatArray*sp_FloatArray_uniq(sp_FloatArray*a){SP_GC_ROOT(a);sp_FloatArray*b=
    Negative indices count from the end; NULL when out of range. */
 void*sp_PtrArray_delete_at(sp_PtrArray*a,mrb_int i){if(i<0)i+=a->len;if(i<0||i>=a->len)return NULL;void*v=a->data[i];for(mrb_int j=i;j<a->len-1;j++)a->data[j]=a->data[j+1];a->len--;return v;}
 void sp_PtrArray_reverse_bang(sp_PtrArray*a){for(mrb_int i=0,j=a->len-1;i<j;i++,j--){void*t=a->data[i];a->data[i]=a->data[j];a->data[j]=t;}}
-void sp_PtrArray_rotate_bang(sp_PtrArray*a,mrb_int n){if(a->len<=0)return;n=((n%a->len)+a->len)%a->len;if(n==0)return;void**d=a->data;mrb_int lo=0,hi=n-1;while(lo<hi){void*t=d[lo];d[lo]=d[hi];d[hi]=t;lo++;hi--;}lo=n;hi=a->len-1;while(lo<hi){void*t=d[lo];d[lo]=d[hi];d[hi]=t;lo++;hi--;}lo=0;hi=a->len-1;while(lo<hi){void*t=d[lo];d[lo]=d[hi];d[hi]=t;lo++;hi--;}}
+void sp_PtrArray_rotate_bang(sp_PtrArray*a,mrb_int n){
+  if(!a)return;
+  if(a->len<=0)return;
+  n=((n%a->len)+a->len)%a->len;
+  if(n==0)return;
+  void**d=a->data;
+  mrb_int rest=a->len-n;
+  mrb_int keep=n<rest?n:rest;
+  void* stackbuf[32];
+  void**t=keep<=32?stackbuf:(void**)malloc(sizeof(void*)*(size_t)keep);
+  if(!t)sp_oom_die();
+  if(n<=rest){
+    memcpy(t,d,sizeof(void*)*(size_t)n);
+    memmove(d,d+n,sizeof(void*)*(size_t)rest);
+    memcpy(d+rest,t,sizeof(void*)*(size_t)n);
+  }
+  else{
+    memcpy(t,d+n,sizeof(void*)*(size_t)rest);
+    memmove(d+rest,d,sizeof(void*)*(size_t)n);
+    memcpy(d,t,sizeof(void*)*(size_t)rest);
+  }
+  if(t!=stackbuf)free(t);
+}
 sp_PtrArray*sp_PtrArray_dup(sp_PtrArray*a){sp_PtrArray*b=sp_PtrArray_new_scan(a->scan_elem);for(mrb_int i=0;i<a->len;i++)sp_PtrArray_push(b,a->data[i]);return b;}
 sp_PtrArray*sp_PtrArray_slice(sp_PtrArray*a,mrb_int start,mrb_int len){if(start<0)start+=a->len;if(start<0)start=0;sp_PtrArray*b=sp_PtrArray_new_scan(a->scan_elem);if(start>=a->len||len<=0)return b;if(len>a->len-start)len=a->len-start;for(mrb_int i=0;i<len;i++)sp_PtrArray_push(b,a->data[start+i]);return b;}
 void sp_PtrArray_shuffle_bang(sp_PtrArray*a){for(mrb_int i=a->len-1;i>0;i--){mrb_int j=sp_krand_below(i+1);void*t=a->data[i];a->data[i]=a->data[j];a->data[j]=t;}}
@@ -342,7 +415,30 @@ const char*sp_StrArray_shift(sp_StrArray*a){if(!a||a->len<=0)return NULL;if(a->f
 sp_StrArray*sp_StrArray_slice(sp_StrArray*a,mrb_int start,mrb_int len){SP_GC_ROOT(a);if(start<0)start+=a->len;if(start<0)start=0;sp_StrArray*b=sp_StrArray_new();if(start>=a->len||len<=0)return b;if(len>a->len-start)len=a->len-start;for(mrb_int i=0;i<len;i++)sp_StrArray_push(b,a->data[start+i]);return b;}
 sp_StrArray*sp_StrArray_slice_range(sp_StrArray*a,mrb_int start,mrb_int end_,mrb_int excl){if(end_<0)end_+=a->len;if(start<0)start+=a->len;mrb_int n=end_-start+(excl?0:1);if(n<0||start<0)n=0;return sp_StrArray_slice(a,start,n);}
 void sp_StrArray_reverse_bang(sp_StrArray*a){if(!a)return;if(a->frozen){sp_raise_frozen_array_at(a, SP_BUILTIN_STR_ARRAY);return;}for(mrb_int i=0,j=a->len-1;i<j;i++,j--){const char*t=a->data[i];a->data[i]=a->data[j];a->data[j]=t;}}
-void sp_StrArray_rotate_bang(sp_StrArray*a,mrb_int n){if(!a)return;if(a->frozen){sp_raise_frozen_array_at(a, SP_BUILTIN_STR_ARRAY);return;}if(a->len<=0)return;n=((n%a->len)+a->len)%a->len;if(n==0)return;const char**d=a->data;mrb_int lo=0,hi=n-1;while(lo<hi){const char*t=d[lo];d[lo]=d[hi];d[hi]=t;lo++;hi--;}lo=n;hi=a->len-1;while(lo<hi){const char*t=d[lo];d[lo]=d[hi];d[hi]=t;lo++;hi--;}lo=0;hi=a->len-1;while(lo<hi){const char*t=d[lo];d[lo]=d[hi];d[hi]=t;lo++;hi--;}}
+void sp_StrArray_rotate_bang(sp_StrArray*a,mrb_int n){
+  if(!a)return;
+  if(a->frozen){sp_raise_frozen_array_at(a, SP_BUILTIN_STR_ARRAY);return;}
+  if(a->len<=0)return;
+  n=((n%a->len)+a->len)%a->len;
+  if(n==0)return;
+  const char**d=a->data;
+  mrb_int rest=a->len-n;
+  mrb_int keep=n<rest?n:rest;
+  const char* stackbuf[32];
+  const char**t=keep<=32?stackbuf:(const char**)malloc(sizeof(const char*)*(size_t)keep);
+  if(!t)sp_oom_die();
+  if(n<=rest){
+    memcpy(t,d,sizeof(const char*)*(size_t)n);
+    memmove(d,d+n,sizeof(const char*)*(size_t)rest);
+    memcpy(d+rest,t,sizeof(const char*)*(size_t)n);
+  }
+  else{
+    memcpy(t,d+n,sizeof(const char*)*(size_t)rest);
+    memmove(d+rest,d,sizeof(const char*)*(size_t)n);
+    memcpy(d,t,sizeof(const char*)*(size_t)rest);
+  }
+  if(t!=stackbuf)free(t);
+}
 static int _sp_str_cmp(const void*a,const void*b){return strcmp(*(const char*const*)a,*(const char*const*)b);}
 void sp_StrArray_sort_bang(sp_StrArray*a){if(!a)return;if(a->frozen){sp_raise_frozen_array_at(a, SP_BUILTIN_STR_ARRAY);return;}qsort(a->data,a->len,sizeof(const char*),_sp_str_cmp);}
 void sp_StrArray_uniq_bang(sp_StrArray*a){if(!a||a->frozen){if(a&&a->frozen)sp_raise_frozen_array_at(a, SP_BUILTIN_STR_ARRAY);return;}for(mrb_int i=0;i<a->len;){int dup=0;for(mrb_int j=0;j<i;j++){if(a->data[j]==a->data[i]||(a->data[j]&&a->data[i]&&!strcmp(a->data[j],a->data[i]))){dup=1;break;}}if(dup){for(mrb_int k2=i;k2<a->len-1;k2++)a->data[k2]=a->data[k2+1];a->len--;}
