@@ -608,6 +608,8 @@ int lazy_endpoint_is_infinite(Compiler *c, int right); /* endless / Float::INFIN
 int emit_chunk_first_class_expr(Compiler *c, int id, Buf *b);
 int emit_cycle_bounded_expr(Compiler *c, int id, Buf *b);
 int emit_predicate_expr(Compiler *c, int id, Buf *b);
+int emit_find_index_poly_expr(Compiler *c, int id, Buf *b);
+void emit_autosplat_params(Compiler *c, int block, int np, int elem_temp, int indent);
 int poly_block_call_needs_dispatch(Compiler *c, int id);
 int emit_grep_pred(Compiler *c, int pat, const char *ev, TyKind et, Buf *b);
 void emit_obj_alloc_expr(Compiler *c, int cid, Buf *b);

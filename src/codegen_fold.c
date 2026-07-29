@@ -1096,7 +1096,7 @@ static void flatmap_coerce_from_poly(TyKind dst, const char *src, Buf *out) {
    of the poly sub-array held in temp `_t<elem_temp>` (an sp_RbVal), coerced to
    each param's pinned type. Used where a multi-param block iterates a poly array
    whose elements are themselves arrays (map/select/reject/sort_by). */
-static void emit_autosplat_params(Compiler *c, int block, int np, int elem_temp, int indent) {
+void emit_autosplat_params(Compiler *c, int block, int np, int elem_temp, int indent) {
   Scope *asc = comp_scope_of(c, block);
   for (int pj = 0; pj < np; pj++) {
     const char *pn = block_param_name(c, block, pj); if (!pn) continue;
@@ -5022,6 +5022,82 @@ static void emit_pred_cond(Buf *b, int pred_kind, const char *cond, int cnt) {
     default: buf_printf(b, "if (%s) _t%d++;\n", cond, cnt); break;
   }
 }
+/* find_index / index / rindex WITH A BLOCK on a poly receiver.
+   The typed-array emitter is keyed on the storage kind, so a value only known
+   to be an array at run time never reached it and the call fell through to the
+   unresolved-call raise -- while every sibling name (find, select, count) had
+   a poly loop of its own. Same loop, answering the index or nil (#3409). */
+int emit_find_index_poly_expr(Compiler *c, int id, Buf *b) {
+  const NodeTable *nt = c->nt;
+  const char *name = nt_str(nt, id, "name");
+  if (!name || !(sp_streq(name, "find_index") || sp_streq(name, "index") ||
+                 sp_streq(name, "rindex"))) return 0;
+  int block = nt_ref(nt, id, "block");
+  int recv = nt_ref(nt, id, "receiver");
+  if (block < 0 || recv < 0) return 0;
+  if (comp_ntype(c, recv) != TY_POLY || infer_type(c, recv) != TY_POLY) return 0;
+  int body = nt_ref(nt, block, "body");
+  int bn = 0; const int *bb = body >= 0 ? nt_arr(nt, body, "body", &bn) : NULL;
+  if (bn < 1) return 0;
+  int rev = sp_streq(name, "rindex");
+  const char *p0raw = block_param_name(c, block, 0);
+  const char *p0 = p0raw ? rename_local(p0raw) : NULL;
+  int trecv = ++g_tmp, tlen = ++g_tmp, ti = ++g_tmp, tres = ++g_tmp;
+  Buf rb; memset(&rb, 0, sizeof rb); emit_expr(c, recv, &rb);
+  emit_indent(g_pre, g_indent);
+  buf_printf(g_pre, "sp_RbVal _t%d = %s;\n", trecv, rb.p ? rb.p : "sp_box_nil()"); free(rb.p);
+  emit_indent(g_pre, g_indent);
+  buf_printf(g_pre, "SP_GC_ROOT_RBVAL(_t%d);\n", trecv);
+  emit_indent(g_pre, g_indent);
+  buf_printf(g_pre, "mrb_int _t%d = sp_poly_arr_len_ex(_t%d);\n", tlen, trecv);
+  emit_indent(g_pre, g_indent);
+  buf_printf(g_pre, "mrb_int _t%d = SP_INT_NIL;\n", tres);
+  emit_indent(g_pre, g_indent);
+  if (rev)
+    buf_printf(g_pre, "for (mrb_int _t%d = _t%d - 1; _t%d >= 0; _t%d--) {\n", ti, tlen, ti, ti);
+  else
+    buf_printf(g_pre, "for (mrb_int _t%d = 0; _t%d < _t%d; _t%d++) {\n", ti, ti, tlen, ti);
+  int bi = g_indent + 1;
+  int nparam = 0; while (block_param_name(c, block, nparam)) nparam++;
+  if (nparam >= 2 && !block_param_is_multi(c, block, 0)) {
+    /* a Hash receiver renders each entry as a boxed [k, v] pair, which a
+       two-parameter block autosplats -- the same binding the spliced loops do */
+    int te = ++g_tmp;
+    emit_indent(g_pre, bi);
+    buf_printf(g_pre, "sp_RbVal _t%d = sp_poly_each_elem(_t%d, _t%d); SP_GC_ROOT_RBVAL(_t%d);\n", te, trecv, ti, te);
+    emit_autosplat_params(c, block, nparam, te, bi);
+  }
+  else if (p0) {
+    Scope *blkv = comp_scope_of(c, block);
+    LocalVar *plv = (blkv && p0raw) ? scope_local(blkv, p0raw) : NULL;
+    TyKind pt = plv ? plv->type : TY_POLY;
+    char src[64]; snprintf(src, sizeof src, "sp_poly_each_elem(_t%d, _t%d)", trecv, ti);
+    emit_indent(g_pre, bi);
+    emit_block_param_from_boxed(c, p0, pt, src, g_pre);
+  }
+  for (int j = 0; j < bn - 1; j++) emit_stmt(c, bb[j], g_pre, bi);
+  int sv = g_indent; g_indent = bi;
+  Buf cb; memset(&cb, 0, sizeof cb); emit_expr(c, bb[bn - 1], &cb);
+  g_indent = sv;
+  /* Ruby truthiness: a poly condition consults the tag, a nil/void one is
+     constant false, and every other type is truthy even at zero. */
+  TyKind bvt = comp_ntype(c, bb[bn - 1]);
+  emit_indent(g_pre, bi);
+  if (bvt == TY_NIL || bvt == TY_VOID)
+    buf_printf(g_pre, "(void)(%s);\n", cb.p ? cb.p : "0");
+  else if (bvt == TY_POLY || bvt == TY_UNKNOWN)
+    buf_printf(g_pre, "if (sp_poly_truthy(%s)) { _t%d = _t%d; break; }\n", cb.p ? cb.p : "0", tres, ti);
+  else if (bvt == TY_BOOL)
+    buf_printf(g_pre, "if (%s) { _t%d = _t%d; break; }\n", cb.p ? cb.p : "0", tres, ti);
+  else
+    buf_printf(g_pre, "{ (void)(%s); _t%d = _t%d; break; }\n", cb.p ? cb.p : "0", tres, ti);
+  free(cb.p);
+  emit_indent(g_pre, g_indent); buf_puts(g_pre, "}\n");
+  if (comp_ntype(c, id) == TY_INT) buf_printf(b, "_t%d", tres);
+  else buf_printf(b, "(_t%d == SP_INT_NIL ? sp_box_nil() : sp_box_int(_t%d))", tres, tres);
+  return 1;
+}
+
 int emit_predicate_expr(Compiler *c, int id, Buf *b) {
   const NodeTable *nt = c->nt;
   const char *name = nt_str(nt, id, "name");

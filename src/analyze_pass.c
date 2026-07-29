@@ -7429,7 +7429,12 @@ int infer_block_params(Compiler *c) {
               sp_streq(name, "select") || sp_streq(name, "reject") || sp_streq(name, "find") ||
               sp_streq(name, "detect") || sp_streq(name, "any?") || sp_streq(name, "all?") ||
               sp_streq(name, "uniq") || sp_streq(name, "uniq!") || sp_streq(name, "sort_by") ||
-              sp_streq(name, "min_by") || sp_streq(name, "max_by")))
+              sp_streq(name, "min_by") || sp_streq(name, "max_by") ||
+              /* the index-finding family binds the element exactly as its
+                 siblings do; it was left off, so a block param that no other
+                 site typed stayed unknown and got no declaration (#3409) */
+              sp_streq(name, "find_index") || sp_streq(name, "index") ||
+              sp_streq(name, "rindex")))
       pt = TY_POLY;
 
     /* array.each_cons(n) / each_slice(n) { |a, b, ...| } -- a single param

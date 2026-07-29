@@ -3074,6 +3074,15 @@ static sp_PolyArray *sp_PolyArray_concat(sp_PolyArray *a, sp_PolyArray *b) { sp_
 static sp_PolyArray *sp_PolyArray_append_all(sp_PolyArray *a, sp_PolyArray *b) { if (!a || !b) return a; SP_GC_ROOT(a); SP_GC_ROOT(b); mrb_int bn = b->len; if (a == b) { /* self-concat: a push may realloc a->data, dangling b->data (same buffer) -- snapshot b first. */ sp_PolyArray *bc = sp_PolyArray_new(); SP_GC_ROOT(bc); for (mrb_int i = 0; i < bn; i++) sp_PolyArray_push(bc, b->data[i]); b = bc; } for (mrb_int i = 0; i < bn; i++) sp_PolyArray_push(a, b->data[i]); return a; }
 /* Array#rindex(obj): index of the LAST element == obj, or -1 (arm maps to nil). */
 static mrb_int sp_PolyArray_rindex(sp_PolyArray *a, sp_RbVal v) { if (!a) return -1; for (mrb_int i = a->len - 1; i >= 0; i--) if (sp_poly_eq(a->data[i], v)) return i; return -1; }
+/* Array#index / #rindex with a VALUE argument, over any array storage kind:
+   the first (or last) position comparing equal, or SP_INT_NIL for none. Used
+   by the poly-receiver arm, where the element kind is only known at run time. */
+static mrb_int sp_poly_arr_index_val(sp_RbVal a, sp_RbVal v, int rev) {
+  mrb_int n = sp_poly_arr_len(a);
+  if (rev) { for (mrb_int i = n - 1; i >= 0; i--) if (sp_poly_eq(sp_poly_arr_get(a, i), v)) return i; }
+  else     { for (mrb_int i = 0; i < n; i++)      if (sp_poly_eq(sp_poly_arr_get(a, i), v)) return i; }
+  return SP_INT_NIL;
+}
 static mrb_bool sp_PolyArray_include_val(sp_PolyArray *a, sp_RbVal v) { if (!a) return FALSE; for (mrb_int i = 0; i < a->len; i++) if (sp_poly_eq(a->data[i], v)) return TRUE; return FALSE; }
 static sp_PolyArray *sp_PolyArray_intersect(sp_PolyArray *a, sp_PolyArray *b) { sp_PolyArray *r = sp_PolyArray_new(); SP_GC_ROOT(r); if (!a || !b) return r; for (mrb_int i = 0; i < a->len; i++) { sp_RbVal v = a->data[i]; if (sp_PolyArray_include_val(b, v) && !sp_PolyArray_include_val(r, v)) sp_PolyArray_push(r, v); } return r; }
 /* intersect? predicate: early-exit, no allocation (matches CRuby's non-building Array#intersect?). */

@@ -4099,6 +4099,13 @@ static int emit_poly_method_dispatch(Compiler *c, int id, Buf *b) {
        was (#3414). Every array kind coerces to a poly array, so one arm
        covers them all rather than one per element type. */
     int is_intersect = sp_streq(name, "intersect?") && argc == 1;
+    /* index / rindex / find_index with a VALUE argument on a poly value that
+       is an array at run time. include? has had this arm for a long time; the
+       index family answering the position rather than a bool was simply never
+       added, so the call raised NoMethodError naming Array (#3409). */
+    int is_arr_index = (sp_streq(name, "index") || sp_streq(name, "rindex") ||
+                        sp_streq(name, "find_index")) && argc == 1 &&
+                       nt_ref(nt, id, "block") < 0;
     /* push/<</append on a poly value that is actually a builtin array: the
        array-mutate statement path skips it when a user class also defines the
        name (the value could be that object), so the switch needs a builtin-array
@@ -4157,7 +4164,7 @@ static int emit_poly_method_dispatch(Compiler *c, int id, Buf *b) {
        receiver (#3234): builtin pre-arms, no user candidates required */
     int is_cover = sp_streq(name, "cover?") && argc == 1 && !diag_user_defines(c, name);
     int is_gcdlcm = sp_streq(name, "gcdlcm") && argc == 1 && !diag_user_defines(c, name);
-    if (ncand > 0 || is_index || is_include || is_fetch || is_push || is_pred || is_strftime || is_intersect || is_cover || is_gcdlcm) {
+    if (ncand > 0 || is_index || is_include || is_fetch || is_push || is_pred || is_strftime || is_intersect || is_arr_index || is_cover || is_gcdlcm) {
       TyKind ret = comp_ntype(c, id);
       int tv = ++g_tmp, tr = ++g_tmp;
       int *atmp = malloc(sizeof(int) * argc);
@@ -4585,6 +4592,23 @@ else {
           emit_boxed_text(c, at, tn, b);
           buf_printf(b, "; _t%d = sp_PolyPolyHash_has_key((sp_PolyPolyHash *)_t%d.v.p, _t%d); break; }", tr, tv, tbox);
         }
+      }
+      if (is_arr_index) {
+        int tix = ++g_tmp;
+        Buf ab4; memset(&ab4, 0, sizeof ab4);
+        { char tn4[32]; snprintf(tn4, sizeof tn4, "_t%d", atmp[0]);
+          if (atmp_ty[0] == TY_POLY) buf_puts(&ab4, tn4);
+          else emit_boxed_text(c, atmp_ty[0], tn4, &ab4); }
+        buf_puts(b, " case SP_BUILTIN_INT_ARRAY: case SP_BUILTIN_STR_ARRAY:"
+                    " case SP_BUILTIN_FLT_ARRAY: case SP_BUILTIN_SYM_ARRAY:"
+                    " case SP_BUILTIN_POLY_ARRAY: {");
+        buf_printf(b, " mrb_int _t%d = sp_poly_arr_index_val(_t%d, %s, %d); _t%d = ",
+                   tix, tv, ab4.p ? ab4.p : "sp_box_nil()",
+                   sp_streq(name, "rindex") ? 1 : 0, tr);
+        if (ret == TY_INT) buf_printf(b, "_t%d", tix);
+        else buf_printf(b, "(_t%d == SP_INT_NIL ? sp_box_nil() : sp_box_int(_t%d))", tix, tix);
+        buf_puts(b, "; break; }");
+        free(ab4.p);
       }
       if (is_intersect) {
         TyKind at2 = infer_type(c, argv[0]);
@@ -8010,6 +8034,7 @@ void emit_call(Compiler *c, int id, Buf *b) {
   if (emit_each_with_index_terminal(c, id, b)) return;
   if (emit_collect_expr(c, id, b)) return;
   if (emit_predicate_expr(c, id, b)) return;
+  if (emit_find_index_poly_expr(c, id, b)) return;
   if (emit_grep_expr(c, id, b)) return;
   if (emit_minmax_by_expr(c, id, b)) return;
   if (emit_flat_map_expr(c, id, b)) return;
@@ -11504,7 +11529,15 @@ void emit_call(Compiler *c, int id, Buf *b) {
   if (recv >= 0 && comp_ntype(c, recv) == TY_POLY &&
       (sp_streq(name, "write") || sp_streq(name, "read") || sp_streq(name, "gets") ||
        sp_streq(name, "readline") || sp_streq(name, "close") || sp_streq(name, "flush") ||
-       sp_streq(name, "fileno"))) {
+       sp_streq(name, "fileno") ||
+       /* the output family and the cheap predicates: a stream read back out of
+          a container (`[$stdout, $stderr][0].puts`) answered NoMethodError
+          naming IO, which is what it was. Names with a non-IO meaning on a
+          poly value -- `size`, `<<`, `each` -- stay off this list; they have
+          their own arms. */
+       sp_streq(name, "puts") || sp_streq(name, "print") || sp_streq(name, "putc") ||
+       sp_streq(name, "eof?") || sp_streq(name, "closed?") || sp_streq(name, "path") ||
+       sp_streq(name, "readlines") || sp_streq(name, "rewind") || sp_streq(name, "sync"))) {
     int iocand = 0;
     for (int k = 0; k < c->nclasses && !iocand; k++)
       if (comp_method_in_chain(c, k, name, NULL) >= 0 ||
@@ -11525,6 +11558,40 @@ void emit_call(Compiler *c, int id, Buf *b) {
         else { buf_puts(b, "sp_poly_to_s("); emit_boxed(c, argv[0], b); buf_puts(b, ")"); }
         buf_puts(b, "); })");
       }
+      else if (sp_streq(name, "puts") || sp_streq(name, "print")) {
+        /* sp_File_puts appends a newline per argument unless the argument
+           already ends in one, and flattens an array argument through
+           sp_File_puts_val -- the same split the TY_IO arm makes. */
+        int is_puts2 = sp_streq(name, "puts");
+        for (int k2 = 0; k2 < argc; k2++) {
+          TyKind akt2 = comp_ntype(c, argv[k2]);
+          Buf ab2; memset(&ab2, 0, sizeof ab2);
+          int arr2 = 0;
+          if (is_puts2 && (ty_is_array(akt2) || akt2 == TY_POLY)) { arr2 = 1; emit_boxed(c, argv[k2], &ab2); }
+          else if (akt2 == TY_STRING) emit_expr(c, argv[k2], &ab2);
+          else { buf_puts(&ab2, "sp_poly_to_s("); emit_boxed(c, argv[k2], &ab2); buf_puts(&ab2, ")"); }
+          const char *at2 = ab2.p ? ab2.p : "\"\"";
+          if (is_puts2 && arr2) buf_printf(b, "sp_File_puts_val(_t%d, %s); ", tio2, at2);
+          else if (is_puts2) {
+            int ts2 = ++g_tmp;
+            buf_printf(b, "sp_File_puts(_t%d, ({ const char *_t%d = %s; _t%d ? _t%d : \"\"; })); ",
+                       tio2, ts2, at2, ts2, ts2);
+          }
+          else buf_printf(b, "sp_File_write(_t%d, %s); ", tio2, at2);
+          free(ab2.p);
+        }
+        if (is_puts2 && argc == 0) buf_printf(b, "sp_File_write(_t%d, \"\\n\"); ", tio2);
+        buf_puts(b, "((mrb_int)0); })");
+      }
+      else if (sp_streq(name, "putc") && argc == 1) {
+        buf_printf(b, "sp_File_putc(_t%d, ", tio2); emit_boxed(c, argv[0], b); buf_puts(b, "); })");
+      }
+      else if (sp_streq(name, "eof?")) buf_printf(b, "sp_File_eof_p(_t%d); })", tio2);
+      else if (sp_streq(name, "closed?")) buf_printf(b, "sp_File_closed_p(_t%d); })", tio2);
+      else if (sp_streq(name, "path")) buf_printf(b, "sp_File_path(_t%d); })", tio2);
+      else if (sp_streq(name, "readlines")) buf_printf(b, "sp_File_readlines(_t%d); })", tio2);
+      else if (sp_streq(name, "rewind")) buf_printf(b, "sp_File_rewind(_t%d); })", tio2);
+      else if (sp_streq(name, "sync")) buf_printf(b, "((void)_t%d, TRUE); })", tio2);
       else if (sp_streq(name, "read")) buf_printf(b, "sp_File_read(_t%d); })", tio2);
       else if (sp_streq(name, "gets")) buf_printf(b, "sp_File_gets(_t%d); })", tio2);
       else if (sp_streq(name, "readline")) buf_printf(b, "sp_File_readline_sep(_t%d, \"\\n\", 0, 0); })", tio2);

@@ -1029,6 +1029,16 @@ TyKind infer_call(Compiler *c, int id) {
       (sp_streq(name, "real") || sp_streq(name, "imaginary") || sp_streq(name, "imag")) &&
       !an_user_defines_method(c, name))
     return TY_POLY;
+  /* poly.find_index/index/rindex { } : the matching element's index, or nil
+     when the block never answers truthy -- so poly, not a bare int. Every
+     sibling block name had a poly rule; this family had none, and the call
+     fell through untyped to the unresolved-call raise (#3409). */
+  if (recv >= 0 && rt == TY_POLY &&
+      (argc == 0 ? nt_ref(nt, id, "block") >= 0
+                 : (argc == 1 && nt_ref(nt, id, "block") < 0)) &&
+      (sp_streq(name, "find_index") || sp_streq(name, "index") || sp_streq(name, "rindex")) &&
+      !an_user_defines_or_reads(c, name))
+    return TY_POLY;
   /* String#chars on a poly value (a String read out of a container / pair):
      an array of single-char strings (#2909). */
   if (recv >= 0 && rt == TY_POLY && argc == 0 &&
