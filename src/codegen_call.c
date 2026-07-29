@@ -1175,6 +1175,13 @@ void emit_rat_coerce(Compiler *c, int node, Buf *b) {
     buf_puts(b, "sp_float_to_rational("); emit_expr(c, node, b); buf_puts(b, ")");
     return;
   }
+  /* A boxed operand decides at runtime: a Rational stays exact, a Float
+     converts exactly, anything else reads as an integer. Reading it as an
+     integer unconditionally turned Rational(<3/4>, 2) into (0/1). */
+  if (comp_ntype(c, node) == TY_POLY) {
+    buf_puts(b, "sp_poly_kernel_rational("); emit_expr(c, node, b); buf_puts(b, ")");
+    return;
+  }
   buf_puts(b, "sp_rational_new((mrb_int)("); emit_expr(c, node, b); buf_puts(b, "), 1)");
 }
 /* Emit a node as an sp_Complex: a Complex stays as-is, an Integer/Float
@@ -2248,10 +2255,15 @@ static int emit_complex_rational_call(Compiler *c, int id, Buf *b) {
       emit_expr(c, argv[0], b);
       return 1;
     }
+    if (argc == 1 && comp_ntype(c, argv[0]) == TY_POLY) {
+      emit_rat_coerce(c, argv[0], b);
+      return 1;
+    }
     /* Rational(a, b) with a Float or Rational operand: the exact quotient of
        the two values (sp_rational_div raises ZeroDivisionError at b == 0). */
     if (argc == 2 && (comp_ntype(c, argv[0]) == TY_FLOAT || comp_ntype(c, argv[1]) == TY_FLOAT ||
-                      comp_ntype(c, argv[0]) == TY_RATIONAL || comp_ntype(c, argv[1]) == TY_RATIONAL)) {
+                      comp_ntype(c, argv[0]) == TY_RATIONAL || comp_ntype(c, argv[1]) == TY_RATIONAL ||
+                      comp_ntype(c, argv[0]) == TY_POLY || comp_ntype(c, argv[1]) == TY_POLY)) {
       buf_puts(b, "sp_rational_div(");
       emit_rat_coerce(c, argv[0], b);
       buf_puts(b, ", ");

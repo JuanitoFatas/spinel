@@ -1806,6 +1806,15 @@ static inline sp_Rational sp_poly_as_rational(sp_RbVal v) {
   if (sp_poly_is_rational(v) && v.v.p) return *(sp_Rational *)v.v.p;
   return sp_rational_new(sp_poly_to_i(v), 1);
 }
+/* Kernel#Rational on a boxed argument: a Rational passes through exactly, a
+   Float converts to its exact value the way Rational(2.5) does, a String
+   parses, and anything else reads as an integer. */
+static inline sp_Rational sp_poly_kernel_rational(sp_RbVal v) {
+  if (sp_poly_is_rational(v) && v.v.p) return *(sp_Rational *)v.v.p;
+  if (v.tag == SP_TAG_FLT) return sp_float_to_rational(v.v.f);
+  if (v.tag == SP_TAG_STR) return sp_str_to_r(v.v.s ? v.v.s : sp_str_empty);
+  return sp_rational_new(sp_poly_to_i(v), 1);
+}
 /* Unbox a boxed Complex (a real number becomes re+0i). Used to keep a Complex
    reduce accumulator typed when the block folds through the poly `+`. */
 static inline sp_Complex sp_poly_as_complex(sp_RbVal v) {
@@ -2129,7 +2138,7 @@ static sp_RbVal sp_poly_abs2(sp_RbVal v) { if (v.tag == SP_TAG_OBJ && v.cls_id =
 /* No-arg floor/ceil/round/truncate return Integer in Ruby: an int/bigint tag
    is already its own floor (returned unchanged, lossless for bigints), a
    float converts through the matching libm rounding. */
-static sp_RbVal sp_poly_floor(sp_RbVal v) { if (v.tag == SP_TAG_FLT) { sp_poly_flo_domain_ck(v.v.f); return sp_box_int((mrb_int)floor(v.v.f)); } if (v.tag == SP_TAG_INT || v.tag == SP_TAG_BIGINT) return v; sp_raise_poly_nomethod("floor", v); }
+static sp_RbVal sp_poly_floor(sp_RbVal v) { if (v.tag == SP_TAG_FLT) { sp_poly_flo_domain_ck(v.v.f); return sp_box_int((mrb_int)floor(v.v.f)); } if (v.tag == SP_TAG_INT || v.tag == SP_TAG_BIGINT) return v; if (sp_poly_is_rational(v)) return sp_box_int(sp_rational_floor_i(sp_poly_as_rational(v))); sp_raise_poly_nomethod("floor", v); }
 /* a NULL char* carried under SP_TAG_STR is the empty string (as in
    sp_poly_to_i / sp_poly_eq): bytesize 0, ord raises CRuby's ArgumentError. */
 static mrb_int sp_poly_bytesize(sp_RbVal v) { if (v.tag == SP_TAG_STR) return v.v.s ? sp_str_bytesize_m(v.v.s) : 0; sp_raise_poly_nomethod("bytesize", v); }
@@ -2143,8 +2152,8 @@ static mrb_int sp_poly_denominator(sp_RbVal v) { if (sp_poly_is_rational(v)) ret
 /* String#getbyte on a poly value; nil (not 0) for an out-of-range index, per
    CRuby, so the result is boxed. */
 static sp_RbVal sp_poly_getbyte(sp_RbVal v, mrb_int i) { if (v.tag != SP_TAG_STR) sp_raise_poly_nomethod("getbyte", v); const char *s = v.v.s; if (!s) return sp_box_nil(); mrb_int bl = (mrb_int)sp_str_byte_len(s); if (i < 0) i += bl; if (i < 0 || i >= bl) return sp_box_nil(); return sp_box_int((mrb_int)(unsigned char)s[i]); }
-static sp_RbVal sp_poly_ceil(sp_RbVal v) { if (v.tag == SP_TAG_FLT) { sp_poly_flo_domain_ck(v.v.f); return sp_box_int((mrb_int)ceil(v.v.f)); } if (v.tag == SP_TAG_INT || v.tag == SP_TAG_BIGINT) return v; sp_raise_poly_nomethod("ceil", v); }
-static sp_RbVal sp_poly_round(sp_RbVal v) { if (v.tag == SP_TAG_FLT) { sp_poly_flo_domain_ck(v.v.f); return sp_box_int((mrb_int)round(v.v.f)); } if (v.tag == SP_TAG_INT || v.tag == SP_TAG_BIGINT) return v; sp_raise_poly_nomethod("round", v); }
+static sp_RbVal sp_poly_ceil(sp_RbVal v) { if (v.tag == SP_TAG_FLT) { sp_poly_flo_domain_ck(v.v.f); return sp_box_int((mrb_int)ceil(v.v.f)); } if (v.tag == SP_TAG_INT || v.tag == SP_TAG_BIGINT) return v; if (sp_poly_is_rational(v)) return sp_box_int(sp_rational_ceil_i(sp_poly_as_rational(v))); sp_raise_poly_nomethod("ceil", v); }
+static sp_RbVal sp_poly_round(sp_RbVal v) { if (v.tag == SP_TAG_FLT) { sp_poly_flo_domain_ck(v.v.f); return sp_box_int((mrb_int)round(v.v.f)); } if (v.tag == SP_TAG_INT || v.tag == SP_TAG_BIGINT) return v; if (sp_poly_is_rational(v)) return sp_box_int(sp_rational_round_i(sp_poly_as_rational(v))); sp_raise_poly_nomethod("round", v); }
 /* Numeric#round(ndigits): a Float stays Float when n > 0 (rounded to n decimal
    places) and becomes Integer when n <= 0; an Integer is unchanged for n >= 0
    and rounded to a power of ten for n < 0. Mirrors the scalar Float#round(n)
@@ -2164,9 +2173,18 @@ static sp_RbVal sp_poly_round_n(sp_RbVal v, mrb_int n) {
     return sp_box_int(isinf(f) ? 0 : (mrb_int)(round((double)v.v.i / f) * f));
   }
   if (v.tag == SP_TAG_BIGINT) return v;  /* n < 0 on a bignum is out of scope */
+  /* Rational#round(n): a positive precision keeps the Rational, n <= 0 lands
+     on an Integer, matching the typed path. */
+  if (sp_poly_is_rational(v)) {
+    sp_Rational r = sp_poly_as_rational(v);
+    if (n > 0) return sp_box_rational(sp_rational_round_prec(r, n));
+    if (n == 0) return sp_box_int(sp_rational_round_i(r));
+    sp_Rational q = sp_rational_round_prec(r, n);
+    return sp_box_int(q.num / q.den);
+  }
   sp_raise_poly_nomethod("round", v);
 }
-static sp_RbVal sp_poly_truncate(sp_RbVal v) { if (v.tag == SP_TAG_FLT) { sp_poly_flo_domain_ck(v.v.f); return sp_box_int((mrb_int)trunc(v.v.f)); } if (v.tag == SP_TAG_INT || v.tag == SP_TAG_BIGINT) return v; sp_raise_poly_nomethod("truncate", v); }
+static sp_RbVal sp_poly_truncate(sp_RbVal v) { if (v.tag == SP_TAG_FLT) { sp_poly_flo_domain_ck(v.v.f); return sp_box_int((mrb_int)trunc(v.v.f)); } if (v.tag == SP_TAG_INT || v.tag == SP_TAG_BIGINT) return v; if (sp_poly_is_rational(v)) { sp_Rational _r = sp_poly_as_rational(v); return sp_box_int(_r.num / _r.den); } sp_raise_poly_nomethod("truncate", v); }
 /* forward: generic array length/element (defined later in this header) and
    the array-kind predicate for cross-kind value equality. */
 static mrb_int sp_poly_length(sp_RbVal v);
