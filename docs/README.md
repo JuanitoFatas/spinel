@@ -17,7 +17,8 @@ Start here, then open the topic you need.
 - **[FFI.md](FFI.md)** — call C functions directly from Spinel Ruby, with no
   extension build step: declarations in the source become direct C call sites.
 - **[rbs-extract.md](rbs-extract.md)** — seed the type inferencer with `.rbs`
-  signatures via `spinel --rbs DIR`, and the supported RBS subset.
+  signatures via `spinel --rbs DIR`: the supported RBS subset, what a seed buys,
+  and why a seed is an assertion you are trusted to get right rather than a hint.
 - **[float-rounding.md](float-rounding.md)** — the return type of
   `Float#ceil`/`#floor`/`#round`/`#truncate`, where Spinel's static typing meets
   CRuby's value-dependent rule.
