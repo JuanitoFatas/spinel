@@ -1096,6 +1096,12 @@ TyKind infer_call(Compiler *c, int id) {
     if (ebl && ebl->type != TY_STRING) ebl->type = TY_STRING;
     return TY_STRING;
   }
+  /* poly.merge(other) { |k, old, new| } -- a Hash reached through a container.
+     The conflict-block form builds the same general boxed-key/value hash the
+     blockless one does; without a type it stayed unresolved. */
+  if (recv >= 0 && rt == TY_POLY && sp_streq(name, "merge") && argc == 1 &&
+      nt_ref(nt, id, "block") >= 0 && !an_user_defines_or_reads(c, "merge"))
+    return TY_POLY_POLY_HASH;
   /* poly.scan(re): a String read out of a container. Same shape as the
      rt==TY_STRING rule -- captures give an array of arrays (#3368). */
   if (recv >= 0 && rt == TY_POLY && argc == 1 && sp_streq(name, "scan") &&
@@ -4223,7 +4229,15 @@ else {
       if (blk >= 0) {
         int body = nt_ref(nt, blk, "body");
         int bn = 0; const int *bb = body >= 0 ? nt_arr(nt, body, "body", &bn) : NULL;
-        if (bn > 0) { TyKind bt = infer_type(c, bb[bn - 1]); if (bt != TY_UNKNOWN) return bt; }
+        if (bn > 0) {
+          TyKind bt = infer_type(c, bb[bn - 1]);
+          /* With no init the accumulator starts as the first element, so a
+             block value shaped differently than that element rides boxed: a
+             fold of Hashes through #merge cannot store a hash pointer in the
+             boxed slot the first element occupies. */
+          if (bt != TY_UNKNOWN && bt != TY_POLY && ty_array_elem(rt) == TY_POLY) return TY_POLY;
+          if (bt != TY_UNKNOWN) return bt;
+        }
       }
       return ty_array_elem(rt);
     }

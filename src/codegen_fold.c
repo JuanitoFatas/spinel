@@ -3209,6 +3209,14 @@ int emit_reduce_block_expr(Compiler *c, int id, Buf *b) {
     else if (rbt == TY_POLY && acc_ty == TY_FLOAT) { buf_puts(&tail, "sp_poly_to_f("); emit_expr(c, bb[bn - 1], &tail); buf_puts(&tail, ")"); }
     else if (rbt == TY_POLY && acc_ty == TY_STRING) { buf_puts(&tail, "sp_poly_to_s("); emit_expr(c, bb[bn - 1], &tail); buf_puts(&tail, ")"); }
     else if (rbt == TY_POLY && acc_ty == TY_SYMBOL) { buf_puts(&tail, "(sp_sym)("); emit_expr(c, bb[bn - 1], &tail); buf_puts(&tail, ").v.i"); }
+    /* The mirror: a concretely typed block value going back into a boxed
+       accumulator has to be boxed. Without this a fold with no init over
+       Hashes assigned a hash pointer into the sp_RbVal seed slot. */
+    else if (acc_ty == TY_POLY && rbt != TY_POLY && rbt != TY_UNKNOWN && rbt != TY_VOID) {
+      Buf raw; memset(&raw, 0, sizeof raw); emit_expr(c, bb[bn - 1], &raw);
+      emit_boxed_text(c, rbt, raw.p ? raw.p : "0", &tail);
+      free(raw.p);
+    }
     else emit_expr(c, bb[bn - 1], &tail);
     g_pre = saved_pre;
     buf_printf(b, "_t%d = %s; } } ", tacc, tail.p ? tail.p : "0");

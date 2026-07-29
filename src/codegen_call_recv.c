@@ -4898,6 +4898,13 @@ else {
           buf_printf(b, "sp_StrPolyHash_from_%s(", at == TY_STR_STR_HASH ? "str_str_hash" : "str_int_hash");
           emit_expr(c, argv[0], b); buf_puts(b, ")");
         }
+        else if (at == TY_POLY && rt == TY_POLY_POLY_HASH) {
+          /* A boxed argument holds whichever variant the value really is, so
+             the pointer cast below would read a Sym-keyed hash through a
+             Poly-keyed struct. The general hash can be rebuilt from any of
+             them: merge it into an empty one. */
+          buf_puts(b, "sp_poly_hash_merge("); emit_expr(c, argv[0], b); buf_puts(b, ", sp_box_nil())");
+        }
         else if (at == TY_POLY) {
           /* poly arg: unbox to the receiver's hash type */
           int t = ++g_tmp;
@@ -9346,6 +9353,59 @@ int emit_poly_call(Compiler *c, int id, Buf *b) {
       return 1;
     }
     if (sp_streq(name, "freeze"))     { buf_puts(b, "sp_poly_freeze("); emit_expr(c, recv, b); buf_puts(b, ")"); return 1; }
+  }
+  /* Hash#merge(other) { |key, old, new| }: the block decides the value for a
+     key both hashes carry. Walk the other hash's pairs into a copy of the
+     receiver, consulting the block on a collision -- sp_poly_hash_merge has no
+     block form, and the typed Hash path cannot serve a boxed receiver. */
+  if (recv >= 0 && rt == TY_POLY && sp_streq(name, "merge") && argc == 1 &&
+      nt_ref(nt, id, "block") >= 0 && !user_defines_or_reads(c, "merge")) {
+    int mblk = nt_ref(nt, id, "block");
+    int mbody = nt_ref(nt, mblk, "body");
+    int mbn = 0; const int *mbb = mbody >= 0 ? nt_arr(nt, mbody, "body", &mbn) : NULL;
+    if (mbn > 0) {
+      const char *mp[3];
+      for (int i = 0; i < 3; i++) {
+        const char *pn = block_param_name(c, mblk, i);
+        mp[i] = pn ? rename_local(pn) : NULL;
+      }
+      /* the block sees three boxed values */
+      Scope *ms = comp_scope_of(c, mblk);
+      LocalVar *mlv[3]; TyKind msave[3];
+      for (int i = 0; i < 3; i++) {
+        const char *pn = block_param_name(c, mblk, i);
+        mlv[i] = (ms && pn) ? scope_local(ms, pn) : NULL;
+        msave[i] = mlv[i] ? mlv[i]->type : TY_UNKNOWN;
+        if (mlv[i]) mlv[i]->type = TY_POLY;
+      }
+      for (int j = 0; j < mbn; j++) infer_subtree(c, mbb[j]);
+      int ta = ++g_tmp, tb = ++g_tmp, tr = ++g_tmp, tp = ++g_tmp, ti = ++g_tmp, tk = ++g_tmp;
+      buf_printf(b, "({ sp_RbVal _t%d = ", ta); emit_boxed(c, recv, b);
+      buf_printf(b, "; SP_GC_ROOT_RBVAL(_t%d); sp_RbVal _t%d = ", ta, tb); emit_boxed(c, argv[0], b);
+      buf_printf(b, "; SP_GC_ROOT_RBVAL(_t%d);", tb);
+      buf_printf(b, " sp_PolyPolyHash *_t%d = sp_poly_hash_merge(_t%d, sp_box_nil()); SP_GC_ROOT(_t%d);",
+                 tr, ta, tr);
+      buf_printf(b, " sp_PolyArray *_t%d = sp_poly_to_a_arr(_t%d); SP_GC_ROOT(_t%d);", tp, tb, tp);
+      buf_printf(b, " for (mrb_int _t%d = 0; _t%d && _t%d < sp_PolyArray_length(_t%d); _t%d++) {",
+                 ti, tp, ti, tp, ti);
+      buf_printf(b, " sp_RbVal _t%d = sp_PolyArray_get(_t%d, _t%d);", tk, tp, ti);
+      buf_printf(b, " sp_RbVal _tk%d = sp_poly_arr_get(_t%d, 0), _tv%d = sp_poly_arr_get(_t%d, 1);",
+                 tk, tk, tk, tk);
+      buf_printf(b, " if (sp_PolyPolyHash_has_key(_t%d, _tk%d)) {", tr, tk);
+      if (mp[0]) buf_printf(b, " sp_RbVal lv_%s = _tk%d;", mp[0], tk);
+      if (mp[1]) buf_printf(b, " sp_RbVal lv_%s = sp_PolyPolyHash_get(_t%d, _tk%d);", mp[1], tr, tk);
+      if (mp[2]) buf_printf(b, " sp_RbVal lv_%s = _tv%d;", mp[2], tk);
+      { Buf *saved_pre = g_pre; g_pre = b;
+        for (int j = 0; j < mbn - 1; j++) { emit_stmt(c, mbb[j], b, 0); buf_puts(b, " "); }
+        buf_printf(b, " sp_PolyPolyHash_set(_t%d, _tk%d, ", tr, tk);
+        emit_boxed(c, mbb[mbn - 1], b);
+        buf_puts(b, "); }");
+        g_pre = saved_pre; }
+      buf_printf(b, " else sp_PolyPolyHash_set(_t%d, _tk%d, _tv%d); }", tr, tk, tk);
+      buf_printf(b, " _t%d; })", tr);
+      for (int i = 0; i < 3; i++) if (mlv[i]) mlv[i]->type = msave[i];
+      return 1;
+    }
   }
   /* poly.ljust/rjust/center(width[, pad]): a String read from a container
      widened to poly. Pad via sp_poly_to_s and re-box (#3222). Outside the
