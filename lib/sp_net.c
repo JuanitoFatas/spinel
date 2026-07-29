@@ -321,11 +321,13 @@ int sp_net_udp_recv_from(int fd, char *buf, int cap, char *ipbuf, int ipcap, int
             struct sockaddr_in *a = (struct sockaddr_in *)&ss;
             inet_ntop(AF_INET, &a->sin_addr, ipbuf, (socklen_t)ipcap);
             if (port_out) *port_out = ntohs(a->sin_port);
-        } else if (ss.ss_family == AF_INET6) {
+        }
+        else if (ss.ss_family == AF_INET6) {
             struct sockaddr_in6 *a = (struct sockaddr_in6 *)&ss;
             inet_ntop(AF_INET6, &a->sin6_addr, ipbuf, (socklen_t)ipcap);
             if (port_out) *port_out = ntohs(a->sin6_port);
-        } else if (port_out) *port_out = 0;
+        }
+        else if (port_out) *port_out = 0;
     }
     return (int)n;
 }
@@ -414,11 +416,13 @@ int sp_net_getaddrinfo_at(const char *host, int port, int socktype, int idx,
                 struct sockaddr_in *a = (struct sockaddr_in *)ai->ai_addr;
                 inet_ntop(AF_INET, &a->sin_addr, ipbuf, (socklen_t)ipcap);
                 if (port_out) *port_out = ntohs(a->sin_port);
-            } else if (ai->ai_family == AF_INET6) {
+            }
+            else if (ai->ai_family == AF_INET6) {
                 struct sockaddr_in6 *a = (struct sockaddr_in6 *)ai->ai_addr;
                 inet_ntop(AF_INET6, &a->sin6_addr, ipbuf, (socklen_t)ipcap);
                 if (port_out) *port_out = ntohs(a->sin6_port);
-            } else if (port_out) *port_out = 0;
+            }
+            else if (port_out) *port_out = 0;
         }
         rc = 0;
         break;

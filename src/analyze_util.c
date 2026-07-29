@@ -454,7 +454,8 @@ int anon_struct_ci_for_value(Compiler *c, int val) {
       for (int k = 0; k < c->nclasses; k++)
         if (c->classes[k].is_anon_struct) c->anon_struct_ids[c->n_anon_struct_ids++] = k;
       c->anon_struct_ids_valid = 1;
-    } else {
+    }
+    else {
       for (int k = 0; k < c->nclasses; k++) {
         if (!c->classes[k].is_anon_struct) continue;
         int w = c->classes[k].def_node;
@@ -965,7 +966,8 @@ int an_user_defines_method(Compiler *c, const char *name) {
        it, so only the full scan answers exactly (rare -- memoized above) */
     for (int uk = 0; uk < c->nclasses; uk++)
       if (comp_method_in_chain(c, uk, name, NULL) >= 0) { ans = 1; break; }
-  } else {
+  }
+  else {
     /* no alias redirects this name anywhere, so resolution is the identity for
        every class: defined iff some class's own method table has it (take that
        class as the chain start) */
