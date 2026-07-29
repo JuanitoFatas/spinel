@@ -571,6 +571,27 @@ static void emit_index_get(Compiler *c, int recv, int key, Buf *b) {
   buf_puts(b, ")");
 }
 
+/* `h[k] ||= v` stores when the slot is nil or false, `&&=` when it is not, and
+   that test has to be spelled per slot type. An mrb_int's nil is SP_INT_NIL,
+   not 0, so a plain `!x` both skipped the store on an ABSENT key (the sentinel
+   is nonzero) and overwrote a legitimately stored 0 (which is truthy in Ruby).
+   The typed-array branches spell it correctly; the hash branch did not, and it
+   is the expression form that is reached when the result is used (#3421). */
+static void emit_slot_nil_test(Compiler *c, TyKind t, int tmp, int want_nil, Buf *b) {
+  const char *n = want_nil ? "" : "!";
+  switch (t) {
+    case TY_INT:    buf_printf(b, "%s(_t%d == SP_INT_NIL)", n, tmp); return;
+    case TY_FLOAT:  buf_printf(b, "%ssp_float_is_nil(_t%d)", n, tmp); return;
+    case TY_SYMBOL: buf_printf(b, "%s(_t%d == (sp_sym)-1)", n, tmp); return;
+    case TY_POLY:   buf_printf(b, "%ssp_poly_truthy(_t%d)", want_nil ? "!" : "", tmp); return;
+    default: break;
+  }
+  /* bool, string, and every pointer-backed slot: nil and false are both the
+     zero value, which is what Ruby treats as falsy here. */
+  buf_printf(b, "%s_t%d", want_nil ? "!" : "", tmp);
+  (void)c;
+}
+
 void emit_expr(Compiler *c, int id, Buf *b) {
   const NodeTable *nt = c->nt;
   const char *ty = nt_type(nt, id);
@@ -1275,7 +1296,9 @@ void emit_expr(Compiler *c, int id, Buf *b) {
       }
       else {
         buf_printf(b, "; %s _t%d = sp_%sHash_get(_t%d, _t%d);", c_type_name(vt), tc2, hn, ta2, tb2);
-        buf_printf(b, " if (%s_t%d) { _t%d = ", is_or2 ? "!" : "", tc2, tc2);
+        buf_puts(b, " if (");
+        emit_slot_nil_test(c, vt, tc2, is_or2, b);
+        buf_printf(b, ") { _t%d = ", tc2);
         emit_expr(c, iv, b);
         buf_printf(b, "; sp_%sHash_set(_t%d, _t%d, _t%d); } _t%d; })", hn, ta2, tb2, tc2, tc2);
       }

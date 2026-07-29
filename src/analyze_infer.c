@@ -1029,6 +1029,18 @@ TyKind infer_call(Compiler *c, int id) {
       (sp_streq(name, "real") || sp_streq(name, "imaginary") || sp_streq(name, "imag")) &&
       !an_user_defines_method(c, name))
     return TY_POLY;
+  /* poly.delete_prefix / #delete_suffix answer a String, like the zero-arg
+     transforms beside them (#3436). */
+  if (recv >= 0 && rt == TY_POLY && argc == 1 && nt_ref(nt, id, "block") < 0 &&
+      (sp_streq(name, "delete_prefix") || sp_streq(name, "delete_suffix")) &&
+      !an_user_defines_or_reads(c, name))
+    return TY_STRING;
+  /* poly.compact / poly.flatten: an Array read out of a container answers a
+     generic Array either way (#3423). */
+  if (recv >= 0 && rt == TY_POLY && argc == 0 && nt_ref(nt, id, "block") < 0 &&
+      (sp_streq(name, "compact") || sp_streq(name, "flatten")) &&
+      !an_user_defines_or_reads(c, name))
+    return TY_POLY_ARRAY;
   /* poly.find_index/index/rindex { } : the matching element's index, or nil
      when the block never answers truthy -- so poly, not a bare int. Every
      sibling block name had a poly rule; this family had none, and the call

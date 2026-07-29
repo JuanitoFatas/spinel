@@ -6780,6 +6780,21 @@ static sp_PolyArray *sp_poly_sort(sp_RbVal v) {
 /* Enumerable#uniq on a boxed value (an array read out of a poly container or
    an ivar that widened): the distinct elements, in first-seen order. Any
    non-array tag is CRuby's NoMethodError, through sp_poly_arr_recv. */
+/* compact / flatten on a value only known to be an Array at run time -- one
+   read out of a Hash value or an Array element. The typed-receiver forms are
+   keyed on the storage kind, so these never reached them and the call fell
+   through to the NoMethodError default, naming Array (#3423). Same shape as
+   sp_poly_uniq below. */
+static sp_PolyArray *sp_poly_compact(sp_RbVal v) {
+  sp_PolyArray *src = sp_poly_arr_recv(v, "compact");
+  SP_GC_ROOT(src);
+  return sp_PolyArray_compact(src);
+}
+static sp_PolyArray *sp_poly_flatten(sp_RbVal v) {
+  sp_PolyArray *src = sp_poly_arr_recv(v, "flatten");
+  SP_GC_ROOT(src);
+  return sp_PolyArray_flatten(src);
+}
 static sp_PolyArray *sp_poly_uniq(sp_RbVal v) {
   sp_PolyArray *src = sp_poly_arr_recv(v, "uniq");
   SP_GC_ROOT(src);

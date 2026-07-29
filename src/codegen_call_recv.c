@@ -811,6 +811,15 @@ int emit_array_call(Compiler *c, int id, Buf *b) {
     buf_puts(b, "sp_poly_uniq("); emit_expr(c, recv, b); buf_puts(b, ")");
     return 1;
   }
+  /* compact / flatten on the same shape: an Array read out of a container.
+     uniq had an arm and these did not, so they raised NoMethodError naming
+     Array -- which is what the receiver was (#3423). */
+  if (recv >= 0 && rt == TY_POLY && argc == 0 && nt_ref(nt, id, "block") < 0 &&
+      (sp_streq(name, "compact") || sp_streq(name, "flatten")) &&
+      !diag_user_defines(c, name)) {
+    buf_printf(b, "sp_poly_%s(", name); emit_expr(c, recv, b); buf_puts(b, ")");
+    return 1;
+  }
   /* `enum.drop(n)` / `enum.reject|select|filter { }` on an each_with_index-style
      Enumerator: materialize its pairs to a poly array and re-dispatch as the
      array form (drop returns a slice; the block forms run the block over each
@@ -9012,6 +9021,19 @@ int emit_poly_call(Compiler *c, int id, Buf *b) {
       return 1;
     }
   }
+  /* The one-String-argument transforms. The block below covers the poly String
+     surface only for the zero-argument shapes, so a String arriving through a
+     poly slot -- a Fiber#resume value, a container read -- had no arm for
+     these and fell through to the unresolved-call raise, naming String, which
+     is what it was (#3436). */
+  if (recv >= 0 && rt == TY_POLY && argc == 1 && nt_ref(nt, id, "block") < 0 &&
+      (sp_streq(name, "delete_prefix") || sp_streq(name, "delete_suffix")) &&
+      !user_defines_or_reads(c, name)) {
+    /* the inference rule answers TY_STRING, so hand back the raw const char * */
+    buf_printf(b, "sp_str_%s(sp_poly_to_s(", name); emit_expr(c, recv, b);
+    buf_puts(b, "), "); emit_str_expr(c, argv[0], b); buf_puts(b, ")");
+    return 1;
+  }
   if (recv >= 0 && rt == TY_POLY && argc == 0) {
     if (sp_streq(name, "nil?")) { buf_puts(b, "sp_poly_nil_p("); emit_expr(c, recv, b); buf_puts(b, ")"); return 1; }
     /* to_a on a runtime-tagged value: nil -> [], array -> itself, hash -> its
@@ -9228,6 +9250,15 @@ int emit_poly_call(Compiler *c, int id, Buf *b) {
     if (sp_streq(name, "reverse"))    { buf_puts(b, "sp_poly_reverse("); emit_expr(c, recv, b); buf_puts(b, ")"); return 1; }
     if (sp_streq(name, "chomp"))      { buf_puts(b, "sp_box_str(sp_str_chomp(sp_poly_to_s("); emit_expr(c, recv, b); buf_puts(b, ")))"); return 1; }
     if (sp_streq(name, "chop"))       { buf_puts(b, "sp_box_str(sp_str_chop(sp_poly_to_s("); emit_expr(c, recv, b); buf_puts(b, ")))"); return 1; }
+    /* The one-String-argument transforms, which the table above covers only for
+       the zero-argument shapes. A String arriving through a poly slot -- a
+       Fiber#resume value, a container read -- had no arm for these and raised
+       NoMethodError naming String, which is what it was (#3436). */
+    if ((sp_streq(name, "delete_prefix") || sp_streq(name, "delete_suffix")) && argc == 1) {
+      buf_printf(b, "sp_box_str(sp_str_%s(sp_poly_to_s(", name); emit_expr(c, recv, b);
+      buf_puts(b, "), "); emit_str_expr(c, argv[0], b); buf_puts(b, "))");
+      return 1;
+    }
     }
     if (sp_streq(name, "chr") && !str_conv_owned) {
       /* dispatch on the runtime tag: (48 + n).chr through a widened int
