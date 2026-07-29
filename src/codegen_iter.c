@@ -3,6 +3,27 @@
 
 #include "codegen_internal.h"
 
+/* A fused loop names the receiver expression twice: once in the bound check
+   (re-run on every iteration) and once in each element read. That is only
+   sound while re-evaluating it is free and yields the same container. A call
+   runs again per step, so `Dir.children(d).each { ... }` re-reads the
+   directory mid-loop and a block that deletes entries skips half of them.
+   Evaluate once into a rooted temp and rewrite the buffer to name it; a bare
+   lvalue (`lv_x`, `sp_self->iv_a`) is left alone so the common loop keeps its
+   current shape. */
+static void hoist_loop_recv(Compiler *c, TyKind rt, Buf *rb, Buf *b, int indent) {
+  if (!rb->p || !strchr(rb->p, '(')) return;
+  int t = ++g_tmp;
+  Buf ct; memset(&ct, 0, sizeof ct); emit_ctype(c, rt, &ct);
+  emit_indent(b, indent);
+  buf_printf(b, "%s _t%d = %s;", ct.p ? ct.p : "sp_RbVal", t, rb->p);
+  free(ct.p);
+  if (needs_root(rt)) buf_printf(b, rt == TY_POLY ? " SP_GC_ROOT_RBVAL(_t%d);" : " SP_GC_ROOT(_t%d);", t);
+  buf_puts(b, "\n");
+  free(rb->p); memset(rb, 0, sizeof *rb);
+  buf_printf(rb, "_t%d", t);
+}
+
 /* Follow a chain of pure `...` forwarders (a method whose whole body is a
    single `target(...)` call, no receiver) from `mi` to the method that
    actually yields or owns the &block; return its index, else -1. A real-
@@ -2146,6 +2167,7 @@ int emit_iteration_stmt(Compiler *c, int id, Buf *b, int indent) {
     const char *p1 = block_param_name(c, block, 1); if (p1) p1 = rename_local(p1);
     int t = ++g_tmp;
     Buf rb; memset(&rb, 0, sizeof rb); emit_expr(c, recv, &rb);
+    hoist_loop_recv(c, rt, &rb, b, indent);
     Scope *cs_ewi = comp_scope_of(c, id);
     LocalVar *clv_ewi_p1 = (p1 && cs_ewi) ? scope_local(cs_ewi, p1) : NULL;
     LocalVar *clv_ewi_p0 = (p0 && cs_ewi) ? scope_local(cs_ewi, p0) : NULL;
@@ -2220,6 +2242,8 @@ int emit_iteration_stmt(Compiler *c, int id, Buf *b, int indent) {
       int t = ++g_tmp;
       Buf rb; memset(&rb, 0, sizeof rb); emit_expr(c, recv, &rb);
       Buf ob; memset(&ob, 0, sizeof ob); emit_expr(c, zargv[0], &ob);
+      hoist_loop_recv(c, rt, &rb, b, indent);
+      if (ty_is_array(a0t)) hoist_loop_recv(c, a0t, &ob, b, indent);
       Scope *zs = comp_scope_of(c, id);
       LocalVar *zlv0 = (p0 && zs) ? scope_local(zs, p0) : NULL;
       LocalVar *zlv1 = (p1n && zs) ? scope_local(zs, p1n) : NULL;
@@ -2592,6 +2616,7 @@ int emit_iteration_stmt(Compiler *c, int id, Buf *b, int indent) {
     int t = ++g_tmp, tn = ++g_tmp;
     Buf rb; memset(&rb, 0, sizeof rb);
     emit_expr(c, recv, &rb);
+    hoist_loop_recv(c, rt, &rb, b, indent);
     /* Detect block param shadowing an outer variable; save/restore to preserve outer value */
     TyKind et = p0 ? ty_array_elem(rt) : TY_UNKNOWN;
     Scope *cs = p0 ? comp_scope_of(c, id) : NULL;
