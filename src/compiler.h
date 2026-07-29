@@ -609,4 +609,8 @@ const char *poly_enum_op_for(const char *name);
    receiver, which resolve statically (#3415). */
 int class_recv_is_dynamic(Compiler *c, int recv);
 
+/* An ivar whose type came from an --rbs seed (class_pin_ivar). Codegen reads
+   it to decide where a seed assertion belongs (#3412). */
+int class_ivar_pinned(ClassInfo *ci, const char *name);
+
 #endif

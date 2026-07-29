@@ -1020,7 +1020,12 @@ void emit_expr(Compiler *c, int id, Buf *b) {
       /* poly rhs assigned to a typed ivar: unbox to the concrete type */
       Buf _rb; memset(&_rb, 0, sizeof _rb);
       emit_expr(c, v, &_rb);
-      emit_unbox_text(c, ivt2, _rb.p ? _rb.p : "sp_box_nil()", b);
+      Buf _ck; memset(&_ck, 0, sizeof _ck);
+      if (ivcls2 >= 0 && class_ivar_pinned(&c->classes[ivcls2], nm))
+        emit_rbs_checked_text(c, ivt2, nm, _rb.p ? _rb.p : "sp_box_nil()", &_ck);
+      else buf_puts(&_ck, _rb.p ? _rb.p : "sp_box_nil()");
+      emit_unbox_text(c, ivt2, _ck.p ? _ck.p : "sp_box_nil()", b);
+      free(_ck.p);
       free(_rb.p);
     }
     else {

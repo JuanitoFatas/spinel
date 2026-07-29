@@ -215,6 +215,7 @@ extern TyKind g_fn_ret_type;
    Persists into inner proc literal bodies so { yield } forwards the block
    param (g_lowered_blk_name, or the synthetic __yblk__). */
 extern int g_current_scope_is_lowered;
+extern int g_ret_seeded;
 extern const char *g_lowered_blk_name;
 extern int g_yblk_celled;
 extern int g_yield_lowered_fallback;
@@ -436,6 +437,10 @@ void emit_unbox_text(Compiler *c, TyKind t, const char *expr, Buf *b);
 /* emit_unbox_text, but a nil-tagged poly lands on the slot's own nil (an int?
    or float? sentinel) instead of the zero payload under the tag (#3412). */
 void emit_unbox_nilable_text(Compiler *c, TyKind t, const char *expr, Buf *b);
+/* Wrap a boxed expression in the --rbs seed assertion (a no-op macro without
+   -DSP_RBS_CHECK) before it narrows into a seeded slot. */
+void emit_rbs_checked_text(Compiler *c, TyKind slot, const char *slotname,
+                           const char *expr, Buf *b);
 void emit_proc_literal(Compiler *c, int create, Buf *b);
 int proc_slot_is_direct(TyKind t);
 const char *proc_rest_name(Compiler *c, int create);

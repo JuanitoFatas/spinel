@@ -7057,6 +7057,35 @@ SP_TLS sp_RbVal _sp_proc_poly_args[16];
    here just before sp_proc_call, and the callee's &block-param prologue
    consumes (and clears) it. Same discipline as _sp_proc_poly_args (#2648). */
 static SP_TLS sp_Proc *_sp_proc_blk;
+/* ---- --rbs seed assertions (-DSP_RBS_CHECK) ----------------------------
+   A seed is trusted, never verified (docs/rbs-extract.md): the analyzer pins
+   the slot and codegen narrows whatever arrives into it, so a signature the
+   program contradicts silently reinterprets the value rather than degrading to
+   the inferred type. Under -DSP_RBS_CHECK every narrowing of a boxed value
+   into a seeded slot carries a tag assertion and aborts at the store instead.
+   Without the define the macro is the value itself, so a release build is
+   unchanged -- which is the point: the check costs nothing to leave emitted.
+
+   Tag level only. A nil always passes: an unset slot reads nil, and a
+   non-nullable seed still sees `@x = nil` in an initialize. Object identity
+   is not checked either, since a subclass in an ancestor-typed slot is
+   correct and layout-compatible. What this catches is the reinterpretation
+   family -- a pointer landing in a scalar slot and the reverse. */
+#ifdef SP_RBS_CHECK
+static sp_RbVal sp_rbs_check(sp_RbVal v, int want, const char *slot, const char *wantname) {
+  if (v.tag == want || v.tag == SP_TAG_NIL) return v;
+  fprintf(stderr,
+          "spinel: --rbs seed violated: %s is declared %s but holds %s\n"
+          "  The signature is trusted and the emitted code reinterprets the value.\n"
+          "  Fix the signature or the program; this build was made with -DSP_RBS_CHECK.\n",
+          slot, wantname, sp_poly_class_name(v));
+  abort();
+}
+#define SP_RBS_CHECK_TAG(v, want, slot, wantname) sp_rbs_check((v), (want), (slot), (wantname))
+#else
+#define SP_RBS_CHECK_TAG(v, want, slot, wantname) (v)
+#endif
+
 mrb_int sp_proc_call(sp_Proc *p, mrb_int argc, mrb_int *args) { if (!p || !p->fn) return 0; if (!args) { mrb_int noargs[16] = {0}; return ((mrb_int (*)(void *, mrb_int, mrb_int *))p->fn)(p->cap, 0, noargs); } return ((mrb_int (*)(void *, mrb_int, mrb_int *))p->fn)(p->cap, argc, args); }
 
 /* ---- Enumerable on a builtin Array receiver, driven by a real sp_Proc ----

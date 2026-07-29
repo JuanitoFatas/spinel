@@ -142,6 +142,41 @@ void emit_unbox_nilable_text(Compiler *c, TyKind t, const char *expr, Buf *b) {
   emit_unbox_text(c, t, expr, b);
 }
 
+/* Wrap a boxed expression in the --rbs seed assertion before it is narrowed
+   into a seeded slot. Emits the plain expression for a slot with no tag of its
+   own (poly, or a by-value type), and for every slot when the program is built
+   without -DSP_RBS_CHECK the macro itself collapses to the expression -- so
+   this is free to emit unconditionally and is only about WHERE a seed's truth
+   is checkable at all: the moment a dynamic value becomes a static type. */
+void emit_rbs_checked_text(Compiler *c, TyKind slot, const char *slotname,
+                           const char *expr, Buf *b) {
+  const char *tag = NULL, *want = NULL;
+  switch (slot) {
+    case TY_INT:    tag = "SP_TAG_INT"; want = "Integer"; break;
+    case TY_FLOAT:  tag = "SP_TAG_FLT"; want = "Float";   break;
+    case TY_STRING: tag = "SP_TAG_STR"; want = "String";  break;
+    case TY_SYMBOL: tag = "SP_TAG_SYM"; want = "Symbol";  break;
+    case TY_BOOL:   tag = "SP_TAG_BOOL"; want = "a boolean"; break;
+    default:
+      if (ty_is_object(slot) && !comp_ty_value_obj(c, slot)) {
+        tag = "SP_TAG_OBJ";
+        want = c->classes[ty_object_class(slot)].name;
+      }
+      else if (ty_is_array(slot) || ty_is_hash(slot)) {
+        tag = "SP_TAG_OBJ";
+        want = ty_is_array(slot) ? "an Array" : "a Hash";
+      }
+      break;
+  }
+  if (!tag) { buf_puts(b, expr); return; }
+  buf_printf(b, "SP_RBS_CHECK_TAG(%s, %s, \"", expr, tag);
+  for (const char *p2 = slotname ? slotname : "?"; *p2; p2++) {
+    if (*p2 == '"' || *p2 == '\\') buf_puts(b, "\\");
+    buf_printf(b, "%c", *p2);
+  }
+  buf_printf(b, "\", \"%s\")", want ? want : "?");
+}
+
 /* An unresolved constant read lowers to a runtime NameError raise whose C
    value is an sp_Class struct (the class-position shape). In a scalar slot
    that struct fails the C compile ("incompatible types"), so the scalar
@@ -1115,6 +1150,7 @@ void emit_method(Compiler *c, Scope *s, Buf *b) {
      call on it, exactly as a lowered yield method does -- so a nested lifted
      proc containing a `yield` has to capture that parameter the same way. */
   int scope_blk_is_param = s->is_lowered_yield || s->is_proc_form;
+  int saved_rseed = g_ret_seeded; g_ret_seeded = s->ret_rbs_seeded;
   int saved_lowered = g_current_scope_is_lowered; g_current_scope_is_lowered = scope_blk_is_param;
   const char *saved_lbn = g_lowered_blk_name;
   g_lowered_blk_name = scope_blk_is_param ? s->blk_param : NULL;
@@ -1209,6 +1245,7 @@ void emit_method(Compiler *c, Scope *s, Buf *b) {
   g_emitting_class_id = saved_emcls;
   g_dm_subst_name = saved_dmn; g_dm_subst_node = saved_dmnode;
   g_current_scope_is_lowered = saved_lowered;
+  g_ret_seeded = saved_rseed;
   g_lowered_blk_name = saved_lbn;
   g_brk_ser_var = saved_bser; g_brk_skip_id = saved_bskip;
   g_yield_proc_ref = sv_ypr9; g_yield_slot_ty = sv_yst9;

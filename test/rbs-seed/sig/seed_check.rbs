@@ -1,0 +1,12 @@
+class Row
+  attr_accessor n: Integer
+  attr_accessor s: String
+end
+
+class FRow
+  attr_accessor f: Float
+end
+
+class Object
+  def take: (Integer x) -> Integer
+end

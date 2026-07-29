@@ -223,6 +223,8 @@ const char *g_fn_pr_label = NULL;
 const char *g_fn_pr_var = NULL;
 TyKind g_fn_ret_type = TY_UNKNOWN;
 int g_current_scope_is_lowered = 0;
+/* the scope being emitted has an --rbs-seeded return type (#3412) */
+int g_ret_seeded = 0;
 /* The block-param name of the lowered method currently being emitted (its
    declared &block name, or "__yblk__" when the lowering synthesized one);
    NULL outside a lowered-method emission. Read by emit_yblk_ref. */

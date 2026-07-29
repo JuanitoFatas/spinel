@@ -4210,17 +4210,25 @@ void emit_for(Compiler *c, int id, Buf *b, int indent) {
    poly-bodied return arises). Used where a method's RBS return type is narrower
    than its poly body value (#1417). */
 static void emit_unbox_node(Compiler *c, TyKind t, int node, Buf *b) {
-  if (t == TY_INT || t == TY_BOOL) { buf_puts(b, "sp_poly_to_i("); emit_expr(c, node, b); buf_puts(b, ")"); return; }
-  if (t == TY_FLOAT)               { buf_puts(b, "sp_poly_to_f("); emit_expr(c, node, b); buf_puts(b, ")"); return; }
-  const char *cn = c_type_name(t);
-  if (t == TY_STRING || ty_is_object(t) || (cn && cn[0] && cn[strlen(cn) - 1] == '*')) {
-    Buf tmp; memset(&tmp, 0, sizeof tmp);
-    emit_expr(c, node, &tmp);
-    emit_unbox_text(c, t, tmp.p ? tmp.p : "", b);
-    free(tmp.p);
-    return;
+  /* When the slot being narrowed into is a SEEDED return, the narrowing is the
+     moment the seed's truth becomes checkable, so it carries the assertion --
+     a no-op macro without -DSP_RBS_CHECK (#3412). g_ret_seeded is set for the
+     scope currently being emitted. */
+  Buf src; memset(&src, 0, sizeof src);
+  emit_expr(c, node, &src);
+  Buf val; memset(&val, 0, sizeof val);
+  if (g_ret_seeded) emit_rbs_checked_text(c, t, "the return value", src.p ? src.p : "sp_box_nil()", &val);
+  else buf_puts(&val, src.p ? src.p : "");
+  const char *v = val.p ? val.p : "";
+  if (t == TY_INT || t == TY_BOOL) buf_printf(b, "sp_poly_to_i(%s)", v);
+  else if (t == TY_FLOAT)          buf_printf(b, "sp_poly_to_f(%s)", v);
+  else {
+    const char *cn = c_type_name(t);
+    if (t == TY_STRING || ty_is_object(t) || (cn && cn[0] && cn[strlen(cn) - 1] == '*'))
+      emit_unbox_text(c, t, v, b);
+    else buf_puts(b, v);
   }
-  emit_expr(c, node, b);
+  free(val.p); free(src.p);
 }
 
 /* A genuine poly body (TY_POLY) is unboxed into any narrower (non-poly) return
@@ -5952,7 +5960,14 @@ else {
          exactly the slot a nil is expected to survive in (#3412). */
       Buf _rb; memset(&_rb, 0, sizeof _rb);
       emit_expr(c, v, &_rb);
-      emit_unbox_nilable_text(c, ivt, _rb.p ? _rb.p : "sp_box_nil()", b);
+      /* A seeded slot is the only place a narrowing can be WRONG rather than
+         merely lossy, so that is where the assertion goes (#3412). */
+      Buf _ck; memset(&_ck, 0, sizeof _ck);
+      if (sc >= 0 && class_ivar_pinned(&c->classes[sc], nm))
+        emit_rbs_checked_text(c, ivt, nm, _rb.p ? _rb.p : "sp_box_nil()", &_ck);
+      else buf_puts(&_ck, _rb.p ? _rb.p : "sp_box_nil()");
+      emit_unbox_nilable_text(c, ivt, _ck.p ? _ck.p : "sp_box_nil()", b);
+      free(_ck.p);
       free(_rb.p);
     }
     else if (ivt != TY_POLY && ivt != TY_UNKNOWN && comp_ntype(c, v) == TY_UNKNOWN) {

@@ -46,12 +46,45 @@ end
 | with the seed    | `99242550607929`    |
 | CRuby            | `"hello"`           |
 
-That number is the String pointer read back as an `Integer`. Nothing
-warns, at compile time or at run time.
+That number is the String pointer read back as an `Integer`.
 
 So write signatures that describe the program, not signatures you would
 like to be true. A seed is closer to a `reinterpret_cast` than to a
 `static_cast`.
+
+## Checking seeds
+
+Building the generated C with **`-DSP_RBS_CHECK`** turns that silence into
+an abort:
+
+```
+$ spinel main.rb --rbs sig --cc="cc -DSP_RBS_CHECK" -o b && ./b
+spinel: --rbs seed violated: @v is declared Integer but holds String
+  The signature is trusted and the emitted code reinterprets the value.
+  Fix the signature or the program; this build was made with -DSP_RBS_CHECK.
+```
+
+The assertion sits where a boxed value is narrowed into a seeded slot --
+a seeded ivar, parameter, or return -- because that is the moment a
+seed's truth becomes checkable at all. Without the define the macro is
+the value itself, so a release build is unchanged and there is no reason
+not to leave the checks emitted.
+
+What it does and does not catch:
+
+- **Tag level only.** A pointer landing in a scalar slot and the reverse,
+  which is the reinterpretation family. Object identity is not checked:
+  a subclass in an ancestor-typed slot is correct and layout-compatible.
+- **A nil always passes.** An unset slot reads nil, and a non-nullable
+  seed still sees `@x = nil` in an `initialize`.
+- **Only dynamic narrowings.** If the value is already statically typed,
+  no narrowing is emitted and there is nothing to assert at run time.
+  That case is diagnosed at compile time instead.
+- **Only paths that execute.** It is a test-time tool, not a proof.
+
+Run your test suite once with it. `make rbs-seed-test` does, over both an
+honest fixture (which must run identically either way) and a deliberately
+contradicted one (which must abort and name the slot).
 
 ## What a seed buys
 

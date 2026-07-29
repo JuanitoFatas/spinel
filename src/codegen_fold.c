@@ -5656,7 +5656,14 @@ void emit_arg_or_default(Compiler *c, Scope *m, int idx, int provided, Buf *out)
         else if (at == TY_POLY && (ty_is_object(pt) || (ptn && ptn[0] && ptn[strlen(ptn) - 1] == '*'))) {
           Buf ub; memset(&ub, 0, sizeof ub);
           emit_expr(c, provided, &ub);
-          emit_unbox_text(c, pt, ub.p ? ub.p : "", out);
+          Buf uck; memset(&uck, 0, sizeof uck);
+          /* a seeded parameter is asserted where the dynamic value becomes a
+             static type -- the same place an ivar seed is (#3412) */
+          if (p && p->rbs_seeded)
+            emit_rbs_checked_text(c, pt, m->pnames[idx], ub.p ? ub.p : "sp_box_nil()", &uck);
+          else buf_puts(&uck, ub.p ? ub.p : "sp_box_nil()");
+          emit_unbox_text(c, pt, uck.p ? uck.p : "", out);
+          free(uck.p);
           free(ub.p);
         }
         /* A string param whose argument is context-typed TY_STRING but whose
