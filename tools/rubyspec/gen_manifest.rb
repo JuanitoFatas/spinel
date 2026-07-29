@@ -20,7 +20,10 @@ BYDESIGN = [
   # (limitations.md: ivars are struct offsets, DCE strips method names)
   /`(instance_method|instance_methods|private_instance_methods|public_instance_methods|protected_instance_methods|owner|unbind)`/,
   # Encoding machinery: one internal representation, no transcoding tables
-  /`(default_external|default_internal|force_encoding)`/
+  /`(default_external|default_internal|force_encoding)`/,
+  # Method-table surgery: methods compile to direct C calls, so there is no
+  # runtime table to remove an entry from
+  /Module#undef_method is not supported/
 ].freeze
 
 results = ARGV[0] or abort "usage: gen_manifest.rb RESULTS_TSV"
