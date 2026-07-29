@@ -2252,6 +2252,19 @@ int bind_call_params(Compiler *c, int call_id, int mi) {
       int en0 = 0; nt_arr(nt, argv[k], "elements", &en0);
       if (en0 == 0) { p->type = TY_POLY_ARRAY; changed = 1; continue; }
     }
+    /* An empty `{}` / `[]` literal carries no type of its own, so it is skipped
+       by the unification below. When ANOTHER call site typed the parameter as
+       the other container, though, the two cannot share one slot: the empty
+       literal still emits as its own kind and the C assignment is ill-typed.
+       Widen to poly, which holds either. */
+    if (at == TY_UNKNOWN && apty && p->type != TY_UNKNOWN && p->type != TY_POLY) {
+      int cross = (sp_streq(apty, "HashNode") && !ty_is_hash(p->type)) ||
+                  (sp_streq(apty, "ArrayNode") && !ty_is_array(p->type));
+      if (cross) {
+        int en1 = 0; nt_arr(nt, argv[k], "elements", &en1);
+        if (en1 == 0) { p->type = TY_POLY; changed = 1; continue; }
+      }
+    }
     /* A void arg (`sink(always_raising_method)`) is nil-ish in value position:
        bind the param poly so it is declarable; the arg is emitted via
        emit_boxed (it diverges and yields nil). */

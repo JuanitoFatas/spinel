@@ -48,6 +48,9 @@ typedef struct {
                        during the init raise NameError (uninitialized constant) */
   int rbs_seeded;   /* param type pinned from an --rbs advisory seed: the
                        fixpoint must not widen it (see apply_rbs_seeds) */
+  int nullable_int; /* an int local that was assigned a value which can be the
+                       nil sentinel (a search miss, a pop off an empty array):
+                       boxing it has to yield nil, not INTPTR_MIN */
   int push_widened; /* (params) a push through this parameter carried an element
                        its bound type could not hold, so it must stay the POLY
                        ARRAY: the call-site unification would otherwise collapse

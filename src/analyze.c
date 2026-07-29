@@ -7560,6 +7560,47 @@ static void check_seed_contradictions(Compiler *c) {
   }
 }
 
+/* Names whose miss answers nil while the type stays TY_INT (a search index, a
+   pop off an empty array): the value they leave in the slot is the sentinel. */
+static int nullable_int_call_name(const char *nm) {
+  if (!nm) return 0;
+  static const char *const N[] = {
+    "index", "rindex", "byteindex", "byterindex", "delete_at", "pop", "shift",
+    "delete", "nonzero?", "infinite?", "getbyte", "bsearch", "bsearch_index", NULL };
+  for (int i = 0; N[i]; i++) if (sp_streq(nm, N[i])) return 1;
+  return 0;
+}
+/* Mark the int locals that can hold that sentinel, so codegen boxes them as
+   nil rather than as INTPTR_MIN. Boxing every int through the nil check costs
+   ~8% on optcarrot -- every pixel goes through it -- so the marking is static
+   and the hot path keeps the plain box. */
+static void mark_nullable_int_locals(Compiler *c) {
+  const NodeTable *nt = c->nt;
+  for (int round = 0; round < 4; round++) {
+    int changed = 0;
+    for (int id = 0; id < nt->count; id++) {
+      if (nt_kind(nt, id) != NK_LocalVariableWriteNode) continue;
+      int v = nt_ref(nt, id, "value");
+      const char *ln = nt_str(nt, id, "name");
+      if (v < 0 || !ln) continue;
+      Scope *sc = comp_scope_of(c, id);
+      LocalVar *lv = sc ? scope_local(sc, ln) : NULL;
+      if (!lv || lv->type != TY_INT || lv->nullable_int) continue;
+      int nul = 0;
+      if (nt_kind(nt, v) == NK_CallNode && nullable_int_call_name(nt_str(nt, v, "name")))
+        nul = 1;
+      else if (nt_kind(nt, v) == NK_LocalVariableReadNode) {
+        const char *rn = nt_str(nt, v, "name");
+        Scope *rs = rn ? comp_scope_of(c, v) : NULL;
+        LocalVar *rv = rs ? scope_local(rs, rn) : NULL;
+        if (rv && rv->nullable_int) nul = 1;
+      }
+      if (nul) { lv->nullable_int = 1; changed = 1; }
+    }
+    if (!changed) break;
+  }
+}
+
 void analyze_program(Compiler *c) {
   comp_scope_index_set_frozen(0);  /* scope shape changes during the passes below */
   /* scope 0 = top level */
@@ -9908,6 +9949,7 @@ void analyze_program(Compiler *c) {
 
   /* An --rbs seed the settled types statically contradict is a compile error,
      not something to emit a reinterpretation for. */
+  mark_nullable_int_locals(c);
   check_seed_contradictions(c);
 
   /* Last: the capture pass again, on the settled types. a_block_is_lifted asks

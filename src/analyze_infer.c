@@ -1096,12 +1096,18 @@ TyKind infer_call(Compiler *c, int id) {
     if (ebl && ebl->type != TY_STRING) ebl->type = TY_STRING;
     return TY_STRING;
   }
+  /* `poly.empty?`: the dispatch carries builtin String / Array / Hash arms, so
+     the call answers a boolean even when a user class defines the name too.
+     Without a type the enclosing method came out void and the value was nil. */
+  if (recv >= 0 && rt == TY_POLY && sp_streq(name, "empty?") && argc == 0 &&
+      nt_ref(nt, id, "block") < 0)
+    return TY_BOOL;
   /* poly.merge(other) { |k, old, new| } -- a Hash reached through a container.
      The conflict-block form builds the same general boxed-key/value hash the
      blockless one does; without a type it stayed unresolved. */
-  if (recv >= 0 && rt == TY_POLY && sp_streq(name, "merge") && argc == 1 &&
+  if (recv >= 0 && (rt == TY_POLY || ty_is_hash(rt)) && sp_streq(name, "merge") && argc == 1 &&
       nt_ref(nt, id, "block") >= 0 && !an_user_defines_or_reads(c, "merge"))
-    return TY_POLY_POLY_HASH;
+    return TY_POLY_POLY_HASH;   /* the conflict block decides each value */
   /* poly.scan(re): a String read out of a container. Same shape as the
      rt==TY_STRING rule -- captures give an array of arrays (#3368). */
   if (recv >= 0 && rt == TY_POLY && argc == 1 && sp_streq(name, "scan") &&

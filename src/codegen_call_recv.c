@@ -9358,7 +9358,7 @@ int emit_poly_call(Compiler *c, int id, Buf *b) {
      key both hashes carry. Walk the other hash's pairs into a copy of the
      receiver, consulting the block on a collision -- sp_poly_hash_merge has no
      block form, and the typed Hash path cannot serve a boxed receiver. */
-  if (recv >= 0 && rt == TY_POLY && sp_streq(name, "merge") && argc == 1 &&
+  if (recv >= 0 && (rt == TY_POLY || ty_is_hash(rt)) && sp_streq(name, "merge") && argc == 1 &&
       nt_ref(nt, id, "block") >= 0 && !user_defines_or_reads(c, "merge")) {
     int mblk = nt_ref(nt, id, "block");
     int mbody = nt_ref(nt, mblk, "body");
@@ -9397,10 +9397,15 @@ int emit_poly_call(Compiler *c, int id, Buf *b) {
       if (mp[2]) buf_printf(b, " sp_RbVal lv_%s = _tv%d;", mp[2], tk);
       { Buf *saved_pre = g_pre; g_pre = b;
         for (int j = 0; j < mbn - 1; j++) { emit_stmt(c, mbb[j], b, 0); buf_puts(b, " "); }
-        buf_printf(b, " sp_PolyPolyHash_set(_t%d, _tk%d, ", tr, tk);
-        emit_boxed(c, mbb[mbn - 1], b);
-        buf_puts(b, "); }");
-        g_pre = saved_pre; }
+        /* the tail's own prelude (an interpolation temp) has to land BEFORE
+           the set call, so render the value into its own buffer while g_pre
+           still points at the statement stream */
+        Buf tailv; memset(&tailv, 0, sizeof tailv);
+        emit_boxed(c, mbb[mbn - 1], &tailv);
+        g_pre = saved_pre;
+        buf_printf(b, " sp_PolyPolyHash_set(_t%d, _tk%d, %s); }",
+                   tr, tk, tailv.p ? tailv.p : "sp_box_nil()");
+        free(tailv.p); }
       buf_printf(b, " else sp_PolyPolyHash_set(_t%d, _tk%d, _tv%d); }", tr, tk, tk);
       buf_printf(b, " _t%d; })", tr);
       for (int i = 0; i < 3; i++) if (mlv[i]) mlv[i]->type = msave[i];

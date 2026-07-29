@@ -4001,6 +4001,7 @@ static int emit_poly_method_dispatch(Compiler *c, int id, Buf *b) {
         buf_printf(b, " case SP_BUILTIN_STR_STR_HASH: _t%d = %s((sp_StrStrHash *)_t%d.v.p)->len%s; break;", tr, bopen, tv, bclose);
         buf_printf(b, " case SP_BUILTIN_STR_INT_HASH: _t%d = %s((sp_StrIntHash *)_t%d.v.p)->len%s; break;", tr, bopen, tv, bclose);
         buf_printf(b, " case SP_BUILTIN_INT_STR_HASH: _t%d = %s((sp_IntStrHash *)_t%d.v.p)->len%s; break;", tr, bopen, tv, bclose);
+        buf_printf(b, " case SP_BUILTIN_INT_INT_HASH: _t%d = %s((sp_IntIntHash *)_t%d.v.p)->len%s; break;", tr, bopen, tv, bclose);
       }
       /* built-in container receivers reaching a poly clear dispatch (a seeded
          boxed ivar array): empty in place through the runtime kind dispatch;
@@ -4031,6 +4032,7 @@ static int emit_poly_method_dispatch(Compiler *c, int id, Buf *b) {
         buf_printf(b, " case SP_BUILTIN_STR_STR_HASH: _t%d = %s((sp_StrStrHash *)_t%d.v.p)->len == 0%s; break;", tr, ebopen, tv, ebclose);
         buf_printf(b, " case SP_BUILTIN_STR_INT_HASH: _t%d = %s((sp_StrIntHash *)_t%d.v.p)->len == 0%s; break;", tr, ebopen, tv, ebclose);
         buf_printf(b, " case SP_BUILTIN_INT_STR_HASH: _t%d = %s((sp_IntStrHash *)_t%d.v.p)->len == 0%s; break;", tr, ebopen, tv, ebclose);
+        buf_printf(b, " case SP_BUILTIN_INT_INT_HASH: _t%d = %s((sp_IntIntHash *)_t%d.v.p)->len == 0%s; break;", tr, ebopen, tv, ebclose);
       }
       /* compare_by_identity? on a poly-carried hash: every spinel hash is
          value-keyed (the mutating variant is a compile error), so any hash
@@ -17467,6 +17469,16 @@ else { memcpy(dir, sf, n); dir[n] = 0; } }
   /* String#clear consumed as a value: empty the assignable receiver in place
      and yield the now-empty string (#2332) */
   if (recv >= 0 && rt == TY_STRING && sp_streq(name, "clear") && argc == 0) {
+    /* A shared-mutable receiver owns a buffer: empty it in place and answer
+       the same string, as CRuby does. Its read is a copy out of the handle,
+       not an lvalue, so the reassignment below did not even compile. */
+    { char srefC[1024];
+      if (strbuf_slot_ref(c, recv, srefC, sizeof srefC)) {
+        int tC2 = ++g_tmp;
+        buf_printf(b, "({ sp_String *_t%d = %s; sp_String_set_bin(_t%d, (&(\"\\xff\")[1]));"
+                      " sp_String_cstr(_t%d); })", tC2, srefC, tC2, tC2);
+        return;
+      } }
     const char *rty = nt_type(nt, recv);
     if (rty && (sp_streq(rty, "LocalVariableReadNode") ||
                 sp_streq(rty, "InstanceVariableReadNode"))) {

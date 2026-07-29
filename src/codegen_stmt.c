@@ -8893,6 +8893,18 @@ int emit_array_mutate_stmt(Compiler *c, int id, Buf *b, int indent) {
       buf_printf(b, "; sp_str_check_mutable(_t%d); (void)_t%d; }\n", tcl9, tcl9);
       return 1;
     }
+    if (sp_streq(name, "clear") && argc == 0) {
+      /* a shared-mutable receiver owns a buffer: empty it in place, so every
+         alias sees the clear and the result is the same object. The
+         reassignment form below cannot serve it -- the read of a handle is not
+         an lvalue, and the emitted C did not compile. */
+      char srefC[1024];
+      if (strbuf_slot_ref(c, recv, srefC, sizeof srefC)) {
+        emit_indent(b, indent);
+        buf_printf(b, "sp_String_set_bin(%s, (&(\"\\xff\")[1]));\n", srefC);
+        return 1;
+      }
+    }
     if (assignable && sp_streq(name, "clear") && argc == 0) {
       /* a fresh unfrozen empty: the shared frozen "" literal would make a
          later mutation of the cleared receiver raise */

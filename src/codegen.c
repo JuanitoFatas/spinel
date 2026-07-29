@@ -319,6 +319,16 @@ int emit_unresolved_coerced(Compiler *c, int node, TyKind target, Buf *b) {
 static int call_returns_nullable_int(Compiler *c, int node) {
   const NodeTable *nt = c->nt;
   const char *nty = nt_type(nt, node);
+  /* A local that was assigned one of these results carries the sentinel just
+     as the call did: `i = s.index("z")` then `i == nil` has to answer true.
+     analyze marks the local; boxing an ordinary int stays on the plain path,
+     which is the hot one (every int boxed into a poly slot). */
+  if (nty && sp_streq(nty, "LocalVariableReadNode")) {
+    const char *ln = nt_str(nt, node, "name");
+    Scope *sc = ln ? comp_scope_of(c, node) : NULL;
+    LocalVar *lv = sc ? scope_local(sc, ln) : NULL;
+    return lv && lv->nullable_int;
+  }
   if (!nty || !sp_streq(nty, "CallNode")) return 0;
   const char *nm = nt_str(nt, node, "name");
   if (!nm) return 0;
