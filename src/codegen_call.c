@@ -16885,8 +16885,11 @@ else { memcpy(dir, sf, n); dir[n] = 0; } }
             free(rp.p); return;
           }
           if (sp_streq(name, "match") && (argc == 1 || argc == 2)) {
-            if (argc == 1) { buf_printf(b, "sp_re_matchdata(%s, ", rp.p); emit_expr(c, argv[0], b); buf_puts(b, ")"); }
-            else { buf_printf(b, "sp_re_matchdata_at(%s, ", rp.p); emit_expr(c, argv[0], b); buf_puts(b, ", "); emit_expr(c, argv[1], b); buf_puts(b, ")"); }
+            /* the subject can arrive boxed -- one call site passing an
+               untyped block param is enough -- so unbox it into the const
+               char * slot the way match? and =~ already do */
+            if (argc == 1) { buf_printf(b, "sp_re_matchdata(%s, ", rp.p); emit_str_expr(c, argv[0], b); buf_puts(b, ")"); }
+            else { buf_printf(b, "sp_re_matchdata_at(%s, ", rp.p); emit_str_expr(c, argv[0], b); buf_puts(b, ", "); emit_expr(c, argv[1], b); buf_puts(b, ")"); }
             free(rp.p); return;
           }
           free(rp.p);
