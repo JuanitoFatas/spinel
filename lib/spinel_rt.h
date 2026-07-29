@@ -140,13 +140,29 @@ SP_NORETURN SP_COLD void sp_raise_cls(const char *cls, const char *msg);
    returns at runtime (sp_raise_cls longjmps). */
 sp_RbVal sp_raise_nomethod(const char *msg);
 
+/* An int slot holds SP_INT_NIL when a container read missed, and that value is
+   nil, not an Integer: arithmetic on it raises the way CRuby's nil does
+   (NoMethodError for nil on the left, the coercion TypeError on the right)
+   instead of computing on INTPTR_MIN. */
+SP_NORETURN void sp_raise_nil_int_op(mrb_int a, mrb_int b, const char *op);
+#define SP_INT_NIL_CK(a, b, op) \
+  if (SP_UNLIKELY((a) == SP_INT_NIL || (b) == SP_INT_NIL)) sp_raise_nil_int_op((a), (b), op)
+
 static inline mrb_int sp_idiv(mrb_int a, mrb_int b) {
+  SP_INT_NIL_CK(a, b, "/");
   if (b == 0) sp_raise_cls("ZeroDivisionError", "divided by 0");
   mrb_int q = a / b; mrb_int r = a % b;
   if ((r != 0) && ((r ^ b) < 0)) q--;
   return q;
 }
+/* Integer#abs: nil-checked (and free of the -INTPTR_MIN overflow the inline
+   ternary had on the sentinel). */
+static inline mrb_int sp_int_abs(mrb_int a) {
+  SP_INT_NIL_CK(a, (mrb_int)0, "abs");
+  return a < 0 ? -a : a;
+}
 static inline mrb_int sp_imod(mrb_int a, mrb_int b) {
+  SP_INT_NIL_CK(a, b, "%");
   if (b == 0) sp_raise_cls("ZeroDivisionError", "divided by 0");
   mrb_int r = a % b;
   if ((r != 0) && ((r ^ b) < 0)) r += b;
@@ -214,12 +230,15 @@ static inline mrb_int sp_iremainder(mrb_int a, mrb_int b) {
 #  define sp_int_neg(a)    (-(a))
 #else
 #  define sp_int_add(a, b) ({ mrb_int _sp_a = (a), _sp_b = (b), _sp_r; \
+    SP_INT_NIL_CK(_sp_a, _sp_b, "+"); \
     if (sp_int_add_overflow_p(_sp_a, _sp_b, &_sp_r)) sp_raise_cls("RangeError", "integer overflow in +"); \
     _sp_r; })
 #  define sp_int_sub(a, b) ({ mrb_int _sp_a = (a), _sp_b = (b), _sp_r; \
+    SP_INT_NIL_CK(_sp_a, _sp_b, "-"); \
     if (sp_int_sub_overflow_p(_sp_a, _sp_b, &_sp_r)) sp_raise_cls("RangeError", "integer overflow in -"); \
     _sp_r; })
 #  define sp_int_mul(a, b) ({ mrb_int _sp_a = (a), _sp_b = (b), _sp_r; \
+    SP_INT_NIL_CK(_sp_a, _sp_b, "*"); \
     if (sp_int_mul_overflow_p(_sp_a, _sp_b, &_sp_r)) sp_raise_cls("RangeError", "integer overflow in *"); \
     _sp_r; })
 #  define sp_int_neg(a)    ({ mrb_int _sp_a = (a), _sp_r; \

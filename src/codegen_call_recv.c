@@ -6083,7 +6083,7 @@ int emit_scalar_call(Compiler *c, int id, Buf *b) {
                 sp_streq(name, "round") || sp_streq(name, "truncate")) && argc == 1) {
         buf_printf(b, "sp_int_%s(%s, ", name, r); emit_expr(c, argv[0], b); buf_puts(b, ")");
       }
-      else if (sp_streq(name, "abs"))    buf_printf(b, "((%s) < 0 ? -(%s) : (%s))", r, r, r);
+      else if (sp_streq(name, "abs"))    buf_printf(b, "sp_int_abs(%s)", r);
       else if (sp_streq(name, "chr") && argc == 0) buf_printf(b, "sp_int_chr(%s)", r);
       else if (sp_streq(name, "chr") && argc == 1) {
         /* Integer#chr(Encoding::X): the encoding argument is resolved at

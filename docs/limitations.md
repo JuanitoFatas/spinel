@@ -224,6 +224,23 @@ as on CRuby. In a few cases CRuby's behavior depends on a feature Spinel does
 not implement, and silently returning a wrong value would be worse than a
 visible error. Those deliberate divergences are listed here.
 
+#### Comparisons and predicates on a `nil` read out of an Integer container
+
+A missing key on an Integer-valued Hash, or an out-of-range index on an
+Integer array, answers `nil`. Spinel represents that `nil` as a sentinel
+value inside the int slot, so the value is `nil` for `nil?`, `inspect`,
+`class` and `||`, and every arithmetic operator on it raises the way CRuby's
+`nil` does: `+`, `-`, `*`, `/`, `%` and `abs` raise `NoMethodError` (or the
+coercion `TypeError` when the `nil` is the right operand).
+
+Comparisons (`<`, `>`, `<=>`) and the numeric predicates (`zero?`,
+`positive?`, ...) still answer from the sentinel rather than raising, because
+checking them would put a branch on every integer comparison in the program,
+including the loop conditions in the hottest code Spinel generates. A
+comparison against a missing key therefore reports a result instead of
+raising. Guard the read (`h[k]&.positive?`, `h.fetch(k, 0)`, or a `nil?`
+test) when the key may be absent.
+
 #### `Integer#**` with a negative exponent
 
 CRuby evaluates a negative integer exponent to a `Rational`. Spinel matches

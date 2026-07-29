@@ -3050,3 +3050,14 @@ sp_Class sp_unbox_class(sp_RbVal v) {
   if (v.cls_id == SP_CLASS_BY_NAME) { sp_Class c = {-1, v.v.s}; return c; }
   { sp_Class c = {(mrb_int)v.cls_id}; return c; }
 }
+
+/* Arithmetic reached an int slot still holding the nil sentinel -- a container
+   read that missed. That value is nil, so CRuby's NoMethodError is the answer,
+   not a computation on INTPTR_MIN. */
+SP_NORETURN void sp_raise_nil_int_op(mrb_int a, mrb_int b, const char *op) {
+  (void)b;
+  if (a == SP_INT_NIL)
+    sp_raise_cls("NoMethodError", sp_sprintf("undefined method '%s' for nil", op));
+  /* nil on the RIGHT is the coercion failure CRuby reports from Integer#+ */
+  sp_raise_cls("TypeError", "nil can't be coerced into Integer");
+}
