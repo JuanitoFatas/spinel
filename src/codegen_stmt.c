@@ -4628,6 +4628,26 @@ void emit_return(Compiler *c, int id, Buf *b, int indent) {
   else buf_printf(b, "return %s;\n", default_value(g_ret_type));
 }
 
+/* An empty `[]` / `{}` literal, possibly wrapped in a freeze. Such a literal
+   carries no element type of its own and falls back to an IntArray (or a
+   str-keyed hash), which mismatches a slot an --rbs seed pinned to another
+   storage kind -- the emitted C then assigns an sp_IntArray * to an
+   sp_PolyArray * slot. `.freeze` is identity for the shape, so see through it
+   and build the literal at the slot's kind, exactly as the parameter and ivar
+   paths already do (#3418). */
+static int empty_literal_node(Compiler *c, int v) {
+  const NodeTable *nt = c->nt;
+  const char *ty = v >= 0 ? nt_type(nt, v) : NULL;
+  if (ty && sp_streq(ty, "CallNode")) {
+    const char *nm = nt_str(nt, v, "name");
+    int r = nt_ref(nt, v, "receiver");
+    int ac = 0; int args = nt_ref(nt, v, "arguments");
+    if (args >= 0) nt_arr(nt, args, "arguments", &ac);
+    if (nm && r >= 0 && ac == 0 && sp_streq(nm, "freeze")) return empty_literal_node(c, r);
+  }
+  return v;
+}
+
 void emit_stmt_inner(Compiler *c, int id, Buf *b, int indent);
 void emit_stmt_tail_inner(Compiler *c, int id, Buf *b, int indent);
 
@@ -6422,13 +6442,14 @@ else {
     }
     emit_indent(b, indent);
     buf_printf(b, "%s_%s = ", pfx, key);
-    const char *vty = nt_type(nt, v);
+    int vlit = empty_literal_node(c, v);
+    const char *vty = nt_type(nt, vlit);
     int v_empty_arr = 0, v_empty_hash = 0;
     if (vty && sp_streq(vty, "ArrayNode")) {
-      int ac = 0; nt_arr(nt, v, "elements", &ac); v_empty_arr = (ac == 0);
+      int ac = 0; nt_arr(nt, vlit, "elements", &ac); v_empty_arr = (ac == 0);
     }
     if (vty && (sp_streq(vty, "HashNode") || sp_streq(vty, "KeywordHashNode"))) {
-      int hec = 0; nt_arr(nt, v, "elements", &hec); v_empty_hash = (hec == 0);
+      int hec = 0; nt_arr(nt, vlit, "elements", &hec); v_empty_hash = (hec == 0);
     }
     /* `$g = Hash.new` (no args/block): an empty hash whose typed slot needs a
        fresh `sp_XHash_new()`, not the boxed sp_RbVal emit_expr would produce for
@@ -6471,13 +6492,14 @@ else {
     LocalVar *cv = nm ? comp_const(c, nm) : NULL;
     if (!cv || cv->type == TY_UNKNOWN) { unsupported(c, id, "constant path write"); return; }
     int v = nt_ref(nt, id, "value");
-    const char *vty = nt_type(nt, v);
+    int vlit = empty_literal_node(c, v);
+    const char *vty = nt_type(nt, vlit);
     int v_empty_arr = 0, v_empty_hash = 0;
     if (vty && sp_streq(vty, "ArrayNode")) {
-      int ac = 0; nt_arr(nt, v, "elements", &ac); v_empty_arr = (ac == 0);
+      int ac = 0; nt_arr(nt, vlit, "elements", &ac); v_empty_arr = (ac == 0);
     }
     if (vty && (sp_streq(vty, "HashNode") || sp_streq(vty, "KeywordHashNode"))) {
-      int hec = 0; nt_arr(nt, v, "elements", &hec); v_empty_hash = (hec == 0);
+      int hec = 0; nt_arr(nt, vlit, "elements", &hec); v_empty_hash = (hec == 0);
     }
     emit_indent(b, indent);
     buf_printf(b, "cst_%s = ", nm);
