@@ -401,9 +401,11 @@ void sp_sched_init(void) {
    first Thread ever always originates on main (no helper exists to run user code
    before this), so this runs single-threaded the one time it does work; later
    calls (a green thread spawning another) see the flag set and return. */
+static int sp_worker_count(void);   /* defined below; the pool size */
 static void sp_sched_ensure_workers(void) {
   if (g_workers_started) return;
   sp_alloc_stress_init();   /* set the stress flags once here, before any helper reads them */
+  sp_alloc_worker_tune(sp_worker_count());  /* and size the GC budget for the pool */
   g_workers_started = 1;
   sp_sched_start_workers();
 }

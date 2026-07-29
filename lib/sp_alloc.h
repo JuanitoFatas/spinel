@@ -83,6 +83,7 @@ extern size_t sp_str_threshold_init;     /* recompute floor */
 extern int    sp_str_stress_checked;     /* one-shot SPINEL_GC_STRESS check */
 #ifdef SP_THREADS
 void sp_alloc_stress_init(void);         /* race-free one-shot stress check (pre-helpers) */
+void sp_alloc_worker_tune(int workers); /* size the collection budget for N workers (pre-helpers) */
 #endif
 
 extern const char sp_str_empty_data[];

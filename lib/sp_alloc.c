@@ -75,6 +75,45 @@ void sp_alloc_stress_init(void) {
     if (stress) { SP_GC_CTR_SET(sp_gc_threshold, 2048); sp_gc_threshold_init = 2048; }
   }
 }
+
+/* Size the collection budget for the worker count, once, before any helper
+   spawns (same single-threaded window as the stress check above).
+
+   The object-heap trigger compares the GLOBAL live-byte total against one
+   threshold, so N workers cross it N times faster in wall clock -- and every
+   crossing now stops N workers instead of one. Measured on an
+   allocation-heavy program: the collection COUNT is flat across worker counts
+   (the total allocated is what it is), but 8 workers ran 1.7x slower than 1
+   while burning 2.9x the CPU, all of it in park/mark/unpark. The string heap
+   already avoids this by comparing per-worker bytes, which makes its aggregate
+   bound N * threshold; this gives the object heap the same bound.
+
+   The cost is bounded and small: N * 256 KB of garbage retained between
+   collections, 2 MB at eight workers. SPINEL_GC_THRESHOLD_KB overrides the
+   base for a program that wants to trade more memory for fewer stops.
+
+   Not scaled under GC stress: that mode exists to maximize collections, and
+   multiplying its 2 KB budget would quietly weaken every stress run. */
+void sp_alloc_worker_tune(int workers) {
+  const char *e = getenv("SPINEL_GC_THRESHOLD_KB");
+  if (e && *e) {
+    long v = atol(e);
+    if (v > 0) {
+      size_t base = (size_t)v * 1024;
+      SP_GC_CTR_SET(sp_gc_threshold, base); sp_gc_threshold_init = base;
+      SP_GC_CTR_SET(sp_str_threshold, base); sp_str_threshold_init = base;
+    }
+  }
+  {
+    const char *st = getenv("SPINEL_GC_STRESS");
+    if (st && *st && *st != '0') return;
+  }
+  if (workers < 1) workers = 1;
+  if (workers > SP_MAX_WORKERS) workers = SP_MAX_WORKERS;
+  if (workers == 1) return;
+  sp_gc_threshold_init *= (size_t)workers;
+  SP_GC_CTR_SET(sp_gc_threshold, SP_GC_CTR_GET(sp_gc_threshold) * (size_t)workers);
+}
 #endif
 
 /* Re-tune the object / string GC thresholds from the pre-collect live bytes
@@ -140,8 +179,14 @@ int sp_gc_collection_wanted(void) {
      that publishes it. A stale read at worst skips one redundant
      collection. */
 #ifdef SP_THREADS
-  return SP_GC_CTR_GET(sp_gc_bytes) > SP_GC_CTR_GET(sp_gc_threshold) ||
-         sp_str_bytes_total() > SP_GC_CTR_GET(sp_str_threshold);
+  /* The string trigger is PER WORKER (sp_str_alloc compares this worker's own
+     bytes), so the justified-now condition on the aggregate is N * threshold.
+     Comparing the aggregate against the bare threshold made this true almost
+     immediately at N > 1, so the early-out never suppressed a redundant stop
+     and workers queued up behind each other's collections. */
+  { int nw = sp_active_workers; if (nw < 1) nw = 1; if (nw > SP_MAX_WORKERS) nw = SP_MAX_WORKERS;
+    return SP_GC_CTR_GET(sp_gc_bytes) > SP_GC_CTR_GET(sp_gc_threshold) ||
+           sp_str_bytes_total() > SP_GC_CTR_GET(sp_str_threshold) * (size_t)nw; }
 #else
   return SP_GC_CTR_GET(sp_gc_bytes) > SP_GC_CTR_GET(sp_gc_threshold) ||
          SP_GC_CTR_GET(sp_str_heap_bytes) > SP_GC_CTR_GET(sp_str_threshold);

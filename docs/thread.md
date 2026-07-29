@@ -93,3 +93,19 @@ These are deliberate consequences of real parallelism, listed in
 |---|---|
 | `SPINEL_WORKERS` | number of OS workers; overrides the online-core autodetect (min 1) |
 | `SPINEL_PREEMPT_SIGNAL` | the signal the monitor uses to preempt a busy worker (default `SIGURG`) |
+| `SPINEL_GC_THRESHOLD_KB` | per-worker collection budget; raise it to trade memory for fewer stop-the-world pauses (default 256) |
+
+### A note on allocation-heavy threads
+
+Collection stops every worker, so a program that allocates hard pays for
+each pause N times over. The budget therefore scales with the worker
+count: eight workers collect at eight times the heap size one worker
+does, which costs a few megabytes of retained garbage and removes most
+of the multi-worker penalty. On one allocation-bound benchmark that took
+eight workers from 1.7x **slower** than a single worker to roughly par.
+
+Roughly par, not eight times faster. CPU-bound threads scale nearly
+linearly (measured 8.25x on eight workers); allocation-bound ones do not
+yet, because the mark phase is serial and every other worker idles
+through it. Raising `SPINEL_GC_THRESHOLD_KB` further is the lever
+available today.
