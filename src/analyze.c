@@ -7424,6 +7424,67 @@ int make_yield_proc_forms(Compiler *c) {
   return made;
 }
 
+/* Representation family of a settled type: 1 for a flat scalar in a machine
+   register, 2 for a heap pointer. 0 for anything the check must not judge --
+   poly and unknown (no static claim), nil (a literal nil is legal in every
+   slot), bigint (int converts at the boundary), a by-value object or a
+   shared-string handle (neither is a plain pointer). */
+static int seed_repr_family(Compiler *c, TyKind t) {
+  switch (t) {
+    case TY_INT: case TY_FLOAT: case TY_BOOL: case TY_SYMBOL: return 1;
+    case TY_STRING: case TY_PROC: return 2;
+    default: break;
+  }
+  if (ty_is_array(t) || ty_is_hash(t)) return 2;
+  if (ty_is_object(t) && !comp_ty_value_obj(c, t)) return 2;
+  return 0;
+}
+
+/* An --rbs seed the program statically contradicts.
+   A seed is trusted, so codegen narrows whatever arrives into the pinned slot
+   and a wrong one reinterprets the value rather than converting it. Where both
+   the seed and the value are concretely typed and one is a flat scalar while
+   the other is a heap pointer, no conversion exists and none is emitted -- the
+   result is a pointer read as an integer. That is decidable here, so refuse
+   rather than emit it.
+   Deliberately narrow. Two types in the SAME family may still disagree (a
+   String slot fed a Symbol) but the emitter has coercions for many such pairs,
+   and a false error breaks a build that works; the dynamic half of this is
+   -DSP_RBS_CHECK, which needs no such caution because it sees the real tag. */
+static void check_seed_contradictions(Compiler *c) {
+  const NodeTable *nt = c->nt;
+  for (int id = 0; id < nt->count; id++) {
+    if (nt_kind(nt, id) != NK_InstanceVariableWriteNode) continue;
+    const char *nm = nt_str(nt, id, "name");
+    int v = nt_ref(nt, id, "value");
+    if (!nm || v < 0) continue;
+    Scope *sc = comp_scope_of(c, id);
+    int cid = sc ? sc->class_id : -1;
+    if (cid < 0) continue;
+    ClassInfo *ci = &c->classes[cid];
+    if (!class_ivar_pinned(ci, nm)) continue;
+    int iv = comp_ivar_index(ci, nm);
+    if (iv < 0) continue;
+    TyKind slot = ci->ivar_types[iv];
+    TyKind val = infer_type(c, v);
+    int fs = seed_repr_family(c, slot), fv = seed_repr_family(c, val);
+    if (!fs || !fv || fs == fv) continue;
+    int ln  = (int)nt_int(nt, id, "node_line", 0);
+    int fid = (int)nt_int(nt, id, "node_file", 0);
+    const char *file = nt_file_path(nt, fid);
+    if (!file || !*file) file = nt->source_file;
+    if (!file || !*file) file = "source.rb";
+    fprintf(stderr,
+            "spinel: %s:%d: --rbs seed contradicted: %s is declared %s but this "
+            "assigns %s\n"
+            "  A seed is trusted, so the emitted code would reinterpret the value "
+            "rather than convert it.\n"
+            "  Fix the signature or the assignment.\n",
+            file, ln, nm, ty_name(slot), ty_name(val));
+    exit(1);
+  }
+}
+
 void analyze_program(Compiler *c) {
   comp_scope_index_set_frozen(0);  /* scope shape changes during the passes below */
   /* scope 0 = top level */
@@ -9736,6 +9797,10 @@ void analyze_program(Compiler *c) {
       break;
     }
   }
+
+  /* An --rbs seed the settled types statically contradict is a compile error,
+     not something to emit a reinterpretation for. */
+  check_seed_contradictions(c);
 
   /* Last: the capture pass again, on the settled types. a_block_is_lifted asks
      whether the receiver is poly, and a receiver that widened after the

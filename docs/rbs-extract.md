@@ -52,6 +52,40 @@ So write signatures that describe the program, not signatures you would
 like to be true. A seed is closer to a `reinterpret_cast` than to a
 `static_cast`.
 
+## Contradictions
+
+A seed the program *statically* contradicts is a compile error:
+
+```
+$ spinel main.rb --rbs sig -o a
+spinel: main.rb:6: --rbs seed contradicted: @v is declared int but this assigns string
+  A seed is trusted, so the emitted code would reinterpret the value rather than convert it.
+  Fix the signature or the assignment.
+```
+
+The rule is deliberately narrow. It fires only when both the seed and the
+value are concretely typed and one is a **flat scalar** (`Integer`,
+`Float`, `bool`, `Symbol`) while the other is a **heap pointer**
+(`String`, an Array, a Hash, an object, a Proc). No conversion exists
+between those and none is emitted, so the result would be a pointer read
+as an integer.
+
+Everything else is left alone on purpose:
+
+- Two types in the same family may still disagree -- a `String` slot fed
+  a `Symbol` -- but the emitter has coercions for many such pairs, and a
+  false error breaks a build that works.
+- `nil` is legal in every slot.
+- `Integer` and a bignum convert at the boundary.
+- A by-value object (`Range`, `Time`, `Complex`, `Rational`) is a struct,
+  not a pointer, so the families do not apply.
+- A value that is `poly` or not yet inferred makes no static claim. That
+  is the dynamic case, and it is what `-DSP_RBS_CHECK` is for.
+
+The two halves are complementary by construction: this one needs both
+types known and costs nothing to run, the other needs the path to
+execute and sees the real tag.
+
 ## Checking seeds
 
 Building the generated C with **`-DSP_RBS_CHECK`** turns that silence into
@@ -79,7 +113,7 @@ What it does and does not catch:
   seed still sees `@x = nil` in an `initialize`.
 - **Only dynamic narrowings.** If the value is already statically typed,
   no narrowing is emitted and there is nothing to assert at run time.
-  That case is diagnosed at compile time instead.
+  That case is [a compile error](#contradictions) instead.
 - **Only paths that execute.** It is a test-time tool, not a proof.
 
 Run your test suite once with it. `make rbs-seed-test` does, over both an
