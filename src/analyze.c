@@ -7440,6 +7440,17 @@ static int seed_repr_family(Compiler *c, TyKind t) {
   return 0;
 }
 
+/* Within the pointer family the representations still differ, with no
+   conversion between them: an Array, a Hash and a String are three different
+   layouts. Anything else that is a pointer (a Proc, an object -- which may
+   carry to_s / to_ary conversions the emitter knows) is left unjudged. */
+static int seed_ptr_kind(TyKind t) {
+  if (ty_is_array(t)) return 1;
+  if (ty_is_hash(t))  return 2;
+  if (t == TY_STRING) return 3;
+  return 0;
+}
+
 /* An --rbs seed the program statically contradicts.
    A seed is trusted, so codegen narrows whatever arrives into the pinned slot
    and a wrong one reinterprets the value rather than converting it. Where both
@@ -7468,7 +7479,11 @@ static void check_seed_contradictions(Compiler *c) {
     TyKind slot = ci->ivar_types[iv];
     TyKind val = infer_type(c, v);
     int fs = seed_repr_family(c, slot), fv = seed_repr_family(c, val);
-    if (!fs || !fv || fs == fv) continue;
+    if (!fs || !fv) continue;
+    if (fs == fv) {
+      int ks = seed_ptr_kind(slot), kv2 = seed_ptr_kind(val);
+      if (fs != 2 || !ks || !kv2 || ks == kv2) continue;
+    }
     int ln  = (int)nt_int(nt, id, "node_line", 0);
     int fid = (int)nt_int(nt, id, "node_file", 0);
     const char *file = nt_file_path(nt, fid);
@@ -7482,6 +7497,66 @@ static void check_seed_contradictions(Compiler *c) {
             "  Fix the signature or the assignment.\n",
             file, ln, nm, ty_name(slot), ty_name(val));
     exit(1);
+  }
+  /* The same contradiction one step earlier: an argument whose type is
+     concretely known, handed to a parameter the seed pinned to a type in the
+     other representation family. Codegen trusts the pin, so the emitted C
+     reads a hash pointer as a C string rather than converting it. Only the
+     plain positional shape is judged -- a rest/keyword param, a splat
+     argument, or a call whose target cannot be resolved statically leaves the
+     mapping in doubt, and a false error breaks a working build. */
+  for (int id = 0; id < nt->count; id++) {
+    if (nt_kind(nt, id) != NK_CallNode) continue;
+    const char *name = nt_str(nt, id, "name");
+    if (!name) continue;
+    int recv = nt_ref(nt, id, "receiver");
+    int mi = -1;
+    if (recv < 0) mi = comp_method_index(c, name);
+    else if (nt_kind(nt, recv) == NK_ConstantReadNode) {
+      const char *cn = nt_str(nt, recv, "name");
+      int rc = cn ? comp_class_index(c, cn) : -1;
+      /* `Mod.m` is a class (singleton) method, which is not in the instance
+         chain; fall back to it before giving up. */
+      if (rc >= 0) mi = comp_cmethod_in_chain(c, rc, name, NULL);
+      if (rc >= 0 && mi < 0) mi = comp_method_in_chain(c, rc, name, NULL);
+    }
+    else {
+      TyKind rt = infer_type(c, recv);
+      if (ty_is_object(rt)) mi = comp_method_in_chain(c, ty_object_class(rt), name, NULL);
+    }
+    if (mi < 0 || mi >= c->nscopes) continue;
+    Scope *m = &c->scopes[mi];
+    if (m->rest_idx >= 0 || m->kwrest_idx >= 0) continue;
+    int args = nt_ref(nt, id, "arguments");
+    int argc = 0; const int *argv = args >= 0 ? nt_arr(nt, args, "arguments", &argc) : NULL;
+    if (!argv || argc > m->nparams) continue;
+    for (int i = 0; i < argc; i++) {
+      if (nt_kind(nt, argv[i]) == NK_SplatNode ||
+          nt_kind(nt, argv[i]) == NK_KeywordHashNode ||
+          nt_kind(nt, argv[i]) == NK_BlockArgumentNode) break;
+      LocalVar *lv = m->pnames[i] ? scope_local(m, m->pnames[i]) : NULL;
+      if (!lv || !lv->rbs_seeded) continue;
+      TyKind slot = lv->type, val = infer_type(c, argv[i]);
+      int fs2 = seed_repr_family(c, slot), fv2 = seed_repr_family(c, val);
+      if (!fs2 || !fv2) continue;
+      if (fs2 == fv2) {
+        int ks = seed_ptr_kind(slot), kv2 = seed_ptr_kind(val);
+        if (fs2 != 2 || !ks || !kv2 || ks == kv2) continue;
+      }
+      int ln  = (int)nt_int(nt, argv[i], "node_line", 0);
+      int fid = (int)nt_int(nt, argv[i], "node_file", 0);
+      const char *file = nt_file_path(nt, fid);
+      if (!file || !*file) file = nt->source_file;
+      if (!file || !*file) file = "source.rb";
+      fprintf(stderr,
+              "spinel: %s:%d: --rbs seed contradicted: parameter %s of %s is "
+              "declared %s but this call passes %s\n"
+              "  A seed is trusted, so the emitted code would reinterpret the value "
+              "rather than convert it.\n"
+              "  Fix the signature or the call.\n",
+              file, ln, m->pnames[i], name, ty_name(slot), ty_name(val));
+      exit(1);
+    }
   }
 }
 

@@ -1,3 +1,7 @@
 class Bad
   attr_accessor v: Integer
 end
+
+module ViewHelpers
+  def self.html_escape: (String s) -> String
+end
