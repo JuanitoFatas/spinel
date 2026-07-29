@@ -761,6 +761,14 @@ TyKind infer_call(Compiler *c, int id) {
       if (comp_method_in_chain(c, k, name, NULL) >= 0) return TY_POLY;
     }
   }
+  /* max_by / min_by on a boxed receiver -- an Array read out of a container.
+     Codegen materializes the elements and re-dispatches as the array form, so
+     the result is the winning element, itself boxed. Without a type here the
+     call stayed untyped and every method on the result was rejected, the way
+     sort_by (which does have one) never was. */
+  if (recv >= 0 && rt == TY_POLY && nt_ref(nt, id, "block") >= 0 && argc == 0 &&
+      (sp_streq(name, "max_by") || sp_streq(name, "min_by")))
+    return TY_POLY;
   /* Same, for a name outside that surface: only a yielding candidate makes
      the call a dispatch there, since a non-yielding one leaves a
      block-carrying call on the builtin path entirely. */
@@ -1057,6 +1065,25 @@ TyKind infer_call(Compiler *c, int id) {
       (sp_streq(name, "chars") || sp_streq(name, "lines")) &&
       nt_ref(nt, id, "block") < 0)
     return an_user_defines_or_reads(c, name) ? TY_POLY : TY_STR_ARRAY;
+  /* A blockless grouping enumerator on a boxed Array -- an Array read out of a
+     container -- materializes to the groups themselves, an Array of Arrays. */
+  if (recv >= 0 && rt == TY_POLY && argc == 1 && nt_ref(nt, id, "block") < 0 &&
+      (sp_streq(name, "each_cons") || sp_streq(name, "each_slice") ||
+       sp_streq(name, "combination") || sp_streq(name, "permutation")) &&
+      !an_user_defines_or_reads(c, name))
+    return (sp_streq(name, "each_cons") || sp_streq(name, "each_slice"))
+             ? TY_ENUMERATOR : TY_POLY_ARRAY;   /* as the typed array answers */
+  /* A blockless each_char / each_line / each_byte / each_codepoint on the same
+     boxed String is CRuby's Enumerator; spinel materializes the elements, so
+     it answers exactly what chars / lines / bytes do. Without this the
+     enumerator stayed untyped and reduce/to_a/sum on it all failed. */
+  if (recv >= 0 && rt == TY_POLY && argc == 0 && nt_ref(nt, id, "block") < 0 &&
+      (sp_streq(name, "each_char") || sp_streq(name, "each_line") ||
+       sp_streq(name, "each_byte") || sp_streq(name, "each_codepoint")) &&
+      !an_user_defines_or_reads(c, name)) {
+    if (sp_streq(name, "each_byte") || sp_streq(name, "each_codepoint")) return TY_INT_ARRAY;
+    return TY_STR_ARRAY;
+  }
   /* poly.each_char { |c| }: the block param is a one-char String and the call
      answers the receiver's string, as String#each_char answers self (#3402). */
   if (recv >= 0 && rt == TY_POLY && argc == 0 && sp_streq(name, "each_char") &&

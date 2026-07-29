@@ -1028,8 +1028,15 @@ int emit_array_call(Compiler *c, int id, Buf *b) {
      container: materialize its elements (a hash yields [k, v] pairs) as a poly
      array and re-dispatch as an array sort_by -- the array path's 2-param
      autosplat destructures each pair, matching the typed Hash#sort_by. (#2935) */
-  if (recv >= 0 && rt == TY_POLY && sp_streq(name, "sort_by") &&
-      nt_ref(nt, id, "block") >= 0 && g_n_argov < MAX_ARG_OVERRIDE) {
+  /* The blockless grouping enumerators take the same route: CRuby answers an
+     Enumerator, spinel materializes it, so re-dispatching as the array form
+     gives the groups a later .map / .to_a can walk. */
+  if (recv >= 0 && rt == TY_POLY && g_n_argov < MAX_ARG_OVERRIDE &&
+      ((nt_ref(nt, id, "block") >= 0 &&
+        (sp_streq(name, "sort_by") || sp_streq(name, "max_by") || sp_streq(name, "min_by"))) ||
+       (nt_ref(nt, id, "block") < 0 && argc == 1 && !user_defines_or_reads(c, name) &&
+        (sp_streq(name, "each_cons") || sp_streq(name, "each_slice") ||
+         sp_streq(name, "combination") || sp_streq(name, "permutation"))))) {
     int ta = ++g_tmp;
     Buf rb; memset(&rb, 0, sizeof rb); emit_expr(c, recv, &rb);
     emit_indent(g_pre, g_indent);
@@ -9325,6 +9332,18 @@ int emit_poly_call(Compiler *c, int id, Buf *b) {
       if (!user_defines_or_reads(c, "lines")) {
         buf_puts(b, "sp_str_lines(sp_poly_to_s("); emit_expr(c, recv, b); buf_puts(b, "))"); return 1;
       }
+    }
+    /* A blockless each_char / each_line / each_byte / each_codepoint is
+       CRuby's Enumerator; materialize it into the array chars / lines / bytes
+       answer, which is what the typed String path does too. */
+    if (argc == 0 && nt_ref(nt, id, "block") < 0 && !user_defines_or_reads(c, name) &&
+        (sp_streq(name, "each_char") || sp_streq(name, "each_line") ||
+         sp_streq(name, "each_byte") || sp_streq(name, "each_codepoint"))) {
+      const char *fn = sp_streq(name, "each_char") ? "sp_str_chars"
+                     : sp_streq(name, "each_line") ? "sp_str_lines"
+                     : sp_streq(name, "each_byte") ? "sp_str_bytes" : "sp_str_codepoints";
+      buf_printf(b, "%s(sp_poly_to_s(", fn); emit_expr(c, recv, b); buf_puts(b, "))");
+      return 1;
     }
     if (sp_streq(name, "freeze"))     { buf_puts(b, "sp_poly_freeze("); emit_expr(c, recv, b); buf_puts(b, ")"); return 1; }
   }
