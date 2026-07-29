@@ -216,6 +216,14 @@ extern void *sp_gc_dbg_ctx;
 void sp_gc_mark(void *obj);
 void sp_gc_mark_all(void);
 void sp_gc_collect(void);
+#ifdef SP_THREADS
+/* Sweep one worker's young list on that worker (see sp_gc.c). Survivors come
+   back as a local list for the collector to splice into the old heap. */
+void sp_gc_sweep_slot(int wid, sp_gc_hdr **out_head, sp_gc_hdr **out_tail, size_t *out_bytes);
+extern void (*sp_gc_par_sweep_hook)(void);
+/* Splice one worker's survivors onto the shared old heap. Collector-only. */
+void sp_gc_promote_slot(sp_gc_hdr *head, sp_gc_hdr *tail, size_t bytes);
+#endif
 void sp_gc_enforce_mem_limit(void);
 /* Collect + re-tune the threshold, assuming exclusive heap access (see
    sp_alloc.c). sp_stw_collect (sp_sched.c, threaded build) stops the world then

@@ -77,6 +77,23 @@ static int            g_nparked  = 0;   /* workers parked at the barrier right n
 static sp_Fiber      *g_parked_fiber[2 * SP_MAX_WORKERS];   /* up to 2 per worker: current + root */
 static int            g_n_parked_fiber = 0;
 static int            g_stw_active = 0; /* a collection is in progress */
+/* Parallel sweep phase, inside the stop-the-world window. The workers are
+   already parked here doing nothing while the collector sweeps, and the sweep
+   is 93% of the stopped time -- so hand each of them its OWN slot instead.
+   Its own, not any slot: freeing an object returns it to the arena it was
+   allocated from, and a single thread freeing eight workers' objects pays for
+   eight arena locks and eight cold metadata sets. */
+static int            g_sweep_go = 0;                 /* collector wants slots swept */
+static int            g_sweep_done = 0;               /* workers finished this round */
+static unsigned char  g_swept[SP_MAX_WORKERS];        /* which slots are claimed */
+static pthread_cond_t g_sweep_cv = PTHREAD_COND_INITIALIZER;
+/* survivors, per slot, spliced onto the shared old heap by the collector */
+static sp_gc_hdr     *g_sw_head[SP_MAX_WORKERS];
+static sp_gc_hdr     *g_sw_tail[SP_MAX_WORKERS];
+static size_t         g_sw_bytes[SP_MAX_WORKERS];
+static void sp_sweep_one_slot(int wid) {
+  sp_gc_sweep_slot(wid, &g_sw_head[wid], &g_sw_tail[wid], &g_sw_bytes[wid]);
+}
 static unsigned       g_stw_epoch = 0;  /* bumped each collection; scopes g_nparked to one */
 static SP_TLS int     g_collector_active = 0;  /* this worker is mid-collection (re-entrancy guard) */
 static int            g_shutdown = 0;   /* set at drain so helper workers exit their loop */
@@ -160,7 +177,24 @@ static void sp_stw_park_locked(void) {
   unsigned my_epoch = g_stw_epoch;
   g_nparked++;
   if (g_nparked >= sp_active_workers - 1) pthread_cond_signal(&g_stw_request);
-  while (g_stw_active && g_stw_epoch == my_epoch) pthread_cond_wait(&g_stw_release, &g_sched_lock);
+  while (g_stw_active && g_stw_epoch == my_epoch) {
+    /* Sweep our own slot if the collector has asked for it. Dropping the
+       scheduler lock is safe and necessary: nothing else touches this slot
+       (the collector claims only its own), the mutators are all parked here,
+       and holding the lock through a free-heavy walk would serialize exactly
+       what this phase exists to parallelize. */
+    if (g_sweep_go && !g_swept[sp_worker_id]) {
+      int wid = sp_worker_id;
+      g_swept[wid] = 1;
+      SCHED_UNLOCK();
+      sp_sweep_one_slot(wid);
+      SCHED_LOCK();
+      g_sweep_done++;
+      pthread_cond_signal(&g_sweep_cv);
+      continue;
+    }
+    pthread_cond_wait(&g_stw_release, &g_sched_lock);
+  }
   if (g_stw_epoch == my_epoch) g_nparked--;
 }
 #else
@@ -401,6 +435,46 @@ void sp_sched_init(void) {
    first Thread ever always originates on main (no helper exists to run user code
    before this), so this runs single-threaded the one time it does work; later
    calls (a green thread spawning another) see the flag set and return. */
+/* Drive the parallel sweep from inside sp_gc_collect, with the world already
+   stopped and every other worker parked in sp_stw_park_locked. Waking them
+   through g_stw_release is safe: their loop re-tests g_stw_active, so a
+   wake that is not a release puts them back to sleep. */
+static int    g_sw_hi = 1;   /* largest pool seen; bounds the per-collection loops */
+static void sp_sched_par_sweep(void) {
+  int n = sp_active_workers; if (n < 1) n = 1; if (n > SP_MAX_WORKERS) n = SP_MAX_WORKERS;
+  int me = sp_worker_id;
+  /* Decide the string sweep once, here, so every worker can do its own slot in
+     the same phase rather than the collector walking all of them afterwards. */
+  /* Only the live slots: SP_MAX_WORKERS is 256 and this runs on every
+     collection, so clearing the whole array cost more than the sweep saved.
+     g_sw_hi is the largest pool ever seen, which bounds the orphan scan below
+     without walking 256 empty slots each time. */
+  if (n > g_sw_hi) g_sw_hi = n;
+  SCHED_LOCK();
+  memset(g_swept, 0, (size_t)g_sw_hi * sizeof g_swept[0]);
+  memset(g_sw_head, 0, (size_t)g_sw_hi * sizeof g_sw_head[0]);
+  memset(g_sw_tail, 0, (size_t)g_sw_hi * sizeof g_sw_tail[0]);
+  memset(g_sw_bytes, 0, (size_t)g_sw_hi * sizeof g_sw_bytes[0]);
+  g_sweep_done = 0;
+  g_swept[me] = 1;          /* ours: we sweep it below, off the lock */
+  g_sweep_go = 1;
+  pthread_cond_broadcast(&g_stw_release);
+  SCHED_UNLOCK();
+  sp_sweep_one_slot(me);
+  SCHED_LOCK();
+  /* Every other participant is parked (the collector waited for that before
+     marking), so exactly n-1 of them will claim a slot. */
+  while (g_sweep_done < n - 1) pthread_cond_wait(&g_sweep_cv, &g_sched_lock);
+  g_sweep_go = 0;
+  SCHED_UNLOCK();
+  /* Any slot no live worker owns -- an index past the current pool, or one
+     whose worker exited -- still has to be swept, or its list leaks. */
+  for (int i = 0; i < g_sw_hi; i++)
+    if (!g_swept[i] && sp_gc_wslot[i].young) sp_sweep_one_slot(i);
+  for (int i = 0; i < g_sw_hi; i++)
+    sp_gc_promote_slot(g_sw_head[i], g_sw_tail[i], g_sw_bytes[i]);
+}
+
 static int sp_worker_count(void);   /* defined below; the pool size */
 static void sp_sched_ensure_workers(void) {
   if (g_workers_started) return;
@@ -408,6 +482,10 @@ static void sp_sched_ensure_workers(void) {
   sp_alloc_worker_tune(sp_worker_count());  /* and size the GC budget for the pool */
   g_workers_started = 1;
   sp_sched_start_workers();
+  /* Hand parked workers their own slots from here on. Workers spawn lazily, so
+     the pool may still be one at this point; the driver itself falls back to
+     the serial sweep whenever there is nobody parked to help. */
+  sp_gc_par_sweep_hook = sp_sched_par_sweep;
 }
 #endif
 
