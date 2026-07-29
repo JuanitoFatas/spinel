@@ -180,10 +180,12 @@ int emit_ctor_yield_inline(Compiler *c, int id, int ci, Buf *b) {
   for (int i = 0; i < m->nparams; i++) {
     emit_indent(b, din);
     buf_printf(b, "lv__y%d_%s = ", tag, m->pnames[i]);
-    int provided = i < pos_argc ? argv2[i] : -1;
+    /* A param past the rest binds by name, never positionally. */
+    int past_rest = m->rest_idx >= 0 && i > m->rest_idx;
+    int provided = (i < pos_argc && !past_rest) ? argv2[i] : -1;
     /* Only bind from the keyword hash when the param was not already filled
        positionally -- otherwise a same-named key would clobber the positional. */
-    if (kwh >= 0 && i >= pos_argc) {
+    if (kwh >= 0 && (i >= pos_argc || past_rest)) {
       int kv = kwh_lookup(nt, kwh, m->pnames[i]);
       if (kv >= 0) provided = kv;
     }
@@ -198,7 +200,17 @@ int emit_ctor_yield_inline(Compiler *c, int id, int ci, Buf *b) {
        repointed at for the inlined body */
     const char *svs = g_self, *svd = g_self_deref;
     g_self = saved_self; g_self_deref = saved_self_deref;
-    emit_arg_or_default(c, m, i, provided, b);
+    /* A rest param collects the middle arguments into an Array rather than
+       taking one of them straight into its slot. */
+    if (m->rest_idx >= 0 && i == m->rest_idx)
+      emit_rest_pack_kwh(c, i, pos_argc - m->npost_rest, argv2, -1, b);
+    else if (m->rest_idx >= 0 && i > m->rest_idx && i <= m->rest_idx + m->npost_rest) {
+      int post_j = i - m->rest_idx - 1;   /* 0-based index among the posts */
+      int argv_idx = pos_argc - m->npost_rest + post_j;
+      emit_arg_or_default(c, m, i,
+                          (argv2 && argv_idx >= 0 && argv_idx < pos_argc) ? argv2[argv_idx] : -1, b);
+    }
+    else emit_arg_or_default(c, m, i, provided, b);
     g_self = svs; g_self_deref = svd;
     g_nren = sv;
     buf_puts(b, ";\n");

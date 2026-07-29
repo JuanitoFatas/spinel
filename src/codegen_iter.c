@@ -319,7 +319,21 @@ int emit_inline_call_x(Compiler *c, int id, Buf *b, int indent, int as_expr) {
       if (mt == TY_POLY && et != TY_POLY) emit_boxed_text(c, et, txt, b);
       else buf_puts(b, txt);
     }
-    else if (i < pos_argc) emit_arg_or_default(c, m, i, argv[i], b);
+    /* A rest param collects the middle arguments into an Array. Without this
+       the first argument was assigned straight into the rest slot -- a
+       pointer of the wrong type, so the rest read back empty (or crashed). */
+    else if (m->rest_idx >= 0 && i == m->rest_idx)
+      emit_rest_pack_kwh(c, i, pos_argc - m->npost_rest, argv, -1, b);
+    else if (m->rest_idx >= 0 && i > m->rest_idx && i <= m->rest_idx + m->npost_rest) {
+      int post_j = i - m->rest_idx - 1;   /* 0-based index among the posts */
+      int argv_idx = pos_argc - m->npost_rest + post_j;
+      emit_arg_or_default(c, m, i,
+                          (argv && argv_idx >= 0 && argv_idx < pos_argc) ? argv[argv_idx] : -1, b);
+    }
+    /* Anything past the rest that is not one of its posts is a keyword (or
+       **kwrest) param: it binds by name, never positionally. */
+    else if (i < pos_argc && !(m->rest_idx >= 0 && i > m->rest_idx))
+      emit_arg_or_default(c, m, i, argv[i], b);
     else {
       int kv = kwh >= 0 ? kwh_lookup(nt, kwh, m->pnames[i]) : -1;
       /* No literal key for this keyword param, but a `**hash` was splatted:
