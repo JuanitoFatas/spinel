@@ -28,6 +28,11 @@ class Set
     end
   end
 
+  # dup and clone must not share the element array with the original.
+  def initialize_copy(orig)
+    @data = orig.to_a
+  end
+
   def add(x)
     @data.push(x) unless include?(x)
     self
