@@ -35,6 +35,9 @@ How the compiler is built and where it is going. Not needed to *use* Spinel.
   the rest of the compiler consumes.
 - **[internals/analyze-ir.md](internals/analyze-ir.md)** — the analyze ↔ codegen
   contract (the shared in-memory `Compiler` model).
+- **[internals/gc.md](internals/gc.md)** — the collector: two heaps, the marker
+  byte that identifies a heap string, explicit roots, a full mark with a
+  generational sweep, and the limits that follow from having no write barrier.
 - **[internals/thread-mn-design.md](internals/thread-mn-design.md)** — the M:N
   thread scheduler: green threads on the fiber substrate, per-worker run queues
   and work stealing, stop-the-world GC, the preemption monitor. A working
