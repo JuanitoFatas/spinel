@@ -490,6 +490,15 @@ int poly_block_call_needs_dispatch(Compiler *c, int id) {
   return 0;
 }
 
+/* Neither class is the other, nor an ancestor of the other. Such a pair has no
+   conversion: their structs share no prefix by construction. */
+static int obj_class_unrelated(Compiler *c, int a, int b) {
+  if (a < 0 || b < 0 || a == b) return 0;
+  for (int k = c->classes[a].parent; k >= 0; k = c->classes[k].parent) if (k == b) return 0;
+  for (int k = c->classes[b].parent; k >= 0; k = c->classes[k].parent) if (k == a) return 0;
+  return 1;
+}
+
 /* Emit the switch key for a poly method dispatch. An SP_TAG_OBJ value uses its
    real cls_id; a boxed scalar maps to its reopened primitive class index (so a
    reopened Integer/Float/String/Symbol/nil method still dispatches), else to a
@@ -4379,6 +4388,15 @@ static int emit_poly_method_dispatch(Compiler *c, int id, Buf *b) {
                   error and semantic garbage; the arm cannot be this call's
                   real target shape */
                ty_is_object(pt0) != ty_is_object(at0) ||
+               /* two UNRELATED object classes. A subclass in an ancestor-typed
+                  slot is fine and gets a cast (#3418), but nothing converts
+                  between siblings -- and this arm cannot be the call's real
+                  target, since a receiver of that class would raise in CRuby
+                  rather than reinterpret the argument. Dropping it is also
+                  what the un-seeded build does, by diagnosing the body
+                  honestly instead (#3419). */
+               (ty_is_object(pt0) && ty_is_object(at0) &&
+                obj_class_unrelated(c, ty_object_class(pt0), ty_object_class(at0))) ||
                /* a struct passed by value converts to nothing: a Range slice
                   `s[0...-5]` on an untyped receiver was matching a seeded
                   `#[](Symbol)` by name and handing sp_Range to an sp_sym slot
@@ -4445,7 +4463,7 @@ static int emit_poly_method_dispatch(Compiler *c, int id, Buf *b) {
               char tn[32]; snprintf(tn, sizeof tn, "_t%d", kwtmp[e_found]);
               if (kpt == TY_POLY && at != TY_POLY) emit_boxed_text(c, at, tn, &cb);
               else if (at == TY_POLY && kpt != TY_POLY && kpt != TY_UNKNOWN) emit_unbox_text(c, kpt, tn, &cb);
-              else buf_puts(&cb, tn);
+              else { emit_obj_upcast_prefix(c, kpt, at, &cb); buf_puts(&cb, tn); }
             }
             else {
               g_self = selfpbuf2;
@@ -4484,7 +4502,10 @@ static int emit_poly_method_dispatch(Compiler *c, int id, Buf *b) {
             char tn[32]; snprintf(tn, sizeof tn, "_t%d", atmp[src]);
             if (pt == TY_POLY && at != TY_POLY) emit_boxed_text(c, at, tn, &cb);
             else if (at == TY_POLY && pt != TY_POLY && pt != TY_UNKNOWN) emit_unbox_text(c, pt, tn, &cb);
-            else buf_puts(&cb, tn);
+            /* a subclass argument into an ancestor-typed parameter: layout-
+               compatible, but C wants it spelled (#3418). The unrelated case
+               never reaches here -- that arm was dropped above. */
+            else { emit_obj_upcast_prefix(c, pt, at, &cb); buf_puts(&cb, tn); }
           }
 else {
             g_self = selfpbuf2;

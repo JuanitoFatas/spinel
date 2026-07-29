@@ -4237,6 +4237,30 @@ static void emit_unbox_node(Compiler *c, TyKind t, int node, Buf *b) {
    Array[untyped] rbs seed over a concrete body): convert per element, boxing
    each -- returning the raw pointer reinterprets the layout and silently
    iterates zero elements (#3279). Returns 1 when it emitted the conversion. */
+/* A narrower hash storage kind feeding a wider declared one -- an
+   Hash[String, untyped] seed over a body that builds {"k" => "v"}. Ruby has one
+   Hash and this runtime has seven layouts, so the pointer cannot just be
+   returned: it would be reinterpreted and read back as garbage, silently on a
+   compiler that only warns (#3420). Convert, as the array side already does. */
+static int emit_ret_hash_widen_conv(Compiler *c, TyKind slot, TyKind vty, int node, Buf *b) {
+  if (!ty_is_hash(slot) || !ty_is_hash(vty) || slot == vty) return 0;
+  const char *fn = slot == TY_STR_POLY_HASH  ? "sp_StrPolyHash_from_poly"
+                 : slot == TY_SYM_POLY_HASH  ? "sp_SymPolyHash_from_poly"
+                 : slot == TY_POLY_POLY_HASH ? "sp_PolyPolyHash_from_poly" : NULL;
+  if (!fn) return 0;   /* narrowing, or a kind with no generic builder: leave it */
+  /* Only widen where the key kind agrees; a String-keyed body through a
+     Symbol-keyed signature is a contradiction, not a conversion. */
+  if (slot == TY_STR_POLY_HASH && ty_hash_key(vty) != TY_STRING) return 0;
+  if (slot == TY_SYM_POLY_HASH && ty_hash_key(vty) != TY_SYMBOL) return 0;
+  Buf vb; memset(&vb, 0, sizeof vb);
+  emit_expr(c, node, &vb);
+  buf_printf(b, "%s(", fn);
+  emit_boxed_text(c, vty, vb.p ? vb.p : "NULL", b);
+  buf_puts(b, ")");
+  free(vb.p);
+  return 1;
+}
+
 static int emit_ret_poly_array_conv(Compiler *c, TyKind slot, TyKind vty, int node, Buf *b) {
   if (slot != TY_POLY_ARRAY) return 0;
   const char *k = vty == TY_INT_ARRAY ? "int" : vty == TY_FLOAT_ARRAY ? "float"
@@ -4450,6 +4474,7 @@ void emit_return(Compiler *c, int id, Buf *b, int indent) {
         buf_printf(b, "%s = ", g_method_pr_var);
         TyKind r0 = ret_arg_ntype(c, a[0]);
         if (g_ret_type == TY_POLY && r0 != TY_POLY) emit_boxed(c, a[0], b);
+        else if (emit_ret_hash_widen_conv(c, g_ret_type, r0, a[0], b)) { }
         else if (emit_ret_poly_array_conv(c, g_ret_type, r0, a[0], b)) { }
         else if (tail_needs_unbox(r0, g_ret_type)) emit_unbox_node(c, g_ret_type, a[0], b);
         else emit_tail_value(c, a[0], b);
@@ -4564,6 +4589,7 @@ void emit_return(Compiler *c, int id, Buf *b, int indent) {
     buf_puts(b, "{ "); emit_ctype(c, g_ret_type == TY_UNKNOWN ? TY_INT : g_ret_type, b);
     buf_printf(b, " _t%d = ", tr);
     if (g_ret_type == TY_POLY && r0 != TY_POLY) emit_boxed(c, a[0], b);
+        else if (emit_ret_hash_widen_conv(c, g_ret_type, r0, a[0], b)) { }
         else if (emit_ret_poly_array_conv(c, g_ret_type, r0, a[0], b)) { }
     else if (tail_needs_unbox(r0, g_ret_type)) emit_unbox_node(c, g_ret_type, a[0], b);
     else emit_tail_value(c, a[0], b);
@@ -4609,6 +4635,7 @@ void emit_return(Compiler *c, int id, Buf *b, int indent) {
     buf_puts(b, "return ");
     TyKind r0 = ret_arg_ntype(c, a[0]);
     if (g_ret_type == TY_POLY && r0 != TY_POLY) emit_boxed(c, a[0], b);
+        else if (emit_ret_hash_widen_conv(c, g_ret_type, r0, a[0], b)) { }
         else if (emit_ret_poly_array_conv(c, g_ret_type, r0, a[0], b)) { }
     /* a poly return value feeding a narrower (non-poly) return slot -- e.g. a
        method(:sym) target pinned to mrb_int that returns a poly @ivar, or an
@@ -8339,6 +8366,7 @@ void emit_stmt_tail_inner(Compiler *c, int id, Buf *b, int indent) {
   TyKind vty = is_subst ? comp_ntype(c, g_dm_subst_node) : comp_ntype(c, id);
   int want_poly = g_result_var ? g_result_poly : (g_ret_type == TY_POLY);
   if (want_poly && vty != TY_POLY) emit_boxed(c, is_subst ? g_dm_subst_node : id, b);
+  else if (!g_result_var && emit_ret_hash_widen_conv(c, g_ret_type, vty, is_subst ? g_dm_subst_node : id, b)) { }
   else if (!g_result_var && emit_ret_poly_array_conv(c, g_ret_type, vty, is_subst ? g_dm_subst_node : id, b)) { }
   /* a poly tail value feeding a narrower (non-poly) return slot -- a scalar
      method(:sym) target, or an RBS-typed String/object method whose body yields

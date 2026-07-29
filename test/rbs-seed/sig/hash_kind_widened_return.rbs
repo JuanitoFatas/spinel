@@ -1,0 +1,6 @@
+class Facade
+  def params: () -> Hash[String, untyped]
+  def counts: () -> Hash[String, untyped]
+  def syms: () -> Hash[Symbol, untyped]
+  def mixed: () -> Hash[String, untyped]
+end

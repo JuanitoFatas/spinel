@@ -4656,6 +4656,21 @@ static sp_RbVal sp_poly_get_str(sp_RbVal v, const char *key) {
   return sp_box_nil();
 }
 /* Extend sp_poly_arr_len for hash types defined after the initial declaration. */
+/* ---- widening one hash storage kind into another --------------------------
+   Ruby has one Hash; this runtime has seven storage kinds, and they do not
+   share a layout. So a body that builds a string-VALUED hash cannot simply be
+   returned through a signature declaring a poly-valued one -- the pointer
+   would be reinterpreted and every read would come back as garbage, silently
+   on a compiler that only warns about the type mismatch (#3420). Convert
+   instead, entry by entry, the way the array side already does
+   (sp_PolyArray_from_str_array and friends).
+
+   Written against the generic pair reader so one function covers every source
+   kind: sp_poly_each_elem renders a Hash entry as a boxed [k, v] pair for all
+   of them. */
+static sp_StrPolyHash *sp_StrPolyHash_from_poly(sp_RbVal src);
+static sp_SymPolyHash *sp_SymPolyHash_from_poly(sp_RbVal src);
+static sp_PolyPolyHash *sp_PolyPolyHash_from_poly(sp_RbVal src);
 static mrb_int sp_poly_arr_len_ex(sp_RbVal a) {
   if (a.tag != SP_TAG_OBJ) return 0;
   switch (a.cls_id) {
@@ -4730,6 +4745,36 @@ static sp_RbVal sp_poly_each_elem(sp_RbVal a, mrb_int i) {
       return sp_box_poly_array(pair); }
     default: return sp_box_nil();
   }
+}
+
+static sp_StrPolyHash *sp_StrPolyHash_from_poly(sp_RbVal src) {
+  sp_StrPolyHash *h = sp_StrPolyHash_new(); SP_GC_ROOT(h);
+  mrb_int n = sp_poly_arr_len_ex(src);
+  for (mrb_int i = 0; i < n; i++) {
+    sp_RbVal e = sp_poly_each_elem(src, i);
+    sp_RbVal k = sp_poly_arr_get(e, 0), v = sp_poly_arr_get(e, 1);
+    sp_StrPolyHash_set(h, k.tag == SP_TAG_STR ? k.v.s : sp_poly_to_s(k), v);
+  }
+  return h;
+}
+static sp_SymPolyHash *sp_SymPolyHash_from_poly(sp_RbVal src) {
+  sp_SymPolyHash *h = sp_SymPolyHash_new(); SP_GC_ROOT(h);
+  mrb_int n = sp_poly_arr_len_ex(src);
+  for (mrb_int i = 0; i < n; i++) {
+    sp_RbVal e = sp_poly_each_elem(src, i);
+    sp_RbVal k = sp_poly_arr_get(e, 0), v = sp_poly_arr_get(e, 1);
+    sp_SymPolyHash_set(h, (sp_sym)k.v.i, v);
+  }
+  return h;
+}
+static sp_PolyPolyHash *sp_PolyPolyHash_from_poly(sp_RbVal src) {
+  sp_PolyPolyHash *h = sp_PolyPolyHash_new(); SP_GC_ROOT(h);
+  mrb_int n = sp_poly_arr_len_ex(src);
+  for (mrb_int i = 0; i < n; i++) {
+    sp_RbVal e = sp_poly_each_elem(src, i);
+    sp_PolyPolyHash_set(h, sp_poly_arr_get(e, 0), sp_poly_arr_get(e, 1));
+  }
+  return h;
 }
 /* poly_arr_get/set for PolyPolyHash with integer index key. */
 /* multi-assign element read: `a, b = v` destructures only when the boxed

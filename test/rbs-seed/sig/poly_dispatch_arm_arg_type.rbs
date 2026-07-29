@@ -1,0 +1,9 @@
+class User
+  def update: (UserParams p) -> Integer
+end
+class Tag
+  def update: (TagParams p) -> String
+end
+class Admin
+  def update: (UserParams p) -> Integer
+end
