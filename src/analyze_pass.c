@@ -461,21 +461,23 @@ int lw_shared_next(int rec) { return lw_shared_ix.next[rec]; }
    #1302 from_hash/to_hash shape). Indexes both plain and `||=` ivar writes;
    callers filter by node kind and class. Reuses LWIndex's layout (scope-less,
    so the bucket key is name only). */
-static int ivw_is_write_kind(NodeKind k) {
-  return k == NK_InstanceVariableWriteNode || k == NK_InstanceVariableOrWriteNode;
-}
-
 static unsigned ivw_hash(const char *name) {
   unsigned h = 2166136261u;
   for (const char *p = name; p && *p; p++) { h ^= (unsigned char)*p; h *= 16777619u; }
   return h;
 }
 
+static const NodeKind ivw_write_kinds[2] = {
+  NK_InstanceVariableWriteNode, NK_InstanceVariableOrWriteNode};
+
 static void ivw_index_build(Compiler *c, LWIndex *ix) {
   const NodeTable *nt = c->nt;
+  /* Iterate only the ivar-write kinds (kind-grouped id lists) rather than the
+     whole table -- the write population is a small fraction of the node count,
+     and this build reruns whenever the table grows. Same move as
+     lw_index_build; consumers are order-independent existence walks. */
   int n = 0;
-  for (int id = 0; id < nt->count; id++)
-    if (ivw_is_write_kind(nt_kind(nt, id))) n++;
+  for (int t = 0; t < 2; t++) { int kn; nt_nodes_of_kind(nt, ivw_write_kinds[t], &kn); n += kn; }
   int cap = 16;
   while (cap < n * 2) cap <<= 1;
   ix->cap = cap;
@@ -484,14 +486,17 @@ static void ivw_index_build(Compiler *c, LWIndex *ix) {
   ix->head = (int *)malloc(sizeof(int) * cap);
   for (int i = 0; i < cap; i++) ix->head[i] = -1;
   int k = 0;
-  for (int id = 0; id < nt->count; id++) {
-    if (!ivw_is_write_kind(nt_kind(nt, id))) continue;
-    const char *nm = nt_str(nt, id, "name");
-    unsigned h = ivw_hash(nm) & (unsigned)(cap - 1);
-    ix->node[k] = id;
-    ix->next[k] = ix->head[h];
-    ix->head[h] = k;
-    k++;
+  for (int t = 0; t < 2; t++) {
+    int kn; const int *ids = nt_nodes_of_kind(nt, ivw_write_kinds[t], &kn);
+    for (int j = 0; j < kn; j++) {
+      int id = ids[j];
+      const char *nm = nt_str(nt, id, "name");
+      unsigned h = ivw_hash(nm) & (unsigned)(cap - 1);
+      ix->node[k] = id;
+      ix->next[k] = ix->head[h];
+      ix->head[h] = k;
+      k++;
+    }
   }
 }
 
@@ -500,6 +505,29 @@ static void ivw_index_build(Compiler *c, LWIndex *ix) {
 static int ivw_index_first(const LWIndex *ix, const char *name) {
   return ix->head[ivw_hash(name) & (unsigned)(ix->cap - 1)];
 }
+
+/* Long-lived ivar-write index behind mark_empty_hash_key_ctx's write-site
+   lookups -- the ivar analogue of lw_shared_ix. The bucket key is the ivar
+   name, a syntactic property of the write node that is stable across the
+   frozen fixpoint (the defining class is confirmed by the caller per hit, so
+   scope re-homing needs no re-key). Rebuilt on the same signal lw_shared uses:
+   node-table identity/growth, or a scope-index epoch tick. */
+static LWIndex ivw_shared_ix;
+static const NodeTable *ivw_shared_nt = NULL;
+static int ivw_shared_ntc = -1;
+static unsigned ivw_shared_gen = 0;
+int ivw_shared_first(Compiler *c, const char *name) {
+  unsigned gen = comp_scope_index_gen();
+  if (!comp_scope_index_is_frozen() ||
+      ivw_shared_nt != c->nt || ivw_shared_ntc != c->nt->count || ivw_shared_gen != gen) {
+    if (ivw_shared_nt) lw_index_free(&ivw_shared_ix);
+    ivw_index_build(c, &ivw_shared_ix);
+    ivw_shared_nt = c->nt; ivw_shared_ntc = c->nt->count; ivw_shared_gen = gen;
+  }
+  return ivw_index_first(&ivw_shared_ix, name);
+}
+int ivw_shared_node(int rec) { return ivw_shared_ix.node[rec]; }
+int ivw_shared_next(int rec) { return ivw_shared_ix.next[rec]; }
 
 /* `x, y = obj.m` where the callee's body ends in `return a, b` with statically
    known element types: yields those types so the destructured targets keep
