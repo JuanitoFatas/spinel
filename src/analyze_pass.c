@@ -2148,6 +2148,24 @@ int infer_write_types(Compiler *c) {
     if (pr != TY_UNKNOWN && (TyKind)lv->proc_ret != pr) { lv->proc_ret = (int)pr; changed = 1; }
   }
 
+  /* A slot already promoted to the append handle keeps that REPRESENTATION
+     across the recompute frame. The reset above re-derives `out = +""` as a
+     plain TY_STRING, and promote_append_accumulators -- which fires on a
+     TY_STRING slot -- then re-promotes it, so the two passes trade the slot
+     back and forth and the fixpoint never converges: every compile ran to the
+     128-iteration cap. TY_STRBUF *is* a String; only the storage differs, so
+     re-deriving the Ruby-level type must not clobber the choice. Same reason
+     infer_bigint_loop_locals re-seeds inside this frame. If the re-derived
+     type is neither String nor the handle, the promotion's precondition is
+     genuinely gone and the flag goes with it. */
+  for (int s = 0; s < c->nscopes; s++)
+    for (int i = 0; i < c->scopes[s].nlocals; i++) {
+      LocalVar *lv = &c->scopes[s].locals[i];
+      if (!lv->str_append) continue;
+      if (lv->type == TY_STRING) lv->type = TY_STRBUF;
+      else if (lv->type != TY_STRBUF) lv->str_append = 0;
+    }
+
   /* detect change vs the stashed old types */
   for (int s = 0; s < c->nscopes; s++)
     for (int i = 0; i < c->scopes[s].nlocals; i++) {
