@@ -2541,9 +2541,16 @@ else {
     #define EMIT_ARM(IS_RIGHT, TB) do { \
       if (IS_RIGHT) { if (res == TY_POLY && comp_ntype(c, right) != TY_POLY) emit_boxed(c, right, (TB)); else emit_expr(c, right, (TB)); } \
       else { if (res == TY_POLY && lt != TY_POLY) { /* box the temp by left type */ \
-               if (lt==TY_INT) buf_printf((TB), "sp_box_int(_t%d)", t); \
+               /* In `a && b` the kept-left arm is reached only when the left is
+                  FALSY, and for a scalar slot that means it holds the nil
+                  sentinel: box it as nil, or the result answers nil? with
+                  false and survives compact. `a || b` keeps a truthy left, so
+                  there the plain box is right. */ \
+               if (lt==TY_INT) { if (is_and) buf_puts((TB), "sp_box_nil()"); \
+                                 else buf_printf((TB), "sp_box_int(_t%d)", t); } \
                else if (lt==TY_STRING) buf_printf((TB), "sp_box_nullable_str(_t%d)", t); \
-               else if (lt==TY_FLOAT) buf_printf((TB), "sp_box_float(_t%d)", t); \
+               else if (lt==TY_FLOAT) { if (is_and) buf_puts((TB), "sp_box_nil()"); \
+                                        else buf_printf((TB), "sp_box_float(_t%d)", t); } \
                else if (lt==TY_BOOL) buf_printf((TB), "sp_box_bool(_t%d)", t); \
                else if (lt==TY_SYMBOL) buf_printf((TB), "(_t%d != (sp_sym)-1 ? sp_box_sym(_t%d) : sp_box_nil())", t, t); \
                else if (ty_is_object(lt)) buf_printf((TB), "sp_box_nullable_obj((void *)_t%d, %d)", t, ty_object_class(lt)); \
