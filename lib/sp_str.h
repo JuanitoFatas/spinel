@@ -26,9 +26,14 @@ static inline unsigned sp_str_lcache_hash(const char *s) {
   uintptr_t k = (uintptr_t)s;
   return (unsigned)((k ^ (k >> 4) ^ (k >> 12)) & (SP_STR_LCACHE_SIZE - 1));
 }
+/* 0xf1 is frozen -- an explicitly frozen heap string, and every string literal
+   (frozen string literals are permanent). Its contents can never change, so its
+   character length is the most cacheable of all; leaving it out meant #length,
+   #[] and every character index on a literal rescanned the whole string on each
+   call. 0xfd (the sp_String append buffer) stays out: that one's length moves. */
 static inline int sp_str_cacheable(const char *s) {
   unsigned char m = ((const unsigned char *)s)[-1];
-  return m == 0xfe || m == 0xfc || m == 0xff;
+  return m == 0xfe || m == 0xfc || m == 0xff || m == 0xf1;
 }
 static inline void sp_str_split_push(sp_StrArray*a,const char*p,size_t n){
   char*r=sp_str_alloc_raw(n+1);
