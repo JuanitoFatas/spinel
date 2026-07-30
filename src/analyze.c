@@ -6794,6 +6794,118 @@ static int strbuf_slot_eligible_shape(Compiler *c, const char *vn, Scope *vs, Lo
   return 1;
 }
 
+/* Append accumulators (`out = +""` ... `out << piece` in a loop): give the
+   local the growable sp_String handle so each append is amortized O(1). A
+   plain-string local reallocates and copies the whole accumulation on every
+   `<<`, which is quadratic in the number of appends -- bm_huffman spends 80%
+   of its time there and is the one benchmark Spinel loses to CRuby on.
+
+   The handle is not free: reading one demotes through a full copy, so this
+   only fires when the local is appended INSIDE a loop and never otherwise
+   read inside one. That is exactly the shape where the quadratic lives; an
+   accumulator read once after the loop pays a single copy for it.
+
+   Unlike the shared-mutable promotion below, this asks nothing about
+   aliasing, so it leaves str_shared alone: the local wants the storage, not
+   the identity semantics. */
+static void an_append_scan(Compiler *c, int node, int *app, int *rd, int cap, int *n_app, int *n_rd) {
+  const NodeTable *nt = c->nt;
+  if (node < 0) return;
+  const char *ty = nt_type(nt, node);
+  if (!ty) return;
+  /* a nested definition is a different scope: its locals are not these */
+  if (sp_streq(ty, "DefNode") || sp_streq(ty, "ClassNode") || sp_streq(ty, "ModuleNode")) return;
+  if (sp_streq(ty, "CallNode")) {
+    const char *nm = nt_str(nt, node, "name");
+    int recv = nt_ref(nt, node, "receiver");
+    int a = nt_ref(nt, node, "arguments");
+    int ac = 0; if (a >= 0) nt_arr(nt, a, "arguments", &ac);
+    if (nm && recv >= 0 && ac == 1 && (sp_streq(nm, "<<") || sp_streq(nm, "concat")) &&
+        nt_kind(nt, recv) == NK_LocalVariableReadNode) {
+      if (*n_app < cap) app[(*n_app)++] = recv;
+      /* the receiver read is the append itself, not a use: skip it below */
+      int nr0 = nt_num_refs(nt, node);
+      for (int i = 0; i < nr0; i++) {
+        int ch = nt_ref_at(nt, node, i);
+        if (ch != recv) an_append_scan(c, ch, app, rd, cap, n_app, n_rd);
+      }
+      int na0 = nt_num_arrs(nt, node);
+      for (int i = 0; i < na0; i++) {
+        int cnt = 0; const int *ids = nt_arr_at(nt, node, i, &cnt);
+        for (int k = 0; k < cnt; k++) an_append_scan(c, ids[k], app, rd, cap, n_app, n_rd);
+      }
+      return;
+    }
+  }
+  if (nt_kind(nt, node) == NK_LocalVariableReadNode) {
+    if (*n_rd < cap) rd[(*n_rd)++] = node;
+    return;
+  }
+  int nr = nt_num_refs(nt, node);
+  for (int i = 0; i < nr; i++) an_append_scan(c, nt_ref_at(nt, node, i), app, rd, cap, n_app, n_rd);
+  int na = nt_num_arrs(nt, node);
+  for (int i = 0; i < na; i++) {
+    int cnt = 0; const int *ids = nt_arr_at(nt, node, i, &cnt);
+    for (int k = 0; k < cnt; k++) an_append_scan(c, ids[k], app, rd, cap, n_app, n_rd);
+  }
+}
+
+static int promote_append_accumulators(Compiler *c) {
+  const NodeTable *nt = c->nt;
+  int changed = 0;
+  for (int L = 0; L < nt->count; L++) {
+    const char *lty = nt_type(nt, L);
+    if (!lty) continue;
+    int body = -1;
+    if (sp_streq(lty, "WhileNode") || sp_streq(lty, "UntilNode") || sp_streq(lty, "ForNode"))
+      body = nt_ref(nt, L, "statements");
+    else if (sp_streq(lty, "CallNode") && nt_ref(nt, L, "block") >= 0) {
+      /* Only a block that actually ITERATES: `proc {}` / `lambda {}` run once
+         (and their body's appends may be the caller's byref writes), so they
+         are not the repeated-append shape this is for. */
+      static const char *const ITER[] = {
+        "each", "each_with_index", "each_with_object", "each_entry", "each_pair",
+        "each_key", "each_value", "each_char", "each_line", "each_byte",
+        "each_slice", "each_cons", "reverse_each", "times", "upto", "downto",
+        "step", "loop", "map", "collect", "flat_map", "collect_concat",
+        "select", "filter", "reject", "sort_by", "min_by", "max_by",
+        "group_by", "partition", "filter_map", "inject", "reduce", "cycle",
+        "sum", "count", "tally_by", NULL };
+      const char *lnm = nt_str(nt, L, "name");
+      int iter = 0;
+      for (int k = 0; lnm && ITER[k] && !iter; k++) if (sp_streq(lnm, ITER[k])) iter = 1;
+      if (iter) body = nt_ref(nt, nt_ref(nt, L, "block"), "body");
+    }
+    if (body < 0) continue;
+    enum { CAP = 128 };
+    int app[CAP], rd[CAP], n_app = 0, n_rd = 0;
+    an_append_scan(c, body, app, rd, CAP, &n_app, &n_rd);
+    for (int i = 0; i < n_app; i++) {
+      const char *vn = nt_str(nt, app[i], "name");
+      Scope *vs = comp_scope_of(c, app[i]);
+      if (!vn || !vs) continue;
+      /* read elsewhere in this loop: the demoting copy would be the new
+         quadratic, so leave the local alone */
+      int read_in_loop = 0;
+      for (int j = 0; j < n_rd && !read_in_loop; j++)
+        if (comp_scope_of(c, rd[j]) == vs && nt_str(nt, rd[j], "name") &&
+            sp_streq(nt_str(nt, rd[j], "name"), vn)) read_in_loop = 1;
+      if (read_in_loop) continue;
+      LocalVar *lv = scope_local(vs, vn);
+      if (!lv || lv->type != TY_STRING) continue;
+      /* a celled or byref slot is shared storage whose writes must stay
+         visible through the other holder: leave the representation alone */
+      if (lv->is_cell || lv->byref_out || lv->is_param || lv->is_block_param) continue;
+      if (!strbuf_slot_eligible_shape(c, vn, vs, lv)) continue;
+      if (strbuf_mut_kind(c, vn, vs) != 1) continue;
+      lv->type = TY_STRBUF;
+      lv->str_append = 1;
+      changed = 1;
+    }
+  }
+  return changed;
+}
+
 static int promote_shared_stored_strings(Compiler *c) {
   int changed = 0;
   const NodeTable *nt = c->nt;
@@ -8193,6 +8305,7 @@ void analyze_program(Compiler *c) {
     ch |= infer_global_const_types(c);
     ch |= infer_multiwrite_const_types(c);
     ch |= promote_shared_stored_strings(c);
+    ch |= promote_append_accumulators(c);
     ch |= infer_ivar_types(c);
     ch |= infer_cvar_types(c);
     ch |= infer_inherited_ivars(c);
@@ -8305,6 +8418,7 @@ void analyze_program(Compiler *c) {
            each iteration's top, so a promote gated on STRING must see the
            freshly re-derived type, not the cleared UNKNOWN (#3227 P4) */
         ch |= promote_shared_stored_strings(c);
+        ch |= promote_append_accumulators(c);
         ch |= widen_shared_cmp_params(c);
         ch |= infer_cvar_types(c);
         ch |= infer_inherited_ivars(c);
@@ -9453,7 +9567,7 @@ void analyze_program(Compiler *c) {
     Scope *sc = &c->scopes[s];
     for (int i = 0; i < sc->nlocals; i++) {
       LocalVar *lv = &sc->locals[i];
-      if (lv->str_shared &&
+      if ((lv->str_shared || lv->str_append) &&
           (lv->type == TY_STRING || lv->type == TY_STR_ARRAY)) lv->type = TY_STRBUF;
     }
   }

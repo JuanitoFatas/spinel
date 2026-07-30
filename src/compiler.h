@@ -72,6 +72,12 @@ typedef struct {
                        `equal?` is handle identity, matching CRuby's mutable
                        String object semantics (#3227). Plain TY_STRBUF (this
                        flag 0) stays the copy-on-read build-in-a-loop refinement. */
+  int str_append;   /* (TY_STRBUF) an append accumulator: appended to inside a
+                       loop and never read inside one, so the growable handle
+                       makes each `<<` amortized O(1) instead of copying the
+                       whole accumulation. Durable, like str_shared: the type
+                       is re-asserted after the fixpoint, which a later
+                       assign-based pass would otherwise overwrite. */
 } LocalVar;
 
 typedef struct {
