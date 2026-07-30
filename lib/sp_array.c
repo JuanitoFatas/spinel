@@ -80,7 +80,9 @@ void sp_IntArray_replace(sp_IntArray*dst,sp_IntArray*src){dst->len=0;dst->start=
 void sp_IntArray_splice(sp_IntArray*a,mrb_int start,mrb_int len,const mrb_int*src,mrb_int srcn){
   if(!a)return;
   if(a->frozen){sp_raise_frozen_array_at(a, SP_BUILTIN_INT_ARRAY);return;}
-  SP_GC_ROOT(a);
+  /* The equal-length overwrite below allocates nothing, so it needs no root --
+     and it is the hot shape (optcarrot's per-tile `@bg_pixels[x, 8] = row`).
+     Root only on the way into the general path, which does allocate. */
   mrb_int alen=a->len,s=start;
   if(s<0)s+=alen;
   if(len<0){sp_raise_cls("IndexError",sp_sprintf("negative length (%lld)",(long long)len));return;}
@@ -92,6 +94,7 @@ void sp_IntArray_splice(sp_IntArray*a,mrb_int start,mrb_int len,const mrb_int*sr
      buffer (self-splice). This is the hot shape (optcarrot's per-tile
      `@bg_pixels[x, 8] = <8-elem row>`); the general path below allocates. */
   if(len==srcn){if(srcn>0)memmove(a->data+a->start+s,src,sizeof(mrb_int)*(size_t)srcn);return;}
+  SP_GC_ROOT(a);
   mrb_int*sb=NULL;
   if(srcn>0){sb=(mrb_int*)malloc(sizeof(mrb_int)*(size_t)srcn);if(!sb)sp_oom_die();memcpy(sb,src,sizeof(mrb_int)*(size_t)srcn);}
   mrb_int tail_from=s+len,tail_n=alen-tail_from;
@@ -105,7 +108,6 @@ void sp_IntArray_splice(sp_IntArray*a,mrb_int start,mrb_int len,const mrb_int*sr
 void sp_FloatArray_splice(sp_FloatArray*a,mrb_int start,mrb_int len,const mrb_float*src,mrb_int srcn){
   if(!a)return;
   if(a->frozen){sp_raise_frozen_array_at(a, SP_BUILTIN_FLT_ARRAY);return;}
-  SP_GC_ROOT(a);
   mrb_int alen=a->len,s=start;
   if(s<0)s+=alen;
   if(len<0){sp_raise_cls("IndexError",sp_sprintf("negative length (%lld)",(long long)len));return;}
@@ -113,6 +115,7 @@ void sp_FloatArray_splice(sp_FloatArray*a,mrb_int start,mrb_int len,const mrb_fl
   if(s>alen){sp_raise_cls("RuntimeError",sp_sprintf("index %lld out of range for typed-array splice (would require nil fill)",(long long)s));return;}
   if(s+len>alen)len=alen-s;
   if(len==srcn){if(srcn>0)memmove(a->data+s,src,sizeof(mrb_float)*(size_t)srcn);return;}  /* see the int form */
+  SP_GC_ROOT(a);
   mrb_float*sb=NULL;
   if(srcn>0){sb=(mrb_float*)malloc(sizeof(mrb_float)*(size_t)srcn);if(!sb)sp_oom_die();memcpy(sb,src,sizeof(mrb_float)*(size_t)srcn);}
   mrb_int tail_from=s+len,tail_n=alen-tail_from;
@@ -126,7 +129,6 @@ void sp_FloatArray_splice(sp_FloatArray*a,mrb_int start,mrb_int len,const mrb_fl
 void sp_StrArray_splice(sp_StrArray*a,mrb_int start,mrb_int len,const char*const*src,mrb_int srcn){
   if(!a)return;
   if(a->frozen){sp_raise_frozen_array_at(a, SP_BUILTIN_STR_ARRAY);return;}
-  SP_GC_ROOT(a);
   mrb_int alen=a->len,s=start;
   if(s<0)s+=alen;
   if(len<0){sp_raise_cls("IndexError",sp_sprintf("negative length (%lld)",(long long)len));return;}
@@ -134,6 +136,7 @@ void sp_StrArray_splice(sp_StrArray*a,mrb_int start,mrb_int len,const char*const
   if(s>alen){sp_raise_cls("RuntimeError",sp_sprintf("index %lld out of range for typed-array splice (would require nil fill)",(long long)s));return;}
   if(s+len>alen)len=alen-s;
   if(len==srcn){if(srcn>0)memmove(a->data+s,src,sizeof(const char*)*(size_t)srcn);return;}  /* see the int form */
+  SP_GC_ROOT(a);
   const char**sb=NULL;
   if(srcn>0){sb=(const char**)malloc(sizeof(const char*)*(size_t)srcn);if(!sb)sp_oom_die();memcpy(sb,src,sizeof(const char*)*(size_t)srcn);}
   /* Snapshot the tail into a *rooted* holder before truncating a->len: once
