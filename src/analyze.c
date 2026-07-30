@@ -6174,7 +6174,11 @@ static int mark_empty_hash_key_ctx(Compiler *c) {
       Scope *rs = comp_scope_of(c, recv);
       int rcid = rs ? rs->class_id : -1;
       if (!ivn || rcid < 0) continue;
-      for (int w = 0; w < nt->count; w++) {
+      /* Walk only the ivar-write nodes named `ivn` (index bucket) instead of
+         rescanning the whole table per read site -- an O(sites * nodes)
+         quadratic on ivar-heavy model graphs otherwise. */
+      for (int r = ivw_shared_first(c, ivn); r >= 0; r = ivw_shared_next(r)) {
+        int w = ivw_shared_node(r);
         if (nt_kind(nt, w) != NK_InstanceVariableWriteNode) continue;
         const char *wn = nt_str(nt, w, "name");
         Scope *ws = comp_scope_of(c, w);
@@ -6193,7 +6197,11 @@ static int mark_empty_hash_key_ctx(Compiler *c) {
     const char *ln = nt_str(nt, recv, "name");
     Scope *sc = comp_scope_of(c, recv);
     if (!ln || !sc || !local_all_writes_empty_hash(c, sc, ln)) continue;
-    for (int w = 0; w < nt->count; w++) {
+    /* Walk only the writes of local `ln` in this scope (index bucket) rather
+       than rescanning the whole table per read site (see the ivar case). */
+    int si = (int)(sc - c->scopes);
+    for (int r = lw_shared_first(c, ln, si); r >= 0; r = lw_shared_next(r)) {
+      int w = lw_shared_node(r);
       if (nt_kind(nt, w) != NK_LocalVariableWriteNode) continue;
       const char *wn = nt_str(nt, w, "name");
       if (!wn || !sp_streq(wn, ln) || comp_scope_of(c, w) != sc) continue;
