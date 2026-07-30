@@ -6514,56 +6514,153 @@ static int ctor_writes_ivar(Compiler *c, int ci, const char *ivname) {
    it TY_STRBUF (the container then unifies to a poly variant and emit_boxed
    wraps the sp_String* as SP_BUILTIN_STRBUF). Unmarked reads of the same
    local keep demoting to TY_STRING, so ordinary consumers are unchanged. */
+/* Both mutation probes below ask "over EVERY call whose receiver names this
+   local (or this ivar), was it mutated in place?" -- and the promotion asks
+   them per candidate, from inside whole-table walks, so a probe that rescans
+   the node table makes the pass O(candidates x nodes). On roundhouse's
+   lobsters emit (41k lines of generated Ruby, the #3115 tree one scale up)
+   the two together are ~35% of compile time in a `sample` profile.
+
+   The answer is a pure function of call-site syntax and scope homing, so one
+   sweep over the CallNode kind list computes it for EVERY key at once into a
+   (name, key) table the probes then read in O(1). Cached while the scope index
+   is frozen and stamped with comp_scope_index_gen() -- the same invalidation
+   the LWIndex behind local_all_writes_empty_hash rides; while unfrozen it
+   rebuilds per query, which costs one kind-list walk, strictly less than the
+   whole-table scan it replaces. */
+typedef struct {
+  const char **name;  /* receiver name, borrowed from the node table */
+  int *key;           /* scope index (locals) / class id (ivars) */
+  signed char *val;   /* 1 = mutated in place, -1 = disqualified */
+  int *next;          /* next record in the same bucket, or -1 */
+  int *head;          /* hash buckets: head record index, or -1 */
+  int cap;            /* bucket count (power of two) */
+  int n, ncap;        /* records used / allocated */
+} SbMutTab;
+
+static unsigned sb_mut_hash(const char *name, int key) {
+  unsigned h = 2166136261u ^ (unsigned)key;
+  for (const char *p = name; p && *p; p++) { h ^= (unsigned char)*p; h *= 16777619u; }
+  return h;
+}
+
+/* `n` bounds the record count: the sweep adds at most one record per call
+   node, so a table sized to the CallNode population never fills. */
+static void sb_mut_tab_init(SbMutTab *t, int n) {
+  int cap = 16;
+  while (cap < n * 2) cap <<= 1;
+  t->cap = cap; t->n = 0; t->ncap = n > 0 ? n : 1;
+  t->name = (const char **)malloc(sizeof(const char *) * t->ncap);
+  t->key = (int *)malloc(sizeof(int) * t->ncap);
+  t->val = (signed char *)malloc(sizeof(signed char) * t->ncap);
+  t->next = (int *)malloc(sizeof(int) * t->ncap);
+  t->head = (int *)malloc(sizeof(int) * cap);
+  for (int i = 0; i < cap; i++) t->head[i] = -1;
+}
+
+static void sb_mut_tab_free(SbMutTab *t) {
+  free((void *)t->name); free(t->key); free(t->val); free(t->next); free(t->head);
+}
+
+/* Status cell for (name, key); appends a fresh 0 cell when `add` and absent. */
+static signed char *sb_mut_tab_slot(SbMutTab *t, const char *name, int key, int add) {
+  unsigned h = sb_mut_hash(name, key) & (unsigned)(t->cap - 1);
+  for (int r = t->head[h]; r >= 0; r = t->next[r])
+    if (t->key[r] == key && sp_streq(t->name[r], name)) return &t->val[r];
+  if (!add || t->n >= t->ncap) return NULL;
+  int r = t->n++;
+  t->name[r] = name; t->key[r] = key; t->val[r] = 0;
+  t->next[r] = t->head[h]; t->head[h] = r;
+  return &t->val[r];
+}
+
+/* -1 wins over 1 whichever order the calls appear, matching the scans' early
+   `return -1`; 1 only lifts a cell still at 0. */
+static void sb_mut_tab_note(SbMutTab *t, const char *name, int key, signed char v) {
+  signed char *slot = sb_mut_tab_slot(t, name, key, 1);
+  if (slot && (v < 0 || *slot == 0)) *slot = v;
+}
+
+static void sb_mut_tabs_build(Compiler *c, SbMutTab *lt, SbMutTab *it, int toplevel) {
+  const NodeTable *nt = c->nt;
+  int ncalls = 0;
+  nt_nodes_of_kind(nt, NK_CallNode, &ncalls);
+  sb_mut_tab_init(lt, ncalls);
+  sb_mut_tab_init(it, ncalls);
+  NT_FOREACH_KIND(nt, NK_CallNode, u) {
+    int ur = nt_ref(nt, u, "receiver");
+    if (ur < 0) continue;
+    NodeKind rk = nt_kind(nt, ur);
+    if (rk != NK_LocalVariableReadNode && rk != NK_InstanceVariableReadNode) continue;
+    const char *urn = nt_str(nt, ur, "name");
+    const char *un = nt_str(nt, u, "name");
+    if (!urn || !un) continue;
+    size_t ul = strlen(un);
+    Scope *us = comp_scope_of(c, ur);
+    if (rk == NK_LocalVariableReadNode) {
+      if (sp_str_mutator(un, SP_MUT_LOCAL))
+        sb_mut_tab_note(lt, urn, us ? (int)(us - c->scopes) : -1, 1);
+      else if (ul > 0 && un[ul - 1] == '!')
+        sb_mut_tab_note(lt, urn, us ? (int)(us - c->scopes) : -1, -1);
+      continue;
+    }
+    signed char v = 0;
+    if (sp_str_mutator(un, SP_MUT_IVAR)) v = 1;
+    else if (sp_streq(un, "insert") || sp_streq(un, "slice!") ||
+             sp_streq(un, "[]=") || sp_streq(un, "setbyte") ||
+             (ul > 0 && un[ul - 1] == '!')) v = -1;
+    else continue;
+    int ucid = -1;
+    if (us && !us->is_cmethod) ucid = us->class_id >= 0 ? us->class_id : toplevel;
+    sb_mut_tab_note(it, urn, ucid, v);
+  }
+}
+
+static SbMutTab sb_local_mut_tab, sb_ivar_mut_tab;
+static const NodeTable *sb_mut_nt = NULL;
+static int sb_mut_ntc = -1;
+static int sb_mut_toplevel = -1;
+static unsigned sb_mut_ntver = 0;
+static unsigned sb_mut_gen = 0;
+static void sb_mut_tabs_sync(Compiler *c) {
+  unsigned gen = comp_scope_index_gen();
+  /* A top-level ivar keys on the Toplevel class id, which comp_class_index
+     only answers once that class has been seeded -- a fact that arrives
+     independently of the scope-index epoch, so it joins the stamp rather than
+     being resolved once and cached wrong (the #3227 P4 top-level case). */
+  int toplevel = comp_class_index(c, "Toplevel");
+  /* nt->version as well as count: a rename pass rewrites a call's `name` in
+     place (nt_set_str) without growing the table, and this index is keyed by
+     name. Worst case the version churns and we rebuild per query -- one
+     kind-list walk, still less than the whole-table scan this replaces. */
+  if (comp_scope_index_is_frozen() && sb_mut_nt == c->nt &&
+      sb_mut_ntc == c->nt->count && sb_mut_ntver == c->nt->version &&
+      sb_mut_gen == gen && sb_mut_toplevel == toplevel)
+    return;
+  if (sb_mut_nt) { sb_mut_tab_free(&sb_local_mut_tab); sb_mut_tab_free(&sb_ivar_mut_tab); }
+  sb_mut_tabs_build(c, &sb_local_mut_tab, &sb_ivar_mut_tab, toplevel);
+  sb_mut_nt = c->nt; sb_mut_ntc = c->nt->count; sb_mut_ntver = c->nt->version;
+  sb_mut_gen = gen; sb_mut_toplevel = toplevel;
+}
+
 /* In-place mutation status of string local `vn` in scope `vs`:
    1 = mutated via a handle-capable mutator, -1 = disqualified (a mutator
    codegen cannot yet run in place on the handle), 0 = not mutated. */
 static int strbuf_mut_kind(Compiler *c, const char *vn, Scope *vs) {
-  const NodeTable *nt = c->nt;
-  int mutated = 0;
-  for (int u = 0; u < nt->count; u++) {
-    const char *uty = nt_type(nt, u);
-    if (!uty || !sp_streq(uty, "CallNode")) continue;
-    int ur = nt_ref(nt, u, "receiver");
-    if (ur < 0 || !nt_type(nt, ur) ||
-        !sp_streq(nt_type(nt, ur), "LocalVariableReadNode")) continue;
-    const char *urn = nt_str(nt, ur, "name");
-    if (!urn || !sp_streq(urn, vn) || comp_scope_of(c, ur) != vs) continue;
-    const char *un = nt_str(nt, u, "name");
-    if (!un) continue;
-    size_t ul = strlen(un);
-    if (sp_str_mutator(un, SP_MUT_LOCAL)) mutated = 1;
-    else if (ul > 0 && un[ul - 1] == '!')
-      return -1;
-  }
-  return mutated;
+  if (!vn) return 0;
+  sb_mut_tabs_sync(c);
+  signed char *v = sb_mut_tab_slot(&sb_local_mut_tab, vn,
+                                   vs ? (int)(vs - c->scopes) : -1, 0);
+  return v ? *v : 0;
 }
 /* In-place mutation status of ivar `nm` of class `cid` (same contract as
    strbuf_mut_kind). The supported set is narrower: the shadow-copy shim
    cannot rename an ivar, so []=/insert/slice!/setbyte disqualify. */
 static int strbuf_ivar_mut_kind(Compiler *c, int cid, const char *nm) {
-  const NodeTable *nt = c->nt;
-  int mutated = 0;
-  for (int u = 0; u < nt->count; u++) {
-    if (nt_kind(nt, u) != NK_CallNode) continue;
-    int ur = nt_ref(nt, u, "receiver");
-    if (ur < 0 || nt_kind(nt, ur) != NK_InstanceVariableReadNode) continue;
-    const char *urn = nt_str(nt, ur, "name");
-    if (!urn || !sp_streq(urn, nm)) continue;
-    Scope *us = comp_scope_of(c, ur);
-    int ucid = -1;
-    if (us && !us->is_cmethod && us->class_id >= 0) ucid = us->class_id;
-    else if (us && !us->is_cmethod && us->class_id < 0) ucid = comp_class_index(c, "Toplevel");
-    if (ucid != cid) continue;
-    const char *un = nt_str(nt, u, "name");
-    if (!un) continue;
-    size_t ul = strlen(un);
-    if (sp_str_mutator(un, SP_MUT_IVAR)) mutated = 1;
-    else if (sp_streq(un, "insert") || sp_streq(un, "slice!") ||
-             sp_streq(un, "[]=") || sp_streq(un, "setbyte") ||
-             (ul > 0 && un[ul - 1] == '!'))
-      return -1;
-  }
-  return mutated;
+  if (!nm) return 0;
+  sb_mut_tabs_sync(c);
+  signed char *v = sb_mut_tab_slot(&sb_ivar_mut_tab, nm, cid, 0);
+  return v ? *v : 0;
 }
 /* The owning class of an ivar READ/WRITE node under the same storage rules
    the emitters use (instance method -> class, top-level -> Toplevel; class
