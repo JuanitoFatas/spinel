@@ -2069,6 +2069,134 @@ static size_t sp_fsl_line_at(const char *text, size_t at) {
   return line;
 }
 
+/* One `require` / `require_relative` occurrence, located by a scan that knows
+   where string literals, comments and heredoc bodies are -- so the word inside
+   a fixture string is not mistaken for a real one.
+
+   `kw` points at the keyword and `expr_end` just past the whole call (past the
+   closing paren in the parenthesized form, past the closing quote otherwise).
+   `margin` is 1 when the keyword starts the line. Only then may the inlined
+   content take the statement's place: anywhere else -- indented inside a
+   method or class body, in a condition, on an assignment's right-hand side --
+   the library belongs at the top of the program (a module cannot be defined
+   inside a method body, and a class nested in a reopened class is not the same
+   class), with the call itself replaced by the value it answers. */
+typedef struct {
+  char *kw, *arg, *expr_end;
+  size_t arg_len;
+  int margin;
+} SpReqHit;
+
+static int sp_req_ident_char(char ch) {
+  return ch == '_' || (ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') ||
+         (ch >= '0' && ch <= '9');
+}
+
+/* The quoted argument of a require starting at `p` (just past the keyword),
+   in either the bare or the parenthesized form, confined to one line. */
+static int sp_req_parse_arg(char *p, char *line_end, SpReqHit *h) {
+  int paren = 0;
+  while (p < line_end && (*p == ' ' || *p == '\t')) p++;
+  if (p < line_end && *p == '(') { paren = 1; p++; while (p < line_end && (*p == ' ' || *p == '\t')) p++; }
+  if (p >= line_end || (*p != '"' && *p != '\'')) return 0;
+  char q = *p++;
+  char *arg = p;
+  while (p < line_end && *p != q) {
+    if (*p == '\\') p++;
+    p++;
+  }
+  if (p >= line_end || *p != q) return 0;
+  h->arg = arg;
+  h->arg_len = (size_t)(p - arg);
+  p++;                                  /* past the closing quote */
+  if (paren) {
+    while (p < line_end && (*p == ' ' || *p == '\t')) p++;
+    if (p >= line_end || *p != ')') return 0;
+    p++;
+  }
+  h->expr_end = p;
+  return 1;
+}
+
+/* The first `word` call at or after `from`. Returns 0 when there is none. */
+static int sp_require_find(char *buf, char *from, const char *word, SpReqHit *out) {
+  size_t wlen = strlen(word);
+  char hd_term[128];   /* the pending heredoc terminator, "" when not in one */
+  hd_term[0] = 0;
+  char *line = buf;
+  while (*line) {
+    char *line_end = strchr(line, '\n');
+    if (!line_end) line_end = line + strlen(line);
+    if (hd_term[0]) {
+      /* inside a heredoc body: the terminator line ends it, nothing else counts */
+      char *t = line;
+      while (t < line_end && (*t == ' ' || *t == '\t')) t++;
+      size_t tl = strlen(hd_term);
+      if ((size_t)(line_end - t) == tl && strncmp(t, hd_term, tl) == 0) hd_term[0] = 0;
+      line = (*line_end == '\n') ? line_end + 1 : line_end;
+      continue;
+    }
+    for (char *p = line; p < line_end; p++) {
+      if (*p == '#') break;                                  /* comment to end of line */
+      if (*p == '"' || *p == '\'') {                         /* skip a string literal */
+        char q = *p++;
+        while (p < line_end && *p != q) { if (*p == '\\') p++; p++; }
+        if (p >= line_end) break;                            /* unterminated: give up on the line */
+        continue;
+      }
+      if (p[0] == '<' && p + 1 < line_end && p[1] == '<' &&
+          (p == line || !sp_req_ident_char(p[-1]))) {        /* a heredoc opener */
+        char *t = p + 2;
+        if (t < line_end && (*t == '~' || *t == '-')) t++;
+        char tq = 0;
+        if (t < line_end && (*t == '"' || *t == '\'')) tq = *t++;
+        char *ts = t;
+        while (t < line_end && sp_req_ident_char(*t)) t++;
+        if (t > ts && (!tq || (t < line_end && *t == tq))) {
+          size_t tl = (size_t)(t - ts);
+          if (tl < sizeof hd_term) { memcpy(hd_term, ts, tl); hd_term[tl] = 0; }
+        }
+        continue;
+      }
+      if (*p != word[0] || strncmp(p, word, wlen) != 0) continue;
+      if (sp_req_ident_char(p[wlen])) continue;              /* require_relative vs require */
+      if (p > buf && (sp_req_ident_char(p[-1]) || p[-1] == '.' || p[-1] == ':' ||
+                      p[-1] == '@' || p[-1] == '$')) continue;
+      if (p < from) continue;
+      SpReqHit h;
+      memset(&h, 0, sizeof h);
+      if (!sp_req_parse_arg(p + wlen, line_end, &h)) continue;
+      h.kw = p;
+      h.margin = (p == line);
+      *out = h;
+      return 1;
+    }
+    line = (*line_end == '\n') ? line_end + 1 : line_end;
+  }
+  return 0;
+}
+
+/* Rebuild `*result` with `content` inlined at the top of the program and the
+   call itself replaced by `value`, so the statement around the require -- a
+   condition, an assignment, a method body -- survives intact. */
+static void sp_req_hoist_splice(char **result, unsigned char **fsl, size_t *fsl_n,
+                                const SpReqHit *h, const char *content,
+                                unsigned char *cfsl, size_t cfsl_n,
+                                const char *value) {
+  size_t kw_off = (size_t)(h->kw - *result), end_off = (size_t)(h->expr_end - *result);
+  size_t rlen = strlen(*result), clen = strlen(content), vlen = strlen(value);
+  sp_fsl_splice(fsl, fsl_n, 0, 0, cfsl, cfsl_n);
+  char *nr = malloc(rlen + clen + vlen + 2);
+  size_t o = 0;
+  memcpy(nr + o, content, clen);                         o += clen;
+  if (clen > 0 && content[clen - 1] != '\n') nr[o++] = '\n';
+  memcpy(nr + o, *result, kw_off);                       o += kw_off;
+  memcpy(nr + o, value, vlen);                           o += vlen;
+  memcpy(nr + o, *result + end_off, rlen - end_off + 1);
+  free(*result);
+  *result = nr;
+}
+
 static char *resolve_requires(const char *source, const char *source_path,
                               unsigned char **fsl_out, size_t *fsl_n_out) {
   /* Get base directory */
@@ -2085,50 +2213,27 @@ static char *resolve_requires(const char *source, const char *source_path,
      splice below so each literal keeps its own file's flag. */
   size_t fsl_n;
   unsigned char *fsl = sp_fsl_make(source, sp_scan_fsl_pragma(source), &fsl_n);
-  char *pos;
-  char *scan_from = result;
-  while ((pos = strstr(scan_from, "require_relative")) != NULL) {
-    /* Check it's at start of line. If the match is mid-line (e.g.
-       the word appears in a comment or string), advance past it and
-       keep scanning the rest of the file — don't abort the whole
-       loop, since later lines may have legitimate require_relative
-       statements. */
-    if (pos != result && *(pos - 1) != '\n') {
-      scan_from = pos + 1;
-      continue;
-    }
+  /* Same scan the plain requires use: wherever the call stands, and never the
+     word as it appears inside a string, comment or heredoc body. */
+  for (;;) {
+    SpReqHit hit;
+    if (!sp_require_find(result, result, "require_relative", &hit)) break;
+    char *pos = hit.kw, *expr_end = hit.expr_end;
     char *line_end = strchr(pos, '\n');
     if (!line_end) line_end = pos + strlen(pos);
-
-    /* Extract quoted path */
-    char *q1 = strchr(pos, '"');
-    char *q2 = strchr(pos, '\'');
-    char quote_char;
-    char *start;
-    if (q1 && q1 < line_end && (!q2 || q1 < q2)) {
-      quote_char = '"';
-      start = q1 + 1;
-    }
-else if (q2 && q2 < line_end) {
-      quote_char = '\'';
-      start = q2 + 1;
-    }
-else { scan_from = pos + 1; continue; }
-
-    char *end = strchr(start, quote_char);
-    if (!end || end > line_end) { scan_from = pos + 1; continue; }
-
-    size_t path_len = end - start;
     /* Issue #765: bail rather than silently truncating overlong paths
        into the fixed-size buffers. */
-    if (path_len >= sizeof(((struct {char x[512];}*)0)->x)) { scan_from = pos + 1; continue; }
+    if (hit.arg_len >= 512) break;
     char rel_path[512];
-    snprintf(rel_path, sizeof(rel_path), "%.*s", (int)path_len, start);
+    snprintf(rel_path, sizeof(rel_path), "%.*s", (int)hit.arg_len, hit.arg);
+    /* What the call answers: true when this is the require that read the
+       file, false when something already had (#3453). */
+    const char *req_val = "true";
 
     /* Build full path */
     char full_path[1024];
     int fp_n = snprintf(full_path, sizeof(full_path), "%s/%s", dir, rel_path);
-    if (fp_n < 0 || (size_t)fp_n >= sizeof(full_path)) { scan_from = pos + 1; continue; }
+    if (fp_n < 0 || (size_t)fp_n >= sizeof(full_path)) break;
     /* Collapse "." / ".." before appending ".rb", so a target ending in
        ".." resolves to the parent dir's `<dir>.rb` rather than "...rb". */
     sp_normalize_dots(full_path);
@@ -2146,6 +2251,7 @@ else { scan_from = pos + 1; continue; }
       content = strdup("# require_relative skipped (already included)");
       cfsl = sp_fsl_make(content, 0, &cfsl_n);
       free(canonical);
+      req_val = "false";
     }
 else {
       sp_mark_path_included(canonical);
@@ -2176,8 +2282,29 @@ else {
     content = sp_wrap_included(content, full_path);
     sp_fsl_pad_wrap(&cfsl, &cfsl_n);
 
-    /* Replace the line */
-    size_t line_len = (line_end - pos) + ((*line_end == '\n') ? 1 : 0);
+    /* The call's value is live (a condition, an assignment, a receiver) or a
+       trailing modifier would be stranded: inline the file ahead of the line
+       and leave the value in the call's place (#3454). */
+    {
+      char *trail = expr_end;
+      while (*trail == ' ' || *trail == '\t') trail++;
+      int has_modifier = (*trail != '\n' && *trail != '\r' && *trail != ';' &&
+                          *trail != '\0' && *trail != '#');
+      if (!hit.margin || has_modifier) {
+        sp_req_hoist_splice(&result, &fsl, &fsl_n, &hit, content, cfsl, cfsl_n, req_val);
+        free(cfsl);
+        free(content);
+        continue;
+      }
+    }
+
+    /* Replace the statement, consuming its trailing whitespace and single
+       newline; anything else on the line (`require_relative 'x'; code`) stays,
+       pushed onto its own line by the inserted content's trailing newline. */
+    char *stmt_end = expr_end;
+    while (*stmt_end == ' ' || *stmt_end == '\t') stmt_end++;
+    if (*stmt_end == '\n') stmt_end++;
+    size_t line_len = (size_t)(stmt_end - pos);
     size_t content_len = strlen(content);
     size_t result_len = strlen(result);
     size_t before_len = pos - result;
@@ -2196,8 +2323,6 @@ else {
 
     free(result);
     result = new_result;
-    /* Buffer reallocated; restart scan from the top of the new buffer. */
-    scan_from = result;
     free(content);
   }
   free(dir);
@@ -2228,10 +2353,26 @@ static int sp_lib_is_native(const char *name) {
 static int sp_require_tolerated(const char *name) {
   /* "ffi": the builtin FFI DSL accepts the ffi gem's spellings
      (attach_function/callback, :string/:pointer/... types, extend
-     FFI::Library as a no-op), so the require is satisfied natively. */
-  static const char *const tolerated[] = { "thread", "enumerator", "fiber", "ffi", NULL };
+     FFI::Library as a no-op), so the require is satisfied natively.
+     "rational" / "complex": both classes are built in, so the require has
+     nothing to load and nothing to warn about -- CRuby satisfies them
+     silently for the same reason (#3455). */
+  static const char *const tolerated[] = { "thread", "enumerator", "fiber", "ffi",
+                                           "rational", "complex", NULL };
   for (int i = 0; tolerated[i]; i++) {
     if (strcmp(name, tolerated[i]) == 0) return 1;
+  }
+  return 0;
+}
+
+/* A library CRuby already has loaded when the program starts, so its require
+   answers false rather than true even the first time it is written. Spinel is
+   in the same position for these: Set is spliced into every program that uses
+   it, so "already available" is the accurate answer here too (#3453). */
+static int sp_require_preloaded(const char *name) {
+  static const char *const preloaded[] = { "set", NULL };
+  for (int i = 0; preloaded[i]; i++) {
+    if (strcmp(name, preloaded[i]) == 0) return 1;
   }
   return 0;
 }
@@ -2272,55 +2413,30 @@ static char *resolve_plain_requires(char *source, const char *exe_path,
   strcat(lib_dir, "/lib");
 
   char *result = source;
-  char *pos;
-  /* `scan` lets us step past a computed-argument require without aborting
-     the loop; it resets to `result` after each rebuild below. */
-  char *scan = result;
-  /* Match a `require` at the very start of the buffer (offset 0) or
-     immediately after a newline. Re-checking offset 0 every iteration --
-     not just while `result == source` -- is what lets a first-line
-     `require` still be processed when a later `require` exists: once the
-     buffer is rebuilt below, `result != source`, and the old condition
-     stranded the line-1 require. */
+  /* The scan finds a `require` wherever it stands -- at the margin, indented
+     inside a body, or in the middle of an expression -- and skips the ones a
+     string, comment or heredoc only appears to contain. A computed argument
+     (`require File.expand_path('x', __dir__)`) matches nothing and is left
+     alone: grabbing the first quote on the line would mistake an inner string
+     literal for the lib name and strand the rest of the expression (#1383).
+     Each splice rebuilds the buffer, so the scan restarts from the top; the
+     stubs it leaves behind are comments, which the scan skips. */
   for (;;) {
-    if (scan == result && strncmp(result, "require ", 8) == 0) {
-      pos = result;
-    }
-else {
-      pos = strstr(scan, "\nrequire ");
-      if (pos == NULL) break;
-      pos++; /* skip the matched newline */
-    }
+    SpReqHit hit;
+    if (!sp_require_find(result, result, "require", &hit)) break;
+    char *pos = hit.kw, *expr_end = hit.expr_end;
     char *line_end = strchr(pos, '\n');
     if (!line_end) line_end = pos + strlen(pos);
 
-    /* Only a bare string-literal argument is inlined. A computed argument
-       (`require File.expand_path('x', __dir__)`, `require some_const`) is
-       left untouched: grabbing the first quote on the line would mistake an
-       inner string literal for the lib name and strand the rest of the
-       expression, producing invalid syntax. Skip past it and keep
-       scanning later lines. (#1383) */
-    {
-      const char *arg = pos + 8;
-      while (arg < line_end && (*arg == ' ' || *arg == '\t')) arg++;
-      if (arg >= line_end || (*arg != '"' && *arg != '\'')) {
-        scan = line_end;
-        continue;
-      }
-    }
-
-    /* Must be: require "name" or require 'name' */
-    char *q1 = strchr(pos + 7, '"');
-    char *q2 = strchr(pos + 7, '\'');
-    char *start; char quote_char;
-    if (q1 && q1 < line_end && (!q2 || q1 < q2)) { quote_char = '"'; start = q1 + 1; }
-    else if (q2 && q2 < line_end) { quote_char = '\''; start = q2 + 1; }
-    else break;
-    char *end = strchr(start, quote_char);
-    if (!end || end > line_end) break;
-
     char lib_name[256];
-    snprintf(lib_name, sizeof(lib_name), "%.*s", (int)(end - start), start);
+    if (hit.arg_len >= sizeof lib_name) break;
+    snprintf(lib_name, sizeof(lib_name), "%.*s", (int)hit.arg_len, hit.arg);
+    /* What the call answers, in CRuby's terms: true when this require is what
+       loads the library, false when it was already there (a repeat, or a
+       capability Spinel provides without loading anything), and nil for a
+       require Spinel could not satisfy at all -- where CRuby would have raised
+       LoadError rather than answer (#3453). */
+    const char *req_val = "nil";
     char lib_path[1024];
     snprintf(lib_path, sizeof(lib_path), "%s/%s", lib_dir, lib_name);
     {
@@ -2339,6 +2455,7 @@ else {
     if (sp_path_already_included(canonical)) {
       content = strdup("# require skipped (already included)");
       free(canonical);
+      req_val = "false";
     }
 else {
       sp_mark_path_included(canonical);
@@ -2405,12 +2522,14 @@ else {
              so the C-native feature (e.g. io/console) becomes available. */
           sp_feature_mark(lib_name);
           content = strdup("# require provided by Spinel runtime");
+          req_val = "false";   /* already there: nothing was loaded */
         }
 else if (sp_require_tolerated(lib_name)) {
           /* A core capability Spinel provides without a file (Thread,
              Enumerator, Fiber, the ffi DSL); the require is a harmless
              no-op, like modern CRuby -- gate or no gate. */
           content = strdup("# require no-op (core feature)");
+          req_val = "false";   /* already there: nothing was loaded */
         }
 else if (g_require_gate) {
           /* Whole-program AOT: an unsatisfiable require can never be provided, so
@@ -2432,6 +2551,7 @@ else {
         /* A bundled lib/<name>.rb was found and spliced; record the feature so
            the require-gate enables any C-native methods it stands in for. */
         sp_feature_mark(lib_name);
+        req_val = "true";   /* this require is what loaded it */
         char *resolved = resolve_requires(content, lib_path, &cfsl, &cfsl_n);
         free(content);
         content = resolved;
@@ -2439,44 +2559,32 @@ else {
     }
     /* Stub arms above leave cfsl NULL: their content is a one-line comment. */
     if (!cfsl) cfsl = sp_fsl_make(content, 0, &cfsl_n);
-
-    /* A trailing same-line modifier (`rescue`, `if`, `unless`, `and`,
-       `&&`, ...) puts the require in expression position: `require 'x'
-       rescue nil`. Replacing it with inlined statements or a comment
-       strands the modifier and Prism reports `unexpected 'rescue'`.
-       Substitute a `nil` expression instead so the modifier attaches;
-       an optional/unavailable require degrades to nil, which is what the
-       `rescue` guards for. `;`, `#`, newline and EOF are statement
-       boundaries, not modifiers, and keep the normal inlining path. */
-    {
-      char *trail = end + 1;
-      while (*trail == ' ' || *trail == '\t') trail++;
-      /* `\r` is part of a CRLF line ending, not a modifier: treat it as a
-         statement boundary so Windows sources keep the normal inlining
-         path. */
-      if (*trail != '\n' && *trail != '\r' && *trail != ';' &&
-          *trail != '\0' && *trail != '#') {
-        free(content);
-        free(cfsl);   /* same-line `nil` substitution: line count unchanged */
-        size_t rl_len = (size_t)((end + 1) - pos);   /* the `require 'x'` span */
-        size_t result_len = strlen(result);
-        size_t before_len = (size_t)(pos - result);
-        char *new_result = malloc(result_len - rl_len + 4);
-        memcpy(new_result, result, before_len);
-        memcpy(new_result + before_len, "nil", 3);
-        memcpy(new_result + before_len + 3, pos + rl_len,
-               result_len - before_len - rl_len + 1);
-        free(result);
-        result = new_result;
-        scan = result;
-        continue;
-      }
-    }
+    if (sp_require_preloaded(lib_name)) req_val = "false";
 
     /* Debug: marker-wrap so plain-require'd lib content doesn't corrupt the
        line map's accounting for code after the require. No-op without --debug. */
     content = sp_wrap_included(content, lib_path);
     sp_fsl_pad_wrap(&cfsl, &cfsl_n);
+
+    /* The call's value is live: the require sits in a condition, an
+       assignment, a receiver chain, or carries a trailing modifier
+       (`require 'x' rescue nil`) that a comment in its place would strand.
+       Inline the library ahead of the line and leave the value behind, so the
+       statement around it survives and answers what CRuby answers (#3454). */
+    {
+      char *trail = expr_end;
+      while (*trail == ' ' || *trail == '\t') trail++;
+      /* `\r` is part of a CRLF line ending, not a modifier: treat it as a
+         statement boundary so Windows sources keep the normal inlining path. */
+      int has_modifier = (*trail != '\n' && *trail != '\r' && *trail != ';' &&
+                          *trail != '\0' && *trail != '#');
+      if (!hit.margin || has_modifier) {
+        sp_req_hoist_splice(&result, fsl, fsl_n, &hit, content, cfsl, cfsl_n, req_val);
+        free(cfsl);
+        free(content);
+        continue;
+      }
+    }
 
     /* Replace only the `require "name"` statement itself, not the whole
        line, so `require "x"; code` keeps `code`. Consume trailing
@@ -2484,7 +2592,7 @@ else {
        require on its own line leaves no blank line); stop at `;` or any
        other trailing code, which the inserted content's trailing newline
        then pushes onto its own line. */
-    char *stmt_end = end + 1;  /* just past the closing quote */
+    char *stmt_end = expr_end;  /* just past the call */
     while (*stmt_end == ' ' || *stmt_end == '\t') stmt_end++;
     int consumed_nl = (*stmt_end == '\n');
     if (consumed_nl) stmt_end++;
@@ -2509,7 +2617,6 @@ else {
     memcpy(new_result + before_len + content_len, pos + line_len, result_len - before_len - line_len + 1);
     free(result);
     result = new_result;
-    scan = result;
     free(content);
   }
   return result;
