@@ -8846,6 +8846,31 @@ int emit_poly_call(Compiler *c, int id, Buf *b) {
      correct for any hash this mutator never (successfully) ran on. */
   if (sp_streq(name, "compare_by_identity"))  /* any arity: identity hashing is unsupported */
     unsupported(c, id, "Hash#compare_by_identity (identity-keyed hashing)");
+  /* The one/two-String-argument transforms on a boxed receiver: a String
+     arriving through a poly slot (a Fiber#resume value, a container read) had
+     no arm for these and raised NoMethodError naming String, which is what it
+     was. A regexp pattern keeps the dedicated regexp emitters. */
+  if (recv >= 0 && rt == TY_POLY && nt_ref(nt, id, "block") < 0 &&
+      !user_defines_or_reads(c, name)) {
+    if (sp_streq(name, "squeeze") && argc == 1) {
+      buf_puts(b, "sp_str_squeeze_chars(sp_poly_to_s("); emit_expr(c, recv, b);
+      buf_puts(b, "), "); emit_str_expr(c, argv[0], b); buf_puts(b, ")");
+      return 1;
+    }
+    if (sp_streq(name, "tr") && argc == 2) {
+      buf_puts(b, "sp_str_tr(sp_poly_to_s("); emit_expr(c, recv, b);
+      buf_puts(b, "), "); emit_str_expr(c, argv[0], b);
+      buf_puts(b, ", "); emit_str_expr(c, argv[1], b); buf_puts(b, ")");
+      return 1;
+    }
+    if ((sp_streq(name, "sub") || sp_streq(name, "gsub")) && argc == 2 &&
+        comp_ntype(c, argv[0]) == TY_STRING && comp_ntype(c, argv[1]) == TY_STRING) {
+      buf_printf(b, "sp_str_%s(sp_poly_to_s(", name); emit_expr(c, recv, b);
+      buf_puts(b, "), "); emit_str_expr(c, argv[0], b);
+      buf_puts(b, ", "); emit_str_expr(c, argv[1], b); buf_puts(b, ")");
+      return 1;
+    }
+  }
   /* nil-aware conversions on a boxed receiver (a nil local widens to poly).
      The call's settled type may predate the widening (the receiver inferred
      TY_NIL on an early fixpoint pass and typed a captured local concretely);

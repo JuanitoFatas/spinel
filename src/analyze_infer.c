@@ -1040,7 +1040,15 @@ TyKind infer_call(Compiler *c, int id) {
   /* poly.delete_prefix / #delete_suffix answer a String, like the zero-arg
      transforms beside them (#3436). */
   if (recv >= 0 && rt == TY_POLY && argc == 1 && nt_ref(nt, id, "block") < 0 &&
-      (sp_streq(name, "delete_prefix") || sp_streq(name, "delete_suffix")) &&
+      (sp_streq(name, "delete_prefix") || sp_streq(name, "delete_suffix") ||
+       sp_streq(name, "squeeze")) &&
+      !an_user_defines_or_reads(c, name))
+    return TY_STRING;
+  /* poly.tr / the String-pattern sub / gsub: same shape with two arguments. */
+  if (recv >= 0 && rt == TY_POLY && argc == 2 && nt_ref(nt, id, "block") < 0 &&
+      (sp_streq(name, "tr") ||
+       ((sp_streq(name, "sub") || sp_streq(name, "gsub")) &&
+        infer_type(c, argv[0]) == TY_STRING && infer_type(c, argv[1]) == TY_STRING)) &&
       !an_user_defines_or_reads(c, name))
     return TY_STRING;
   /* poly.compact / poly.flatten: an Array read out of a container answers a
