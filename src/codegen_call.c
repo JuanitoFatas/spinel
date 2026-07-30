@@ -3554,8 +3554,19 @@ static int emit_poly_builtin_method(Compiler *c, int id, Buf *b) {
       buf_printf(b, "; _sv%d.tag == SP_TAG_NIL ? SP_INT_NIL : sp_poly_to_i(_sv%d); })", tv, tv);
     return 1;
   }
-  /* Array#insert on a poly value: one value at an index, in place. */
+  /* Array#insert on a poly value: one value at an index, in place. The same
+     helper serves String#insert, whose plain-string box cannot hold the
+     spliced contents -- so an lvalue receiver takes the result back, the way
+     the typed String mutators do (#3445). An array receiver is mutated
+     through its pointer and answers itself, so the write-back is a no-op. */
   if (sp_streq(name, "insert") && argc == 2) {
+    const char *rvti = nt_type(nt, recv);
+    if (rvti && (sp_streq(rvti, "LocalVariableReadNode") ||
+                 sp_streq(rvti, "InstanceVariableReadNode"))) {
+      buf_puts(b, "(");
+      emit_expr(c, recv, b);
+      buf_puts(b, " = ");
+    }
     buf_puts(b, "sp_poly_insert(");
     emit_expr(c, recv, b);
     buf_puts(b, ", ");
@@ -3563,6 +3574,9 @@ static int emit_poly_builtin_method(Compiler *c, int id, Buf *b) {
     buf_puts(b, ", ");
     emit_boxed(c, argv[1], b);
     buf_puts(b, ")");
+    if (rvti && (sp_streq(rvti, "LocalVariableReadNode") ||
+                 sp_streq(rvti, "InstanceVariableReadNode")))
+      buf_puts(b, ")");
     return 1;
   }
   /* Array#delete_at on a poly value (#3298): in-place removal through the
@@ -4825,8 +4839,29 @@ else {
          so those names keep their existing answer rather than gain a
          mislabelled raise (#3394). */
       if (!is_pred && !is_strftime && !is_aref && !is_fetch && !is_include &&
-          !is_push && !is_cover && !is_gcdlcm && !is_strdel && !is_strsplit)
-        buf_printf(b, " default: sp_raise_nomethod(sp_nomethod_msg(\"%s\", _t%d)); break;", name, tv);
+          !is_push && !is_cover && !is_gcdlcm && !is_strdel && !is_strsplit) {
+        buf_puts(b, " default:");
+        /* index/rindex also belong to String, whose box carries no cls_id, so
+           no case above can claim it. Answer it here, ahead of the raise, or a
+           substring search on a boxed String reports a missing method (#3445).
+           find_index is Enumerable-only and keeps falling through. */
+        if (is_arr_index && !sp_streq(name, "find_index")) {
+          int tsi = ++g_tmp;
+          Buf ab5; memset(&ab5, 0, sizeof ab5);
+          { char tn5[32]; snprintf(tn5, sizeof tn5, "_t%d", atmp[0]);
+            if (atmp_ty[0] == TY_POLY) buf_puts(&ab5, tn5);
+            else emit_boxed_text(c, atmp_ty[0], tn5, &ab5); }
+          buf_printf(b, " if (_t%d.tag == SP_TAG_STR || sp_poly_is_strbuf(_t%d)) {"
+                        " mrb_int _t%d = sp_poly_str_index_val(_t%d, %s, %d); _t%d = ",
+                     tv, tv, tsi, tv, ab5.p ? ab5.p : "sp_box_nil()",
+                     sp_streq(name, "rindex") ? 1 : 0, tr);
+          if (ret == TY_INT) buf_printf(b, "_t%d", tsi);
+          else buf_printf(b, "(_t%d == SP_INT_NIL ? sp_box_nil() : sp_box_int(_t%d))", tsi, tsi);
+          buf_puts(b, "; break; }");
+          free(ab5.p);
+        }
+        buf_printf(b, " sp_raise_nomethod(sp_nomethod_msg(\"%s\", _t%d)); break;", name, tv);
+      }
       buf_printf(b, " } _t%d; })", tr);
       free(atmp);
       free(atmp_ty);

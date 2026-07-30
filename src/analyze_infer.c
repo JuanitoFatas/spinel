@@ -1044,6 +1044,34 @@ TyKind infer_call(Compiler *c, int id) {
        sp_streq(name, "squeeze")) &&
       !an_user_defines_or_reads(c, name))
     return TY_STRING;
+  /* The String-only surface on a boxed receiver: the names no other class
+     answers, so the result type is the one the typed String path gives. Names
+     Array or Enumerable share (index, count, sum) stay untyped here and go
+     through their runtime kind dispatch instead. */
+  if (recv >= 0 && rt == TY_POLY && nt_ref(nt, id, "block") < 0 &&
+      !an_user_defines_or_reads(c, name)) {
+    if (argc == 0 && (sp_streq(name, "hex") || sp_streq(name, "oct"))) return TY_INT;
+    if (argc == 0 && sp_streq(name, "squeeze")) return TY_STRING;
+    if (argc == 1 && sp_streq(name, "casecmp")) return TY_INT;
+    if (argc <= 2 && argc >= 1 && sp_streq(name, "byteindex")) return TY_INT;
+    if (argc == 1 && sp_streq(name, "casecmp?")) return TY_BOOL;
+    if (argc == 1 && (sp_streq(name, "partition") || sp_streq(name, "rpartition")))
+      return TY_STR_ARRAY;
+    if (argc == 2 && sp_streq(name, "tr_s")) return TY_STRING;
+    if (argc == 1 && sp_streq(name, "crypt")) return TY_STRING;
+    /* #slice re-enters codegen as #[], whose boxed result is poly. */
+    if ((argc == 1 || argc == 2) && sp_streq(name, "slice")) return TY_POLY;
+  }
+  /* The String value-form mutators on a boxed receiver answer the mutated
+     string (NULL for the no-change bang contract), like the typed path. */
+  if (recv >= 0 && rt == TY_POLY && !an_user_defines_or_reads(c, name)) {
+    static const char *const PBANGN[] = {
+      "gsub!", "sub!", "upcase!", "downcase!", "capitalize!", "swapcase!",
+      "strip!", "lstrip!", "rstrip!", "chomp!", "chop!", "squeeze!", "tr!",
+      "delete!", "tr_s!", "delete_prefix!", "delete_suffix!", "succ!", "next!",
+      NULL };
+    for (int i = 0; PBANGN[i]; i++) if (sp_streq(name, PBANGN[i])) return TY_STRING;
+  }
   /* poly.tr / the String-pattern sub / gsub: same shape with two arguments. */
   if (recv >= 0 && rt == TY_POLY && argc == 2 && nt_ref(nt, id, "block") < 0 &&
       (sp_streq(name, "tr") ||

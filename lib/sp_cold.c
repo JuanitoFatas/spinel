@@ -682,6 +682,15 @@ sp_IntArray *sp_file_binread_bytes(const char *path) {
 
 /* ---- more cold helpers: string/File/Dir/poly-combinatorics/misc ---- */
 
+/* String#sum: the byte checksum modulo 2**bits (bits <= 0 or >= 64 leaves the
+   sum untruncated, like CRuby). The typed emitter inlines this same loop; the
+   boxed receiver reaches it through sp_poly_sum. */
+mrb_int sp_str_sum_bits(const char *s, mrb_int bits) {
+  mrb_int acc = 0;
+  for (const char *p = s ? s : ""; *p; p++) acc += (unsigned char)*p;
+  return (bits <= 0 || bits >= 64) ? acc : (acc & ((((mrb_int)1) << bits) - 1));
+}
+
 const char *sp_str_splice_at(const char *s, mrb_int from, mrb_int n, const char *val, int range_form) {
   if (!s) s = "";
   if (!val) val = "";

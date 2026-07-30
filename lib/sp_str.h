@@ -137,6 +137,7 @@ const char*sp_str_sub_range_len_r(const char*s,mrb_int cl,mrb_int start,mrb_int 
 const char*sp_str_reverse(const char*s);
 mrb_int sp_str_count(const char*s,const char*chars);
 mrb_int sp_str_count_n(const char*s,const char**chars,mrb_int n);
+mrb_int sp_str_sum_bits(const char*s,mrb_int bits);   /* String#sum(bits=16) */
 sp_IntArray*sp_str_codepoints(const char*s);
 sp_StrArray*sp_str_chars(const char*s);
 const char*sp_str_tr(const char*s,const char*from,const char*to);

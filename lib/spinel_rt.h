@@ -2393,7 +2393,8 @@ static void sp_sort_idx_by_poly(mrb_int *idx, const sp_RbVal *keys, mrb_int n) {
   free(tmp);
 }
 static sp_RbVal sp_poly_div(sp_RbVal a, sp_RbVal b) { if ((sp_poly_is_brat(a) || sp_poly_is_brat(b))) { if (a.tag == SP_TAG_FLT || b.tag == SP_TAG_FLT) return sp_box_float(sp_poly_to_f(a) / sp_poly_to_f(b)); return sp_brat_div_poly(a, b); } if ((sp_poly_is_rational(a) || sp_poly_is_rational(b)) && a.tag != SP_TAG_FLT && b.tag != SP_TAG_FLT) return sp_box_rational(sp_rational_div(sp_poly_as_rational(a), sp_poly_as_rational(b))); if ((a.tag == SP_TAG_OBJ && a.cls_id == SP_BUILTIN_COMPLEX) || (b.tag == SP_TAG_OBJ && b.cls_id == SP_BUILTIN_COMPLEX)) return sp_box_complex(sp_complex_div(sp_poly_as_complex(a), sp_poly_as_complex(b))); if (a.tag == SP_TAG_FLT || b.tag == SP_TAG_FLT) return sp_box_float(sp_poly_to_f_with_rational(a) / sp_poly_to_f_with_rational(b)); return sp_box_int(sp_idiv(sp_poly_to_i(a), sp_poly_to_i(b))); }
-static sp_RbVal sp_poly_mod(sp_RbVal a, sp_RbVal b) { if (a.tag == SP_TAG_FLT || b.tag == SP_TAG_FLT) return sp_box_float(sp_fmod(sp_poly_to_f(a), sp_poly_to_f(b))); return sp_box_int(sp_imod(sp_poly_to_i(a), sp_poly_to_i(b))); }  /* sp_fmod: CRuby divisor-sign result + zero-divisor raise */
+static sp_RbVal sp_poly_str_mod(sp_RbVal a, sp_RbVal b);  /* fwd: defined beside the format helper */
+static sp_RbVal sp_poly_mod(sp_RbVal a, sp_RbVal b) { if (a.tag == SP_TAG_STR || sp_poly_is_strbuf(a)) return sp_poly_str_mod(sp_poly_strbuf_deref(a), b); if (a.tag == SP_TAG_FLT || b.tag == SP_TAG_FLT) return sp_box_float(sp_fmod(sp_poly_to_f(a), sp_poly_to_f(b))); return sp_box_int(sp_imod(sp_poly_to_i(a), sp_poly_to_i(b))); }  /* sp_fmod: CRuby divisor-sign result + zero-divisor raise */
 /* Comparable#clamp on boxed numerics, faithful to CRuby: the result is the
    applied operand returned UNCHANGED, so an in-range Integer receiver stays
    Integer while a Float bound that clamps stays Float (5.clamp(1.0, 3.0) is
@@ -3238,6 +3239,19 @@ static void sp_splat_p(sp_RbVal a) {
 }
 /* format(*args): the first element is the format string, the rest its args */
 static const char *sp_str_format_polyarr(const char *fmt, sp_PolyArray *a);
+/* `fmt % args` where the format arrived boxed (a Fiber#resume value, a
+   container read): the same format the typed String path runs. A non-Array
+   operand is the one-element list, per String#%. Without this the String fell
+   into the numeric arm of sp_poly_mod, where sp_poly_to_i read it as 0 and the
+   divisor 0 raised ZeroDivisionError. */
+static sp_RbVal sp_poly_str_mod(sp_RbVal a, sp_RbVal b) {
+  SP_GC_ROOT_RBVAL(a); SP_GC_ROOT_RBVAL(b);
+  sp_PolyArray *ar = (b.tag == SP_TAG_OBJ && sp_poly_is_array_kind(b.cls_id))
+                       ? sp_poly_to_poly_array(b) : sp_PolyArray_new();
+  SP_GC_ROOT(ar);
+  if (!(b.tag == SP_TAG_OBJ && sp_poly_is_array_kind(b.cls_id))) sp_PolyArray_push(ar, b);
+  return sp_box_str(sp_str_format_polyarr(a.v.s ? a.v.s : (&("\xff")[1]), ar));
+}
 static const char *sp_str_format_splat(sp_RbVal a) {
   mrb_int n = sp_poly_arr_len(a);
   const char *fmt = n > 0 ? sp_poly_to_s(sp_poly_arr_get(a, 0)) : "";
@@ -4594,7 +4608,25 @@ static sp_RbVal sp_poly_pop(sp_RbVal v) {
 }
 /* Array#insert on a poly value: in-place insertion of one value at an index
    through the runtime kind dispatch; returns the receiver. */
+/* Replace the contents a boxed String stands for, and answer the result. A
+   shared handle mutates its buffer so every alias observes it; a plain string
+   box has no handle to write through, so it follows the value-form contract
+   the typed emitter uses for the same case (frozen check, then the new
+   string). */
+static sp_RbVal sp_poly_str_become(sp_RbVal v, const char *s) {
+  if (sp_poly_is_strbuf(v)) { sp_String_set_bin((sp_String *)v.v.p, s); return v; }
+  sp_str_check_mutable(v.v.s);
+  return sp_box_str(s);
+}
 static sp_RbVal sp_poly_insert(sp_RbVal v, mrb_int i, sp_RbVal x) {
+  /* String#insert on a boxed receiver: splice at a character index, where a
+     negative index counts from the end AFTER the last character (#3445). */
+  if (v.tag == SP_TAG_STR || sp_poly_is_strbuf(v)) {
+    const char *s = sp_poly_strbuf_deref(v).v.s;
+    if (!s) s = (&("\xff")[1]);
+    if (i < 0) i += (mrb_int)sp_str_length(s) + 1;
+    return sp_poly_str_become(v, sp_str_splice_at(s, i, 0, sp_poly_to_s(x), 0));
+  }
   if (v.tag == SP_TAG_OBJ && v.v.p) {
     switch (v.cls_id) {
       case SP_BUILTIN_INT_ARRAY:
@@ -5386,7 +5418,26 @@ mrb_bool sp_poly_cbi_p(sp_RbVal v) __attribute__((unused));
 /* sp_poly_cbi_p: moved to lib/sp_cold.c */
 mrb_bool sp_poly_cbi_p(sp_RbVal v);
 /* boxed-array count(v): value-equality element count (0 for non-arrays) */
+/* String#index / #rindex on a boxed receiver: the byte offset of a substring,
+   SP_INT_NIL when absent. The receiver switch that serves the array kinds
+   dispatches on cls_id, which a String box does not carry, so its default arm
+   routes here before reporting a missing method (#3445). */
+static mrb_int sp_poly_str_index_val(sp_RbVal v, sp_RbVal sub, int from_end) {
+  sp_RbVal s = sp_poly_strbuf_deref(v), a = sp_poly_strbuf_deref(sub);
+  if (a.tag != SP_TAG_STR) return SP_INT_NIL;
+  const char *sp = s.v.s ? s.v.s : (&("\xff")[1]);
+  const char *ap = a.v.s ? a.v.s : (&("\xff")[1]);
+  return from_end ? sp_str_rindex_opt(sp, ap) : sp_str_index_opt(sp, ap);
+}
 static mrb_int sp_poly_count_val(sp_RbVal v, sp_RbVal x) {
+  /* String#count on a boxed receiver counts characters from a set, not
+     elements; without this arm it fell through the array test and answered 0
+     for every argument (#3446). */
+  if (v.tag == SP_TAG_STR || sp_poly_is_strbuf(v)) {
+    sp_RbVal s = sp_poly_strbuf_deref(v), a = sp_poly_strbuf_deref(x);
+    if (a.tag != SP_TAG_STR) return 0;
+    return sp_str_count(s.v.s ? s.v.s : (&("\xff")[1]), a.v.s ? a.v.s : (&("\xff")[1]));
+  }
   if (v.tag != SP_TAG_OBJ || !sp_poly_is_array_kind(v.cls_id)) return 0;
   mrb_int n = sp_poly_length(v), cnt = 0;
   for (mrb_int i = 0; i < n; i++) if (sp_poly_eq(sp_poly_arr_get(v, i), x)) cnt++;
@@ -5472,6 +5523,10 @@ static sp_RbVal sp_poly_to_c_m(sp_RbVal v) {
    friends work without statically knowing the run's array type. first/last reuse
    the generic boxed-element accessors. */
 static sp_RbVal sp_poly_sum(sp_RbVal v) {
+  /* String#sum is a byte checksum, not a container fold: a boxed String fell
+     past the switch below and answered 0 (#3446). */
+  if (v.tag == SP_TAG_STR || sp_poly_is_strbuf(v))
+    return sp_box_int(sp_str_sum_bits(sp_poly_strbuf_deref(v).v.s, 16));
   if (v.tag != SP_TAG_OBJ) return sp_box_int(0);
   switch (v.cls_id) {
     case SP_BUILTIN_INT_ARRAY:  return sp_box_int(sp_IntArray_sum((sp_IntArray *)v.v.p, 0));
@@ -5493,6 +5548,9 @@ static sp_RbVal sp_poly_sum(sp_RbVal v) {
    full numeric-tower semantics (#3234). */
 static sp_RbVal sp_poly_sum_seed(sp_RbVal v, sp_RbVal seed) {
   sp_RbVal acc = seed;
+  /* On a String the argument is the bit width of the checksum, not a seed. */
+  if (v.tag == SP_TAG_STR || sp_poly_is_strbuf(v))
+    return sp_box_int(sp_str_sum_bits(sp_poly_strbuf_deref(v).v.s, sp_poly_to_i(seed)));
   if (v.tag != SP_TAG_OBJ || !sp_poly_is_array_kind(v.cls_id)) return acc;
   mrb_int n = sp_poly_length(v);
   for (mrb_int i = 0; i < n; i++) acc = sp_poly_add(acc, sp_poly_arr_get(v, i));

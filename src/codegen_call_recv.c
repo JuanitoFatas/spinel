@@ -8862,6 +8862,109 @@ int emit_poly_call(Compiler *c, int id, Buf *b) {
      correct for any hash this mutator never (successfully) ran on. */
   if (sp_streq(name, "compare_by_identity"))  /* any arity: identity hashing is unsupported */
     unsupported(c, id, "Hash#compare_by_identity (identity-keyed hashing)");
+  /* #slice is #[] for every class that has it, and the boxed `[]` already
+     dispatches on the runtime kind -- so hand it over rather than mint a
+     second dispatch that would have to guess between String and Array
+     (#3445). Re-entry through a rename, like the typed-array slice above. */
+  if (recv >= 0 && rt == TY_POLY && (argc == 1 || argc == 2) &&
+      sp_streq(name, "slice") && nt_ref(nt, id, "block") < 0 &&
+      !user_defines_or_reads(c, "slice")) {
+    nt_node_set_str((NodeTable *)nt, id, "name", "[]");
+    emit_call(c, id, b);
+    nt_node_set_str((NodeTable *)nt, id, "name", "slice");
+    return 1;
+  }
+  /* String value-form mutators on a boxed receiver: compute the non-bang
+     transform against the unboxed contents, then write the result back through
+     the box. Only the bang names String alone owns -- reverse!/sort!/uniq! are
+     Array's too, and the receiver's runtime class is unknown here (#3445). */
+  if (recv >= 0 && rt == TY_POLY && !user_defines_or_reads(c, name) &&
+      g_n_argov < MAX_ARG_OVERRIDE) {
+    static const struct { const char *bang, *plain; int nil_nc; } PBANG[] = {
+      {"gsub!", "gsub", 1}, {"sub!", "sub", 1}, {"upcase!", "upcase", 1},
+      {"downcase!", "downcase", 1}, {"capitalize!", "capitalize", 1},
+      {"swapcase!", "swapcase", 1}, {"strip!", "strip", 1}, {"lstrip!", "lstrip", 1},
+      {"rstrip!", "rstrip", 1}, {"chomp!", "chomp", 1}, {"chop!", "chop", 1},
+      {"squeeze!", "squeeze", 1}, {"tr!", "tr", 1}, {"delete!", "delete", 1},
+      {"tr_s!", "tr_s", 1}, {"delete_prefix!", "delete_prefix", 1},
+      {"delete_suffix!", "delete_suffix", 1}, {"succ!", "succ", 0}, {"next!", "next", 0},
+      {NULL, NULL, 0}
+    };
+    int pbi = -1;
+    for (int j = 0; PBANG[j].bang; j++) if (sp_streq(name, PBANG[j].bang)) { pbi = j; break; }
+    if (pbi >= 0) {
+      int tvb = ++g_tmp, tob = ++g_tmp, tnb = ++g_tmp;
+      Buf rbb; memset(&rbb, 0, sizeof rbb); emit_expr(c, recv, &rbb);
+      emit_indent(g_pre, g_indent);
+      buf_printf(g_pre, "sp_RbVal _t%d = %s; SP_GC_ROOT_RBVAL(_t%d);"
+                        " const char *_t%d = sp_poly_to_s(_t%d); SP_GC_ROOT(_t%d);\n",
+                 tvb, rbb.p ? rbb.p : "sp_box_nil()", tvb, tob, tvb, tob);
+      free(rbb.p);
+      g_argov_node[g_n_argov] = recv;
+      snprintf(g_argov_text[g_n_argov], sizeof g_argov_text[0], "_t%d", tob);
+      g_n_argov++;
+      TyKind svb = c->ntype[recv]; c->ntype[recv] = TY_STRING;
+      nt_node_set_str((NodeTable *)nt, id, "name", PBANG[pbi].plain);
+      Buf nbb; memset(&nbb, 0, sizeof nbb); emit_call(c, id, &nbb);
+      nt_node_set_str((NodeTable *)nt, id, "name", PBANG[pbi].bang);
+      c->ntype[recv] = svb;
+      g_n_argov--;
+      buf_printf(b, "({ const char *_t%d = %s; ", tnb, nbb.p ? nbb.p : "\"\"");
+      free(nbb.p);
+      /* A shared handle absorbs the new contents; a plain string box cannot,
+         so an lvalue receiver takes the value back the way the typed path
+         does for the same case. */
+      { const char *rvtb = nt_type(nt, recv);
+        if (rvtb && (sp_streq(rvtb, "LocalVariableReadNode") ||
+                     sp_streq(rvtb, "InstanceVariableReadNode"))) {
+          emit_expr(c, recv, b);
+          buf_printf(b, " = sp_poly_str_become(_t%d, _t%d); ", tvb, tnb);
+        }
+        else buf_printf(b, "sp_poly_str_become(_t%d, _t%d); ", tvb, tnb);
+      }
+      if (PBANG[pbi].nil_nc) buf_printf(b, "sp_str_eq(_t%d, _t%d) ? NULL : _t%d; })", tob, tnb, tnb);
+      else buf_printf(b, "_t%d; })", tnb);
+      return 1;
+    }
+  }
+  /* The rest of the String surface on a boxed receiver: unbox once and
+     re-dispatch the same call with the receiver typed String, so the typed
+     emitter IS the implementation. Only names no other class answers may go
+     here -- the receiver's runtime class is unknown, so a name Array or
+     Enumerable also owns (index, count, sum, slice, insert) would compile the
+     String body for an array receiver. Those are served by their runtime kind
+     dispatch instead. `partition` qualifies only in its one-argument form:
+     Enumerable#partition takes no argument, and a block already excludes this
+     arm. Not a catch-all, so a name without a typed emitter still reports the
+     missing method. */
+  if (recv >= 0 && rt == TY_POLY && nt_ref(nt, id, "block") < 0 &&
+      !user_defines_or_reads(c, name) && g_n_argov < MAX_ARG_OVERRIDE) {
+    static const struct { const char *name; int argc; } PSR[] = {
+      {"squeeze", 0}, {"byteindex", 1}, {"byteindex", 2},
+      {"partition", 1}, {"rpartition", 1},
+      {"hex", 0}, {"oct", 0}, {"tr_s", 2}, {"crypt", 1},
+      {"casecmp", 1}, {"casecmp?", 1},
+      {NULL, 0} };
+    int want = 0;
+    for (int i = 0; PSR[i].name && !want; i++)
+      if (sp_streq(name, PSR[i].name) && argc == PSR[i].argc) want = 1;
+    if (want) {
+      int tps = ++g_tmp;
+      Buf rbs; memset(&rbs, 0, sizeof rbs); emit_expr(c, recv, &rbs);
+      emit_indent(g_pre, g_indent);
+      buf_printf(g_pre, "const char *_t%d = sp_poly_to_s(%s); SP_GC_ROOT(_t%d);\n",
+                 tps, rbs.p ? rbs.p : "sp_box_nil()", tps);
+      free(rbs.p);
+      g_argov_node[g_n_argov] = recv;
+      snprintf(g_argov_text[g_n_argov], sizeof g_argov_text[0], "_t%d", tps);
+      g_n_argov++;
+      TyKind svps = c->ntype[recv]; c->ntype[recv] = TY_STRING;
+      emit_call(c, id, b);
+      c->ntype[recv] = svps;
+      g_n_argov--;
+      return 1;
+    }
+  }
   /* The one/two-String-argument transforms on a boxed receiver: a String
      arriving through a poly slot (a Fiber#resume value, a container read) had
      no arm for these and raised NoMethodError naming String, which is what it
