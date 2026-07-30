@@ -4077,7 +4077,8 @@ else {
       return et;
     }
     if (sp_streq(name, "dig") && argc >= 1) {
-      if (argc == 1) return ty_array_elem(rt);
+      /* dig(*keys) walks a runtime key list: the depth is unknown here */
+      if (argc == 1 && nt_kind(nt, argv[0]) != NK_SplatNode) return ty_array_elem(rt);
       return TY_POLY;
     }
     /* index returns nil on a miss -> poly (int-or-nil) */
@@ -5154,7 +5155,9 @@ else {
     }
     if (sp_streq(name, "delete")) return ty_hash_val(rt);
     if (sp_streq(name, "dig") && argc >= 1) {
-      if (argc == 1) return ty_hash_val(rt);
+      /* dig(*keys) walks a runtime key list: the depth, and so the value's
+         type, is not known here */
+      if (argc == 1 && nt_kind(nt, argv[0]) != NK_SplatNode) return ty_hash_val(rt);
       return TY_POLY;
     }
     if (sp_streq(name, "default") && argc <= 1) return TY_POLY;  /* default(key) too (#2409) */

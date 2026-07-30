@@ -1444,6 +1444,12 @@ int emit_array_call(Compiler *c, int id, Buf *b) {
       return 1;
     }
     if (rt == TY_POLY_ARRAY && sp_streq(name, "dig") && argc >= 1) {
+      /* dig(*keys): walk the runtime key list (see the hash arm) */
+      if (nt_kind(nt, argv[0]) == NK_SplatNode) {
+        buf_puts(b, "sp_poly_dig_list("); emit_boxed(c, recv, b);
+        buf_puts(b, ", sp_poly_to_poly_array("); emit_boxed(c, argv[0], b); buf_puts(b, "))");
+        return 1;
+      }
       if (argc == 1) {
         buf_puts(b, "sp_PolyArray_get("); emit_expr(c, recv, b); buf_puts(b, ", "); emit_expr(c, argv[0], b); buf_puts(b, ")");
       }
@@ -4240,6 +4246,16 @@ int emit_hash_call(Compiler *c, int id, Buf *b) {
         return 1;
       }
       if (sp_streq(name, "dig") && argc >= 1) {
+        /* dig(*keys): the key list only exists at run time, so walk it there.
+           Emitting the splat as a single key read the key array through the
+           key's own type and the C did not compile. */
+        if (nt_kind(nt, argv[0]) == NK_SplatNode) {
+          buf_puts(b, "sp_poly_dig_list("); emit_boxed(c, recv, b);
+          buf_puts(b, ", sp_poly_to_poly_array(");
+          emit_boxed(c, argv[0], b);
+          buf_puts(b, "))");
+          return 1;
+        }
         TyKind vt = ty_hash_val(rt);
         TyKind kt = ty_hash_key(rt);
         /* Static key-type mismatch (string key on sym hash, etc.) -> nil. */

@@ -4906,6 +4906,19 @@ static sp_RbVal sp_poly_dig_step(sp_RbVal a, mrb_int i) {
                sp_sprintf("%s does not have #dig method", sp_poly_class_name(a)));
   return sp_box_nil();
 }
+/* dig(*keys): the key list is a runtime array, so walk it one step at a time.
+   A nil at any step stops, as CRuby's #dig does. */
+static sp_RbVal sp_poly_index_poly(sp_RbVal recv, sp_RbVal idx);
+static sp_RbVal sp_poly_dig_list(sp_RbVal recv, sp_PolyArray *keys) {
+  if (!keys) return sp_box_nil();
+  SP_GC_ROOT(keys);
+  sp_RbVal cur = recv;
+  for (mrb_int i = 0; i < keys->len; i++) {
+    if (cur.tag == SP_TAG_NIL) return sp_box_nil();
+    cur = sp_poly_index_poly(cur, keys->data[i]);
+  }
+  return cur;
+}
 /* poly[poly_key]: dispatch on key tag at runtime. */
 static sp_RbVal sp_poly_index_poly(sp_RbVal recv, sp_RbVal idx) {
   /* heterogeneous-key hash: any key kind (incl. Method) looks up directly. */
