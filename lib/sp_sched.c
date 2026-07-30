@@ -91,8 +91,13 @@ static pthread_cond_t g_sweep_cv = PTHREAD_COND_INITIALIZER;
 static sp_gc_hdr     *g_sw_head[SP_MAX_WORKERS];
 static sp_gc_hdr     *g_sw_tail[SP_MAX_WORKERS];
 static size_t         g_sw_bytes[SP_MAX_WORKERS];
+/* Decided once per collection by sp_sched_par_sweep, read by every worker. */
+static int    g_str_sweep = 0;
+static int    g_str_major = 0;
+static size_t g_str_promoted[SP_MAX_WORKERS];
 static void sp_sweep_one_slot(int wid) {
   sp_gc_sweep_slot(wid, &g_sw_head[wid], &g_sw_tail[wid], &g_sw_bytes[wid]);
+  if (g_str_sweep) sp_str_sweep_one(wid, g_str_major, &g_str_promoted[wid]);
 }
 static unsigned       g_stw_epoch = 0;  /* bumped each collection; scopes g_nparked to one */
 static SP_TLS int     g_collector_active = 0;  /* this worker is mid-collection (re-entrancy guard) */
@@ -450,7 +455,14 @@ static void sp_sched_par_sweep(void) {
      g_sw_hi is the largest pool ever seen, which bounds the orphan scan below
      without walking 256 empty slots each time. */
   if (n > g_sw_hi) g_sw_hi = n;
+  /* The string gate is one decision over the whole heap, so make it here --
+     once, before anyone starts -- and let each worker apply it to its own
+     slot. Taking it per worker would let them disagree about `major`. */
+  g_str_major = 0;
+  g_str_sweep = sp_str_sweep_begin(&g_str_major);
+  sp_str_par_done = 1;   /* the collector's serial pass must not repeat this */
   SCHED_LOCK();
+  memset(g_str_promoted, 0, (size_t)g_sw_hi * sizeof g_str_promoted[0]);
   memset(g_swept, 0, (size_t)g_sw_hi * sizeof g_swept[0]);
   memset(g_sw_head, 0, (size_t)g_sw_hi * sizeof g_sw_head[0]);
   memset(g_sw_tail, 0, (size_t)g_sw_hi * sizeof g_sw_tail[0]);
@@ -469,10 +481,21 @@ static void sp_sched_par_sweep(void) {
   SCHED_UNLOCK();
   /* Any slot no live worker owns -- an index past the current pool, or one
      whose worker exited -- still has to be swept, or its list leaks. */
+  /* A slot no live worker owns -- past the current pool, or a worker that
+     exited -- still has to be swept or its lists leak. Its STRING list counts
+     too: a slot can hold strings with no objects left in it. */
   for (int i = 0; i < g_sw_hi; i++)
-    if (!g_swept[i] && sp_gc_wslot[i].young) sp_sweep_one_slot(i);
+    if (!g_swept[i] && (sp_gc_wslot[i].young ||
+                        (g_str_sweep && (sp_str_wslot[i].young || sp_str_wslot[i].old))))
+      sp_sweep_one_slot(i);
   for (int i = 0; i < g_sw_hi; i++)
     sp_gc_promote_slot(g_sw_head[i], g_sw_tail[i], g_sw_bytes[i]);
+  if (g_str_sweep) {
+    size_t promoted = 0;
+    for (int i = 0; i < g_sw_hi; i++) promoted += g_str_promoted[i];
+    sp_str_sweep_end(g_str_major, promoted);
+    g_str_sweep = 0;
+  }
 }
 
 static int sp_worker_count(void);   /* defined below; the pool size */

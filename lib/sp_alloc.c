@@ -390,27 +390,61 @@ void sp_PolyArray_pool_recycle(sp_gc_hdr *h) {
    string sweep (delayed reclamation, not a leak); the sweep itself resets
    marks for the next cycle. Retuning here (with the collector-side retunes
    removed) keeps the trigger tracking the live size in one place. */
-static void sp_str_sweep_gated(void) {
+/* The gate, split so the per-worker middle can run on the workers themselves.
+   `begin` decides (and remembers `before` for the retune), `one` sweeps one
+   worker's two lists, `end` re-aims the thresholds. The serial driver below
+   still calls all three in a row; the scheduler interleaves the middle across
+   the parked workers instead. */
+static size_t sp_str_gate_before = 0;
+#ifdef SP_THREADS
+int sp_str_par_done = 0;   /* the workers already did it for this collection */
+#endif
+int sp_str_sweep_begin(int *major) {
 #ifdef SP_THREADS
   size_t before = sp_str_bytes_total();
 #else
   size_t before = SP_GC_CTR_GET(sp_str_heap_bytes);
 #endif
-  if (before <= SP_GC_CTR_GET(sp_str_threshold)) return;
+  if (before <= SP_GC_CTR_GET(sp_str_threshold)) return 0;
+  sp_str_gate_before = before;
   /* Walk the old generation only once it has itself grown past a threshold,
      then re-aim that threshold at what survived. Between majors, old strings
      that die are reclaimed late -- the same delayed-reclamation trade this
      gate already makes for the whole heap, one level up. */
-  size_t old_before = sp_str_old_total();
-  int major = old_before > sp_str_old_threshold;
-  size_t promoted = sp_str_sweep_gen(major);
+  *major = sp_str_old_total() > sp_str_old_threshold;
+  return 1;
+}
+void sp_str_sweep_end(int major, size_t promoted) {
   if (major) {
     size_t old_after = sp_str_old_total();
     sp_str_old_threshold = old_after * 2;
     if (sp_str_old_threshold < sp_str_old_threshold_init)
       sp_str_old_threshold = sp_str_old_threshold_init;
   }
-  sp_str_retune(before, promoted);
+  sp_str_retune(sp_str_gate_before, promoted);
+}
+#ifdef SP_THREADS
+/* One worker's own string lists. Freeing a string on the worker that allocated
+   it keeps the block in the arena it came from: the collector doing all eight
+   workers' frees turned every one of them into a cross-arena free, which is
+   the slow path in glibc and in every other thread-caching allocator. Each
+   worker also clears its own length cache, whose entries are keyed by the
+   addresses this sweep is about to recycle. */
+void sp_str_sweep_one(int wid, int major, size_t *promoted) {
+  if (major) sp_str_sweep_old(&sp_str_wslot[wid].old, &sp_str_wslot[wid].old_bytes);
+  sp_str_sweep_young(&sp_str_wslot[wid].young, &sp_str_wslot[wid].young_bytes,
+                     &sp_str_wslot[wid].old, &sp_str_wslot[wid].old_bytes, promoted);
+  sp_str_lcache_clear();
+}
+#endif
+static void sp_str_sweep_gated(void) {
+#ifdef SP_THREADS
+  if (sp_str_par_done) { sp_str_par_done = 0; return; }
+#endif
+  int major = 0;
+  if (!sp_str_sweep_begin(&major)) return;
+  size_t promoted = sp_str_sweep_gen(major);
+  sp_str_sweep_end(major, promoted);
 }
 
 /* Non-inline sp_str_alloc, for a TU that cannot include sp_alloc.h.
