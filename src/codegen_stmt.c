@@ -4982,6 +4982,21 @@ void emit_begin(Compiler *c, int id, Buf *b, int indent, const char *resultvar) 
   int ensure_c = nt_ref(nt, id, "ensure_clause");
   int else_stmts = else_c >= 0 ? nt_ref(nt, else_c, "statements") : -1;
   int ensure_stmts = ensure_c >= 0 ? nt_ref(nt, ensure_c, "statements") : -1;
+  /* A `begin ... end` with no rescue, else or ensure protects nothing -- the
+     `begin ... end while cond` do-while idiom is the common shape -- so it
+     needs no handler frame at all. Emitting one put a setjmp on APU's
+     per-sample path, 3.6% of optcarrot's profile. */
+  if (rescue < 0 && else_stmts < 0 && ensure_stmts < 0) {
+    if (body >= 0) {
+      if (resultvar) {
+        const char *sv0 = g_result_var; g_result_var = resultvar;
+        emit_stmts_tail(c, body, b, indent);
+        g_result_var = sv0;
+      }
+      else emit_stmts(c, body, b, indent);
+    }
+    return;
+  }
   int fr = ++g_tmp;
   /* GC root watermark for the protected region: a raise unwinds via longjmp,
      which skips the __attribute__((cleanup)) pops of any SP_GC_ROOT locals in
