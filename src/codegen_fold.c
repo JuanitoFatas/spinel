@@ -1358,6 +1358,21 @@ int emit_filter_map_expr(Compiler *c, int id, Buf *b) {
   return 1;
 }
 
+/* Whether `node` is a call the resolution gate will lower to its raising
+   token: a settled receiver type, and no user class owns the name. Used to
+   tell "the block names a method that does not exist" (compile it, let it
+   raise) apart from "codegen has no shape for this" (decline). */
+static int block_tail_is_unresolved(Compiler *c, int node) {
+  const NodeTable *nt = c->nt;
+  if (node < 0 || nt_kind(nt, node) != NK_CallNode) return 0;
+  const char *nm = nt_str(nt, node, "name");
+  int r = nt_ref(nt, node, "receiver");
+  if (!nm || r < 0) return 0;
+  TyKind rt2 = comp_ntype(c, r);
+  if (rt2 == TY_UNKNOWN || rt2 == TY_POLY) return 0;
+  return !diag_user_defines(c, nm);
+}
+
 int emit_minmax_by_expr(Compiler *c, int id, Buf *b) {
   const NodeTable *nt = c->nt;
   int block = nt_ref(nt, id, "block");
@@ -1379,6 +1394,12 @@ int emit_minmax_by_expr(Compiler *c, int id, Buf *b) {
   int bn = 0; const int *bb = body >= 0 ? nt_arr(nt, body, "body", &bn) : NULL;
   if (bn < 1) return 0;
   TyKind bvt = infer_type(c, bb[bn - 1]);
+  /* An unresolved block value -- a symbol-proc naming a method the element
+     does not have -- lowers to the raising token, which is a boxed value.
+     Fold it as poly so the call compiles and raises NoMethodError at run
+     time, the way `map` with the same symbol-proc already does, instead of
+     refusing the whole build. */
+  if (bvt == TY_UNKNOWN && block_tail_is_unresolved(c, bb[bn - 1])) bvt = TY_POLY;
   if (bvt != TY_INT && bvt != TY_FLOAT && bvt != TY_POLY &&
       bvt != TY_STRING && bvt != TY_SYMBOL) return 0;
   /* A String/Symbol key orders lexicographically: box it and compare with the
@@ -3645,6 +3666,9 @@ int emit_sortby_expr(Compiler *c, int id, Buf *b) {
   int bn = 0; const int *bb = body >= 0 ? nt_arr(nt, body, "body", &bn) : NULL;
   if (bn < 1) return 0;
   TyKind kt = comp_ntype(c, bb[bn - 1]);
+  /* an unresolved key (a symbol-proc naming a method the element does not
+     have) is the raising token: sort as poly so the call compiles and raises */
+  if (kt == TY_UNKNOWN && block_tail_is_unresolved(c, bb[bn - 1])) kt = TY_POLY;
   /* scalar, poly, symbol, or ARRAY key (the multi-key sort idiom
      `sort_by { [a, b] }` -- sp_poly_cmp orders boxed arrays element-wise) */
   if (kt != TY_INT && kt != TY_FLOAT && kt != TY_STRING && kt != TY_POLY &&
