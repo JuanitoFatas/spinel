@@ -21,6 +21,27 @@ static inline int sp_streq(const char *a, const char *b) {
   }
 }
 
+/* Read-only Hash/Enumerable names a boxed receiver answers by pretending to be
+   the general boxed-key/value hash: inference types the call that way and
+   codegen normalizes the receiver to match, so the two agree by construction.
+   Every name here must have a PolyPolyHash emitter, and none may mutate -- the
+   normalization copies any other hash variant, so a write would be lost. */
+static inline int ty_poly_hash_face_name(const char *nm) {
+  static const char *const NAMES[] = {
+    "dig", "value?", "has_value?", "invert", "assoc", "rassoc",
+    "filter_map", "each_with_object", "group_by", "partition", "zip",
+    "reduce", "inject", "find", "detect", "find_all", "take", "drop",
+    "select", "filter", "reject", "compact", "slice",
+    "except", "values_at", "fetch_values", "entries", "flatten", "first",
+    "each_pair", "each_key", "each_value", "transform_values",
+    "transform_keys", "tally", "chunk_while", "each_entry", "flat_map",
+    "collect_concat", "none?", "one?",
+    0 };
+  if (!nm) return 0;
+  for (int i = 0; NAMES[i]; i++) if (sp_streq(nm, NAMES[i])) return 1;
+  return 0;
+}
+
 typedef enum {
   TY_UNKNOWN = 0,  /* not yet inferred, or an unsupported construct */
   TY_VOID,         /* a statement with no usable value */

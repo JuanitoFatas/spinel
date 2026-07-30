@@ -20133,6 +20133,34 @@ else { memcpy(dir, sf, n); dir[n] = 0; } }
       const char *rcn = nt_str(nt, recv, "name");
       grt_builtin_cls = rcn && comp_class_index(c, rcn) < 0 && builtin_class_id(rcn) != 0;
     }
+    /* A Hash that arrives boxed -- a Fiber#resume value, a seedless
+       Array#reduce, a container read -- keeps its whole read-only
+       Hash/Enumerable face. Nothing above claimed the name, so normalize the
+       receiver to the general boxed-key/value hash and re-dispatch against the
+       typed emitter; inference typed the call by the same pretence, so the
+       result slot already fits. A receiver that is not a hash at runtime raises
+       exactly the NoMethodError this site would have raised (#3449). */
+    if (grt == TY_POLY && ty_poly_hash_face_name(nt_str(nt, id, "name")) &&
+        g_n_argov < MAX_ARG_OVERRIDE) {
+      const char *hnm = nt_str(nt, id, "name");
+      int thv = ++g_tmp;
+      Buf hrb; memset(&hrb, 0, sizeof hrb); emit_boxed(c, recv, &hrb);
+      emit_indent(g_pre, g_indent);
+      buf_printf(g_pre, "sp_PolyPolyHash *_t%d = sp_poly_as_pp_hash(%s, \"%s\"); SP_GC_ROOT(_t%d);\n",
+                 thv, hrb.p ? hrb.p : "sp_box_nil()", hnm, thv);
+      free(hrb.p);
+      g_argov_node[g_n_argov] = recv;
+      snprintf(g_argov_text[g_n_argov], sizeof g_argov_text[0], "_t%d", thv);
+      g_n_argov++;
+      TyKind svh = c->ntype[recv]; c->ntype[recv] = TY_POLY_POLY_HASH;
+      int hren = sp_streq(hnm, "each_entry");   /* same yield as each_pair */
+      if (hren) nt_node_set_str((NodeTable *)nt, id, "name", "each_pair");
+      emit_call(c, id, b);
+      if (hren) nt_node_set_str((NodeTable *)nt, id, "name", "each_entry");
+      c->ntype[recv] = svh;
+      g_n_argov--;
+      return;
+    }
     if (grt == TY_POLY || grt == TY_NIL || grt == TY_INT || grt == TY_UNKNOWN ||
         grt == TY_STRING || grt == TY_FLOAT || grt == TY_BOOL ||
         grt == TY_COMPLEX || grt == TY_RATIONAL || grt_builtin_cls) {

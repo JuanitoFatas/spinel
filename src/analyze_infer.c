@@ -8,6 +8,10 @@
    The generation is bumped once per fixpoint iteration (sp_narrow_memo_bump),
    so a stale entry can only survive within an iteration the fixpoint will
    re-run anyway. */
+/* Receiver node whose type the boxed-hash face re-inference pretends is the
+   general boxed-key/value hash (see infer_call's last resort). -1 when idle;
+   set for the duration of one nested infer_call only. */
+static int g_hash_face_node = -1;
 #define SP_NMEMO_SZ 16384
 static unsigned g_narrow_gen = 1;
 static struct { unsigned gen; long key; signed char val; } g_nmemo[SP_NMEMO_SZ];
@@ -940,10 +944,16 @@ TyKind infer_call(Compiler *c, int id) {
   /* `poly.reject/select/filter { }` on a value only known to be an array at
      runtime (read out of a poly container): a filtered generic Array. */
   if (recv >= 0 && nt_ref(nt, id, "block") >= 0 && argc == 0 &&
-      (sp_streq(name, "reject") || sp_streq(name, "select") || sp_streq(name, "filter") ||
-       sp_streq(name, "map!") || sp_streq(name, "collect!")) &&
+      (sp_streq(name, "map!") || sp_streq(name, "collect!")) &&
       infer_type(c, recv) == TY_POLY)
     return TY_POLY_ARRAY;
+  /* The filtering siblings answer whatever kind the receiver is -- Hash#select
+     is a Hash, Array#select an Array -- and only the runtime value says which,
+     so the result rides boxed (#3449). */
+  if (recv >= 0 && nt_ref(nt, id, "block") >= 0 && argc == 0 &&
+      (sp_streq(name, "reject") || sp_streq(name, "select") || sp_streq(name, "filter")) &&
+      infer_type(c, recv) == TY_POLY)
+    return TY_POLY;
   /* `poly.zip(other...)` on a value only known to be an array at runtime
      (e.g. a row that is a block param of an outer nested-array iterator):
      a poly array of tuples, matching the array-receiver form (#3190). */
@@ -1082,9 +1092,14 @@ TyKind infer_call(Compiler *c, int id) {
   /* poly.compact / poly.flatten: an Array read out of a container answers a
      generic Array either way (#3423). */
   if (recv >= 0 && rt == TY_POLY && argc == 0 && nt_ref(nt, id, "block") < 0 &&
-      (sp_streq(name, "compact") || sp_streq(name, "flatten")) &&
+      sp_streq(name, "flatten") &&
       !an_user_defines_or_reads(c, name))
     return TY_POLY_ARRAY;
+  /* #compact answers the receiver's own kind -- Hash#compact is a Hash -- and
+     only the runtime value says which, so it rides boxed (#3449). */
+  if (recv >= 0 && rt == TY_POLY && argc == 0 && nt_ref(nt, id, "block") < 0 &&
+      sp_streq(name, "compact") && !an_user_defines_or_reads(c, name))
+    return TY_POLY;
   /* poly.find_index/index/rindex { } : the matching element's index, or nil
      when the block never answers truthy -- so poly, not a bare int. Every
      sibling block name had a poly rule; this family had none, and the call
@@ -1603,6 +1618,9 @@ TyKind infer_call(Compiler *c, int id) {
       TyKind prt = infer_type(c, pr);
       if (prt == TY_INT_ARRAY || prt == TY_POLY_ARRAY || prt == TY_STR_ARRAY ||
           prt == TY_FLOAT_ARRAY ||
+          /* a boxed receiver walks whatever sp_poly_arr_recv renders -- a
+             hash's [key, value] pairs, an array's elements (#3451) */
+          prt == TY_POLY ||
           (prt == TY_UNKNOWN && nt_type(nt, pr) && sp_streq(nt_type(nt, pr), "ArrayNode")) ||
           (prt == TY_RANGE && range_enum_redispatch(c, recv)))
         return TY_POLY_ARRAY;
@@ -6006,6 +6024,24 @@ else {
     }
   }
 
+  /* Last resort for a boxed receiver: the read-only Hash/Enumerable face,
+     typed as if the receiver were the general boxed-key/value hash. Codegen
+     normalizes the receiver to exactly that before re-dispatching, so both
+     sides agree on the result slot; a receiver that is not a hash at runtime
+     raises NoMethodError there, as it did before (#3449). */
+  if (recv >= 0 && rt == TY_POLY && g_hash_face_node < 0 &&
+      ty_poly_hash_face_name(name) && !an_user_defines_or_reads(c, name)) {
+    /* Inside the pretence `each_entry` IS `each_pair`: Hash#each_entry yields
+       the same [key, value] pair, and only the pair name has an emitter. */
+    int ren = sp_streq(name, "each_entry");
+    if (ren) nt_node_set_str((NodeTable *)nt, id, "name", "each_pair");
+    g_hash_face_node = recv;
+    TyKind ht = infer_call(c, id);
+    g_hash_face_node = -1;
+    if (ren) nt_node_set_str((NodeTable *)nt, id, "name", "each_entry");
+    if (ht != TY_UNKNOWN) return ht;
+  }
+
   return TY_UNKNOWN;
 }
 
@@ -6773,6 +6809,11 @@ TyKind infer_uncached(Compiler *c, int id) {
 
 TyKind infer_type(Compiler *c, int id) {
   if (id < 0 || id >= c->nt->count) return TY_UNKNOWN;
+  /* The boxed-hash face re-inference (infer_call's last resort) asks what one
+     call would be if this receiver were the general hash. Only that receiver
+     node, only for the duration of the recursion, and the cache is left
+     untouched so the receiver's own type is unaffected. */
+  if (id == g_hash_face_node) return TY_POLY_POLY_HASH;
   TyKind t = infer_uncached(c, id);
   c->ntype[id] = t;
   return t;

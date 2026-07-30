@@ -7471,7 +7471,21 @@ int infer_block_params(Compiler *c) {
                  siblings do; it was left off, so a block param that no other
                  site typed stayed unknown and got no declaration (#3409) */
               sp_streq(name, "find_index") || sp_streq(name, "index") ||
-              sp_streq(name, "rindex")))
+              sp_streq(name, "rindex") ||
+              /* Same binding, same omission: every remaining sibling that
+                 yields one element (or, for the pairwise ones, two). A param
+                 no other site typed stayed unknown and got no declaration, so
+                 the emitted body referenced an undeclared local and the C
+                 compile failed outright (#3448). */
+              sp_streq(name, "filter") || sp_streq(name, "find_all") ||
+              sp_streq(name, "flat_map") || sp_streq(name, "collect_concat") ||
+              sp_streq(name, "filter_map") || sp_streq(name, "partition") ||
+              sp_streq(name, "group_by") || sp_streq(name, "none?") ||
+              sp_streq(name, "one?") || sp_streq(name, "count") ||
+              sp_streq(name, "sum") || sp_streq(name, "take_while") ||
+              sp_streq(name, "drop_while") || sp_streq(name, "each_entry") ||
+              sp_streq(name, "bsearch") ||
+              sp_streq(name, "chunk_while") || sp_streq(name, "slice_when")))
       pt = TY_POLY;
 
     /* array.each_cons(n) / each_slice(n) { |a, b, ...| } -- a single param
@@ -7944,6 +7958,40 @@ int infer_block_params(Compiler *c) {
       TyKind want = sp_streq(name, "each_value") ? ty_hash_val(rt) : ty_hash_key(rt);
       TyKind vm = ty_unify(vp->type, want);
       if (vm != vp->type) { vp->type = vm; changed = 1; }
+      continue;
+    }
+
+    /* A boxed receiver's each_with_object: the element rides poly either way
+       (a Hash yields its [k, v] pair, an Array its element), while the memo
+       takes the seed's own type so the seed's C representation fits the slot.
+       Typing the memo poly instead put an unboxed seed in a boxed slot and the
+       generated C did not compile (#3449). */
+    if (sp_streq(name, "each_with_object") && rt == TY_POLY) {
+      Scope *ps = comp_scope_of(c, block);
+      if (block_param_is_multi(c, block, 0)) {
+        int lc = block_param_multi_count(c, block, 0);
+        for (int li = 0; li < lc; li++) {
+          const char *ln = block_param_multi_leaf(c, block, 0, li);
+          if (!ln) continue;
+          LocalVar *lp = scope_local_intern(ps, ln); lp->is_block_param = 1;
+          TyKind lm = ty_unify(lp->type, TY_POLY);
+          if (lm != lp->type) { lp->type = lm; changed = 1; }
+        }
+      }
+      else if (p0) {
+        LocalVar *ep = scope_local_intern(ps, p0); ep->is_block_param = 1;
+        TyKind em = ty_unify(ep->type, TY_POLY);
+        if (em != ep->type) { ep->type = em; changed = 1; }
+      }
+      const char *mp = block_param_name(c, block, 1);
+      int ea = nt_ref(nt, id, "arguments"); int eac = 0;
+      const int *eav = ea >= 0 ? nt_arr(nt, ea, "arguments", &eac) : NULL;
+      TyKind seedT = (eac > 0 && eav) ? infer_type(c, eav[0]) : TY_UNKNOWN;
+      if (mp && seedT != TY_UNKNOWN) {
+        LocalVar *mlv = scope_local_intern(ps, mp); mlv->is_block_param = 1;
+        TyKind mm = ty_unify(mlv->type, seedT);
+        if (mm != mlv->type) { mlv->type = mm; changed = 1; }
+      }
       continue;
     }
 

@@ -817,7 +817,10 @@ int emit_array_call(Compiler *c, int id, Buf *b) {
   if (recv >= 0 && rt == TY_POLY && argc == 0 && nt_ref(nt, id, "block") < 0 &&
       (sp_streq(name, "compact") || sp_streq(name, "flatten")) &&
       !diag_user_defines(c, name)) {
-    buf_printf(b, "sp_poly_%s(", name); emit_expr(c, recv, b); buf_puts(b, ")");
+    /* compact keeps the receiver's kind (a Hash drops its nil VALUES and stays
+       a Hash), so it answers boxed; flatten is an Array either way. */
+    buf_printf(b, "sp_poly_%s(", sp_streq(name, "compact") ? "compact_val" : "flatten");
+    emit_expr(c, recv, b); buf_puts(b, ")");
     return 1;
   }
   /* `enum.drop(n)` / `enum.reject|select|filter { }` on an each_with_index-style
@@ -881,12 +884,19 @@ int emit_array_call(Compiler *c, int id, Buf *b) {
     int fbn = 0; const int *fbb = fbody >= 0 ? nt_arr(nt, fbody, "body", &fbn) : NULL;
     if (fbn >= 1) {
       int keep_truthy = !sp_streq(name, "reject");  /* select/filter keep truthy */
-      int trecv = ++g_tmp, ti = ++g_tmp, tres = ++g_tmp;
+      int trecv = ++g_tmp, ti = ++g_tmp, tres = ++g_tmp, tbox = ++g_tmp;
       Buf rb = expr_buf(c, recv);
+      /* Keep the receiver boxed as well as coerced: Hash#select answers a
+         Hash, Array#select an Array, and only the runtime value says which
+         (#3449). sp_poly_arr_recv renders a hash as its [key, value] pairs, so
+         the loop below is the same either way. */
       emit_indent(g_pre, g_indent);
-      buf_printf(g_pre, "sp_PolyArray *_t%d = sp_poly_arr_recv(%s, \"%s\"); SP_GC_ROOT(_t%d);\n",
-                 trecv, rb.p ? rb.p : "sp_box_nil()", name, trecv);
+      buf_printf(g_pre, "sp_RbVal _t%d = %s; SP_GC_ROOT_RBVAL(_t%d);\n",
+                 tbox, rb.p ? rb.p : "sp_box_nil()", tbox);
       free(rb.p);
+      emit_indent(g_pre, g_indent);
+      buf_printf(g_pre, "sp_PolyArray *_t%d = sp_poly_arr_recv(_t%d, \"%s\"); SP_GC_ROOT(_t%d);\n",
+                 trecv, tbox, name, trecv);
       emit_indent(g_pre, g_indent);
       buf_printf(g_pre, "sp_PolyArray *_t%d = sp_PolyArray_new(); SP_GC_ROOT(_t%d);\n", tres, tres);
       emit_indent(g_pre, g_indent);
@@ -902,7 +912,7 @@ int emit_array_call(Compiler *c, int id, Buf *b) {
                  keep_truthy ? "" : "!", cb.p ? cb.p : "0", tres, es);
       free(cb.p);
       emit_indent(g_pre, g_indent); buf_puts(g_pre, "}\n");
-      buf_printf(b, "_t%d", tres);
+      buf_printf(b, "sp_poly_kept_result(_t%d, _t%d)", tbox, tres);
       return 1;
     }
   }
@@ -8862,16 +8872,33 @@ int emit_poly_call(Compiler *c, int id, Buf *b) {
      correct for any hash this mutator never (successfully) ran on. */
   if (sp_streq(name, "compare_by_identity"))  /* any arity: identity hashing is unsupported */
     unsupported(c, id, "Hash#compare_by_identity (identity-keyed hashing)");
-  /* #slice is #[] for every class that has it, and the boxed `[]` already
-     dispatches on the runtime kind -- so hand it over rather than mint a
-     second dispatch that would have to guess between String and Array
-     (#3445). Re-entry through a rename, like the typed-array slice above. */
-  if (recv >= 0 && rt == TY_POLY && (argc == 1 || argc == 2) &&
-      sp_streq(name, "slice") && nt_ref(nt, id, "block") < 0 &&
-      !user_defines_or_reads(c, "slice")) {
-    nt_node_set_str((NodeTable *)nt, id, "name", "[]");
-    emit_call(c, id, b);
-    nt_node_set_str((NodeTable *)nt, id, "name", "slice");
+  /* #slice on a boxed receiver is two different methods: Hash#slice(*keys)
+     answers a sub-Hash, while String#slice / Array#slice is exactly #[]. Only
+     the runtime value tells them apart, so branch on it and hand the non-hash
+     side to the boxed `[]` dispatch through a rename re-entry, like the
+     typed-array slice above (#3445, #3449). */
+  if (recv >= 0 && rt == TY_POLY && argc >= 1 && sp_streq(name, "slice") &&
+      nt_ref(nt, id, "block") < 0 && !user_defines_or_reads(c, "slice") &&
+      g_n_argov < MAX_ARG_OVERRIDE) {
+    int tsv = ++g_tmp;
+    buf_printf(b, "({ sp_RbVal _t%d = ", tsv); emit_boxed(c, recv, b);
+    buf_printf(b, "; (_t%d.tag == SP_TAG_OBJ && sp_poly_is_hash_kind(_t%d.cls_id))"
+                  " ? sp_poly_hash_slice(_t%d, %d, (sp_RbVal[]){", tsv, tsv, tsv, argc);
+    for (int i = 0; i < argc; i++) { if (i) buf_puts(b, ", "); emit_boxed(c, argv[i], b); }
+    buf_puts(b, "}) : ");
+    if (argc == 1 || argc == 2) {
+      g_argov_node[g_n_argov] = recv;
+      snprintf(g_argov_text[g_n_argov], sizeof g_argov_text[0], "_t%d", tsv);
+      g_n_argov++;
+      nt_node_set_str((NodeTable *)nt, id, "name", "[]");
+      Buf ib; memset(&ib, 0, sizeof ib); emit_call(c, id, &ib);
+      nt_node_set_str((NodeTable *)nt, id, "name", "slice");
+      g_n_argov--;
+      buf_puts(b, ib.p ? ib.p : "sp_box_nil()");
+      free(ib.p);
+    }
+    else buf_printf(b, "sp_raise_nomethod(sp_nomethod_msg(\"slice\", _t%d))", tsv);
+    buf_puts(b, "; })");
     return 1;
   }
   /* String value-form mutators on a boxed receiver: compute the non-bang
@@ -9024,10 +9051,13 @@ int emit_poly_call(Compiler *c, int id, Buf *b) {
         int th2 = ++g_tmp;
         buf_printf(b, "({ sp_RbVal _t%d = sp_poly_to_h_m(", th2);
         emit_expr(c, recv, b);
-        buf_printf(b, "); if (_t%d.cls_id != SP_BUILTIN_SYM_POLY_HASH)"
-                      " sp_raise_cls(\"TypeError\", \"to_h on a non-symbol-keyed boxed hash\");", th2);
+        buf_puts(b, ");");
+        /* A boxed slot takes any hash variant as-is. Only the concrete
+           sym-keyed slot needs one: a hash built at runtime through the
+           general merge path is a PolyPolyHash even when every key is a
+           Symbol, and rejecting it outright was wrong (#3452). */
         if (comp_ntype(c, id) == TY_POLY) buf_printf(b, " _t%d; })", th2);
-        else buf_printf(b, " (sp_SymPolyHash *)_t%d.v.p; })", th2);
+        else buf_printf(b, " sp_poly_as_sym_hash(_t%d); })", th2);
       }
       return 1;
     }
@@ -9259,9 +9289,15 @@ int emit_poly_call(Compiler *c, int id, Buf *b) {
           buf_printf(g_pre, "mrb_int _t%d = 0;\n", tc);
           emit_indent(g_pre, g_indent);
           buf_printf(g_pre, "for (mrb_int _t%d = 0; _t%d < sp_poly_length(_t%d); _t%d++) {\n", ti, ti, tr, ti);
-          if (cp0r) {
-            emit_indent(g_pre, g_indent + 1);
-            buf_printf(g_pre, "lv_%s = sp_poly_arr_get(_t%d, _t%d);\n", cp0r, tr, ti);
+          {
+            /* sp_poly_each_elem, not a raw index: a boxed Hash renders each
+               entry as its [key, value] pair, which a two-parameter block
+               autosplats the way every sibling element loop does (#3448). */
+            char csrc[64]; snprintf(csrc, sizeof csrc, "sp_poly_each_elem(_t%d, _t%d)", tr, ti);
+            if (!emit_iter_autosplat(c, cblk, TY_POLY_ARRAY, csrc, g_indent + 1) && cp0r) {
+              emit_indent(g_pre, g_indent + 1);
+              buf_printf(g_pre, "lv_%s = %s;\n", cp0r, csrc);
+            }
           }
           int svind = g_indent; g_indent++;
           for (int j = 0; j < cbn - 1; j++) emit_stmt(c, cbb[j], g_pre, g_indent);

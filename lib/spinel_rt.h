@@ -2835,8 +2835,13 @@ static void sp_poly_arr_writeback(sp_RbVal orig, sp_PolyArray *work) {
     default: return;   /* POLY_ARRAY: same storage; others: nothing to do */
   }
 }
+static sp_PolyArray *sp_enum_items_from(sp_RbVal v);   /* fwd: hash -> [key, value] pairs */
 static sp_PolyArray *sp_poly_arr_recv(sp_RbVal v, const char *m) {
   if (v.tag == SP_TAG_OBJ && sp_poly_is_array_kind(v.cls_id)) return sp_poly_to_poly_array(v);
+  /* A boxed Hash enumerates as its [key, value] pairs, which is what every
+     Enumerable name reaching here wants (#3449). The few whose Hash result is
+     itself a Hash rebuild one from the pairs at their own call site. */
+  if (v.tag == SP_TAG_OBJ && sp_poly_is_hash_kind(v.cls_id)) return sp_enum_items_from(v);
   /* a user object with #to_a (a container-read Set): iterate its elements
      through the generated hook (#3234) */
   if (v.tag == SP_TAG_OBJ && sp_obj_to_a_fn) {
@@ -5578,8 +5583,17 @@ static sp_RbVal sp_poly_max(sp_RbVal v) {
     default: return sp_box_nil();
   }
 }
+/* Hash#first / #last answer a [key, value] pair; sp_poly_arr_get indexes the
+   array kinds only, so a boxed hash answered nil (#3450). sp_enum_items_from
+   renders the pairs the same way `each` does. */
+static sp_PolyArray *sp_poly_hash_pairs_or_null(sp_RbVal v) {
+  if (v.tag == SP_TAG_OBJ && sp_poly_is_hash_kind(v.cls_id)) return sp_enum_items_from(v);
+  return NULL;
+}
 static sp_RbVal sp_poly_first(sp_RbVal v) {
   if (v.tag != SP_TAG_OBJ) return sp_box_nil();
+  { sp_PolyArray *ps = sp_poly_hash_pairs_or_null(v);
+    if (ps) return ps->len > 0 ? ps->data[0] : sp_box_nil(); }
   return sp_poly_arr_get(v, 0);
 }
 static sp_RbVal sp_poly_last(sp_RbVal v) {
@@ -6885,6 +6899,71 @@ static sp_PolyPolyHash *sp_poly_hash_merge(sp_RbVal a, sp_RbVal b) {
   }
   return r;
 }
+/* A boxed hash as the concrete symbol-keyed variant: itself when it already is
+   one, rebuilt when every key is a Symbol (a hash folded through the general
+   merge path is a PolyPolyHash regardless of its keys), and a TypeError only
+   when a key really is not a Symbol (#3452). */
+static sp_SymPolyHash *sp_poly_as_sym_hash(sp_RbVal v) {
+  if (v.tag == SP_TAG_OBJ && v.cls_id == SP_BUILTIN_SYM_POLY_HASH)
+    return (sp_SymPolyHash *)v.v.p;
+  if (v.tag == SP_TAG_OBJ && sp_poly_is_hash_kind(v.cls_id)) {
+    sp_PolyArray *pairs = sp_enum_items_from(v);
+    SP_GC_ROOT(pairs);
+    sp_SymPolyHash *h = sp_SymPolyHash_new();
+    SP_GC_ROOT(h);
+    for (mrb_int i = 0; pairs && i < pairs->len; i++) {
+      sp_RbVal pair = pairs->data[i], k = sp_poly_arr_get(pair, 0);
+      if (k.tag != SP_TAG_SYM) {
+        sp_raise_cls("TypeError", "to_h on a non-symbol-keyed boxed hash");
+        return NULL;
+      }
+      sp_SymPolyHash_set(h, (sp_sym)k.v.i, sp_poly_arr_get(pair, 1));
+    }
+    return h;
+  }
+  sp_raise_cls("TypeError", "to_h on a non-symbol-keyed boxed hash");
+  return NULL;
+}
+/* Hash#slice(*keys) on a boxed receiver: the sub-hash of the keys that are
+   present, in the order given (#3449). */
+static sp_RbVal sp_poly_hash_slice(sp_RbVal v, int n, sp_RbVal *keys) {
+  sp_PolyPolyHash *h = sp_PolyPolyHash_new();
+  SP_GC_ROOT(h);
+  for (int i = 0; i < n; i++)
+    if (sp_poly_has_key(v, keys[i]))
+      sp_PolyPolyHash_set(h, keys[i], sp_poly_index_poly(v, keys[i]));
+  return sp_box_obj(h, SP_BUILTIN_POLY_POLY_HASH);
+}
+/* The result of filtering a boxed receiver: a Hash receiver answers a Hash
+   rebuilt from the surviving [key, value] pairs, anything else the poly array
+   the loop collected. Only the runtime value can decide, so select/reject/
+   filter on a boxed receiver route their result through here (#3449). */
+static sp_RbVal sp_poly_kept_result(sp_RbVal orig, sp_PolyArray *kept) {
+  if (!(orig.tag == SP_TAG_OBJ && sp_poly_is_hash_kind(orig.cls_id)))
+    return sp_box_poly_array(kept);
+  sp_PolyPolyHash *h = sp_PolyPolyHash_new();
+  SP_GC_ROOT(h);
+  for (mrb_int i = 0; kept && i < kept->len; i++) {
+    sp_RbVal pair = kept->data[i];
+    sp_PolyPolyHash_set(h, sp_poly_arr_get(pair, 0), sp_poly_arr_get(pair, 1));
+  }
+  return sp_box_obj(h, SP_BUILTIN_POLY_POLY_HASH);
+}
+/* The general boxed-key/value form of any boxed hash: the shape the read-only
+   Hash/Enumerable face is compiled against when the receiver's variant is not
+   known at the call site (#3449). A hash that is already general is handed back
+   as-is; every other variant materializes, so this must stay read-only. A
+   receiver that is not a hash at all raises the NoMethodError the call site
+   would otherwise have raised. */
+static sp_PolyPolyHash *sp_poly_as_pp_hash(sp_RbVal v, const char *nm) {
+  if (v.tag == SP_TAG_OBJ && v.cls_id == SP_BUILTIN_POLY_POLY_HASH)
+    return (sp_PolyPolyHash *)v.v.p;
+  if (v.tag != SP_TAG_OBJ || !sp_poly_is_hash_kind(v.cls_id)) {
+    sp_raise_nomethod(sp_nomethod_msg(nm, v));
+    return NULL;
+  }
+  return sp_poly_hash_merge(v, sp_box_nil());
+}
 /* OpenStruct.new(hash) where hash is a runtime value (not a literal): seed the
    member table from the hash's entries, keys coerced to symbols. Copies, so
    mutating the OpenStruct does not alter the source hash (#3194). */
@@ -6943,6 +7022,22 @@ static sp_PolyArray *sp_poly_compact(sp_RbVal v) {
   sp_PolyArray *src = sp_poly_arr_recv(v, "compact");
   SP_GC_ROOT(src);
   return sp_PolyArray_compact(src);
+}
+/* #compact keeps the receiver's kind: a Hash drops the entries whose VALUE is
+   nil and stays a Hash, an Array drops its nil elements (#3449). */
+static sp_RbVal sp_poly_compact_val(sp_RbVal v) {
+  if (v.tag == SP_TAG_OBJ && sp_poly_is_hash_kind(v.cls_id)) {
+    sp_PolyArray *pairs = sp_enum_items_from(v);
+    SP_GC_ROOT(pairs);
+    sp_PolyPolyHash *h = sp_PolyPolyHash_new();
+    SP_GC_ROOT(h);
+    for (mrb_int i = 0; pairs && i < pairs->len; i++) {
+      sp_RbVal pair = pairs->data[i], val = sp_poly_arr_get(pair, 1);
+      if (val.tag != SP_TAG_NIL) sp_PolyPolyHash_set(h, sp_poly_arr_get(pair, 0), val);
+    }
+    return sp_box_obj(h, SP_BUILTIN_POLY_POLY_HASH);
+  }
+  return sp_box_poly_array(sp_poly_compact(v));
 }
 static sp_PolyArray *sp_poly_flatten(sp_RbVal v) {
   sp_PolyArray *src = sp_poly_arr_recv(v, "flatten");

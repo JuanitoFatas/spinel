@@ -2522,7 +2522,7 @@ static int emit_chunk_family_runs(Compiler *c, int ck) {
     int pen = 0; nt_arr(nt, pr, "elements", &pen);
     if (pen != 0) pr_empty_lit = 0;
   }
-  if (pr < 0 || (prt != TY_POLY_ARRAY && prt != TY_INT_ARRAY &&
+  if (pr < 0 || (prt != TY_POLY_ARRAY && prt != TY_INT_ARRAY && prt != TY_POLY &&
                  prt != TY_STR_ARRAY && prt != TY_FLOAT_ARRAY && !pr_empty_lit))
     return -1;
   int body = nt_ref(nt, block, "body");
@@ -2542,7 +2542,7 @@ static int emit_chunk_family_runs(Compiler *c, int ck) {
   /* A poly receiver pins the params poly for the body emission. A typed
      int/str receiver keeps the pass-assigned param types -- the snapshot's
      boxed elements unbox into them below. */
-  int pin_poly = (prt == TY_POLY_ARRAY);
+  int pin_poly = (prt == TY_POLY_ARRAY || prt == TY_POLY);
   if (pin_poly && lva) lva->type = TY_POLY;
   if (pin_poly && lvb) lvb->type = TY_POLY;
   TyKind at0 = (!pin_poly && lva && lva->type != TY_UNKNOWN) ? lva->type : TY_POLY;
@@ -2556,6 +2556,11 @@ static int emit_chunk_family_runs(Compiler *c, int ck) {
     buf_printf(g_pre, "sp_PolyArray *_t%d = sp_PolyArray_new(); SP_GC_ROOT(_t%d);\n", ta, ta);
   else if (prt == TY_POLY_ARRAY)
     buf_printf(g_pre, "sp_PolyArray *_t%d = %s; SP_GC_ROOT(_t%d);\n", ta, rb.p ? rb.p : "", ta);
+  /* A boxed receiver (a container-read row, a boxed Hash) walks the elements
+     sp_poly_arr_recv renders -- a hash's [key, value] pairs (#3451). */
+  else if (prt == TY_POLY)
+    buf_printf(g_pre, "sp_PolyArray *_t%d = sp_poly_arr_recv(%s, \"%s\"); SP_GC_ROOT(_t%d);\n",
+               ta, rb.p ? rb.p : "sp_box_nil()", m, ta);
   else
     buf_printf(g_pre, "sp_PolyArray *_t%d = sp_enum_items_from(sp_box_%s_array(%s)); SP_GC_ROOT(_t%d);\n",
                ta, prt == TY_INT_ARRAY ? "int" : prt == TY_STR_ARRAY ? "str" : "float",
@@ -5197,13 +5202,20 @@ int emit_predicate_expr(Compiler *c, int id, Buf *b) {
     emit_indent(g_pre, g_indent);
     buf_printf(g_pre, "for (mrb_int _t%d = 0; _t%d < _t%d; _t%d++) {\n", ti, ti, tlen, ti);
     int bodyIndentP = g_indent + 1;
-    if (p0) {
-      Scope *blkv = comp_scope_of(c, block);
-      LocalVar *plv = (blkv && p0raw) ? scope_local(blkv, p0raw) : NULL;
-      TyKind pt = plv ? plv->type : TY_POLY;
+    {
+      /* A multi-param block over a boxed receiver auto-splats each element,
+         exactly as the sibling element loops do: `h.none? { |k, v| ... }` on a
+         boxed Hash walks [key, value] pairs, and binding only the first param
+         left the second nil (#3448). */
       char src[64]; snprintf(src, sizeof src, "sp_poly_each_elem(_t%d, _t%d)", trecv, ti);
-      emit_indent(g_pre, bodyIndentP);
-      emit_block_param_from_boxed(c, p0, pt, src, g_pre);
+      int splatP = emit_iter_autosplat(c, block, TY_POLY_ARRAY, src, bodyIndentP);
+      if (!splatP && p0) {
+        Scope *blkv = comp_scope_of(c, block);
+        LocalVar *plv = (blkv && p0raw) ? scope_local(blkv, p0raw) : NULL;
+        TyKind pt = plv ? plv->type : TY_POLY;
+        emit_indent(g_pre, bodyIndentP);
+        emit_block_param_from_boxed(c, p0, pt, src, g_pre);
+      }
     }
     for (int j = 0; j < bn - 1; j++) emit_stmt(c, bb[j], g_pre, bodyIndentP);
     int saveIndentP = g_indent;
