@@ -1253,8 +1253,14 @@ void emit_expr(Compiler *c, int id, Buf *b) {
       buf_printf(b, "({ sp_PolyArray *_t%d = ", ta2); emit_expr(c, ir, b);
       buf_printf(b, "; mrb_int _t%d = ", tb2); emit_int_expr(c, iav[0], b);
       buf_printf(b, "; sp_RbVal _t%d = sp_PolyArray_get(_t%d, _t%d);", tc2, ta2, tb2);
-      buf_printf(b, " if (%ssp_poly_truthy(_t%d)) { _t%d = ", is_or2 ? "!" : "", tc2, tc2);
-      emit_boxed(c, iv, b);
+      buf_printf(b, " if (%ssp_poly_truthy(_t%d)) { ", is_or2 ? "!" : "", tc2);
+      /* The right-hand side's own prelude belongs INSIDE the guard. Hoisted
+         above it, a call there runs even when the key is already present --
+         which turned the memoizing `memo[n] ||= f.(n-1) + f.(n-2)` into
+         unbounded recursion. */
+      { Buf rvb; memset(&rvb, 0, sizeof rvb); Buf *svp = g_pre; g_pre = b;
+        emit_boxed(c, iv, &rvb); g_pre = svp;
+        buf_printf(b, "_t%d = %s", tc2, rvb.p ? rvb.p : "sp_box_nil()"); free(rvb.p); }
       buf_printf(b, "; sp_PolyArray_set(_t%d, _t%d, _t%d); } _t%d; })", ta2, tb2, tc2, tc2);
     }
     else if (irt == TY_INT_ARRAY) {
@@ -1290,8 +1296,14 @@ void emit_expr(Compiler *c, int id, Buf *b) {
       buf_printf(b, "; %s _t%d = ", c_type_name(kt), tb2); emit_hash_key(c, iav[0], kt, b);
       if (vt == TY_POLY) {
         buf_printf(b, "; sp_RbVal _t%d = sp_%sHash_get(_t%d, _t%d);", tc2, hn, ta2, tb2);
-        buf_printf(b, " if (%ssp_poly_truthy(_t%d)) { _t%d = ", is_or2 ? "!" : "", tc2, tc2);
-        emit_boxed(c, iv, b);
+        buf_printf(b, " if (%ssp_poly_truthy(_t%d)) { ", is_or2 ? "!" : "", tc2);
+        /* The right-hand side's own prelude belongs INSIDE the guard. Hoisted
+           above it, a call there runs even when the key is already present --
+           which turned the memoizing `memo[n] ||= f.(n-1) + f.(n-2)` into
+           unbounded recursion. */
+        { Buf rvb; memset(&rvb, 0, sizeof rvb); Buf *svp = g_pre; g_pre = b;
+          emit_boxed(c, iv, &rvb); g_pre = svp;
+          buf_printf(b, "_t%d = %s", tc2, rvb.p ? rvb.p : "sp_box_nil()"); free(rvb.p); }
         buf_printf(b, "; sp_%sHash_set(_t%d, _t%d, _t%d); } _t%d; })", hn, ta2, tb2, tc2, tc2);
       }
       else {
@@ -1311,23 +1323,41 @@ void emit_expr(Compiler *c, int id, Buf *b) {
       if (kt2 == TY_INT) {
         buf_printf(b, "mrb_int _t%d = ", tb2); emit_int_expr(c, iav[0], b); buf_puts(b, "; ");
         buf_printf(b, "sp_RbVal _t%d = sp_poly_arr_get_hash(_t%d, _t%d);", tc2, ta2, tb2);
-        buf_printf(b, " if (%ssp_poly_truthy(_t%d)) { _t%d = ", is_or2 ? "!" : "", tc2, tc2);
-        emit_boxed(c, iv, b);
+        buf_printf(b, " if (%ssp_poly_truthy(_t%d)) { ", is_or2 ? "!" : "", tc2);
+        /* The right-hand side's own prelude belongs INSIDE the guard. Hoisted
+           above it, a call there runs even when the key is already present --
+           which turned the memoizing `memo[n] ||= f.(n-1) + f.(n-2)` into
+           unbounded recursion. */
+        { Buf rvb; memset(&rvb, 0, sizeof rvb); Buf *svp = g_pre; g_pre = b;
+          emit_boxed(c, iv, &rvb); g_pre = svp;
+          buf_printf(b, "_t%d = %s", tc2, rvb.p ? rvb.p : "sp_box_nil()"); free(rvb.p); }
         buf_printf(b, "; sp_poly_arr_set_hash(_t%d, _t%d, _t%d); } _t%d; })", ta2, tb2, tc2, tc2);
       }
       else if (kt2 == TY_STRING) {
         buf_printf(b, "const char *_t%d = ", tb2); emit_expr(c, iav[0], b); buf_puts(b, "; ");
         buf_printf(b, "sp_RbVal _t%d = sp_poly_get_str(_t%d, _t%d);", tc2, ta2, tb2);
-        buf_printf(b, " if (%ssp_poly_truthy(_t%d)) { _t%d = ", is_or2 ? "!" : "", tc2, tc2);
-        emit_boxed(c, iv, b);
+        buf_printf(b, " if (%ssp_poly_truthy(_t%d)) { ", is_or2 ? "!" : "", tc2);
+        /* The right-hand side's own prelude belongs INSIDE the guard. Hoisted
+           above it, a call there runs even when the key is already present --
+           which turned the memoizing `memo[n] ||= f.(n-1) + f.(n-2)` into
+           unbounded recursion. */
+        { Buf rvb; memset(&rvb, 0, sizeof rvb); Buf *svp = g_pre; g_pre = b;
+          emit_boxed(c, iv, &rvb); g_pre = svp;
+          buf_printf(b, "_t%d = %s", tc2, rvb.p ? rvb.p : "sp_box_nil()"); free(rvb.p); }
         buf_printf(b, "; sp_poly_set_str(_t%d, _t%d, _t%d); } _t%d; })", ta2, tb2, tc2, tc2);
       }
       else {
         /* poly key fallback: box the key, look up polymorphically, set via poly */
         buf_printf(b, "sp_RbVal _t%d = ", tb2); emit_boxed(c, iav[0], b); buf_puts(b, "; ");
         buf_printf(b, "sp_RbVal _t%d = sp_poly_index_poly(_t%d, _t%d);", tc2, ta2, tb2);
-        buf_printf(b, " if (%ssp_poly_truthy(_t%d)) { _t%d = ", is_or2 ? "!" : "", tc2, tc2);
-        emit_boxed(c, iv, b);
+        buf_printf(b, " if (%ssp_poly_truthy(_t%d)) { ", is_or2 ? "!" : "", tc2);
+        /* The right-hand side's own prelude belongs INSIDE the guard. Hoisted
+           above it, a call there runs even when the key is already present --
+           which turned the memoizing `memo[n] ||= f.(n-1) + f.(n-2)` into
+           unbounded recursion. */
+        { Buf rvb; memset(&rvb, 0, sizeof rvb); Buf *svp = g_pre; g_pre = b;
+          emit_boxed(c, iv, &rvb); g_pre = svp;
+          buf_printf(b, "_t%d = %s", tc2, rvb.p ? rvb.p : "sp_box_nil()"); free(rvb.p); }
         buf_printf(b, "; sp_poly_set_poly(_t%d, _t%d, _t%d); } _t%d; })", ta2, tb2, tc2, tc2);
       }
     }
