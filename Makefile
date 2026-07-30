@@ -35,7 +35,7 @@ RBS_SRC      = $(wildcard $(RBS_DIR)/src/*.c) $(wildcard $(RBS_DIR)/src/util/*.c
 RBS_OBJ      = $(patsubst $(RBS_DIR)/src/%.c,build/rbs/%.o,$(RBS_SRC))
 RBS_LIB      = build/librbs.a
 
-.PHONY: all regexp rbs_extract rbs-test rbs-seed-test rubyspec rubyspec-gate spin-check \
+.PHONY: all regexp rbs_extract rbs-test rbs-seed-test alloc-report-test rubyspec rubyspec-gate spin-check \
         test test-run clean-test-results regen-rbs-expected \
         regen-expected regen-expected-err bench optcarrot gate check gate-legs gate-test gate-bench \
         gate-optcarrot clean install uninstall deps tools
@@ -1021,7 +1021,25 @@ optcarrot: $(SPINEL) $(SP_RT_LIB)
 check:
 	+@$(MAKE) --no-print-directory all
 	+@$(MAKE) --no-print-directory test OPT=-O1
+	+@$(MAKE) --no-print-directory alloc-report-test
 	+@$(MAKE) --no-print-directory spin-check
+
+# SPINEL_ALLOC_REPORT / SPINEL_ALLOC_SITES (#1336): the site is an address, so
+# assert the line SHAPE rather than a snapshot -- per-type lines without the
+# sites gate, `site;type` lines with it, and the program's own output either way.
+alloc-report-test: $(SPINEL) $(SP_RT_LIB)
+	@tmp=$$(mktemp -d /tmp/spinel-alloc.XXXXXX); ok=1; \
+	$(SPINEL) test/alloc-report/sites.rb -o "$$tmp/sites" >/dev/null 2>&1 || { echo "alloc-report-test: FAIL (compile)"; exit 1; }; \
+	SPINEL_ALLOC_REPORT="$$tmp/t.folded" "$$tmp/sites" > "$$tmp/t.out" 2>&1; \
+	grep -q '^done$$' "$$tmp/t.out" || { echo "alloc-report-test: FAIL (program output)"; ok=0; }; \
+	grep -qE '^alloc;[A-Za-z(][^;]* [0-9]+$$' "$$tmp/t.folded" || { echo "alloc-report-test: FAIL (no per-type alloc line)"; sed -n 1,5p "$$tmp/t.folded"; ok=0; }; \
+	grep -qE '^# bytes ' "$$tmp/t.folded" || { echo "alloc-report-test: FAIL (no bytes line)"; ok=0; }; \
+	SPINEL_ALLOC_REPORT="$$tmp/s.folded" SPINEL_ALLOC_SITES=1 "$$tmp/sites" > "$$tmp/s.out" 2>&1; \
+	grep -q '^done$$' "$$tmp/s.out" || { echo "alloc-report-test: FAIL (program output with sites)"; ok=0; }; \
+	if grep -qE '^alloc;.+;[A-Za-z(][^;]* [0-9]+$$' "$$tmp/s.folded"; then :; \
+	else grep -qE '^alloc;[A-Za-z(][^;]* [0-9]+$$' "$$tmp/s.folded" || { echo "alloc-report-test: FAIL (sites run produced neither shape)"; sed -n 1,5p "$$tmp/s.folded"; ok=0; }; fi; \
+	rm -rf "$$tmp"; \
+	if [ $$ok -eq 1 ]; then echo "alloc-report-test: pass"; else exit 1; fi
 
 # spin end-to-end: scaffold/path-dep/git-dep/lock/vendor/offline/test,
 # hermetic under a mktemp dir (tools/spin_e2e.sh).

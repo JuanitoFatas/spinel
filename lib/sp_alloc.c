@@ -5,6 +5,20 @@
    via a constructor, so a collection triggered from any TU also reaps strings. */
 #include "sp_alloc.h"
 #include "sp_dtoa.h"   /* sp_format_float for locale-independent Float#to_s */
+/* Per-site allocation attribution (SPINEL_ALLOC_SITES=1, on top of
+   SPINEL_ALLOC_REPORT). The site is the raw return address of the frame that
+   asked for the allocation -- captured here, symbolised only at dump time, so
+   nothing allocates on the counted path. execinfo is optional; without it the
+   report stays per-type. */
+#if defined(__has_include)
+#  if __has_include(<execinfo.h>)
+#    include <execinfo.h>
+#    define SP_ALLOC_SITE_AVAILABLE 1
+#  endif
+#endif
+#ifndef SP_ALLOC_SITE_AVAILABLE
+#  define SP_ALLOC_SITE_AVAILABLE 0
+#endif
 
 #ifdef SP_THREADS
 sp_str_wslot_t sp_str_wslot[SP_MAX_WORKERS];     /* zero-init: NULL lists, 0 bytes */
@@ -458,33 +472,88 @@ const char *sp_float_to_s(mrb_float f) {
    env value as a path, or stderr when it is "1". No signals, no allocation
    in the hot path, portable (plain counters + atexit). */
 int sp_alloc_report_on = 0;
-typedef struct { void *key; const char *name; unsigned long long count, bytes; } sp_AllocStat;
-#define SP_ALLOC_STATS 512
+static int sp_alloc_sites_on = 0;
+typedef struct { void *key; void *site; unsigned long long count, bytes; } sp_AllocStat;
+#define SP_ALLOC_STATS 2048
 static sp_AllocStat sp_alloc_stats[SP_ALLOC_STATS];
 static unsigned long long sp_alloc_str_count, sp_alloc_str_bytes;
+/* Type names live in their own table: one entry per scan fn, independent of
+   how many sites allocate it. */
+typedef struct { void *key; const char *name; } sp_AllocName;
+#define SP_ALLOC_NAMES 512
+static sp_AllocName sp_alloc_names[SP_ALLOC_NAMES];
 
-static sp_AllocStat *sp_alloc_stat_slot(void *key) {
-  size_t h = ((size_t)(uintptr_t)key >> 4) % SP_ALLOC_STATS;
+static const char *sp_alloc_name_of(void *key) {
+  size_t h = ((size_t)(uintptr_t)key >> 4) % SP_ALLOC_NAMES;
+  for (size_t i = 0; i < SP_ALLOC_NAMES; i++) {
+    sp_AllocName *n = &sp_alloc_names[(h + i) % SP_ALLOC_NAMES];
+    if (n->key == key) return n->name;
+    if (n->key == NULL) return NULL;
+  }
+  return NULL;
+}
+static sp_AllocStat *sp_alloc_stat_slot(void *key, void *site) {
+  size_t h = (((size_t)(uintptr_t)key >> 4) ^ ((size_t)(uintptr_t)site >> 3)) % SP_ALLOC_STATS;
   for (size_t i = 0; i < SP_ALLOC_STATS; i++) {
     sp_AllocStat *s = &sp_alloc_stats[(h + i) % SP_ALLOC_STATS];
-    if (s->key == key || s->key == NULL) { s->key = key; return s; }
+    if ((s->key == key && s->site == site) || s->key == NULL) { s->key = key; s->site = site; return s; }
   }
   return &sp_alloc_stats[h];   /* table full: merge into the home slot */
 }
-static unsigned long long sp_alloc_noscan_count, sp_alloc_noscan_bytes;
+/* The frame that asked for this allocation: skip this helper, the counter and
+   the allocator itself. */
+static void *sp_alloc_site_now(void) {
+#if SP_ALLOC_SITE_AVAILABLE
+  if (!sp_alloc_sites_on) return NULL;
+  /* frame 0 is this counter (sp_alloc_site_now inlines into it), frame 1 the
+     allocator, frame 2 the code that asked -- which is what we want. */
+  void *fr[4];
+  int n = backtrace(fr, 4);
+  return n >= 3 ? fr[2] : (n > 0 ? fr[n - 1] : NULL);
+#else
+  return NULL;
+#endif
+}
+/* NULL is the table's empty marker, so a scan-less object (an int array, a
+   plain byte buffer) counts under this stand-in key -- which keeps it on the
+   per-site path too. */
+#define SP_ALLOC_NOSCAN_KEY ((void *)(uintptr_t)1)
 void sp_alloc_report_count(void *scan, size_t bytes) {
-  if (!scan) {   /* NULL is the table's empty marker: dedicated bucket */
-    sp_alloc_noscan_count++; sp_alloc_noscan_bytes += (unsigned long long)bytes;
-    return;
-  }
-  sp_AllocStat *s = sp_alloc_stat_slot(scan);
+  sp_AllocStat *s = sp_alloc_stat_slot(scan ? scan : SP_ALLOC_NOSCAN_KEY, sp_alloc_site_now());
   s->count++; s->bytes += (unsigned long long)bytes;
 }
 void sp_alloc_report_str(size_t bytes) {
   sp_alloc_str_count++; sp_alloc_str_bytes += (unsigned long long)bytes;
 }
 void sp_alloc_report_tag(void *scan, const char *name) {
-  sp_alloc_stat_slot(scan)->name = name;
+  size_t h = ((size_t)(uintptr_t)scan >> 4) % SP_ALLOC_NAMES;
+  for (size_t i = 0; i < SP_ALLOC_NAMES; i++) {
+    sp_AllocName *n = &sp_alloc_names[(h + i) % SP_ALLOC_NAMES];
+    if (n->key == scan || n->key == NULL) { n->key = scan; n->name = name; return; }
+  }
+}
+/* A site's human name, resolved at dump time. Prefers the symbol name from
+   the dynamic symbol table; falls back to the raw address. Caller frees. */
+static char *sp_alloc_site_name(void *site) {
+#if SP_ALLOC_SITE_AVAILABLE
+  char **syms = backtrace_symbols(&site, 1);
+  if (syms && syms[0]) {
+    /* "path(sym+0x12) [0xaddr]" -> "sym" when the symbol is there */
+    const char *o = strchr(syms[0], '(');
+    const char *plus = o ? strchr(o, '+') : NULL;
+    char *r;
+    if (o && plus && plus > o + 1) {
+      size_t n = (size_t)(plus - o - 1);
+      r = (char *)malloc(n + 1);
+      if (r) { memcpy(r, o + 1, n); r[n] = 0; free(syms); return r; }
+    }
+    r = strdup(syms[0]);
+    free(syms);
+    if (r) return r;
+  }
+  if (syms) free(syms);
+#endif
+  { char *r = (char *)malloc(32); if (r) snprintf(r, 32, "%p", site); return r; }
 }
 static void sp_alloc_report_dump(void) {
   const char *out = getenv("SPINEL_ALLOC_REPORT");
@@ -495,27 +564,36 @@ static void sp_alloc_report_dump(void) {
     if (g) { f = g; close_f = 1; }
   }
   if (sp_alloc_str_count) fprintf(f, "alloc;String %llu\n", sp_alloc_str_count);
-  if (sp_alloc_noscan_count) fprintf(f, "alloc;(no-scan) %llu\n", sp_alloc_noscan_count);
-  for (size_t i = 0; i < SP_ALLOC_STATS; i++) {
-    sp_AllocStat *s = &sp_alloc_stats[i];
-    if (!s->key || !s->count) continue;
-    if (s->name) fprintf(f, "alloc;%s %llu\n", s->name, s->count);
-    else fprintf(f, "alloc;scan_%p %llu\n", s->key, s->count);
+  /* Symbolise the sites once, here: `alloc;<site>;<Type> <count>` keeps the
+     folded-stack shape a flamegraph consumer wants, with the site as the outer
+     frame. Without site tracking the line is the old per-type one. */
+  for (int pass = 0; pass < 2; pass++) {
+    const char *lead = pass ? "# bytes " : "alloc;";
+    for (size_t i = 0; i < SP_ALLOC_STATS; i++) {
+      sp_AllocStat *s = &sp_alloc_stats[i];
+      if (!s->key || !s->count) continue;
+      const char *nm = s->key == SP_ALLOC_NOSCAN_KEY ? "(no-scan)" : sp_alloc_name_of(s->key);
+      char tybuf[64];
+      if (!nm) { snprintf(tybuf, sizeof tybuf, "scan_%p", s->key); nm = tybuf; }
+      unsigned long long v = pass ? s->bytes : s->count;
+      if (s->site) {
+        char *sym = sp_alloc_site_name(s->site);
+        if (pass) fprintf(f, "# bytes %s;%s %llu\n", sym, nm, v);
+        else      fprintf(f, "alloc;%s;%s %llu\n", sym, nm, v);
+        free(sym);
+      }
+      else fprintf(f, "%s%s %llu\n", lead, nm, v);
+    }
   }
   if (sp_alloc_str_count) fprintf(f, "# bytes String %llu\n", sp_alloc_str_bytes);
-  if (sp_alloc_noscan_count) fprintf(f, "# bytes (no-scan) %llu\n", sp_alloc_noscan_bytes);
-  for (size_t i = 0; i < SP_ALLOC_STATS; i++) {
-    sp_AllocStat *s = &sp_alloc_stats[i];
-    if (!s->key || !s->count) continue;
-    if (s->name) fprintf(f, "# bytes %s %llu\n", s->name, s->bytes);
-    else fprintf(f, "# bytes scan_%p %llu\n", s->key, s->bytes);
-  }
   if (close_f) fclose(f);
 }
 __attribute__((constructor)) static void sp_alloc_report_boot(void) {
   const char *e = getenv("SPINEL_ALLOC_REPORT");
   if (e && *e && strcmp(e, "0") != 0) {
     sp_alloc_report_on = 1;
+    { const char *sv = getenv("SPINEL_ALLOC_SITES");
+      sp_alloc_sites_on = (sv && *sv && strcmp(sv, "0") != 0) ? 1 : 0; }
     atexit(sp_alloc_report_dump);
   }
 }

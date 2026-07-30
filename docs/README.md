@@ -24,6 +24,9 @@ Start here, then open the topic you need.
   CRuby's value-dependent rule.
 - **[int-overflow.md](int-overflow.md)** — `--int-overflow=raise|wrap|promote`:
   what happens when an `Integer` crosses Spinel's 64-bit boundary.
+- **[profiling.md](profiling.md)** — where the time goes (`--profile` plus any
+  frame-pointer sampler) and where the allocations come from
+  (`SPINEL_ALLOC_REPORT`, with per-site attribution).
 - **[thread.md](thread.md)** — `Thread` as true M:N parallelism with no GVL:
   the execution model, the supported API, and the data-race semantics that
   follow from having no global lock.
