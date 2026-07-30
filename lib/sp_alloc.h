@@ -130,6 +130,14 @@ extern SP_TLS void *_sp_ret_strbuf;
    constructor so it runs from sp_gc_collect regardless of which TU triggered
    the collection. */
 void sp_str_sweep(void);
+/* The string-sweep gate, split so the scheduler can run the middle on the
+   workers that own the slots (see sp_alloc.c). */
+int  sp_str_sweep_begin(int *major);
+void sp_str_sweep_end(int major, size_t promoted);
+#ifdef SP_THREADS
+void sp_str_sweep_one(int wid, int major, size_t *promoted);
+extern int sp_str_par_done;
+#endif
 void sp_str_lcache_clear(void);
 /* Collect + retune (see sp_alloc.c). The single-threaded allocators call the
    per-heap variants directly; sp_stw_collect (threaded) runs _all under STW. */
