@@ -4387,6 +4387,15 @@ static void emit_tail_value(Compiler *c, int node, Buf *b) {
       return;
     }
   }
+  /* A bare `nil` returned through an int or float slot. emit_expr renders
+     NilNode as the numeric default 0, which in those two slots is a real
+     value -- the caller reads 0 / 0.0 where the method said nil. Both have a
+     sentinel (SP_INT_NIL, the float NaN), and every consumer already tests
+     for it: the same method returning nil through a String or bool slot is
+     correct today because NULL and the poly box carry nil natively. So spell
+     the sentinel here rather than let the numeric default stand (#3458). */
+  if ((g_ret_type == TY_INT || g_ret_type == TY_FLOAT) &&
+      nt_kind(c->nt, node) == NK_NilNode) { emit_ret_nil(c, g_ret_type, b); return; }
   Buf tmp; memset(&tmp, 0, sizeof tmp);
   emit_expr(c, node, &tmp);
   const char *txt = tmp.p ? tmp.p : "";

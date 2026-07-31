@@ -1,0 +1,5 @@
+i nil?=true to_s=<>
+f nil?=true to_s=<>
+b nil?=true to_s=<>
+s nil?=true to_s=<>
+i2=1 f2=1.5

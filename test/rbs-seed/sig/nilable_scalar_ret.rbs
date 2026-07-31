@@ -1,0 +1,6 @@
+class Seed
+  def self.i: (bool) -> Integer?
+  def self.f: (bool) -> Float?
+  def self.b: (bool) -> bool?
+  def self.s: (bool) -> String?
+end
