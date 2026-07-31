@@ -7531,6 +7531,20 @@ static int any_class_defines(Compiler *c, const char *qm) {
       return 1;
   return 0;
 }
+/* Read the analyze-time `recv.<qm>` probes stashed on a respond_to? node: a
+   recognized method infers a concrete type, an unrecognized one stays UNKNOWN.
+   Reading the cached type is side-effect free (unlike emitting, which mutates
+   g_pre/g_tmp), so it is safe inside a live fold. Returns 0 when no probe was
+   synthesized (a non-literal method name). */
+static int rt_probe_answer(Compiler *c, int id, int *yes) {
+  int pn = 0; const int *probes = nt_arr(c->nt, id, "rt_probes", &pn);
+  if (!probes || pn <= 0) return 0;
+  *yes = 0;
+  for (int p = 0; p < pn; p++)
+    if (comp_ntype(c, probes[p]) != TY_UNKNOWN) { *yes = 1; break; }
+  return 1;
+}
+
 static int class_responds_to(Compiler *c, int ci, const char *qm) {
   const NodeTable *nt = c->nt;
   if (comp_cmethod_in_chain(c, ci, qm, NULL) >= 0) return 1;
@@ -7548,8 +7562,10 @@ static int class_responds_to(Compiler *c, int ci, const char *qm) {
   int dn = c->classes[ci].def_node;
   const char *dt = dn >= 0 ? nt_type(nt, dn) : NULL;
   int is_module = dt && sp_streq(dt, "ModuleNode");
-  /* a module also responds to its def'd (module_function) methods */
-  if (is_module && comp_method_in_chain(c, ci, qm, NULL) >= 0) return 1;
+  /* A module's `module_function` methods are recorded class-level and were
+     already matched above. Its plain `def m` are instance methods, which the
+     module object itself does NOT respond to -- answering true for those made
+     `Greeter.respond_to?(:greet)` disagree with CRuby (#3467). */
   /* builtin Class/Module methods every class object inherits */
   static const char *const cls_uni[] = {
     "name", "instance_methods", "public_instance_methods",
@@ -17204,6 +17220,12 @@ else { memcpy(dir, sf, n); dir[n] = 0; } }
         if (rty && sp_streq(rty, "ConstantReadNode")) {
           int ci = comp_class_index(c, nt_str(nt, recv, "name"));
           if (ci >= 0) { resolved = 1; yes = class_responds_to(c, ci, qm); }
+          /* A core class or module (String, Integer, Comparable, Thread) has no
+             user class entry, and stopping here left the call unresolved -- it
+             then raised NoMethodError, or was rejected outright by the front
+             end. The synthesized probes answer it from the real resolver, the
+             same way they do for a primitive receiver (#3467). */
+          else if (rt_probe_answer(c, id, &yes)) resolved = 1;
         }
         else if (recv >= 0 && ty_is_object(rt)) {
           int cid = ty_object_class(rt);
@@ -17317,17 +17339,7 @@ else { memcpy(dir, sf, n); dir[n] = 0; } }
              so it never drifts from what a real `recv.qm` would compile to. A
              poly/unknown receiver with no user protocol method falls through
              here (the builtin probe answer) rather than a possibly-wrong false. */
-          int pn = 0; const int *probes = nt_arr(nt, id, "rt_probes", &pn);
-          if (probes && pn > 0) {
-            resolved = 1; yes = 0;
-            /* Each probe is a synthesized `recv.m(...)` call the analyze fixpoint
-               already typed with the real resolver; a recognized method infers a
-               concrete type, an unrecognized one stays UNKNOWN. Reading the
-               cached inferred type is side-effect free (unlike emitting, which
-               mutates g_pre/g_tmp), so it is safe inside the live fold. */
-            for (int p = 0; p < pn; p++)
-              if (comp_ntype(c, probes[p]) != TY_UNKNOWN) { yes = 1; break; }
-          }
+          if (rt_probe_answer(c, id, &yes)) resolved = 1;
         }
       }
       if (resolved) { buf_printf(b, "%d", yes); return; }
