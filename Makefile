@@ -1034,11 +1034,26 @@ check:
 	+@$(MAKE) --no-print-directory all
 	+@$(MAKE) --no-print-directory test OPT=-O1
 	+@$(MAKE) --no-print-directory alloc-report-test
+	+@$(MAKE) --no-print-directory infer-test
 	+@$(MAKE) --no-print-directory spin-check
 
 # SPINEL_ALLOC_REPORT / SPINEL_ALLOC_SITES (#1336): the site is an address, so
 # assert the line SHAPE rather than a snapshot -- per-type lines without the
 # sites gate, `site;type` lines with it, and the program's own output either way.
+# Inference properties the stdout comparison cannot see: a boxed slot still
+# prints the right answer, so a type regression here is invisible to `make
+# test`. Assert the emitted C signature directly, the way rbs-seed-test does
+# for seeds.
+infer-test: $(SPINEL) $(SP_RT_LIB)
+	@tmp=$$(mktemp -d /tmp/spinel-infer.XXXXXX); ok=1; \
+	$(SPINEL) test/infer/unsettled_index_write.rb -c --no-line-map -o "$$tmp/u.c" >/dev/null 2>&1 || { echo "infer-test: FAIL (compile unsettled_index_write)"; exit 1; }; \
+	grep -Eq 'static mrb_int sp_M_s_mul\(mrb_int [A-Za-z_]+, mrb_int [A-Za-z_]+\)' "$$tmp/u.c" || { echo "infer-test: FAIL (an int-keyed []= on an unsettled slot poisoned the call graph)"; grep -E 'sp_M_s_mul\(' "$$tmp/u.c" | head -1; ok=0; }; \
+	grep -Eq 'sp_IntArray \* *lv_xs' "$$tmp/u.c" || { echo "infer-test: FAIL (the mapped array did not settle to an int array)"; ok=0; }; \
+	$(SPINEL) test/infer/int_keyed_hash.rb -c --no-line-map -o "$$tmp/k.c" >/dev/null 2>&1 || { echo "infer-test: FAIL (compile int_keyed_hash)"; exit 1; }; \
+	grep -Eq 'sp_IntIntHash \* *lv_h' "$$tmp/k.c" || { echo "infer-test: FAIL (a slot with no array evidence lost its int-keyed hash)"; ok=0; }; \
+	rm -rf "$$tmp"; \
+	if [ $$ok -eq 1 ]; then echo "infer-test: pass"; else exit 1; fi
+
 alloc-report-test: $(SPINEL) $(SP_RT_LIB)
 	@tmp=$$(mktemp -d /tmp/spinel-alloc.XXXXXX); ok=1; \
 	$(SPINEL) test/alloc-report/sites.rb -o "$$tmp/sites" >/dev/null 2>&1 || { echo "alloc-report-test: FAIL (compile)"; exit 1; }; \

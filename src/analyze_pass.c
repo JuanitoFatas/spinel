@@ -2059,16 +2059,33 @@ int infer_write_types(Compiler *c) {
          would otherwise collide with it. Mirrors the ivar guard. */
       if (!is_push && lv->type == TY_UNKNOWN) {
         int lsc_sid = (int)(lsc - c->scopes);
-        int has_array_write = 0;
-        for (int _r = lw_index_first(&lw_ix, rnm, lsc_sid); _r >= 0 && !has_array_write; _r = lw_ix.next[_r]) {
+        int has_array_write = 0, has_unsettled_write = 0;
+        for (int _r = lw_index_first(&lw_ix, rnm, lsc_sid); _r >= 0; _r = lw_ix.next[_r]) {
           int w = lw_ix.node[_r];
           if (nt_kind(nt, w) != NK_LocalVariableWriteNode) continue;
           const char *wn = nt_str(nt, w, "name");
           if (!wn || !sp_streq(wn, rnm) || comp_scope_of(c, w) != lsc) continue;
           int wv = nt_ref(nt, w, "value");
-          if (wv >= 0 && ty_is_array(infer_type(c, wv))) has_array_write = 1;
+          if (wv < 0) continue;
+          if (ty_is_array(infer_type(c, wv))) { has_array_write = 1; break; }
+          /* `xs = src.map { ... }` is an ARRAY once the block's own return
+             settles, but it reads UNKNOWN until then -- and an int-keyed
+             `xs[i] = v` in between would pin xs to an int-keyed hash. That
+             guess is committed the moment xs is passed anywhere, because
+             parameters only widen: when the map result later settles on an
+             Integer array the two unify to poly and every method the value
+             reaches boxes for good. Only the array-producing iterators count
+             here; a write that cannot become an array (a hash literal, a
+             Hash.new call) is left to the rules that already type it. */
+          if (infer_type(c, wv) == TY_UNKNOWN && nt_kind(nt, wv) == NK_CallNode &&
+              nt_ref(nt, wv, "block") >= 0 &&
+              ty_iter_shape(nt_str(nt, wv, "name")) != TY_ITER_NONE)
+            has_unsettled_write = 1;
         }
         if (has_array_write) continue;
+        /* while the fixpoint runs; the second stage (g_infer_optimistic
+           cleared) still types a slot whose array evidence never arrived */
+        if (g_infer_optimistic && has_unsettled_write) continue;
       }
       slot = &lv->type;
       slot_reset = !lv->is_param && !lv->is_block_param && !lv->rbs_seeded;
