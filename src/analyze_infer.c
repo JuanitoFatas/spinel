@@ -4578,10 +4578,16 @@ else {
         sp_streq(name, "include?"))
       return TY_BOOL;
     if (rt == TY_POLY) {
-      /* &. on a poly receiver may short-circuit to nil at runtime → always poly */
+      /* &. on a poly receiver may short-circuit to nil at runtime → always
+         poly. The array-returning trio below is the exception: those lower to
+         a C pointer, for which NULL already reads as nil, and calling the
+         whole expression poly left the guard's two arms disagreeing about
+         their C type (an sp_RbVal nil against an sp_PolyArray *) (#3461). */
       {
         const char *call_op = nt_str(nt, id, "call_operator");
-        if (recv >= 0 && call_op && sp_streq(call_op, "&.")) return TY_POLY;
+        int sn_arr = (sp_streq(name, "keys") || sp_streq(name, "values") ||
+                      sp_streq(name, "to_a")) && argc == 0;
+        if (recv >= 0 && call_op && sp_streq(call_op, "&.") && !sn_arr) return TY_POLY;
       }
       if (sp_streq(name, "to_s") || sp_streq(name, "inspect")) return TY_STRING;
       if ((sp_streq(name, "gsub") || sp_streq(name, "sub")) && argc == 2) return TY_STRING;

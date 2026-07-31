@@ -8966,9 +8966,16 @@ void emit_call(Compiler *c, int id, Buf *b) {
                    tsn, rsn.p ? rsn.p : "sp_box_nil()", tsn);
         free(rsn.p);
         buf_printf(b, "(_sn%d.tag == SP_TAG_NIL ? ", tsn);
+        /* an array-typed result lowers to a C pointer, whose NULL is nil */
+        int sn_ptr = (ret2 == TY_INT || ret2 == TY_FLOAT || ret2 == TY_STRING ||
+                      ty_is_array(ret2));
         if (ret2 == TY_INT) buf_puts(b, "SP_INT_NIL");
         else if (ret2 == TY_FLOAT) buf_puts(b, "sp_float_nil()");
         else if (ret2 == TY_STRING) buf_puts(b, "((const char *)NULL)");
+        else if (ty_is_array(ret2)) {
+          const char *ak = (ret2 == TY_POLY_ARRAY) ? "Poly" : array_kind(ret2);
+          buf_printf(b, "((sp_%sArray *)NULL)", ak ? ak : "Poly");
+        }
         else buf_puts(b, "sp_box_nil()");
         buf_puts(b, " : (");
         if (g_n_argov < MAX_ARG_OVERRIDE) {
@@ -8976,7 +8983,7 @@ void emit_call(Compiler *c, int id, Buf *b) {
           g_argov_node[slot2] = recv;
           snprintf(g_argov_text[slot2], sizeof g_argov_text[0], "_sn%d", tsn);
           int sv_skip = g_sn_skip; g_sn_skip = id;
-          if (ret2 == TY_INT || ret2 == TY_FLOAT || ret2 == TY_STRING) emit_expr(c, id, b);
+          if (sn_ptr) emit_expr(c, id, b);
           else emit_boxed(c, id, b);
           g_sn_skip = sv_skip;
           g_n_argov--;
