@@ -200,6 +200,10 @@ const char *sp_Random_urandom(mrb_int n) {
   for (mrb_int i = 0; i < n; i++) b[i] = (char)(sp_pcg32_adv(&sp_urandom_state) & 0xff);
   b[n] = 0;
   sp_str_set_len(b, (size_t)n);
+  /* CRuby hands back ASCII-8BIT, so #length is the byte count. Without the
+     mark, a short draw that happens to spell valid UTF-8 (about 1.5% of
+     4-byte draws) counted code points and answered short (#3474). */
+  sp_str_mark_binary(b);
   return b;
 }
 /* Random#inspect / #to_s: CRuby's default object rendering (the seed is not

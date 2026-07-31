@@ -17588,7 +17588,10 @@ else { memcpy(dir, sf, n); dir[n] = 0; } }
     else if (rt == TY_STRING) {
       /* +str returns a mutable copy (so subsequent <</concat/upcase! mutate a
          fresh string); -str returns a FROZEN string (#2331). */
-      if (name[0] == '+') { buf_puts(b, "sp_str_dup_external("); emit_expr(c, recv, b); buf_puts(b, ")"); }
+      /* sp_str_dup, not sp_str_dup_external: the latter sizes the copy with
+         strlen (it is for C strings that carry no header), which truncated a
+         receiver holding an embedded NUL (#3473) */
+      if (name[0] == '+') { buf_puts(b, "sp_str_dup("); emit_expr(c, recv, b); buf_puts(b, ")"); }
       else { buf_puts(b, "sp_str_uminus_val("); emit_expr(c, recv, b); buf_puts(b, ")"); }  /* frozen recv: identity (#2369) */
     }
     else if (rt == TY_BIGINT) {

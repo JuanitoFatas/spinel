@@ -1070,8 +1070,13 @@ sp_PolyArray *sp_str_chars_poly(const char *s) {
   sp_PolyArray *a = sp_PolyArray_new();
   SP_GC_ROOT(a);
   if (!s) sp_nil_recv("chars");
-  for (const char *p = s; *p; ) {
-    int n = sp_utf8_advance(p);
+  /* to the recorded byte length, not to the first NUL: a NUL is an ordinary
+     character and the ones after it are real (#3473) */
+  int bin = sp_str_is_binary(s);
+  const char *end = s + sp_str_byte_len(s);
+  for (const char *p = s; p < end; ) {
+    int n = bin ? 1 : sp_utf8_advance(p);
+    if (p + n > end) n = (int)(end - p);
     char *c = sp_str_alloc(n); memcpy(c, p, n); c[n] = 0;
     sp_PolyArray_push(a, sp_box_str(c));
     p += n;
@@ -2164,14 +2169,14 @@ sp_StrIntHash*sp_gc_stat(void){
      misses a just-pushed one (benign undercount for an introspection stat). */
   { int nw = sp_active_workers; if (nw < 1) nw = 1; if (nw > SP_MAX_WORKERS) nw = SP_MAX_WORKERS;
     for (int wi = 0; wi < nw; wi++) {
-      for(sp_str_hdr*sh=sp_str_wslot[wi].young; sh; sh=sh->next){ str_bytes+=sh->size; str_count++; }
-      for(sp_str_hdr*sh=sp_str_wslot[wi].old; sh; sh=sh->next){ str_bytes+=sh->size; str_count++; } } }
+      for(sp_str_hdr*sh=sp_str_wslot[wi].young; sh; sh=sh->next){ str_bytes+=sh->size & SP_STR_SIZE_MASK; str_count++; }
+      for(sp_str_hdr*sh=sp_str_wslot[wi].old; sh; sh=sh->next){ str_bytes+=sh->size & SP_STR_SIZE_MASK; str_count++; } } }
 #else
   SP_HEAP_LOCK();
   /* Both generations: the split is an internal sweep optimization, so the
      reported footprint has to stay the whole string heap. */
-  for(sp_str_hdr*sh=sp_str_heap; sh; sh=sh->next){ str_bytes+=sh->size; str_count++; }
-  for(sp_str_hdr*sh=sp_str_old; sh; sh=sh->next){ str_bytes+=sh->size; str_count++; }
+  for(sp_str_hdr*sh=sp_str_heap; sh; sh=sh->next){ str_bytes+=sh->size & SP_STR_SIZE_MASK; str_count++; }
+  for(sp_str_hdr*sh=sp_str_old; sh; sh=sh->next){ str_bytes+=sh->size & SP_STR_SIZE_MASK; str_count++; }
   SP_HEAP_UNLOCK();
 #endif
   sp_StrIntHash*h=sp_StrIntHash_new();sp_StrIntHash_set(h,SPL("bytes"),(mrb_int)SP_GC_CTR_GET(sp_gc_bytes));sp_StrIntHash_set(h,SPL("old_bytes"),(mrb_int)sp_gc_old_bytes);sp_StrIntHash_set(h,SPL("threshold"),(mrb_int)sp_gc_threshold);sp_StrIntHash_set(h,SPL("cycle"),(mrb_int)sp_gc_cycle);sp_StrIntHash_set(h,SPL("full_runs"),(mrb_int)(sp_gc_cycle/SP_GC_FULL_INTERVAL));sp_StrIntHash_set(h,SPL("str_bytes"),(mrb_int)str_bytes);sp_StrIntHash_set(h,SPL("str_count"),str_count);return h;}

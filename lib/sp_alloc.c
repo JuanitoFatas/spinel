@@ -290,10 +290,10 @@ static void sp_str_sweep_young(sp_str_hdr **head, size_t *bytes,
       if (m == 0xfc) body[0] = (char)0xfe;
       h->next = keep;
       keep = h;
-      moved += h->size;
+      moved += h->size & SP_STR_SIZE_MASK;
     }
     else {
-      *bytes -= h->size;
+      *bytes -= h->size & SP_STR_SIZE_MASK;
       free(h);
     }
     h = next;
@@ -316,7 +316,7 @@ static void sp_str_sweep_old(sp_str_hdr **head, size_t *bytes) {
     else if (m == 0xf1) { pp = &h->next; }
     else {
       *pp = h->next;
-      *bytes -= h->size;
+      *bytes -= h->size & SP_STR_SIZE_MASK;
       free(h);
     }
   }

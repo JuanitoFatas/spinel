@@ -154,6 +154,18 @@ void sp_alloc_report_count(void *scan, size_t bytes);
 void sp_alloc_report_str(size_t bytes);
 void sp_alloc_report_tag(void *scan, const char *name);
 
+/* Binary (ASCII-8BIT) strings. spinel keeps no per-string encoding tag:
+   String#length counts UTF-8 code points while the bytes stay valid UTF-8 and
+   falls back to the byte count once an invalid byte shows up, which lands on
+   Ruby's answer for text and for almost all binary data. "Almost" is the gap:
+   a short draw of random bytes is valid UTF-8 by chance about 1.5% of the
+   time, and Random.urandom(4).length then answered 3 (#3474). One bit says
+   "these bytes are data, count them as bytes" for the few producers that know
+   it. It rides in the top bit of the header's `size` (the allocation total,
+   far below 2GB), so no string grows by a byte. */
+#define SP_STR_SIZE_BINARY 0x80000000u
+#define SP_STR_SIZE_MASK   0x7FFFFFFFu
+
 static inline char *sp_str_alloc(size_t len) {
   size_t total = sizeof(sp_str_hdr) + 1 + len + 1;
   sp_str_hdr *h;
@@ -223,6 +235,21 @@ static inline char *sp_str_alloc_raw(size_t total_with_null) {
   char *s = sp_str_alloc(total_with_null > 0 ? total_with_null - 1 : 0);
   (((sp_str_hdr *)(s - 1)) - 1)->len = SP_STR_LEN_UNSET;
   return s;
+}
+
+/* The markers that carry a real sp_str_hdr in front of the bytes; a raw C
+   string (a bare literal, a getenv result) has none and answers "not binary". */
+static inline int sp_str_has_hdr(const char *s) {
+  unsigned char m = ((const unsigned char *)s)[-1];
+  return m == 0xfe || m == 0xfc || m == 0xfd || m == 0xf1;
+}
+static inline int sp_str_is_binary(const char *s) {
+  if (!s || !sp_str_has_hdr(s)) return 0;
+  return (((const sp_str_hdr *)(s - 1)) - 1)->size & SP_STR_SIZE_BINARY ? 1 : 0;
+}
+static inline void sp_str_mark_binary(char *s) {
+  if (!s || !sp_str_has_hdr(s)) return;
+  (((sp_str_hdr *)(s - 1)) - 1)->size |= SP_STR_SIZE_BINARY;
 }
 
 static inline size_t sp_str_byte_len(const char *s) {
