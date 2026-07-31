@@ -989,6 +989,29 @@ int reconcile_locals_reading_ivars(Compiler *c) {
 /* Element type contributed by a pushed value (see yield_aware_elem_ty). */
 static TyKind push_elem_ty(Compiler *c, int node) { return yield_aware_elem_ty(c, node); }
 
+/* Does the subtree assign a local anywhere? Gates the recompute pass below:
+   only a block whose body introduces locals can have left an enclosing write's
+   RHS type derived from still-reset slots. */
+static int subtree_writes_local(const NodeTable *nt, int id) {
+  if (id < 0) return 0;
+  const char *ty = nt_type(nt, id);
+  if (ty && (sp_streq(ty, "LocalVariableWriteNode") ||
+             sp_streq(ty, "LocalVariableOperatorWriteNode") ||
+             sp_streq(ty, "LocalVariableOrWriteNode") ||
+             sp_streq(ty, "LocalVariableAndWriteNode"))) return 1;
+  int nr = nt_num_refs(nt, id);
+  for (int i = 0; i < nr; i++)
+    if (subtree_writes_local(nt, nt_ref_at(nt, id, i))) return 1;
+  int na = nt_num_arrs(nt, id);
+  for (int i = 0; i < na; i++) {
+    int n = 0;
+    const int *ids = nt_arr_at(nt, id, i, &n);
+    for (int k = 0; k < n; k++)
+      if (subtree_writes_local(nt, ids[k])) return 1;
+  }
+  return 0;
+}
+
 int infer_write_types(Compiler *c) {
   const NodeTable *nt = c->nt;
   int changed = 0;
@@ -1153,7 +1176,15 @@ int infer_write_types(Compiler *c) {
     int is_ie = sp_streq(vnm, "instance_eval") || sp_streq(vnm, "instance_exec");
     if (!is_ie) {
       TyKind vrt = infer_type(c, vrecv);
-      if (!ty_is_object(vrt) || !comp_trampoline_kind(c, ty_object_class(vrt), vnm, NULL)) continue;
+      int tramp = ty_is_object(vrt) &&
+                  comp_trampoline_kind(c, ty_object_class(vrt), vnm, NULL);
+      /* An iterator block that assigns a local has the same shape: the block
+         body's locals sit at higher node ids than this write, so the main loop
+         derived the element type with them still reset to UNKNOWN and the slot
+         came out narrower than the value the block actually yields
+         (`r = [0].map { |i| w = ...; w ? w[0] : 9 }` -> an Integer array
+         holding boxed values) (#3463). */
+      if (!tramp && !subtree_writes_local(nt, nt_ref(nt, val_id, "block"))) continue;
     }
     const char *nm = nt_str(nt, id, "name");
     LocalVar *lv = nm ? scope_local(comp_scope_of(c, id), nm) : NULL;
