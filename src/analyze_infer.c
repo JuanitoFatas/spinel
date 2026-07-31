@@ -34,7 +34,15 @@ static int an_nonblock_no_exception(Compiler *c, int id) {
   return e >= 0 && nt_type(nt, e) && sp_streq(nt_type(nt, e), "FalseNode");
 }
 
+/* Set while re-deriving a poly-receiver call's type as if no user class owned
+   the name: the answer the builtin surface alone would give. A union whose
+   receiver provably carries a container needs both that answer and the user
+   one, and codegen needs to know the builtin shape to emit its arm (#3459). */
+static int an_builtin_only = 0;
+int an_builtin_only_p(void) { return an_builtin_only; }
+
 int an_user_defines_or_reads(Compiler *c, const char *name) {
+  if (an_builtin_only) return 0;
   if (!name) return 0;
   for (int k = 0; k < c->nclasses; k++) {
     if (comp_method_in_chain(c, k, name, NULL) >= 0) return 1;
@@ -4578,6 +4586,19 @@ else {
         sp_streq(name, "include?"))
       return TY_BOOL;
     if (rt == TY_POLY) {
+      /* A container read the poly dispatch may have to serve from a builtin
+         Array or Hash: record what the builtin surface alone would answer, so
+         codegen can shape that arm (its emitters read the node's own type, and
+         the node here holds the union). Computed once per node. */
+      if (recv >= 0 && !an_builtin_only && poly_container_read_p(name) &&
+          nt_ref(nt, id, "block") < 0 && c->poly_builtin_ty &&
+          id < c->node_cap && c->poly_builtin_ty[id] == TY_UNKNOWN &&
+          an_user_defines_or_reads(c, name)) {
+        an_builtin_only = 1;
+        TyKind bt = infer_call(c, id);
+        an_builtin_only = 0;
+        c->poly_builtin_ty[id] = bt;
+      }
       /* &. on a poly receiver may short-circuit to nil at runtime → always
          poly. The array-returning trio below is the exception: those lower to
          a C pointer, for which NULL already reads as nil, and calling the
@@ -4596,20 +4617,16 @@ else {
       if (sp_streq(name, "to_f")) return TY_FLOAT;
       /* Hash#keys / #values on a poly hash -> a poly array (boxed elements).
          to_a on a poly value follows the same rule: nil -> [], arrays and
-         hashes materialize, anything else raises (sp_poly_to_a_arr).
-         For keys/values a user class owning the name does not take the answer
-         over: the receiver is a union, so the value is the user return OR the
-         builtin array, and pinning it to the user's return type made the
-         dispatch raise on a real Hash (#3459). Poly holds both. to_a keeps the
-         user's type -- it is a conversion every collection class defines, so
-         widening it cascades through the containers built from the result. */
+         hashes materialize, anything else raises (sp_poly_to_a_arr). A user
+         class owning the name is handled by the container-union rule at the
+         user lookup below. */
       if ((sp_streq(name, "keys") || sp_streq(name, "values") ||
            sp_streq(name, "to_a")) && argc == 0) {
         int has_user = 0;
+        if (!an_builtin_only)
         for (int k = 0; k < c->nclasses && !has_user; k++)
           if (comp_method_in_chain(c, k, name, NULL) >= 0) has_user = 1;
         if (!has_user) return TY_POLY_ARRAY;
-        if (!sp_streq(name, "to_a")) return TY_POLY;
       }
       if (sp_streq(name, "clamp")) return TY_POLY;  /* boxed numeric clamp -> poly */
       /* nil-aware conversions (a nil local widens to poly): boxed results */
@@ -4618,6 +4635,7 @@ else {
            sp_streq(name, "to_r") || sp_streq(name, "rationalize") ||
            sp_streq(name, "to_c"))) {
         int has_user = 0;
+        if (!an_builtin_only)
         for (int k = 0; k < c->nclasses && !has_user; k++)
           if (comp_method_in_chain(c, k, name, NULL) >= 0) has_user = 1;
         if (!has_user) {
@@ -4631,6 +4649,7 @@ else {
       }
       if (argc == 1 && sp_streq(name, "===")) {
         int has_user = 0;
+        if (!an_builtin_only)
         for (int k = 0; k < c->nclasses && !has_user; k++)
           if (comp_method_in_chain(c, k, name, NULL) >= 0) has_user = 1;
         if (!has_user) return TY_BOOL;
@@ -4725,6 +4744,7 @@ else {
           }
           continue;
         }
+        if (an_builtin_only) continue;   /* the builtin answer alone is wanted */
         int mi = comp_method_in_chain(c, k, name, NULL);
         if (mi >= 0) { r = found ? ty_unify(r, c->scopes[mi].ret) : c->scopes[mi].ret; found = 1; continue; }
         int rdcls = -1;
@@ -4738,11 +4758,20 @@ else {
           r = found ? ty_unify(r, rt2) : rt2; found = 1;
         }
       }
-      /* first/last are container reads a builtin Array or Hash in the union
-         serves too, so pinning the result to the user class's return type made
-         the dispatch raise on a genuine Array. Poly holds both answers (#3459). */
-      if (found && argc == 0 && (sp_streq(name, "first") || sp_streq(name, "last")))
+      /* The receiver is a union. When it provably carries a builtin Array or
+         Hash (see infer_container_flow), a container read's value is the user
+         return OR the builtin answer -- pinning it to the user return left the
+         dispatch no room for the builtin arm, which then raised NoMethodError
+         on a genuine Array or Hash (#3459). Poly holds both. Without the
+         evidence the slot is a user object the fixpoint has not settled yet,
+         and widening it there poisons the class (Set's own @data).
+         The builtin answer's own shape is recorded for codegen, which emits
+         the builtin arm by re-entering the ordinary emission and has to know
+         whether that produces an array pointer or a boxed value. */
+      if (found && !an_builtin_only && poly_container_read_p(name) &&
+          nt_ref(nt, id, "block") < 0 && poly_expr_flows_container(c, recv)) {
         return TY_POLY;
+      }
       if (found) return r;
       /* Numeric queries / rounding on a boxed value: the sp_poly_* helpers
          dispatch on the runtime tag (a non-numeric tag raises CRuby's
@@ -4776,6 +4805,7 @@ else {
            sp_streq(name, "take") || sp_streq(name, "drop") ||
            sp_streq(name, "rotate") || sp_streq(name, "sample"))) {
         int has_user = 0;
+        if (!an_builtin_only)
         for (int k = 0; k < c->nclasses && !has_user; k++)
           if (comp_method_in_chain(c, k, name, NULL) >= 0 ||
               comp_reader_in_chain(c, k, name, NULL)) has_user = 1;
@@ -4783,6 +4813,7 @@ else {
       }
       if (argc >= 1 && sp_streq(name, "values_at") && nt_ref(nt, id, "block") < 0) {
         int has_user = 0;
+        if (!an_builtin_only)
         for (int k = 0; k < c->nclasses && !has_user; k++)
           if (comp_method_in_chain(c, k, name, NULL) >= 0) has_user = 1;
         if (!has_user) return TY_POLY_ARRAY;
@@ -6865,7 +6896,12 @@ TyKind infer_type(Compiler *c, int id) {
      untouched so the receiver's own type is unaffected. */
   if (id == g_hash_face_node) return TY_POLY_POLY_HASH;
   TyKind t = infer_uncached(c, id);
-  c->ntype[id] = t;
+  /* The builtin-only re-derivation (see an_builtin_only) asks what this call
+     would be if no user class owned the name. That answer is not the node's
+     real type, and neither are the child types derived under it, so the cache
+     must not record any of them -- leaving them in made the whole analysis
+     order-sensitive (#3459). */
+  if (!an_builtin_only) c->ntype[id] = t;
   return t;
 }
 

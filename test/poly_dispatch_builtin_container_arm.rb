@@ -53,3 +53,27 @@ p a.select { |x| x > 1 }
 s = Src.arr(false)
 p s.first
 p s.map
+
+# The reads the general mechanism reaches once a user class owns the name:
+# analyze widens the union to poly and the dispatch's builtin arm re-enters the
+# ordinary emission, so the builtin receiver answers exactly as it would with
+# no user class in the program.
+class Shadow2
+  def min; :S; end
+  def max; :S; end
+  def sum; :S; end
+  def sort; :S; end
+  def reverse; :S; end
+  def index(x); :S; end
+end
+class Src2
+  def self.arr(w) = w ? [3, 1, 2] : Shadow2.new
+end
+b = Src2.arr(true)
+p b.min
+p b.max
+p b.sum
+p b.sort
+p b.reverse
+p b.index(1)
+p Src2.arr(false).min

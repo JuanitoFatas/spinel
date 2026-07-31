@@ -989,6 +989,140 @@ int reconcile_locals_reading_ivars(Compiler *c) {
 /* Element type contributed by a pushed value (see yield_aware_elem_ty). */
 static TyKind push_elem_ty(Compiler *c, int node) { return yield_aware_elem_ty(c, node); }
 
+/* ---- "this poly slot can hold a builtin container" ----
+   TY_POLY is a top type with no member list, so a call on a poly receiver
+   cannot tell a union that really includes an Array/Hash from a user object
+   the fixpoint has not pinned down yet. The dispatch needs the difference: a
+   user class owning a container method name must not strip the builtin answer
+   (#3459), and widening every such call instead poisons classes whose poly
+   slots never hold a container. These two passes carry one bit -- "a builtin
+   Array or Hash is among the values that flow here" -- along the same edges
+   the types travel, and only ever turn it on. */
+
+static int flows_container(Compiler *c, int node, int depth);
+
+/* The tail value of a statements list, which is what a body evaluates to. */
+static int stmts_tail(const NodeTable *nt, int stmts) {
+  if (stmts < 0) return -1;
+  int n = 0;
+  const int *b = nt_arr(nt, stmts, "body", &n);
+  return (b && n > 0) ? b[n - 1] : -1;
+}
+
+/* Resolve a call to the user scope it lands in, or -1. */
+static int call_target_scope(Compiler *c, int id) {
+  const NodeTable *nt = c->nt;
+  const char *nm = nt_str(nt, id, "name");
+  if (!nm) return -1;
+  int recv = nt_ref(nt, id, "receiver");
+  if (recv < 0) {
+    int mi = comp_method_index(c, nm);
+    if (mi >= 0) return mi;
+    Scope *self = comp_scope_of(c, id);
+    if (self && self->class_id >= 0) {
+      mi = comp_method_in_chain(c, self->class_id, nm, NULL);
+      if (mi < 0) mi = comp_cmethod_in_chain(c, self->class_id, nm, NULL);
+    }
+    return mi;
+  }
+  const char *rty = nt_type(nt, recv);
+  if (rty && (sp_streq(rty, "ConstantReadNode") || sp_streq(rty, "ConstantPathNode"))) {
+    int ci = comp_class_index(c, nt_str(nt, recv, "name"));
+    return ci >= 0 ? comp_cmethod_in_chain(c, ci, nm, NULL) : -1;
+  }
+  TyKind rt = infer_type(c, recv);
+  if (ty_is_object(rt)) return comp_method_in_chain(c, ty_object_class(rt), nm, NULL);
+  return -1;
+}
+
+static int flows_container(Compiler *c, int node, int depth) {
+  if (node < 0 || depth > 6) return 0;
+  const NodeTable *nt = c->nt;
+  TyKind t = infer_type(c, node);
+  /* At depth 0 the caller is asking about a POLY receiver, so "this expression
+     is itself a container" is not evidence -- it would mean there is no poly
+     dispatch to widen. Only the slot evidence counts there. Deeper down we are
+     walking the values that flow into such a slot, where a container-typed
+     producer is exactly the evidence wanted. A transient array typing of the
+     receiver otherwise answered yes for a slot that never holds one, which is
+     how Set's `orig.to_a` came to widen (#3459). */
+  if (depth > 0 && (ty_is_array(t) || ty_is_hash(t))) return 1;
+  /* a settled non-container concrete type carries no container */
+  if (t != TY_POLY && t != TY_UNKNOWN && t != TY_NIL) return 0;
+  const char *ty = nt_type(nt, node);
+  if (!ty) return 0;
+  if (sp_streq(ty, "ParenthesesNode")) return flows_container(c, stmts_tail(nt, nt_ref(nt, node, "body")), depth + 1);
+  if (sp_streq(ty, "StatementsNode")) return flows_container(c, stmts_tail(nt, node), depth + 1);
+  if (sp_streq(ty, "ReturnNode")) {
+    int a = nt_ref(nt, node, "arguments");
+    int n = 0; const int *av = a >= 0 ? nt_arr(nt, a, "arguments", &n) : NULL;
+    return (av && n > 0) ? flows_container(c, av[0], depth + 1) : 0;
+  }
+  if (sp_streq(ty, "IfNode") || sp_streq(ty, "UnlessNode")) {
+    if (flows_container(c, stmts_tail(nt, nt_ref(nt, node, "statements")), depth + 1)) return 1;
+    int sub = nt_ref(nt, node, "subsequent");
+    if (sub < 0) sub = nt_ref(nt, node, "else_clause");
+    if (sub < 0) return 0;
+    const char *sty = nt_type(nt, sub);
+    if (sty && (sp_streq(sty, "ElseNode") || sp_streq(sty, "IfNode") || sp_streq(sty, "UnlessNode")))
+      return flows_container(c, sty && sp_streq(sty, "ElseNode")
+                                ? stmts_tail(nt, nt_ref(nt, sub, "statements")) : sub, depth + 1);
+    return flows_container(c, sub, depth + 1);
+  }
+  if (sp_streq(ty, "AndNode") || sp_streq(ty, "OrNode"))
+    return flows_container(c, nt_ref(nt, node, "left"), depth + 1) ||
+           flows_container(c, nt_ref(nt, node, "right"), depth + 1);
+  if (sp_streq(ty, "CaseNode")) {
+    int n = 0; const int *ws = nt_arr(nt, node, "conditions", &n);
+    for (int i = 0; ws && i < n; i++)
+      if (flows_container(c, stmts_tail(nt, nt_ref(nt, ws[i], "statements")), depth + 1)) return 1;
+    int el = nt_ref(nt, node, "else_clause");
+    return el >= 0 && flows_container(c, stmts_tail(nt, nt_ref(nt, el, "statements")), depth + 1);
+  }
+  if (sp_streq(ty, "LocalVariableReadNode")) {
+    const char *nm = nt_str(nt, node, "name");
+    LocalVar *lv = nm ? scope_local(comp_scope_of(c, node), nm) : NULL;
+    return lv ? lv->poly_ctr : 0;
+  }
+  if (sp_streq(ty, "CallNode")) {
+    int mi = call_target_scope(c, node);
+    return mi >= 0 ? c->scopes[mi].ret_poly_ctr : 0;
+  }
+  return 0;
+}
+
+int poly_expr_flows_container(Compiler *c, int node) { return flows_container(c, node, 0); }
+
+int infer_container_flow(Compiler *c) {
+  const NodeTable *nt = c->nt;
+  int changed = 0;
+  for (int id = 0; id < nt->count; id++) {
+    const char *ty = nt_type(nt, id);
+    if (!ty) continue;
+    if (sp_streq(ty, "LocalVariableWriteNode")) {
+      const char *nm = nt_str(nt, id, "name");
+      LocalVar *lv = nm ? scope_local(comp_scope_of(c, id), nm) : NULL;
+      if (!lv || lv->poly_ctr) continue;
+      if (flows_container(c, nt_ref(nt, id, "value"), 1)) { lv->poly_ctr = 1; changed = 1; }
+    }
+  }
+  /* explicit returns, in ONE node pass: the per-scope rescan this replaces is
+     O(scopes * nodes), which dominates on a large input */
+  for (int id = 0; id < nt->count; id++) {
+    const char *ty = nt_type(nt, id);
+    if (!ty || !sp_streq(ty, "ReturnNode")) continue;
+    int s = c->nscope[id];
+    if (s < 0 || s >= c->nscopes || c->scopes[s].ret_poly_ctr) continue;
+    if (flows_container(c, id, 1)) { c->scopes[s].ret_poly_ctr = 1; changed = 1; }
+  }
+  for (int s = 0; s < c->nscopes; s++) {
+    Scope *sc = &c->scopes[s];
+    if (sc->ret_poly_ctr) continue;
+    if (flows_container(c, stmts_tail(nt, sc->body), 1)) { sc->ret_poly_ctr = 1; changed = 1; }
+  }
+  return changed;
+}
+
 /* Does the subtree assign a local anywhere? Gates the recompute pass below:
    only a block whose body introduces locals can have left an enclosing write's
    RHS type derived from still-reset slots. */

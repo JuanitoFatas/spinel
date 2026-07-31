@@ -9280,6 +9280,16 @@ void analyze_program(Compiler *c) {
      locals (`a = m()`) -- and the callers' own returns -- on the next round.
      A write-only re-run would strand such a caller's return at UNKNOWN, and
      the method would emit as void, silently dropping its value (#1670). */
+  /* Settle the container-flow bits ONCE, on the types the main fixpoint left,
+     then let the write/return re-runs below propagate the widening they gate.
+     Not inside the fixpoint: a bit arriving mid-run re-types a call after its
+     neighbours have settled, and whether it arrived at all depended on node
+     order -- a --line-map and a --no-line-map run of the same program then
+     disagreed about whether a program compiled at all. Not before it either:
+     the evidence is a container-typed producer, which the fixpoint is what
+     establishes. (#3459) */
+  for (int iter = 0; iter < 8; iter++) if (!infer_container_flow(c)) break;
+
   g_ret_no_new_poly = 1;
   for (int iter = 0; iter < 8; iter++) {
     int ch = infer_write_types(c);

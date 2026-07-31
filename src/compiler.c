@@ -58,6 +58,7 @@ Compiler *comp_new(const NodeTable *nt) {
   c->empty_hash_recv = calloc((size_t)n, 1);
   c->empty_hash_arg = calloc((size_t)n, 1);
   c->empty_hash_want = calloc((size_t)n, sizeof(TyKind));
+  c->poly_builtin_ty = calloc((size_t)n, sizeof(TyKind));
   c->node_cap = n;
   return c;
 }
@@ -76,7 +77,8 @@ void comp_grow_node_arrays(Compiler *c) {
   c->empty_hash_recv = realloc(c->empty_hash_recv, (size_t)n);
   c->empty_hash_arg = realloc(c->empty_hash_arg, (size_t)n);
   c->empty_hash_want = realloc(c->empty_hash_want, sizeof(TyKind) * (size_t)n);
-  for (int i = c->node_cap; i < n; i++) { c->ntype[i] = TY_UNKNOWN; c->nilnarrow[i] = TY_UNKNOWN; c->nscope[i] = 0; c->node_cbody[i] = -1; c->empty_arr_recv[i] = 0; c->empty_hash_recv[i] = 0; c->empty_hash_arg[i] = 0; c->empty_hash_want[i] = TY_UNKNOWN; c->strbuf_box[i] = 0; }
+  c->poly_builtin_ty = realloc(c->poly_builtin_ty, sizeof(TyKind) * (size_t)n);
+  for (int i = c->node_cap; i < n; i++) { c->ntype[i] = TY_UNKNOWN; c->nilnarrow[i] = TY_UNKNOWN; c->nscope[i] = 0; c->node_cbody[i] = -1; c->empty_arr_recv[i] = 0; c->empty_hash_recv[i] = 0; c->empty_hash_arg[i] = 0; c->empty_hash_want[i] = TY_UNKNOWN; c->poly_builtin_ty[i] = TY_UNKNOWN; c->strbuf_box[i] = 0; }
   c->node_cap = n;
 }
 
@@ -134,6 +136,7 @@ void comp_free(Compiler *c) {
   free(c->empty_arr_recv);
   free(c->empty_hash_recv);
   free(c->empty_hash_want);
+  free(c->poly_builtin_ty);
   free(c);
 }
 
@@ -1109,6 +1112,23 @@ const char *poly_enum_op_for(const char *name) {
   return NULL;
 }
 
+
+/* Reads whose answer a builtin Array or Hash gives differently from any user
+   method of the same name, and which the poly builtin surface can actually
+   serve. On a poly receiver that provably carries a container, a call to one of
+   these is a union of the user return and the builtin answer, so its type has
+   to be poly -- pinning it to the user return left the dispatch with no room
+   for the builtin arm, which then raised NoMethodError on a genuine Array or
+   Hash (#3459). Names the surface cannot serve are left out: widening them
+   would change the type without changing the answer. */
+int poly_container_read_p(const char *name) {
+  static const char *const N[] = {
+    "first", "last", "keys", "values", "min", "max", "sum", "sort",
+    "reverse", "index", NULL };
+  if (!name) return 0;
+  for (int i = 0; N[i]; i++) if (sp_streq(name, N[i])) return 1;
+  return 0;
+}
 
 /* A Class-valued receiver that carries its class only at run time: a variable,
    or a call whose result is a class (`Job.set(1).run(2)` -- ActiveJob's chained

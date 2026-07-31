@@ -893,7 +893,15 @@ int diag_user_defines(Compiler *c, const char *name) {
    chain. Used where a builtin poly-method shortcut must decline to the general
    cls_id dispatch so a field-reader arm (which the general path DOES emit) wins
    over a colliding builtin (e.g. Data member `day` vs Time#day, #3239). */
+/* Set while emitting a poly dispatch's builtin-container arm. Inside that arm
+   the runtime value is known to BE an Array or Hash, so the user classes that
+   own the name are not candidates there and the builtin emitters must serve it
+   as if the name were unowned -- the switch's own case labels keep the user
+   receivers out (#3459). */
+int g_poly_builtin_arm = 0;
+
 int user_defines_or_reads(Compiler *c, const char *name) {
+  if (g_poly_builtin_arm) return 0;
   if (diag_user_defines(c, name)) return 1;
   for (int uk = 0; uk < c->nclasses; uk++)
     if (comp_is_reader(&c->classes[uk], name)) return 1;
@@ -3630,6 +3638,10 @@ static int emit_poly_builtin_method(Compiler *c, int id, Buf *b) {
 }
 
 static int emit_poly_method_dispatch(Compiler *c, int id, Buf *b) {
+  /* Re-entered from this very dispatch's builtin-container arm: decline, so
+     the call falls through to the builtin emitters the arm is there to
+     reach. Without this the arm rebuilt the same switch (#3459). */
+  if (g_pd_skip == id) return 0;
   const NodeTable *nt = c->nt;
   const char *name = nt_str(nt, id, "name");
   int recv = nt_ref(nt, id, "receiver");
@@ -4064,37 +4076,63 @@ static int emit_poly_method_dispatch(Compiler *c, int id, Buf *b) {
         buf_printf(b, " case SP_BUILTIN_INT_INT_HASH: _t%d = %s((sp_IntIntHash *)_t%d.v.p)->len == 0%s; break;", tr, ebopen, tv, ebclose);
       }
       /* Container reads on a builtin receiver that reached this dispatch only
-         because a user class happens to own the name. The user arms are emitted
-         above; without these the switch left every builtin tag on the raise
-         default, so `hash.keys` / `array.first` on a genuine Hash or Array
-         raised NoMethodError (#3459). Only for a poly result slot: a scalar
-         slot means the dispatch was fixed to the user return type, and widening
-         it here would need a conversion the arm cannot pick. */
-      if (argc == 0 && ret == TY_POLY &&
-          (sp_streq(name, "first") || sp_streq(name, "last") ||
-           sp_streq(name, "keys") || sp_streq(name, "values") ||
-           sp_streq(name, "to_a"))) {
-        const char *arr_tags =
-          " case SP_BUILTIN_INT_ARRAY: case SP_BUILTIN_SYM_ARRAY:"
-          " case SP_BUILTIN_FLT_ARRAY: case SP_BUILTIN_STR_ARRAY:"
-          " case SP_BUILTIN_POLY_ARRAY:";
-        const char *hash_tags =
-          " case SP_BUILTIN_STR_INT_HASH: case SP_BUILTIN_STR_STR_HASH:"
-          " case SP_BUILTIN_INT_STR_HASH: case SP_BUILTIN_INT_INT_HASH:"
-          " case SP_BUILTIN_STR_POLY_HASH: case SP_BUILTIN_SYM_POLY_HASH:"
-          " case SP_BUILTIN_POLY_POLY_HASH:";
-        if (sp_streq(name, "first") || sp_streq(name, "last")) {
-          buf_printf(b, "%s%s _t%d = sp_poly_%s(_t%d); break;",
-                     arr_tags, hash_tags, tr, name, tv);
+         because a user class happens to own the name. The user arms are above;
+         without an arm of its own the switch left every builtin tag on the
+         raise default, so `hash.keys` / `array.first` on a genuine Hash or
+         Array raised NoMethodError (#3459).
+
+         Rather than re-implement each read here, re-enter the ordinary call
+         emission on the guarded temp with g_poly_builtin_arm set: inside these
+         case labels the value IS a container, so the user classes owning the
+         name are not candidates and the builtin surface should serve the call
+         exactly as it would with no user class in the program. That is the
+         invariant -- a user class owning a name must not change what a builtin
+         receiver does -- and it holds for every name the surface serves, not a
+         list maintained here. Only for a poly result slot: a scalar slot means
+         the dispatch was pinned to the user return type (analyze widens the
+         ones it can, see poly_container_read_p), and the re-entered emission
+         would not fit it. */
+      if (argc == 0 && ret == TY_POLY && nt_ref(nt, id, "block") < 0 &&
+          poly_container_read_p(name) && g_pd_skip != id &&
+          g_n_argov < MAX_ARG_OVERRIDE) {
+        int slot9 = g_n_argov++;
+        g_argov_node[slot9] = recv;
+        snprintf(g_argov_text[slot9], sizeof g_argov_text[0], "_t%d", tv);
+        int sv_pd = g_pd_skip, sv_fb = g_poly_builtin_arm;
+        g_pd_skip = id; g_poly_builtin_arm = 1;
+        /* The builtin surface reads the node's own type to pick its shape, and
+           this node was widened to poly to hold both answers. Restore the
+           builtin-only type analyze recorded (an array read lowers to a
+           pointer, a scalar read to a boxed value) for the duration, then box
+           the result back into the dispatch's poly slot. */
+        TyKind bt9 = (c->poly_builtin_ty && id < c->node_cap)
+                       ? c->poly_builtin_ty[id] : TY_UNKNOWN;
+        TyKind sv_ty = c->ntype[id];
+        if (bt9 != TY_UNKNOWN) c->ntype[id] = bt9;
+        Buf ib9; memset(&ib9, 0, sizeof ib9);
+        if (bt9 != TY_UNKNOWN && bt9 != TY_POLY) {
+          Buf nb9; memset(&nb9, 0, sizeof nb9);
+          emit_expr(c, id, &nb9);
+          emit_boxed_text(c, bt9, nb9.p ? nb9.p : "0", &ib9);
+          free(nb9.p);
         }
-        else if (sp_streq(name, "to_a")) {
-          buf_printf(b, "%s%s _t%d = sp_box_nullable_obj((void *)sp_poly_to_a_arr(_t%d),"
-                        " SP_BUILTIN_POLY_ARRAY); break;", arr_tags, hash_tags, tr, tv);
+        else emit_boxed(c, id, &ib9);
+        c->ntype[id] = sv_ty;
+        g_pd_skip = sv_pd; g_poly_builtin_arm = sv_fb;
+        g_n_argov--;
+        /* an emission that fell through to the raise token adds nothing: leave
+           those tags on the switch's own default so the message is the same */
+        if (ib9.p && strncmp(ib9.p, "sp_raise_nomethod(", 18) != 0) {
+          buf_puts(b, " case SP_BUILTIN_INT_ARRAY: case SP_BUILTIN_SYM_ARRAY:"
+                      " case SP_BUILTIN_FLT_ARRAY: case SP_BUILTIN_STR_ARRAY:"
+                      " case SP_BUILTIN_POLY_ARRAY:"
+                      " case SP_BUILTIN_STR_INT_HASH: case SP_BUILTIN_STR_STR_HASH:"
+                      " case SP_BUILTIN_INT_STR_HASH: case SP_BUILTIN_INT_INT_HASH:"
+                      " case SP_BUILTIN_STR_POLY_HASH: case SP_BUILTIN_SYM_POLY_HASH:"
+                      " case SP_BUILTIN_POLY_POLY_HASH:");
+          buf_printf(b, " _t%d = %s; break;", tr, ib9.p);
         }
-        else {
-          buf_printf(b, "%s _t%d = sp_box_nullable_obj((void *)sp_poly_%s(_t%d),"
-                        " SP_BUILTIN_POLY_ARRAY); break;", hash_tags, tr, name, tv);
-        }
+        free(ib9.p);
       }
       /* compare_by_identity? on a poly-carried hash: every spinel hash is
          value-keyed (the mutating variant is a compile error), so any hash
@@ -18928,8 +18966,9 @@ else { memcpy(dir, sf, n); dir[n] = 0; } }
       (sp_streq(name, "inject") || sp_streq(name, "reduce")) &&
       comp_ntype(c, argv[0]) == TY_SYMBOL) {
     int ncand8 = 0;
-    for (int k = 0; k < c->nclasses; k++)
-      if (comp_method_in_chain(c, k, name, NULL) >= 0) ncand8++;
+    if (!g_poly_builtin_arm)
+      for (int k = 0; k < c->nclasses; k++)
+        if (comp_method_in_chain(c, k, name, NULL) >= 0) ncand8++;
     if (ncand8 == 0) {
       buf_puts(b, "sp_poly_inject_sym("); emit_expr(c, recv, b); buf_puts(b, ", ");
       emit_expr(c, argv[0], b); buf_puts(b, ")");
@@ -18962,9 +19001,10 @@ else { memcpy(dir, sf, n); dir[n] = 0; } }
     else if (sp_streq(name, "sample")) pn9 = "sp_poly_arr_sample_n";
     if (pn9) {
       int ncand9 = 0;
-      for (int k = 0; k < c->nclasses; k++)
-        if (comp_method_in_chain(c, k, name, NULL) >= 0 ||
-            comp_reader_in_chain(c, k, name, NULL)) ncand9++;
+      if (!g_poly_builtin_arm)
+        for (int k = 0; k < c->nclasses; k++)
+          if (comp_method_in_chain(c, k, name, NULL) >= 0 ||
+              comp_reader_in_chain(c, k, name, NULL)) ncand9++;
       if (ncand9 == 0) {
         Buf cb9; memset(&cb9, 0, sizeof cb9);
         buf_printf(&cb9, "%s(", pn9);
@@ -18987,8 +19027,9 @@ else { memcpy(dir, sf, n); dir[n] = 0; } }
   if (recv >= 0 && rt == TY_POLY && argc >= 1 && nt_ref(nt, id, "block") < 0 &&
       sp_streq(name, "values_at")) {
     int ncand9 = 0;
-    for (int k = 0; k < c->nclasses; k++)
-      if (comp_method_in_chain(c, k, name, NULL) >= 0) ncand9++;
+    if (!g_poly_builtin_arm)
+      for (int k = 0; k < c->nclasses; k++)
+        if (comp_method_in_chain(c, k, name, NULL) >= 0) ncand9++;
     if (ncand9 == 0) {
       int ti9 = ++g_tmp;
       emit_indent(g_pre, g_indent);
@@ -19030,9 +19071,10 @@ else { memcpy(dir, sf, n); dir[n] = 0; } }
          reader call is hijacked (e.g. sp_poly_fiber_value on a Node). The
          general poly dispatch below emits reader arms, so it handles them. */
       int ncand = 0;
-      for (int k = 0; k < c->nclasses; k++)
-        if (comp_method_in_chain(c, k, name, NULL) >= 0 ||
-            comp_reader_in_chain(c, k, name, NULL)) ncand++;
+      if (!g_poly_builtin_arm)
+        for (int k = 0; k < c->nclasses; k++)
+          if (comp_method_in_chain(c, k, name, NULL) >= 0 ||
+              comp_reader_in_chain(c, k, name, NULL)) ncand++;
       if (ncand == 0) {
         buf_printf(b, "%s(", pm); emit_expr(c, recv, b); buf_puts(b, ")");
         return;

@@ -933,6 +933,7 @@ static int udm_aliased_name(Compiler *c, const char *name) {
   return udm_set_has(&udm_aliased_set, name);
 }
 int an_user_defines_method(Compiler *c, const char *name) {
+  if (an_builtin_only_p()) return 0;   /* deriving the builtin-only answer (#3459) */
   if (!name) return 0;
   if (!comp_scope_index_is_frozen()) {
     /* scope shape may still change without the counts moving (renames);

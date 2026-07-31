@@ -9187,6 +9187,7 @@ int emit_poly_call(Compiler *c, int id, Buf *b) {
   if (recv >= 0 && rt == TY_POLY && argc == 1 && sp_streq(name, "count") &&
       nt_ref(nt, id, "block") < 0) {
     int has_user_cnt = 0;
+    if (!g_poly_builtin_arm)
     for (int kk = 0; kk < c->nclasses && !has_user_cnt; kk++)
       if (comp_method_in_chain(c, kk, "count", NULL) >= 0 ||
           comp_reader_in_chain(c, kk, "count", NULL)) has_user_cnt = 1;
@@ -9201,6 +9202,7 @@ int emit_poly_call(Compiler *c, int id, Buf *b) {
   if (recv >= 0 && rt == TY_POLY && argc == 1 && sp_streq(name, "round") &&
       nt_ref(nt, id, "block") < 0) {
     int has_user_rnd = 0;
+    if (!g_poly_builtin_arm)
     for (int kk = 0; kk < c->nclasses && !has_user_rnd; kk++)
       if (comp_method_in_chain(c, kk, "round", NULL) >= 0 ||
           comp_reader_in_chain(c, kk, "round", NULL)) has_user_rnd = 1;
@@ -9277,6 +9279,7 @@ int emit_poly_call(Compiler *c, int id, Buf *b) {
     if ((sp_streq(name, "to_a") || sp_streq(name, "deconstruct")) && argc == 0 &&
         nt_ref(nt, id, "block") < 0) {
       int has_user_ta = 0;
+      if (!g_poly_builtin_arm)
       for (int kk = 0; kk < c->nclasses && !has_user_ta; kk++)
         if (comp_method_in_chain(c, kk, name, NULL) >= 0) has_user_ta = 1;
       if (!has_user_ta) {
@@ -9287,6 +9290,7 @@ int emit_poly_call(Compiler *c, int id, Buf *b) {
     /* Struct#members on a Struct/Data read out of a container. */
     if (sp_streq(name, "members") && argc == 0 && nt_ref(nt, id, "block") < 0) {
       int has_user_m = 0;
+      if (!g_poly_builtin_arm)
       for (int kk = 0; kk < c->nclasses && !has_user_m; kk++)
         if (comp_method_in_chain(c, kk, "members", NULL) >= 0) has_user_m = 1;
       if (!has_user_m) {
@@ -9298,6 +9302,7 @@ int emit_poly_call(Compiler *c, int id, Buf *b) {
        stayed poly). Skip when a user class defines keys/values so its method wins. */
     if (sp_streq(name, "keys") || sp_streq(name, "values")) {
       int has_user = 0;
+      if (!g_poly_builtin_arm)
       for (int kk = 0; kk < c->nclasses && !has_user; kk++)
         if (comp_method_in_chain(c, kk, name, NULL) >= 0) has_user = 1;
       if (!has_user) {
@@ -9308,6 +9313,7 @@ int emit_poly_call(Compiler *c, int id, Buf *b) {
       /* count / count(v) / count { |x| } on a boxed array (skip when any
          user class defines count -- same rule as length below) */
       int has_user_cnt = 0;
+      if (!g_poly_builtin_arm)
       for (int kk = 0; kk < c->nclasses && !has_user_cnt; kk++)
         if (comp_method_in_chain(c, kk, "count", NULL) >= 0 ||
             comp_reader_in_chain(c, kk, "count", NULL)) has_user_cnt = 1;
@@ -9363,10 +9369,12 @@ int emit_poly_call(Compiler *c, int id, Buf *b) {
          `Struct.new(:offset, :size, :name)` entry answering `.size`). */
       int has_user_len = 0;
       const char *lcheck = (sp_streq(name, "empty?")) ? "length" : name;
+      if (!g_poly_builtin_arm)
       for (int kk = 0; kk < c->nclasses && !has_user_len; kk++)
         if (comp_method_in_chain(c, kk, lcheck, NULL) >= 0 ||
             comp_reader_in_chain(c, kk, lcheck, NULL)) has_user_len = 1;
       if (sp_streq(name, "empty?") && !has_user_len)
+        if (!g_poly_builtin_arm)
         for (int kk = 0; kk < c->nclasses && !has_user_len; kk++)
           if (comp_method_in_chain(c, kk, "empty?", NULL) >= 0) has_user_len = 1;
       if (!has_user_len) {
@@ -9395,6 +9403,7 @@ int emit_poly_call(Compiler *c, int id, Buf *b) {
     if ((sp_streq(name, "real") || sp_streq(name, "imaginary") || sp_streq(name, "imag") ||
          sp_streq(name, "conjugate") || sp_streq(name, "conj")) && argc == 0) {
       int has_user = 0;
+      if (!g_poly_builtin_arm)
       for (int kk = 0; kk < c->nclasses && !has_user; kk++)
         if (comp_method_in_chain(c, kk, name, NULL) >= 0 || comp_reader_in_chain(c, kk, name, NULL)) has_user = 1;
       if (!has_user) {
@@ -9409,6 +9418,7 @@ int emit_poly_call(Compiler *c, int id, Buf *b) {
        CRuby's NoMethodError. A user class defining to_sym wins via poly dispatch. */
     if (sp_streq(name, "to_sym")) {
       int has_user = 0;
+      if (!g_poly_builtin_arm)
       for (int kk = 0; kk < c->nclasses && !has_user; kk++)
         if (comp_method_in_chain(c, kk, name, NULL) >= 0) has_user = 1;
       if (!has_user) {
@@ -9457,6 +9467,7 @@ int emit_poly_call(Compiler *c, int id, Buf *b) {
         sp_streq(name, "end")         ? "sp_poly_range_end" : NULL;
       if (pfn) {
         int has_user = 0;
+        if (!g_poly_builtin_arm)
         for (int kk = 0; kk < c->nclasses && !has_user; kk++)
           if (comp_method_in_chain(c, kk, name, NULL) >= 0 ||
               comp_reader_in_chain(c, kk, name, NULL)) has_user = 1;
@@ -9638,6 +9649,7 @@ int emit_poly_call(Compiler *c, int id, Buf *b) {
       (sp_streq(name, "ljust") || sp_streq(name, "rjust") || sp_streq(name, "center")) &&
       (argc == 1 || argc == 2)) {
     int has_user = 0;
+    if (!g_poly_builtin_arm)
     for (int kk = 0; kk < c->nclasses && !has_user; kk++)
       if (comp_method_in_chain(c, kk, name, NULL) >= 0) has_user = 1;
     if (!has_user) {
@@ -9657,6 +9669,7 @@ int emit_poly_call(Compiler *c, int id, Buf *b) {
   if (recv >= 0 && rt == TY_POLY && sp_streq(name, "with") && argc == 1 &&
       nt_type(nt, argv[0]) && sp_streq(nt_type(nt, argv[0]), "KeywordHashNode")) {
     int has_user = 0;
+    if (!g_poly_builtin_arm)
     for (int kk = 0; kk < c->nclasses && !has_user; kk++)
       if (comp_method_in_chain(c, kk, "with", NULL) >= 0) has_user = 1;
     if (!has_user) {
@@ -9683,6 +9696,7 @@ int emit_poly_call(Compiler *c, int id, Buf *b) {
      A user method or attr reader with the same name wins. */
   if (recv >= 0 && rt == TY_POLY && argc == 1 && sp_streq(name, "getbyte")) {
     int has_user = 0;
+    if (!g_poly_builtin_arm)
     for (int kk = 0; kk < c->nclasses && !has_user; kk++)
       if (comp_method_in_chain(c, kk, name, NULL) >= 0 ||
           comp_reader_in_chain(c, kk, name, NULL)) has_user = 1;

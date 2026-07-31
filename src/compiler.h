@@ -78,6 +78,15 @@ typedef struct {
                        whole accumulation. Durable, like str_shared: the type
                        is re-asserted after the fixpoint, which a later
                        assign-based pass would otherwise overwrite. */
+  int poly_ctr;     /* (TY_POLY) a builtin Array or Hash is among the values
+                       that flow into this slot. TY_POLY is a top type with no
+                       member list, so a call on it cannot otherwise tell
+                       "union that includes a container" from "user object the
+                       fixpoint has not pinned down yet". Without the
+                       distinction a user class owning a container method name
+                       stripped the builtin answer from the dispatch (#3459),
+                       and widening unconditionally instead poisoned classes
+                       whose poly slots never hold a container (Set's @data). */
 } LocalVar;
 
 typedef struct {
@@ -121,6 +130,8 @@ typedef struct {
   int kwrest_idx;   /* index in pnames[] of **kwrest param, -1 if none */
 
   TyKind ret;       /* inferred return type */
+  int ret_poly_ctr; /* the return value can be a builtin Array/Hash even
+                       though `ret` collapsed to poly (see LocalVar.poly_ctr) */
   int ret_specialized; /* ret was set by specialization (inherited-cls-new copy);
                           don't overwrite it from the shared body in the fixpoint */
   int ret_rbs_seeded;  /* ret pinned from an --rbs advisory seed: the fixpoint
@@ -318,6 +329,9 @@ typedef struct {
   char *empty_hash_recv; /* [node_cap] empty `{}` used as a hash block-method receiver -> TY_STR_POLY_HASH */
   char *empty_hash_arg;  /* [node_cap] empty `{}` passed as a user-method arg -> TY_POLY_POLY_HASH */
   TyKind *empty_hash_want; /* [node_cap] variant an empty `{}` should take from its use context (#3040) */
+  TyKind *poly_builtin_ty; /* [node_cap] for a container read on a poly receiver a
+                              user class also owns: the type the builtin surface
+                              alone would give, so codegen can shape its arm (#3459) */
   int *hash_default_arg_memo; /* [node_cap] hash_new_default_arg(node) memo; INT_MIN = uncomputed */
   unsigned hash_default_arg_memo_gen; /* scope-index generation the memo was built for */
   int hash_default_arg_memo_cap;      /* allocated length of hash_default_arg_memo */
@@ -612,6 +626,7 @@ static inline int comp_ty_value_obj(const Compiler *c, TyKind t) {
    these names, and analyze keeps a block passed to such a call poly-typed
    because that arm can take it (#3409). */
 const char *poly_enum_op_for(const char *name);
+int poly_container_read_p(const char *name);
 
 /* 1 for a Class-valued receiver whose class is only known at run time (a
    variable, or a call returning a class); 0 for a constant or accessor

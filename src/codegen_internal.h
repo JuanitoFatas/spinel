@@ -115,6 +115,7 @@ extern int  g_argov_node[MAX_ARG_OVERRIDE];
 extern char g_argov_text[MAX_ARG_OVERRIDE][16];
 extern int  g_n_argov;
 extern int  g_sn_skip;   /* safe-nav re-entry marker (see codegen_util.c) */
+extern int  g_pd_skip;   /* poly-dispatch builtin-arm re-entry marker */
 int subtree_may_allocate(const NodeTable *nt, int id);
 /* When a yielding method is inlined, g_yield_block_fallback holds the block
    that was active in the CALLER's context so nested `yield`s inside the
@@ -669,6 +670,7 @@ int diagnose_eval_call(Compiler *c, int id);
 int diagnose_unsupported_call(Compiler *c, int id);
 int diag_user_defines(Compiler *c, const char *name);
 int user_defines_or_reads(Compiler *c, const char *name);
+extern int g_poly_builtin_arm;  /* emitting a poly dispatch's builtin arm */
 void emit_complex_coerce(Compiler *c, int node, Buf *b);
 int emit_array_mutate_stmt(Compiler *c, int id, Buf *b, int indent);
 void emit_brk_wrapped_call(Compiler *c, int id, Buf *b);
