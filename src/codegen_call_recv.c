@@ -2857,7 +2857,7 @@ else {
         buf_printf(b, " mrb_int _t%d = 0;", tc);
         buf_printf(b, " for (mrb_int _t%d = 0; _t%d < sp_%sArray_length(_t%d); _t%d++)", ti, ti, k, ta, ti);
         if (rt == TY_STR_ARRAY)
-          buf_printf(b, " if (strcmp(sp_%sArray_get(_t%d, _t%d), _t%d) == 0) _t%d++;", k, ta, ti, tv, tc);
+          buf_printf(b, " if (sp_str_cmp_bytes(sp_%sArray_get(_t%d, _t%d), _t%d) == 0) _t%d++;", k, ta, ti, tv, tc);
         else
           buf_printf(b, " if (sp_%sArray_get(_t%d, _t%d) == _t%d) _t%d++;", k, ta, ti, tv, tc);
         if (sp_streq(name, "all?"))        buf_printf(b, " _t%d == sp_%sArray_length(_t%d); })", tc, k, ta);
@@ -5809,7 +5809,7 @@ int emit_scalar_call(Compiler *c, int id, Buf *b) {
         int tc = ++g_tmp, tlo = ++g_tmp, thi = ++g_tmp;
         buf_printf(b, "({ const char *_t%d = %s; const char *_t%d = ", tc, r, tlo); emit_expr(c, lo_n, b);
         buf_printf(b, "; const char *_t%d = ", thi); emit_expr(c, hi_n, b);
-        buf_printf(b, "; strcmp(_t%d, _t%d) < 0 ? _t%d : (strcmp(_t%d, _t%d) > 0 ? _t%d : _t%d); })",
+        buf_printf(b, "; sp_str_cmp_bytes(_t%d, _t%d) < 0 ? _t%d : (sp_str_cmp_bytes(_t%d, _t%d) > 0 ? _t%d : _t%d); })",
                    tc, tlo, tlo, tc, thi, thi, tc);
       }
       else if (sp_streq(name, "oct") && argc == 0) buf_printf(b, "sp_str_oct(%s)", r);

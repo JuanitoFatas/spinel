@@ -35,6 +35,18 @@ static inline int sp_str_cacheable(const char *s) {
   unsigned char m = ((const unsigned char *)s)[-1];
   return m == 0xfe || m == 0xfc || m == 0xff || m == 0xf1;
 }
+/* Byte-exact comparison of two heap strings. strcmp stops at the first NUL,
+   so two strings that differ only after one compared equal and sorted equal --
+   `\0` is an ordinary byte in a Ruby String, and the representation carries
+   the real length (#3471, #3472). Ordering matches CRuby's: memcmp over the
+   common prefix, then the shorter string first. */
+static inline int sp_str_cmp_bytes(const char *a, const char *b) {
+  size_t la = sp_str_byte_len(a), lb = sp_str_byte_len(b);
+  size_t n = la < lb ? la : lb;
+  int r = n ? memcmp(a, b, n) : 0;
+  if (r) return r < 0 ? -1 : 1;
+  return la == lb ? 0 : (la < lb ? -1 : 1);
+}
 static inline void sp_str_split_push(sp_StrArray*a,const char*p,size_t n){
   char*r=sp_str_alloc_raw(n+1);
   memcpy(r,p,n);

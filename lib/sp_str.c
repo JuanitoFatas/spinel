@@ -37,7 +37,12 @@ static const char *sp_bytestr(const char *hay, size_t hn, const char *need, size
   return NULL;
 }
 int sp_utf8_set_has(const uint32_t*cps,size_t n,uint32_t cp){for(size_t i=0;i<n;i++)if(cps[i]==cp)return 1;return 0;}
-mrb_int sp_str_casecmp(const char*a,const char*b){if(!a)sp_nil_recv("casecmp");if(!b)return 1;for(;;){int ca=tolower((unsigned char)*a),cb=tolower((unsigned char)*b);if(ca!=cb)return ca<cb?-1:1;if(!*a)return 0;a++;b++;}}
+/* Case-insensitive byte comparison over the REAL lengths: stopping at the
+   first NUL made two strings differing only after one compare equal (#3471). */
+mrb_int sp_str_casecmp(const char*a,const char*b){if(!a)sp_nil_recv("casecmp");if(!b)return 1;
+  size_t la=sp_str_byte_len(a),lb=sp_str_byte_len(b),n=la<lb?la:lb;
+  for(size_t i=0;i<n;i++){int ca=tolower((unsigned char)a[i]),cb=tolower((unsigned char)b[i]);if(ca!=cb)return ca<cb?-1:1;}
+  return la==lb?0:(la<lb?-1:1);}
 mrb_bool sp_str_valid_encoding(const char*s){if(!s)sp_nil_recv("valid_encoding?");const unsigned char*p=(const unsigned char*)s;while(*p){unsigned c=*p;if(c<0x80){p++;continue;}int extra;unsigned cp;unsigned min;if((c&0xE0)==0xC0){extra=1;cp=c&0x1F;min=0x80;}
 else if((c&0xF0)==0xE0){extra=2;cp=c&0x0F;min=0x800;}
 else if((c&0xF8)==0xF0){extra=3;cp=c&0x07;min=0x10000;}
