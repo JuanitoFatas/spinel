@@ -4594,16 +4594,22 @@ else {
       if (sp_streq(name, "join")) return TY_STRING;
       if (sp_streq(name, "to_i") || sp_streq(name, "length") || sp_streq(name, "size")) return TY_INT;
       if (sp_streq(name, "to_f")) return TY_FLOAT;
-      /* Hash#keys / #values on a poly hash -> a poly array (boxed elements),
-         unless a user class defines that method (then its return type wins).
+      /* Hash#keys / #values on a poly hash -> a poly array (boxed elements).
          to_a on a poly value follows the same rule: nil -> [], arrays and
-         hashes materialize, anything else raises (sp_poly_to_a_arr). */
+         hashes materialize, anything else raises (sp_poly_to_a_arr).
+         For keys/values a user class owning the name does not take the answer
+         over: the receiver is a union, so the value is the user return OR the
+         builtin array, and pinning it to the user's return type made the
+         dispatch raise on a real Hash (#3459). Poly holds both. to_a keeps the
+         user's type -- it is a conversion every collection class defines, so
+         widening it cascades through the containers built from the result. */
       if ((sp_streq(name, "keys") || sp_streq(name, "values") ||
            sp_streq(name, "to_a")) && argc == 0) {
         int has_user = 0;
         for (int k = 0; k < c->nclasses && !has_user; k++)
           if (comp_method_in_chain(c, k, name, NULL) >= 0) has_user = 1;
         if (!has_user) return TY_POLY_ARRAY;
+        if (!sp_streq(name, "to_a")) return TY_POLY;
       }
       if (sp_streq(name, "clamp")) return TY_POLY;  /* boxed numeric clamp -> poly */
       /* nil-aware conversions (a nil local widens to poly): boxed results */
@@ -4732,6 +4738,11 @@ else {
           r = found ? ty_unify(r, rt2) : rt2; found = 1;
         }
       }
+      /* first/last are container reads a builtin Array or Hash in the union
+         serves too, so pinning the result to the user class's return type made
+         the dispatch raise on a genuine Array. Poly holds both answers (#3459). */
+      if (found && argc == 0 && (sp_streq(name, "first") || sp_streq(name, "last")))
+        return TY_POLY;
       if (found) return r;
       /* Numeric queries / rounding on a boxed value: the sp_poly_* helpers
          dispatch on the runtime tag (a non-numeric tag raises CRuby's

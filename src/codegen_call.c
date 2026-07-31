@@ -4063,6 +4063,39 @@ static int emit_poly_method_dispatch(Compiler *c, int id, Buf *b) {
         buf_printf(b, " case SP_BUILTIN_INT_STR_HASH: _t%d = %s((sp_IntStrHash *)_t%d.v.p)->len == 0%s; break;", tr, ebopen, tv, ebclose);
         buf_printf(b, " case SP_BUILTIN_INT_INT_HASH: _t%d = %s((sp_IntIntHash *)_t%d.v.p)->len == 0%s; break;", tr, ebopen, tv, ebclose);
       }
+      /* Container reads on a builtin receiver that reached this dispatch only
+         because a user class happens to own the name. The user arms are emitted
+         above; without these the switch left every builtin tag on the raise
+         default, so `hash.keys` / `array.first` on a genuine Hash or Array
+         raised NoMethodError (#3459). Only for a poly result slot: a scalar
+         slot means the dispatch was fixed to the user return type, and widening
+         it here would need a conversion the arm cannot pick. */
+      if (argc == 0 && ret == TY_POLY &&
+          (sp_streq(name, "first") || sp_streq(name, "last") ||
+           sp_streq(name, "keys") || sp_streq(name, "values") ||
+           sp_streq(name, "to_a"))) {
+        const char *arr_tags =
+          " case SP_BUILTIN_INT_ARRAY: case SP_BUILTIN_SYM_ARRAY:"
+          " case SP_BUILTIN_FLT_ARRAY: case SP_BUILTIN_STR_ARRAY:"
+          " case SP_BUILTIN_POLY_ARRAY:";
+        const char *hash_tags =
+          " case SP_BUILTIN_STR_INT_HASH: case SP_BUILTIN_STR_STR_HASH:"
+          " case SP_BUILTIN_INT_STR_HASH: case SP_BUILTIN_INT_INT_HASH:"
+          " case SP_BUILTIN_STR_POLY_HASH: case SP_BUILTIN_SYM_POLY_HASH:"
+          " case SP_BUILTIN_POLY_POLY_HASH:";
+        if (sp_streq(name, "first") || sp_streq(name, "last")) {
+          buf_printf(b, "%s%s _t%d = sp_poly_%s(_t%d); break;",
+                     arr_tags, hash_tags, tr, name, tv);
+        }
+        else if (sp_streq(name, "to_a")) {
+          buf_printf(b, "%s%s _t%d = sp_box_nullable_obj((void *)sp_poly_to_a_arr(_t%d),"
+                        " SP_BUILTIN_POLY_ARRAY); break;", arr_tags, hash_tags, tr, tv);
+        }
+        else {
+          buf_printf(b, "%s _t%d = sp_box_nullable_obj((void *)sp_poly_%s(_t%d),"
+                        " SP_BUILTIN_POLY_ARRAY); break;", hash_tags, tr, name, tv);
+        }
+      }
       /* compare_by_identity? on a poly-carried hash: every spinel hash is
          value-keyed (the mutating variant is a compile error), so any hash
          tag answers false; a non-hash receiver falls through to the gate. */
