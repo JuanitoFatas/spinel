@@ -6874,6 +6874,44 @@ int emit_object_call(Compiler *c, int id, Buf *b) {
      the reflexive same-lvalue read is knowably true (the string arm's rule). */
   /* Object#eql? default (no user override) is identity, exactly equal? --
      route it through the same arm (#2361) */
+  /* Object#frozen? / #freeze on a concurrency handle: none of them can be
+     frozen, so frozen? is false and freeze answers self. A Fiber reached the
+     front-end reject where its Thread sibling did not (#3470). */
+  if (recv >= 0 && argc == 0 && nt_ref(nt, id, "block") < 0 &&
+      (rt == TY_MUTEX || rt == TY_QUEUE || rt == TY_CONDVAR ||
+       rt == TY_FIBER || rt == TY_THREAD) &&
+      (sp_streq(name, "frozen?") || sp_streq(name, "freeze")) &&
+      !user_defines_or_reads(c, name)) {
+    if (sp_streq(name, "frozen?")) {
+      buf_puts(b, "((void)("); emit_expr(c, recv, b); buf_puts(b, "), (mrb_bool)0)");
+    }
+    else emit_expr(c, recv, b);
+    return 1;
+  }
+  /* The concurrency handles are heap instances too -- a Mutex, Queue,
+     SizedQueue, ConditionVariable or Fiber IS its pointer -- so identity is
+     the same pointer comparison. They are not ty_is_object (no user class
+     behind them), which left equal?/eql? on them refused by the front end,
+     where it could not even be rescued (#3470). */
+  if (recv >= 0 && argc == 1 &&
+      (rt == TY_MUTEX || rt == TY_QUEUE || rt == TY_CONDVAR ||
+       rt == TY_FIBER || rt == TY_THREAD) &&
+      (sp_streq(name, "equal?") || sp_streq(name, "eql?")) &&
+      !user_defines_or_reads(c, name)) {
+    TyKind a0 = comp_ntype(c, argv[0]);
+    if (a0 == rt) {
+      buf_puts(b, "(("); emit_expr(c, recv, b); buf_puts(b, ") == (");
+      emit_expr(c, argv[0], b); buf_puts(b, "))");
+    }
+    else if (a0 == TY_POLY) {
+      int te = ++g_tmp;
+      buf_printf(b, "({ sp_RbVal _t%d = ", te); emit_boxed(c, argv[0], b);
+      buf_printf(b, "; _t%d.tag == SP_TAG_OBJ && _t%d.v.p == (void*)(", te, te);
+      emit_expr(c, recv, b); buf_puts(b, "); })");
+    }
+    else { buf_puts(b, "(("); emit_expr(c, argv[0], b); buf_puts(b, "), 0)"); }
+    return 1;
+  }
   if (recv >= 0 && ty_is_object(rt) && argc == 1 &&
       (sp_streq(name, "equal?") || sp_streq(name, "eql?")) &&
       comp_method_in_chain(c, ty_object_class(rt), name, NULL) < 0 &&

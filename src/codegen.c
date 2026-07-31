@@ -1683,6 +1683,7 @@ void emit_fiber_new(Compiler *c, int id, Buf *b, int as_gen, int size_node) {
      (#2976); a single param binds resumed_value directly. */
   const char *bp0 = NULL;
   const char *bp_names[8]; int nbp = 0;
+  const char *bp_rest = NULL;
   int bp_node = nt_ref(nt, blk, "parameters");
   if (bp_node >= 0) {
     int inner = nt_ref(nt, bp_node, "parameters");
@@ -1693,10 +1694,18 @@ void emit_fiber_new(Compiler *c, int id, Buf *b, int as_gen, int size_node) {
       if (pnm) bp_names[nbp++] = pnm;
     }
     if (nbp > 0) bp0 = bp_names[0];
+    /* `|*a|`: no requireds, so nothing above collected a name. The rest param
+       takes every resume argument as an array. */
+    if (nbp == 0) {
+      int rst = nt_ref(nt, pn, "rest");
+      const char *rnm = rst >= 0 ? nt_str(nt, rst, "name") : NULL;
+      if (rnm) { bp_rest = rnm; bp0 = rnm; }
+    }
   }
   /* multi-param binding only for a plain fiber/thread block (not a generator's
      yielder, which uses bp0 as `y`) */
   int multi_bind = !as_gen && nbp > 1;
+  int rest_bind = !as_gen && bp_rest != NULL;
   int body = nt_ref(nt, blk, "body");
   Scope *encl = comp_scope_of(c, id);
 
@@ -1725,6 +1734,7 @@ void emit_fiber_new(Compiler *c, int id, Buf *b, int as_gen, int size_node) {
       const char *nm = fib_used.v[u];
       int is_bp = 0;
       for (int bi = 0; bi < nbp; bi++) if (sp_streq(nm, bp_names[bi])) { is_bp = 1; break; }
+      if (bp_rest && sp_streq(nm, bp_rest)) is_bp = 1;
       if (is_bp) continue;   /* every block param is bound below, never captured */
       LocalVar *lv = scope_local(encl, nm);
       if (!lv || lv->type == TY_UNKNOWN) continue;
@@ -1873,6 +1883,21 @@ void emit_fiber_new(Compiler *c, int id, Buf *b, int as_gen, int size_node) {
       buf_printf(pb, "    sp_RbVal lv_%s = sp_poly_index_poly(_fb->resumed_value, sp_box_int(%d));\n", bpn, bi);
       buf_printf(pb, "    SP_GC_ROOT_RBVAL(lv_%s);\n", bpn);
     }
+  }
+  else if (rest_bind) {
+    /* A rest param collects the resume arguments as an array: nil (no
+       arguments) is empty, a packed multi-argument value is already the list,
+       and a single argument becomes a one-element list. A single ARRAY
+       argument is indistinguishable from a packed pair here -- the fiber
+       carries one value and no arity -- so `resume([1, 2])` binds [1, 2]
+       rather than [[1, 2]]; carrying the count would be the fix. */
+    const char *bpn = rename_local(bp_rest);
+    buf_printf(pb, "    sp_PolyArray *lv_%s = ({ sp_RbVal _rv = _fb->resumed_value;"
+                   " _rv.tag == SP_TAG_NIL ? sp_PolyArray_new()"
+                   " : (_rv.tag == SP_TAG_OBJ && sp_poly_is_array_kind(_rv.cls_id))"
+                   " ? sp_poly_to_poly_array(_rv)"
+                   " : ({ sp_PolyArray *_ra = sp_PolyArray_new(); sp_PolyArray_push(_ra, _rv); _ra; }); });\n", bpn);
+    buf_printf(pb, "    SP_GC_ROOT(lv_%s);\n", bpn);
   }
   else if (bp0) {
     const char *bpn = rename_local(bp0);

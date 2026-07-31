@@ -1951,6 +1951,29 @@ static int emit_dynamic_send(Compiler *c, int id, Buf *b) {
   return 1;
 }
 
+/* The single value a resume / transfer hands the fiber. Ruby passes any number
+   of arguments and the body's parameters take them positionally, but the fiber
+   carries ONE resumed value -- so two or more are packed into a poly array,
+   which is exactly what a multi-parameter fiber body already indexes (see the
+   multi_bind arm in codegen.c). Emitting them as separate C arguments instead
+   overran sp_Fiber_resume's arity and stopped the build (#3469). */
+static void emit_fiber_pass_value(Compiler *c, int argc, const int *argv, Buf *b) {
+  if (argc == 0) { buf_puts(b, "sp_box_nil()"); return; }
+  if (argc == 1) {
+    if (comp_ntype(c, argv[0]) == TY_POLY) emit_expr(c, argv[0], b);
+    else emit_boxed(c, argv[0], b);
+    return;
+  }
+  int tp = ++g_tmp;
+  buf_printf(b, "sp_box_poly_array(({ sp_PolyArray *_t%d = sp_PolyArray_new(); SP_GC_ROOT(_t%d);", tp, tp);
+  for (int k = 0; k < argc; k++) {
+    buf_printf(b, " sp_PolyArray_push(_t%d, ", tp);
+    emit_boxed(c, argv[k], b);
+    buf_puts(b, ");");
+  }
+  buf_printf(b, " _t%d; }))", tp);
+}
+
 static int emit_concurrency_call(Compiler *c, int id, Buf *b) {
   const NodeTable *nt = c->nt;
   const char *name = nt_str(nt, id, "name");
@@ -2116,12 +2139,8 @@ static int emit_concurrency_call(Compiler *c, int id, Buf *b) {
   if (recv >= 0 && comp_ntype(c, recv) == TY_FIBER) {
     if (sp_streq(name, "resume")) {
       buf_puts(b, "sp_Fiber_resume("); emit_expr(c, recv, b);
-      for (int k = 0; k < argc; k++) {
-        buf_puts(b, ", ");
-        if (comp_ntype(c, argv[k]) == TY_POLY) emit_expr(c, argv[k], b);
-        else emit_boxed(c, argv[k], b);
-      }
-      if (argc == 0) buf_puts(b, ", sp_box_nil()");
+      buf_puts(b, ", ");
+      emit_fiber_pass_value(c, argc, argv, b);
       buf_puts(b, ")");
       return 1;
     }
@@ -2133,12 +2152,8 @@ static int emit_concurrency_call(Compiler *c, int id, Buf *b) {
     }
     if (sp_streq(name, "transfer")) {
       buf_puts(b, "sp_Fiber_transfer("); emit_expr(c, recv, b);
-      for (int k = 0; k < argc; k++) {
-        buf_puts(b, ", ");
-        if (comp_ntype(c, argv[k]) == TY_POLY) emit_expr(c, argv[k], b);
-        else emit_boxed(c, argv[k], b);
-      }
-      if (argc == 0) buf_puts(b, ", sp_box_nil()");
+      buf_puts(b, ", ");
+      emit_fiber_pass_value(c, argc, argv, b);
       buf_puts(b, ")");
       return 1;
     }
@@ -6819,6 +6834,30 @@ static int emit_case_eq_call(Compiler *c, int id, Buf *b) {
         buf_printf(b, "; sp_BoundMethod *_t%d = ", tb2); emit_expr(c, argv[0], b);
         buf_printf(b, "; (mrb_bool)%s(_t%d->self == _t%d->self && _t%d->fn == _t%d->fn); })",
                    eq ? "" : "!", ta2, tb2, ta2, tb2);
+      }
+      else {
+        buf_puts(b, "((void)("); emit_expr(c, recv, b); buf_puts(b, "), (void)(");
+        emit_boxed(c, argv[0], b); buf_printf(b, "), %d)", eq ? 0 : 1);
+      }
+      return 1;
+    }
+    /* The concurrency handles compare by identity, like any other heap
+       instance: Object#== is equal? unless the class overrides it, and none of
+       these do. An operand of any other type is simply unequal, matching the
+       neighbouring arms (#3470). */
+    if (recv >= 0 && (rt == TY_MUTEX || rt == TY_QUEUE || rt == TY_CONDVAR ||
+                      rt == TY_FIBER || rt == TY_THREAD)) {
+      if (a0 == rt) {
+        buf_printf(b, "(("); emit_expr(c, recv, b);
+        buf_printf(b, ") %s (", eq ? "==" : "!="); emit_expr(c, argv[0], b);
+        buf_puts(b, "))");
+      }
+      else if (a0 == TY_POLY) {
+        int tq = ++g_tmp;
+        buf_printf(b, "({ sp_RbVal _t%d = ", tq); emit_boxed(c, argv[0], b);
+        buf_printf(b, "; (mrb_bool)%s(_t%d.tag == SP_TAG_OBJ && _t%d.v.p == (void*)(",
+                   eq ? "" : "!", tq, tq);
+        emit_expr(c, recv, b); buf_puts(b, ")); })");
       }
       else {
         buf_puts(b, "((void)("); emit_expr(c, recv, b); buf_puts(b, "), (void)(");

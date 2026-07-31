@@ -344,6 +344,13 @@ mrb_bool sp_Fiber_alive(sp_Fiber*f){return f->state!=3;}
    sp_Fiber_resume's re-raise, exactly like an exception raised by the body. */
 sp_RbVal sp_Fiber_raise(sp_Fiber*f,const char*cls,const char*msg,void*obj){
   if(f->state==3){sp_raise_cls("FiberError","dead fiber called");}
+  /* Never resumed: there is no fiber context to deliver into, so CRuby refuses
+     rather than raising the exception somewhere. Delivering it in the CALLER
+     instead -- which is what resuming an unstarted fiber with the injection
+     queued did -- made a `rescue FiberError` around fiber setup miss, and
+     handed the caller the wrong class (#3468). Note Fiber#kill is different
+     and stays a no-op here: an unborn fiber has nothing to unwind. */
+  if(f->state==0){sp_raise_cls("FiberError","cannot raise exception on unborn fiber");}
   sp_fiber_inject_publish(f,1,cls,msg,obj);   /* same-thread, but keep the slot discipline uniform */
   return sp_Fiber_resume(f,sp_box_nil());
 }
