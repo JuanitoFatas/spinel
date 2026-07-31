@@ -4566,6 +4566,17 @@ else {
        arithmetic, even when the count `n` widened to poly under promote. */
     if ((ty_is_array(rt) || rt == TY_POLY_ARRAY) && sp_streq(name, "*") && argc == 1)
       return rt;
+    /* `arr - x` / `arr & x` / `arr | x` with a poly operand are SET operations,
+       not arithmetic. codegen coerces the operand at run time -- an Array
+       becomes a poly array, anything else raises CRuby's TypeError -- so the
+       result is a poly array. Typed as arithmetic instead, `-` reached
+       sp_poly_sub, which had no array case and answered "no implicit
+       conversion of Array into Array" on two real Arrays (#3475). */
+    if ((ty_is_array(rt) || rt == TY_POLY_ARRAY) && argc == 1 &&
+        (sp_streq(name, "-") || sp_streq(name, "&") || sp_streq(name, "|") ||
+         sp_streq(name, "difference") || sp_streq(name, "intersection") ||
+         sp_streq(name, "union")))
+      return TY_POLY_ARRAY;
     /* String operators with a poly operand are NOT poly arithmetic: `str % x`
        is printf formatting, `str + x` is concatenation, `str * n` is repeat --
        all yield a string. Defer them to the rt==TY_STRING path below. */

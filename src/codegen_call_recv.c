@@ -3093,6 +3093,22 @@ else {
         else emit_expr(c, argv[0], b);  /* already poly */
         buf_puts(b, ")"); return 1;
       }
+      /* typed-array receiver, POLY argument (a value whose static type widened,
+         not a poly array): coerce it at run time -- an Array becomes the poly
+         array the set-op primitives take, anything else raises the TypeError
+         CRuby raises. Without this arm the call had nowhere to go and `&`/`|`
+         failed to compile (#3475). */
+      if ((sp_streq(name, "&") || sp_streq(name, "intersection") ||
+           sp_streq(name, "|") || sp_streq(name, "union") ||
+           sp_streq(name, "-") || sp_streq(name, "difference")) && argc == 1 &&
+          a0 == TY_POLY) {
+        const char *fn = (sp_streq(name, "&") || sp_streq(name, "intersection")) ? "intersect" : (sp_streq(name, "|") || sp_streq(name, "union") ? "union" : "difference");
+        const char *conv_l = rt == TY_INT_ARRAY ? "sp_IntArray_to_poly" :
+                             rt == TY_STR_ARRAY ? "sp_StrArray_to_poly_fmt" : "sp_FloatArray_to_poly";
+        buf_printf(b, "sp_PolyArray_%s(%s(", fn, conv_l); emit_expr(c, recv, b);
+        buf_puts(b, "), sp_poly_set_operand("); emit_expr(c, argv[0], b);
+        buf_puts(b, "))"); return 1;
+      }
       /* variadic named set ops: union/intersection/difference(*others) fold the
          binary operator over each argument, accumulating in a rooted temp. */
       if ((sp_streq(name, "intersection") || sp_streq(name, "union") ||
@@ -3258,6 +3274,16 @@ else {
         buf_printf(b, "sp_PolyArray_%s(", fn);
         emit_expr(c, recv, b); buf_printf(b, ", %s(", conv); emit_expr(c, argv[0], b);
         buf_puts(b, "))"); return 1;
+      }
+      /* poly-array receiver, POLY argument: same run-time coercion (#3475) */
+      if ((sp_streq(name, "&") || sp_streq(name, "intersection") ||
+           sp_streq(name, "|") || sp_streq(name, "union") ||
+           sp_streq(name, "-") || sp_streq(name, "difference")) && argc == 1 &&
+          a0 == TY_POLY) {
+        const char *fn = (sp_streq(name, "&") || sp_streq(name, "intersection")) ? "intersect" : (sp_streq(name, "|") || sp_streq(name, "union") ? "union" : "difference");
+        buf_printf(b, "sp_PolyArray_%s(", fn);
+        emit_expr(c, recv, b); buf_puts(b, ", sp_poly_set_operand(");
+        emit_expr(c, argv[0], b); buf_puts(b, "))"); return 1;
       }
       /* variadic named set ops on a poly array: fold over each argument */
       if ((sp_streq(name, "intersection") || sp_streq(name, "union") ||

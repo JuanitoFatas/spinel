@@ -17841,7 +17841,12 @@ else { memcpy(dir, sf, n); dir[n] = 0; } }
   if (recv >= 0 && argc == 1 && (rt == TY_POLY || a0 == TY_POLY) &&
       rt != TY_TIME &&  /* Time +/- a poly is Time arithmetic (emit_array_arith_call, #2456) */
       !(rt == TY_STRING && (sp_streq(name, "+") || sp_streq(name, "*"))) &&
-      !((ty_is_array(rt) || rt == TY_POLY_ARRAY) && sp_streq(name, "*"))) {
+      !((ty_is_array(rt) || rt == TY_POLY_ARRAY) && sp_streq(name, "*")) &&
+      /* `arr - x` is a set difference, served by the set-op arms with their
+         run-time Array coercion; routing it here reached sp_poly_sub, which
+         has no array case and answered "no implicit conversion of Array into
+         Array" on two real Arrays (#3475) */
+      !((ty_is_array(rt) || rt == TY_POLY_ARRAY) && sp_streq(name, "-"))) {
     const char *pfn = NULL;
     if (sp_streq(name, "+")) pfn = "sp_poly_add";
     else if (sp_streq(name, "-")) pfn = "sp_poly_sub";
