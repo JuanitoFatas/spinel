@@ -4926,6 +4926,166 @@ static void widen_ivars_from_pushed_params(Compiler *c) {
   }
 }
 
+/* Narrow an @ivar holding a table of int arrays. An ivar
+   is harder than a local in one way that matters: its references are
+   spread over every method of the class and can escape through a reader,
+   a bare return or an argument, and a missed one here is not a lost
+   optimization but an sp_PtrArray * meeting sp_RbVal in the emitted C. So
+   the vetting is deliberately absolute -- EVERY reference to the ivar,
+   anywhere in the program, must be the receiver of an op this pass models,
+   from a method of the owning class itself; anything else leaves the slot
+   alone. An attr reader/writer is an escape by definition and disqualifies
+   the ivar outright.
+
+   Placement matters as much as the vetting: this runs inside
+   narrow_object_arrays, after every pass that re-derives an ivar type by
+   unifying it with its writes. Earlier, that re-derivation would unify
+   TY_INT_ARRAY_ARRAY with the write's TY_POLY_ARRAY -- two array kinds,
+   which unify to the plain poly scalar -- and the slot would come out
+   WORSE than it went in. */
+static void narrow_int_table_ivars(Compiler *c) {
+  const NodeTable *nt = c->nt;
+  for (int ci = 0; ci < c->nclasses; ci++) {
+    ClassInfo *cl = &c->classes[ci];
+    for (int iv = 0; iv < cl->nivars; iv++) {
+      if (cl->ivar_types[iv] != TY_POLY_ARRAY) continue;
+      const char *ivn = cl->ivars[iv];
+      if (!ivn || !ivn[0]) continue;
+      if (class_ivar_pinned(cl, ivn)) continue;         /* an --rbs seed owns it */
+      const char *bare = ivn[0] == '@' ? ivn + 1 : ivn;
+      if (comp_is_reader(cl, bare) || comp_is_writer(cl, bare)) continue;
+      if (comp_is_sg_reader(cl, bare) || comp_is_sg_writer(cl, bare)) continue;
+      int ok = 1, saw_table = 0;
+      for (int id = 0; id < nt->count && ok; id++) {
+        const char *ty = nt_type(nt, id);
+        if (!ty) continue;
+        int is_read  = sp_streq(ty, "InstanceVariableReadNode");
+        int is_write = sp_streq(ty, "InstanceVariableWriteNode");
+        int is_owrite = sp_streq(ty, "InstanceVariableOperatorWriteNode") ||
+                        sp_streq(ty, "InstanceVariableOrWriteNode") ||
+                        sp_streq(ty, "InstanceVariableAndWriteNode");
+        if (!is_read && !is_write && !is_owrite) continue;
+        const char *nm = nt_str(nt, id, "name");
+        if (!nm || !sp_streq(nm, ivn)) continue;
+        Scope *sc = comp_scope_of(c, id);
+        if (!sc) { ok = 0; break; }
+        if (sc->class_id != ci) {
+          /* An unrelated class with an ivar of the same name is a different
+             slot -- ignore it. A subclass (or a module transplanted in) reads
+             THIS slot from code this pass does not vet, so that disqualifies. */
+          int related = 0;
+          for (int k = sc->class_id; k >= 0; k = c->classes[k].parent)
+            if (k == ci) { related = 1; break; }
+          if (!related) continue;
+          ok = 0; break;
+        }
+        if (is_owrite) { ok = 0; break; }   /* `@t ||= ...`: unmodeled */
+        if (is_write) {
+          int v = nt_ref(nt, id, "value");
+          const char *vty = v >= 0 ? nt_type(nt, v) : NULL;
+          if (!vty) { ok = 0; break; }
+          if (sp_streq(vty, "NilNode")) continue;                  /* neutral */
+          if (sp_streq(vty, "ArrayNode")) {
+            int en = 0; const int *el = nt_arr(nt, v, "elements", &en);
+            if (en == 0) continue;                                 /* `@t = []` */
+            for (int e = 0; e < en && ok; e++)
+              if (infer_type(c, el[e]) != TY_INT_ARRAY) ok = 0;
+            if (ok) saw_table = 1;
+            continue;
+          }
+          /* `@t = Array.new(n) { <int array> }` */
+          if (!sp_streq(vty, "CallNode")) { ok = 0; break; }
+          const char *cn = nt_str(nt, v, "name");
+          int crecv = nt_ref(nt, v, "receiver");
+          int gb = nt_ref(nt, v, "block");
+          if (!cn || !sp_streq(cn, "new") || crecv < 0 || gb < 0 ||
+              !nt_type(nt, crecv) || !sp_streq(nt_type(nt, crecv), "ConstantReadNode") ||
+              !nt_str(nt, crecv, "name") ||
+              !sp_streq(nt_str(nt, crecv, "name"), "Array")) { ok = 0; break; }
+          int gbody = nt_ref(nt, gb, "body");
+          int gn = 0; const int *gs = gbody >= 0 ? nt_arr(nt, gbody, "body", &gn) : NULL;
+          if (!gs || gn <= 0 || infer_type(c, gs[gn - 1]) != TY_INT_ARRAY) { ok = 0; break; }
+          saw_table = 1;
+          continue;
+        }
+        /* a read: it must BE the receiver of a modeled op, nothing else */
+        int used = 0;
+        for (int u = 0; u < nt->count; u++) {
+          if (!nt_type(nt, u) || !sp_streq(nt_type(nt, u), "CallNode")) continue;
+          if (nt_ref(nt, u, "receiver") != id) continue;
+          const char *un = nt_str(nt, u, "name");
+          int ua = nt_ref(nt, u, "arguments"); int uan = 0;
+          if (ua >= 0) nt_arr(nt, ua, "arguments", &uan);
+          /* sort/min/max need the boxed comparator, which this element kind
+             has no arm for: leave those tables alone */
+          if (un && (sp_streq(un, "sort") || sp_streq(un, "sort!") ||
+                     sp_streq(un, "min") || sp_streq(un, "max"))) { used = 0; break; }
+          if (!oa_recv_op_ok(un, uan, nt_ref(nt, u, "block") >= 0)) { used = 0; break; }
+          used = 1; break;
+        }
+        if (!used) { ok = 0; break; }
+      }
+      if (ok && saw_table) cl->ivar_types[iv] = TY_INT_ARRAY_ARRAY;
+    }
+  }
+}
+
+/* Locals read out of an already-narrowed array: `b = arr[i]` makes b the
+   element type, so its own reads unbox. Split out of narrow_object_arrays
+   so it still runs when that pass has no local candidate slot and returns
+   early -- an ivar table narrowed by narrow_int_table_ivars has exactly
+   that shape, and without this its rows stayed boxed and the narrowing
+   bought nothing. */
+static void narrow_locals_from_arrays(Compiler *c) {
+  const NodeTable *nt = c->nt;
+  /* dependent locals: `b = arr[i]` (arr now a narrowed obj array) makes `b`
+        the element object type, so its field accesses unbox. Every write of the
+        local must be such an index read of one class (nil writes excepted).
+        Iterated, because the narrowing chains: `a = rows[0]` narrows a to an
+        int array only in this step, and only then can `m = a[1]` see an int
+        (#3354). */
+  for (int prop = 0; prop < 8; prop++) {
+  int prop_ch = 0;
+  for (int s = 0; s < c->nscopes; s++) {
+    Scope *sc = &c->scopes[s];
+    for (int li = 0; li < sc->nlocals; li++) {
+      LocalVar *lv = &sc->locals[li];
+      if (lv->type != TY_POLY || lv->is_param || lv->is_block_param || lv->rbs_seeded) continue;
+      TyKind elem = TY_UNKNOWN; int ok = 1, saw = 0;
+      for (int id = 0; id < nt->count && ok; id++) {
+        const char *ty = nt_type(nt, id);
+        if (!ty || !sp_streq(ty, "LocalVariableWriteNode") || c->nscope[id] != s) continue;
+        const char *nm = nt_str(nt, id, "name");
+        if (!nm || !sp_streq(nm, lv->name)) continue;
+        int v = nt_ref(nt, id, "value");
+        const char *vty = v >= 0 ? nt_type(nt, v) : NULL;
+        if (vty && sp_streq(vty, "NilNode")) continue;
+        if (!vty || !sp_streq(vty, "CallNode")) { ok = 0; break; }
+        const char *cn = nt_str(nt, v, "name");
+        int crecv = nt_ref(nt, v, "receiver");
+        int can = 0; { int ca = nt_ref(nt, v, "arguments"); if (ca >= 0) nt_arr(nt, ca, "arguments", &can); }
+        int idx_op = cn && (sp_streq(cn, "[]") || sp_streq(cn, "at")) && can == 1;
+        int end_op = cn && (sp_streq(cn, "first") || sp_streq(cn, "last")) && can == 0;
+        if ((!idx_op && !end_op) || crecv < 0) { ok = 0; break; }
+        TyKind rt = infer_type(c, crecv);
+        /* element type of a narrowed obj-array OR the new int-array-array */
+        /* a scalar-element array yields its element type; an out-of-range
+           read is that type's nil (SP_INT_NIL / NULL), which it models */
+        TyKind ec = ty_is_obj_array(rt) ? ty_object(ty_obj_array_class(rt))
+                  : (rt == TY_INT_ARRAY_ARRAY) ? TY_INT_ARRAY
+                  : (rt == TY_INT_ARRAY || rt == TY_FLOAT_ARRAY || rt == TY_STR_ARRAY)
+                    ? ty_array_elem(rt) : TY_UNKNOWN;
+        if (ec == TY_UNKNOWN) { ok = 0; break; }
+        if (elem == TY_UNKNOWN) elem = ec; else if (elem != ec) { ok = 0; break; }
+        saw = 1;
+      }
+      if (ok && saw && elem != TY_UNKNOWN) { lv->type = elem; prop_ch = 1; }
+    }
+  }
+  if (!prop_ch) break;
+  }
+}
+
 static void narrow_object_arrays(Compiler *c) {
   const NodeTable *nt = c->nt;
   /* 1. candidate slots: POLY_ARRAY locals/params (skip block params + rbs). */
@@ -5193,53 +5353,6 @@ static void narrow_object_arrays(Compiler *c) {
        poly, where the boxed comparator raises the CRuby ArgumentError. */
     if (sl[r].needs_cmp && comp_method_in_chain(c, sl[r].cls, "<=>", NULL) < 0) continue;
     sl[i].lv->type = ty_obj_array(sl[r].cls);
-  }
-
-  /* 8. dependent locals: `b = arr[i]` (arr now a narrowed obj array) makes `b`
-        the element object type, so its field accesses unbox. Every write of the
-        local must be such an index read of one class (nil writes excepted).
-        Iterated, because the narrowing chains: `a = rows[0]` narrows a to an
-        int array only in this step, and only then can `m = a[1]` see an int
-        (#3354). */
-  for (int prop = 0; prop < 8; prop++) {
-  int prop_ch = 0;
-  for (int s = 0; s < c->nscopes; s++) {
-    Scope *sc = &c->scopes[s];
-    for (int li = 0; li < sc->nlocals; li++) {
-      LocalVar *lv = &sc->locals[li];
-      if (lv->type != TY_POLY || lv->is_param || lv->is_block_param || lv->rbs_seeded) continue;
-      TyKind elem = TY_UNKNOWN; int ok = 1, saw = 0;
-      for (int id = 0; id < nt->count && ok; id++) {
-        const char *ty = nt_type(nt, id);
-        if (!ty || !sp_streq(ty, "LocalVariableWriteNode") || c->nscope[id] != s) continue;
-        const char *nm = nt_str(nt, id, "name");
-        if (!nm || !sp_streq(nm, lv->name)) continue;
-        int v = nt_ref(nt, id, "value");
-        const char *vty = v >= 0 ? nt_type(nt, v) : NULL;
-        if (vty && sp_streq(vty, "NilNode")) continue;
-        if (!vty || !sp_streq(vty, "CallNode")) { ok = 0; break; }
-        const char *cn = nt_str(nt, v, "name");
-        int crecv = nt_ref(nt, v, "receiver");
-        int can = 0; { int ca = nt_ref(nt, v, "arguments"); if (ca >= 0) nt_arr(nt, ca, "arguments", &can); }
-        int idx_op = cn && (sp_streq(cn, "[]") || sp_streq(cn, "at")) && can == 1;
-        int end_op = cn && (sp_streq(cn, "first") || sp_streq(cn, "last")) && can == 0;
-        if ((!idx_op && !end_op) || crecv < 0) { ok = 0; break; }
-        TyKind rt = infer_type(c, crecv);
-        /* element type of a narrowed obj-array OR the new int-array-array */
-        /* a scalar-element array yields its element type; an out-of-range
-           read is that type's nil (SP_INT_NIL / NULL), which it models */
-        TyKind ec = ty_is_obj_array(rt) ? ty_object(ty_obj_array_class(rt))
-                  : (rt == TY_INT_ARRAY_ARRAY) ? TY_INT_ARRAY
-                  : (rt == TY_INT_ARRAY || rt == TY_FLOAT_ARRAY || rt == TY_STR_ARRAY)
-                    ? ty_array_elem(rt) : TY_UNKNOWN;
-        if (ec == TY_UNKNOWN) { ok = 0; break; }
-        if (elem == TY_UNKNOWN) elem = ec; else if (elem != ec) { ok = 0; break; }
-        saw = 1;
-      }
-      if (ok && saw && elem != TY_UNKNOWN) { lv->type = elem; prop_ch = 1; }
-    }
-  }
-  if (!prop_ch) break;
   }
 
   free(sl); free(read_slot); free(claimed); free(value_ok);
@@ -9445,7 +9558,9 @@ void analyze_program(Compiler *c) {
   /* narrow monomorphic object arrays (POLY_ARRAY -> obj-pointer array) before
      the node cache is finalized so the rebuild below propagates the new element
      types to every `arr[i]` / `arr[i].field` site. */
+  narrow_int_table_ivars(c);
   narrow_object_arrays(c);
+  narrow_locals_from_arrays(c);
 
   /* narrow poly locals that are only ever used as ints (drop per-use boxing);
      the rebuild below re-infers their reads/ops at the narrowed int type. */

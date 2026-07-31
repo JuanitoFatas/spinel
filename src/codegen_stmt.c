@@ -5982,7 +5982,36 @@ else {
       if (sp_streq(vty, "HashNode") || sp_streq(vty, "KeywordHashNode"))
         v_empty_hash = (nt_arr(nt, v, "elements", &hen), hen == 0);
     }
-    if (ivt == TY_INT && emit_nullable_int_ternary(c, v, b)) {
+    /* `@t = Array.new(n) { <int array> }` into a narrowed pointer-array ivar:
+       the generator emits from the NODE's type, which the narrowing (a slot
+       decision) does not change. Lend it the slot's type, exactly as the local
+       write does, or the sp_PolyArray * it builds lands in an sp_PtrArray *
+       field and every read of the table dereferences the wrong shape. */
+    if (ty_is_ptr_array(ivt) && vty && sp_streq(vty, "CallNode") &&
+        nt_ref(nt, v, "block") >= 0 && nt_str(nt, v, "name") &&
+        sp_streq(nt_str(nt, v, "name"), "new") && nt_ref(nt, v, "receiver") >= 0 &&
+        nt_type(nt, nt_ref(nt, v, "receiver")) &&
+        sp_streq(nt_type(nt, nt_ref(nt, v, "receiver")), "ConstantReadNode") &&
+        nt_str(nt, nt_ref(nt, v, "receiver"), "name") &&
+        sp_streq(nt_str(nt, nt_ref(nt, v, "receiver"), "name"), "Array")) {
+      TyKind sv = c->ntype[v];
+      c->ntype[v] = ivt;
+      emit_expr(c, v, b);
+      c->ntype[v] = sv;
+    }
+    else if (ty_is_ptr_array(ivt) && v_empty_array) buf_puts(b, "sp_PtrArray_new()");
+    /* `@t = [[..], [..]]` into a narrowed pointer-array ivar: build the
+       sp_PtrArray with the unboxed element pointers, as the local write does. */
+    else if (ty_is_ptr_array(ivt) && vty && sp_streq(vty, "ArrayNode")) {
+      int tpa = ++g_tmp;
+      buf_printf(b, "({ sp_PtrArray *_t%d = sp_PtrArray_new(); SP_GC_ROOT(_t%d);", tpa, tpa);
+      int pen = 0; const int *pel = nt_arr(nt, v, "elements", &pen);
+      for (int e = 0; e < pen; e++) {
+        buf_printf(b, " sp_PtrArray_push(_t%d, ", tpa); emit_expr(c, pel[e], b); buf_puts(b, ");");
+      }
+      buf_printf(b, " _t%d; })", tpa);
+    }
+    else if (ivt == TY_INT && emit_nullable_int_ternary(c, v, b)) {
       /* `@iv = cond ? nil : <int>` emitted in int context (nil -> SP_INT_NIL) */
     }
     else if (vty && sp_streq(vty, "NilNode")) {
