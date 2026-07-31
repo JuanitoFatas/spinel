@@ -6737,9 +6737,22 @@ TyKind infer_uncached(Compiler *c, int id) {
     return sret;
   }
   if (nk == NK_AndNode || nk == NK_OrNode) {
-    TyKind lt = infer_type(c, nt_ref(nt, id, "left"));
-    TyKind rt = infer_type(c, nt_ref(nt, id, "right"));
+    int lnd = nt_ref(nt, id, "left"), rnd = nt_ref(nt, id, "right");
+    TyKind lt = infer_type(c, lnd);
+    TyKind rt = infer_type(c, rnd);
     if (lt == TY_BOOL && rt == TY_BOOL) return TY_BOOL;
+    /* `nil_valued || []` -- the nil-guard fallback. The empty literal alone
+       stays UNKNOWN (its element type comes from later usage), and unifying
+       that with a nil left left the whole expression typed nil, so `.size` on
+       it raised NoMethodError. In this position the literal is the value the
+       expression yields, and it is an Array whatever else happens (#3462). */
+    if (rt == TY_UNKNOWN && (lt == TY_NIL || lt == TY_UNKNOWN)) {
+      const char *rty = rnd >= 0 ? nt_type(nt, rnd) : NULL;
+      if (rty && sp_streq(rty, "ArrayNode")) {
+        int rn = 0; nt_arr(nt, rnd, "elements", &rn);
+        if (rn == 0) return TY_POLY_ARRAY;
+      }
+    }
     return ty_unify(lt, rt);  /* value form: a || b -> common type */
   }
   if (nk == NK_BeginNode) {

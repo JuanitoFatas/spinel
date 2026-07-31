@@ -2569,7 +2569,7 @@ else {
     Buf rarm; memset(&rarm, 0, sizeof rarm);
     Buf rpre; memset(&rpre, 0, sizeof rpre);
     #define EMIT_ARM(IS_RIGHT, TB) do { \
-      if (IS_RIGHT) { if (res == TY_POLY && comp_ntype(c, right) != TY_POLY) emit_boxed(c, right, (TB)); else emit_expr(c, right, (TB)); } \
+      if (IS_RIGHT) { emit_ternary_arm(c, right, res, (TB)); } \
       else { if (res == TY_POLY && lt != TY_POLY) { /* box the temp by left type */ \
                /* In `a && b` the kept-left arm is reached only when the left is
                   FALSY, and for a scalar slot that means it holds the nil
