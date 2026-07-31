@@ -994,6 +994,24 @@ void emit_assign(Compiler *c, int id, Buf *b, int indent) {
     }
     buf_printf(b, " _t%d; })", t);
   }
+  /* `a = Array.new(n) { <int array> }` into a narrowed pointer-array slot: the
+     generator emits from the NODE's type, which the narrowing (a slot-level
+     decision) left as the poly array. Lend it the slot's type for the emit, or
+     the sp_PolyArray * it builds lands in an sp_PtrArray * slot and every read
+     of the table dereferences the wrong shape. */
+  else if (lv && ty_is_ptr_array(lv->type) && vty && sp_streq(vty, "CallNode") &&
+           nt_ref(c->nt, v, "block") >= 0 && nt_str(c->nt, v, "name") &&
+           sp_streq(nt_str(c->nt, v, "name"), "new") &&
+           nt_ref(c->nt, v, "receiver") >= 0 &&
+           nt_type(c->nt, nt_ref(c->nt, v, "receiver")) &&
+           sp_streq(nt_type(c->nt, nt_ref(c->nt, v, "receiver")), "ConstantReadNode") &&
+           nt_str(c->nt, nt_ref(c->nt, v, "receiver"), "name") &&
+           sp_streq(nt_str(c->nt, nt_ref(c->nt, v, "receiver"), "name"), "Array")) {
+    TyKind sv = c->ntype[v];
+    c->ntype[v] = lv->type;
+    emit_expr(c, v, b);
+    c->ntype[v] = sv;
+  }
   else if (is_hash_new && nt_ref(c->nt, v, "block") >= 0) {
     /* Hash.new { |hash, key| ... }: emit through emit_call so the dproc
        function + sp_PolyPolyHash_new_dproc path runs. */

@@ -6051,7 +6051,13 @@ static int emit_class_new_call(Compiler *c, int id, Buf *b) {
         /* Array.new(n) { |i| body } / Array.new(0) { body } */
         int blk = nt_ref(nt, id, "block");
         TyKind at = comp_ntype(c, id);
-        const char *k = (at == TY_POLY_ARRAY) ? "Poly" : array_kind(at);
+        /* A narrowed pointer array (an int-array table, an object array) is an
+           sp_PtrArray of unboxed element pointers. Without this arm the slot
+           was declared sp_PtrArray * and handed an sp_PolyArray * -- so the
+           narrowing that makes the nested int table cheap could not be used at
+           all, and every read of it stayed boxed. */
+        const char *k = (at == TY_POLY_ARRAY) ? "Poly"
+                      : ty_is_ptr_array(at)   ? "Ptr" : array_kind(at);
         if (!k) k = "Poly";
         int tn = ++g_tmp, tr = ++g_tmp, ti = ++g_tmp;
         int bbody = nt_ref(nt, blk, "body");
@@ -6099,6 +6105,8 @@ static int emit_class_new_call(Compiler *c, int id, Buf *b) {
             else buf_puts(g_pre, vb.p ? vb.p : "sp_box_nil()");
             buf_puts(g_pre, ");\n");
           }
+          else if (sp_streq(k, "Ptr"))
+            buf_printf(g_pre, "sp_PtrArray_push(_t%d, (void *)(%s));\n", tr, vb.p ? vb.p : "0");
           else { buf_printf(g_pre, "sp_%sArray_push(_t%d, %s);\n", k, tr, vb.p ? vb.p : ""); }
           free(vb.p);
         }

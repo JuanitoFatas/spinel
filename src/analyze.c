@@ -5141,6 +5141,23 @@ static void narrow_object_arrays(Compiler *c) {
         claimed[crecv] = 1;
         oa_uf_union(sl, S, read_slot[crecv]);
       }
+      /* `t = Array.new(n) { <int array> }`: the generator block's value is the
+         element, so its type is the same evidence a pushed element gives. The
+         nested int table this builds is the one shape the pass still left on
+         the boxed poly path, so every read of it went through sp_poly_arr_get
+         and its arithmetic boxed. */
+      else if (cn && sp_streq(cn, "new") && crecv >= 0 &&
+               nt_type(nt, crecv) && sp_streq(nt_type(nt, crecv), "ConstantReadNode") &&
+               nt_str(nt, crecv, "name") && sp_streq(nt_str(nt, crecv, "name"), "Array") &&
+               nt_ref(nt, v, "block") >= 0) {
+        int gb = nt_ref(nt, v, "block");
+        int gbody = gb >= 0 ? nt_ref(nt, gb, "body") : -1;
+        int gn = 0;
+        const int *gs = gbody >= 0 ? nt_arr(nt, gbody, "body", &gn) : NULL;
+        int ec = (gs && gn > 0) ? oa_obj_class_of(c, gs[gn - 1]) : -1;
+        if (ec < 0 && ec != OA_CLS_IA) sl[S].alive = 0;
+        else sl[S].cls = oa_cls_join(sl[S].cls, ec);
+      }
       else sl[S].alive = 0;
     }
     else sl[S].alive = 0;
