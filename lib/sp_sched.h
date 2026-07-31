@@ -185,6 +185,7 @@ typedef struct sp_mutex {
 sp_mutex  *sp_Mutex_new(void);
 sp_mutex  *sp_Monitor_new(void);              /* a Mutex with reentrancy on */
 const char *sp_Mutex_class_name(sp_mutex *m); /* "Monitor" or "Thread::Mutex" */
+const char *sp_Queue_class_name(sp_queue *q);  /* "Thread::SizedQueue" or "Thread::Queue" */
 void       sp_Mutex_lock(sp_mutex *m);
 void       sp_Mutex_unlock(sp_mutex *m);
 mrb_bool   sp_Mutex_try_lock(sp_mutex *m);   /* #try_lock: true if acquired */

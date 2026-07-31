@@ -13228,7 +13228,16 @@ else { memcpy(dir, sf, n); dir[n] = 0; } }
     else if (rt == TY_OPENSTRUCT) cn = "OpenStruct";
     else if (rt == TY_TMS) cn = "Process::Tms";
     else if (rt == TY_THREAD) cn = "Thread";
-    else if (rt == TY_QUEUE) cn = "Thread::Queue";
+    else if (rt == TY_QUEUE) {
+      /* Queue and SizedQueue share one runtime object, so the name comes from
+         the bound rather than the static type -- a SizedQueue reported itself
+         as Thread::Queue (#3466). */
+      int tq2 = ++g_tmp;
+      buf_printf(b, "({ sp_queue *_t%d = ", tq2); emit_expr(c, recv, b);
+      buf_printf(b, "; ((sp_Class){(mrb_int)%d, sp_Queue_class_name(_t%d)}); })",
+                 builtin_class_id("Queue"), tq2);
+      return;
+    }
     else if (rt == TY_MUTEX) cn = "Thread::Mutex";
     else if (rt == TY_CONDVAR) cn = "Thread::ConditionVariable";
     else if (rt == TY_IO) {
@@ -18285,6 +18294,23 @@ else { memcpy(dir, sf, n); dir[n] = 0; } }
         return;
       }
     }
+    /* Queue and SizedQueue are one runtime object told apart by its bound, so
+       these two cannot be answered statically from TY_QUEUE alone -- a
+       SizedQueue reported false for its own class (#3466). */
+    { const char *qcn = nt_str(nt, argv[0], "name");
+      if (eff_rt == TY_QUEUE && qcn &&
+          (sp_streq(qcn, "SizedQueue") || sp_streq(qcn, "Queue"))) {
+        int tq3 = ++g_tmp;
+        int want_sized = sp_streq(qcn, "SizedQueue");
+        buf_printf(b, "({ sp_queue *_t%d = ", tq3); emit_expr(c, recv, b);
+        /* is_a?(Queue) is true for both (SizedQueue < Queue); instance_of? and
+           is_a?(SizedQueue) read the bound. */
+        if (!want_sized && !sp_streq(name, "instance_of?"))
+          buf_printf(b, "; (void)_t%d; (mrb_bool)1; })", tq3);
+        else
+          buf_printf(b, "; (mrb_bool)((sp_Queue_max(_t%d) > 0) == %d); })", tq3, want_sized ? 1 : 0);
+        return;
+      } }
     int yes = ty_matches_class(eff_rt, nt_str(nt, argv[0], "name"), sp_streq(name, "instance_of?"));
     if (yes >= 0) { buf_puts(b, "((void)("); emit_expr(c, recv, b); buf_printf(b, "), %d)", yes); return; }
   }

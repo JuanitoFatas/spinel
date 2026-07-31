@@ -845,6 +845,22 @@ int builtin_class_id(const char *name) {
     if (sp_streq(name, "UNIXServer"))  return -172;
     if (sp_streq(name, "Socket"))      return -173;
   }
+  /* The concurrency classes: naming one as a VALUE (`p Queue`, `Mutex.name`,
+     `Fiber.ancestors`) raised NameError even though `.new` on each works. The
+     top-level constant is the CRuby alias; #name answers the qualified form,
+     which the class-name mapping supplies. (#3466) */
+  {
+    if (sp_streq(name, "Thread"))            return -174;
+    if (sp_streq(name, "Mutex"))             return -175;
+    if (sp_streq(name, "Thread::Mutex"))     return -175;
+    if (sp_streq(name, "Queue"))             return -176;
+    if (sp_streq(name, "Thread::Queue"))     return -176;
+    if (sp_streq(name, "SizedQueue"))        return -177;
+    if (sp_streq(name, "Thread::SizedQueue")) return -177;
+    if (sp_streq(name, "ConditionVariable")) return -178;
+    if (sp_streq(name, "Thread::ConditionVariable")) return -178;
+    if (sp_streq(name, "Fiber"))             return -179;
+  }
   return 0;
 }
 const char *c_type_name(TyKind t) {

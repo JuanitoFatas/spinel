@@ -1477,7 +1477,12 @@ sp_mutex *sp_Monitor_new(void) {
 
 const char *sp_Mutex_class_name(sp_mutex *m) {
   return (m && m->reentrant) ? "Monitor" : "Thread::Mutex";
+}/* A bounded queue is a SizedQueue; an unbounded one is a Queue. One object
+   backs both, so the class name reads the bound rather than a separate tag. */
+const char *sp_Queue_class_name(sp_queue *q) {
+  return (q && q->max > 0) ? "Thread::SizedQueue" : "Thread::Queue";
 }
+
 
 void sp_Mutex_lock(sp_mutex *m) {
   SCHED_LOCK();

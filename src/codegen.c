@@ -5680,13 +5680,18 @@ char *codegen_program(const NodeTable *nt) {
     buf_puts(&b, "case -168:return SPL(\"TCPSocket\");case -169:return SPL(\"TCPServer\");");
     buf_puts(&b, "case -170:return SPL(\"UDPSocket\");case -171:return SPL(\"UNIXSocket\");");
     buf_puts(&b, "case -172:return SPL(\"UNIXServer\");case -173:return SPL(\"Socket\");");
+    /* The concurrency classes name themselves the way CRuby does: the
+       top-level constant is an alias, #name answers the qualified form. */
+    buf_puts(&b, "case -174:return SPL(\"Thread\");case -175:return SPL(\"Thread::Mutex\");");
+    buf_puts(&b, "case -176:return SPL(\"Thread::Queue\");case -177:return SPL(\"Thread::SizedQueue\");");
+    buf_puts(&b, "case -178:return SPL(\"Thread::ConditionVariable\");case -179:return SPL(\"Fiber\");");
     buf_puts(&b, "default:return sp_str_empty;} }\n\n");
     /* Inverse of the table above, for resolving a class carried by NAME back to
        its builtin id so the id-keyed hierarchy walks work on it (#3022). Cold
        path only (superclass/ancestors), so a linear scan is fine. */
     buf_puts(&b, "static mrb_int sp_builtin_id_of_name(const char *n){\n");
     buf_puts(&b, "  if(!n||!n[0])return SP_CLASS_NIL_ID;\n");
-    buf_puts(&b, "  for(mrb_int i=-100;i>=-173;i--){const char*s=sp_class_to_s((sp_Class){i,NULL});"
+    buf_puts(&b, "  for(mrb_int i=-100;i>=-179;i--){const char*s=sp_class_to_s((sp_Class){i,NULL});"
                  "if(s&&s[0]&&!strcmp(s,n))return i;}\n");
     buf_puts(&b, "  return SP_CLASS_NIL_ID;\n}\n\n");
   }
@@ -5836,6 +5841,10 @@ char *codegen_program(const NodeTable *nt) {
   buf_puts(&b, "  case -168:case -170: return ((sp_Class){-167});\n");
   buf_puts(&b, "  case -169: return ((sp_Class){-168});\n");
   buf_puts(&b, "  case -172: return ((sp_Class){-171});\n");
+  /* Thread / Mutex / Queue / ConditionVariable / Fiber -> Object, and
+     SizedQueue -> Queue as CRuby has it */
+  buf_puts(&b, "  case -174:case -175:case -176:case -178:case -179: return ((sp_Class){-116});\n");
+  buf_puts(&b, "  case -177: return ((sp_Class){-176});\n");
   /* Object -> BasicObject */
   buf_puts(&b, "  case -116: return ((sp_Class){-117});\n");
   /* BasicObject: the hierarchy root -- its superclass is nil (#2654) */
