@@ -4,3 +4,8 @@ class Seed
   def self.b: (bool) -> bool?
   def self.s: (bool) -> String?
 end
+
+class Row
+  def v: () -> Integer?
+  def w: () -> Float?
+end

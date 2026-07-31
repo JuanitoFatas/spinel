@@ -4220,8 +4220,13 @@ static void emit_unbox_node(Compiler *c, TyKind t, int node, Buf *b) {
   if (g_ret_seeded) emit_rbs_checked_text(c, t, "the return value", src.p ? src.p : "sp_box_nil()", &val);
   else buf_puts(&val, src.p ? src.p : "");
   const char *v = val.p ? val.p : "";
-  if (t == TY_INT || t == TY_BOOL) buf_printf(b, "sp_poly_to_i(%s)", v);
-  else if (t == TY_FLOAT)          buf_printf(b, "sp_poly_to_f(%s)", v);
+  /* int and float keep nil distinguishable: the plain conversions answer the
+     type's zero for a boxed nil, which in these two slots is a real value and
+     is what made a nullable return read back as 0 / 0.0. bool has no sentinel
+     to land on, so it keeps the plain conversion (#3458). */
+  if (t == TY_INT)                 buf_printf(b, "sp_poly_to_i_or_nil(%s)", v);
+  else if (t == TY_FLOAT)          buf_printf(b, "sp_poly_to_f_or_nil(%s)", v);
+  else if (t == TY_BOOL)           buf_printf(b, "sp_poly_to_i(%s)", v);
   else {
     const char *cn = c_type_name(t);
     if (t == TY_STRING || ty_is_object(t) || (cn && cn[0] && cn[strlen(cn) - 1] == '*'))

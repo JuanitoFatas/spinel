@@ -23,3 +23,20 @@ puts "s nil?=" + vs.nil?.to_s + " to_s=<" + vs.to_s + ">"
 
 # the present branch is unaffected
 puts "i2=" + Seed.i(true).to_s + " f2=" + Seed.f(true).to_s
+
+# The same slot fed from a BOXED value rather than a literal: the ivar holds
+# nil natively (it is poly), and the narrowing on the way out is where nil was
+# being flattened. This is the shape a nullable foreign key takes -- a reader
+# over a boxed column -- and the reason group_by on one found no nil group.
+class Row
+  def initialize(v); @v = v; end
+  def v; @v; end
+  def w; @v; end
+end
+r0 = Row.new(nil)
+r1 = Row.new(7)
+puts "boxed-nil nil?=" + r0.v.nil?.to_s + " to_s=<" + r0.v.to_s + ">"
+puts "boxed-val=" + r1.v.to_s
+puts "boxed-f nil?=" + r0.w.nil?.to_s
+groups = [r0, r1].group_by { |x| x.v }
+puts "nil-group=" + (groups[nil] ? groups[nil].length.to_s : "missing")
