@@ -2100,6 +2100,10 @@ int infer_write_types(Compiler *c) {
       int iv = inm ? comp_ivar_index(ci, inm) : -1;
       if (iv < 0) continue;
       if (class_ivar_pinned(ci, inm)) continue;  /* --rbs seed pins are authoritative */
+      /* A narrowed int table is pinned: its own write still reads
+         TY_POLY_ARRAY, and re-deriving from that would unify two array kinds
+         into the plain poly scalar -- strictly worse than what it replaced. */
+      if (ci->ivar_int_table[iv]) continue;
       slot = &ci->ivar_types[iv];
       watch_nm = inm;
       /* If the slot is TY_UNKNOWN but has a direct InstanceVariableWriteNode

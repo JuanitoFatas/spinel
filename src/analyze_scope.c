@@ -3783,7 +3783,12 @@ int infer_ivar_types(Compiler *c) {
         else
           vt = ci->ivar_types[iv];  /* keep existing type, don't widen */
       }
-      if (!class_ivar_pinned(ci, nm)) {
+      /* A narrowed int table is pinned: its own write reads TY_POLY_ARRAY,
+         and the two array kinds unify to the plain poly SCALAR -- re-deriving
+         it here would replace the narrowed type with something strictly
+         worse, and a parameter bound from `@t[k][j]` would take poly for
+         good (parameters only widen). */
+      if (!class_ivar_pinned(ci, nm) && !ci->ivar_int_table[iv]) {
         TyKind merged = ty_unify(ci->ivar_types[iv], vt);
         sp_ivwatch(nm, "ivar_write_merge", ci->ivar_types[iv], merged);
         if (merged != ci->ivar_types[iv]) { ci->ivar_types[iv] = merged; changed = 1; }

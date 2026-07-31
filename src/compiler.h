@@ -160,6 +160,15 @@ typedef struct {
   unsigned char *ivar_str_shared; /* (#3227) the slot is a shared-mutable
                                      string handle (sp_String *): survives
                                      re-clears; post-fixpoint reasserts it */
+  unsigned char *ivar_int_table;  /* the slot is a table of int arrays, narrowed
+                                     to TY_INT_ARRAY_ARRAY while the fixpoint
+                                     runs so a parameter bound from `@t[k][j]`
+                                     sees an Integer. The write it was derived
+                                     from still reads TY_POLY_ARRAY, and those
+                                     two array kinds unify to the plain poly
+                                     SCALAR -- so without this flag the next
+                                     write pass replaced the narrowed type with
+                                     something strictly worse. */
   int nivars, civars;
   char **rbs_pin_ivars; /* ivar names (incl '@') pinned by an --rbs seed: the
                            fixpoint must not widen their type */

@@ -1,5 +1,8 @@
 #include "analyze_internal.h"
 
+
+static int narrow_int_table_ivars(Compiler *c);  /* declared early: the fixpoint calls it */
+
 /* --int-overflow=promote flag; see analyze.h. Default off. */
 int g_promote_mode = 0;
 
@@ -4943,11 +4946,25 @@ static void widen_ivars_from_pushed_params(Compiler *c) {
    TY_INT_ARRAY_ARRAY with the write's TY_POLY_ARRAY -- two array kinds,
    which unify to the plain poly scalar -- and the slot would come out
    WORSE than it went in. */
-static void narrow_int_table_ivars(Compiler *c) {
+static int narrow_int_table_ivars(Compiler *c) {
+  int narrowed = 0;
+  /* Re-assert first. The slot's own write still reads TY_POLY_ARRAY and ~90
+     sites derive an ivar type from one, so something re-derives this one on
+     nearly every round -- and TY_INT_ARRAY_ARRAY unified with TY_POLY_ARRAY is
+     the plain poly SCALAR, strictly worse than either. Guarding every writer
+     is not practical; restoring the pinned type on each round is what
+     ivar_str_shared already does for the same reason. */
+  for (int ci = 0; ci < c->nclasses; ci++) {
+    ClassInfo *cl = &c->classes[ci];
+    for (int iv = 0; iv < cl->nivars; iv++)
+      if (cl->ivar_int_table[iv] && cl->ivar_types[iv] != TY_INT_ARRAY_ARRAY)
+        cl->ivar_types[iv] = TY_INT_ARRAY_ARRAY;
+  }
   const NodeTable *nt = c->nt;
   for (int ci = 0; ci < c->nclasses; ci++) {
     ClassInfo *cl = &c->classes[ci];
     for (int iv = 0; iv < cl->nivars; iv++) {
+      if (cl->ivar_int_table[iv]) continue;   /* already narrowed and pinned */
       if (cl->ivar_types[iv] != TY_POLY_ARRAY) continue;
       const char *ivn = cl->ivars[iv];
       if (!ivn || !ivn[0]) continue;
@@ -5025,9 +5042,14 @@ static void narrow_int_table_ivars(Compiler *c) {
         }
         if (!used) { ok = 0; break; }
       }
-      if (ok && saw_table) cl->ivar_types[iv] = TY_INT_ARRAY_ARRAY;
+      if (ok && saw_table) {
+        cl->ivar_types[iv] = TY_INT_ARRAY_ARRAY;
+        cl->ivar_int_table[iv] = 1;
+        narrowed = 1;
+      }
     }
   }
+  return narrowed;
 }
 
 /* Locals read out of an already-narrowed array: `b = arr[i]` makes b the
@@ -8483,6 +8505,13 @@ void analyze_program(Compiler *c) {
     build_ie_map(c);  /* refresh instance_exec receiver-class map each pass */
     ch |= register_ie_block_ivars(c);  /* slot ivars first assigned in iexec blocks */
     ch |= infer_write_types(c);
+    /* The table type has to be visible HERE, not after the fixpoint: a
+       parameter bound from `@t[k][j]` widens to poly on the first iteration
+       and never comes back (parameters only widen). The narrowing needs
+       infer_write_types to have given the ivar its poly-array type first, and
+       the locals read out of it (`row = @t[r]`) need one more write pass to
+       re-derive from the narrowed type before the binding below sees them. */
+    if (narrow_int_table_ivars(c)) ch |= infer_write_types(c);
     ch |= infer_param_types(c);
     ch |= infer_param_hash_value(c);
     ch |= propagate_prep_params(c);
@@ -8816,6 +8845,7 @@ void analyze_program(Compiler *c) {
   for (int ci = 0; ci < c->nclasses; ci++) {
     ClassInfo *cl = &c->classes[ci];
     for (int iv = 0; iv < cl->nivars; iv++) {
+      if (cl->ivar_int_table[iv]) continue;   /* already narrowed and pinned */
       if (cl->ivar_types[iv] != TY_POLY_ARRAY) continue;
       const char *ivn = cl->ivars[iv];
       int saw = 0, ok = 1;
