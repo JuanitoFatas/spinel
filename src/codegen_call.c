@@ -18949,6 +18949,69 @@ else { memcpy(dir, sf, n); dir[n] = 0; } }
       return;
     }
   }
+  /* The count-taking Array reads on a poly receiver. An array read out of a
+     nested Array or Hash answers Array to #class but had no arm for these, so
+     they raised NoMethodError (#3464). rotate's count is optional. */
+  if (recv >= 0 && rt == TY_POLY && nt_ref(nt, id, "block") < 0 &&
+      (argc == 1 || (argc == 0 && sp_streq(name, "rotate")))) {
+    const char *pn9 = NULL;
+    if (sp_streq(name, "first") || sp_streq(name, "take")) pn9 = "sp_poly_arr_take";
+    else if (sp_streq(name, "last")) pn9 = "sp_poly_arr_last_n";
+    else if (sp_streq(name, "drop")) pn9 = "sp_poly_arr_drop";
+    else if (sp_streq(name, "rotate")) pn9 = "sp_poly_arr_rotate";
+    else if (sp_streq(name, "sample")) pn9 = "sp_poly_arr_sample_n";
+    if (pn9) {
+      int ncand9 = 0;
+      for (int k = 0; k < c->nclasses; k++)
+        if (comp_method_in_chain(c, k, name, NULL) >= 0 ||
+            comp_reader_in_chain(c, k, name, NULL)) ncand9++;
+      if (ncand9 == 0) {
+        Buf cb9; memset(&cb9, 0, sizeof cb9);
+        buf_printf(&cb9, "%s(", pn9);
+        { Buf rb9; memset(&rb9, 0, sizeof rb9); emit_expr(c, recv, &rb9);
+          buf_puts(&cb9, rb9.p ? rb9.p : "sp_box_nil()"); free(rb9.p); }
+        buf_puts(&cb9, ", ");
+        if (argc == 1) { Buf nb9; memset(&nb9, 0, sizeof nb9); emit_int_expr(c, argv[0], &nb9);
+                         buf_puts(&cb9, nb9.p ? nb9.p : "0"); free(nb9.p); }
+        else buf_puts(&cb9, "1");
+        buf_puts(&cb9, ")");
+        /* the helpers answer a boxed poly array; a slot typed as the array
+           itself takes the pointer out of the box */
+        emit_unbox_text(c, comp_ntype(c, id), cb9.p ? cb9.p : "sp_box_nil()", b);
+        free(cb9.p);
+        return;
+      }
+    }
+  }
+  /* values_at takes any number of indices; collect them into a poly array. */
+  if (recv >= 0 && rt == TY_POLY && argc >= 1 && nt_ref(nt, id, "block") < 0 &&
+      sp_streq(name, "values_at")) {
+    int ncand9 = 0;
+    for (int k = 0; k < c->nclasses; k++)
+      if (comp_method_in_chain(c, k, name, NULL) >= 0) ncand9++;
+    if (ncand9 == 0) {
+      int ti9 = ++g_tmp;
+      emit_indent(g_pre, g_indent);
+      buf_printf(g_pre, "sp_PolyArray *_t%d = sp_PolyArray_new(); SP_GC_ROOT(_t%d);\n", ti9, ti9);
+      for (int k = 0; k < argc; k++) {
+        emit_indent(g_pre, g_indent);
+        buf_printf(g_pre, "sp_PolyArray_push(_t%d, ", ti9);
+        Buf ab9; memset(&ab9, 0, sizeof ab9);
+        emit_boxed(c, argv[k], &ab9);
+        buf_puts(g_pre, ab9.p ? ab9.p : "sp_box_nil()");
+        free(ab9.p);
+        buf_puts(g_pre, ");\n");
+      }
+      Buf cv9; memset(&cv9, 0, sizeof cv9);
+      buf_puts(&cv9, "sp_poly_arr_values_at(");
+      { Buf rv9; memset(&rv9, 0, sizeof rv9); emit_expr(c, recv, &rv9);
+        buf_puts(&cv9, rv9.p ? rv9.p : "sp_box_nil()"); free(rv9.p); }
+      buf_printf(&cv9, ", _t%d)", ti9);
+      emit_unbox_text(c, comp_ntype(c, id), cv9.p ? cv9.p : "sp_box_nil()", b);
+      free(cv9.p);
+      return;
+    }
+  }
   if (recv >= 0 && rt == TY_POLY && argc == 0 && nt_ref(nt, id, "block") < 0) {
     const char *pm = NULL;
     if (sp_streq(name, "sum")) pm = "sp_poly_sum";

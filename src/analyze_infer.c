@@ -4767,6 +4767,26 @@ else {
       if (argc == 1 && sp_streq(name, "round")) return TY_POLY;
       /* String#getbyte on a boxed value: int byte or nil on out-of-range. */
       if (argc == 1 && sp_streq(name, "getbyte")) return TY_POLY;
+      /* The count-taking Array reads on a boxed array. Their value is a new
+         array; without a rule they typed nil/void and the call emitted as a
+         discarded statement (#3464). rotate's count is optional. */
+      if ((argc == 1 || (argc == 0 && sp_streq(name, "rotate"))) &&
+          nt_ref(nt, id, "block") < 0 &&
+          (sp_streq(name, "first") || sp_streq(name, "last") ||
+           sp_streq(name, "take") || sp_streq(name, "drop") ||
+           sp_streq(name, "rotate") || sp_streq(name, "sample"))) {
+        int has_user = 0;
+        for (int k = 0; k < c->nclasses && !has_user; k++)
+          if (comp_method_in_chain(c, k, name, NULL) >= 0 ||
+              comp_reader_in_chain(c, k, name, NULL)) has_user = 1;
+        if (!has_user) return TY_POLY_ARRAY;
+      }
+      if (argc >= 1 && sp_streq(name, "values_at") && nt_ref(nt, id, "block") < 0) {
+        int has_user = 0;
+        for (int k = 0; k < c->nclasses && !has_user; k++)
+          if (comp_method_in_chain(c, k, name, NULL) >= 0) has_user = 1;
+        if (!has_user) return TY_POLY_ARRAY;
+      }
       /* Array-reduction methods on a boxed array element (a run from
          chunk_while etc.): the concrete element type is erased to poly, so the
          result is a boxed poly value resolved at runtime by cls_id. */

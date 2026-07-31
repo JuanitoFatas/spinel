@@ -3057,6 +3057,26 @@ static sp_RbVal sp_poly_splice_range(sp_RbVal recv, sp_Range r, sp_RbVal src) {
   }
   return sp_poly_splice(recv, first, len, src);
 }
+/* arr[Range] / arr.slice(Range) on a poly receiver. A Range index used to fall
+   through the poly `[]` as index 0, so every range answered the first element
+   -- the array read out of a nested Array or Hash is exactly the shape that
+   lands here (#3464). The string receiver was already handled (#3175). */
+static sp_RbVal sp_poly_arr_range(sp_RbVal recv, sp_Range r) {
+  mrb_int alen = sp_poly_arr_len(recv);
+  mrb_int first = r.first;
+  if (first == INTPTR_MIN) first = 0;          /* beginless */
+  else if (first < 0) first += alen;
+  if (first < 0 || first > alen) return sp_box_nil();   /* CRuby: out of range */
+  mrb_int len;
+  if (r.last == INTPTR_MAX) len = alen - first;         /* endless */
+  else {
+    mrb_int last = r.last < 0 ? r.last + alen : r.last;
+    len = last - first + (r.excl ? 0 : 1);
+  }
+  if (len < 0) len = 0;
+  if (len > alen - first) len = alen - first;
+  return sp_poly_slice(recv, first, len);
+}
 /* Array#replace(other): replace recv's contents with other's, returning recv.
    recv keeps the same boxed pointer (the underlying array is mutated in place),
    so a nullable-array slot typed poly stays valid. A nil/non-array recv is a
@@ -5000,6 +5020,10 @@ static sp_RbVal sp_poly_index_poly(sp_RbVal recv, sp_RbVal idx) {
     return sp_box_str(sp_str_sub_range_r(recv.v.s ? recv.v.s : sp_str_empty,
                                          rg->first, rg->last, (int)rg->excl));
   }
+  /* the same for a poly ARRAY: a sub-array, not element 0 (#3464) */
+  if (idx.tag == SP_TAG_OBJ && idx.cls_id == SP_BUILTIN_RANGE &&
+      recv.tag == SP_TAG_OBJ && sp_poly_is_array_kind(recv.cls_id))
+    return sp_poly_arr_range(recv, *(sp_Range *)idx.v.p);
   mrb_int i = (idx.tag == SP_TAG_INT) ? idx.v.i : 0;
   /* Struct#[n] is the nth MEMBER, in declaration order -- the order #to_h
      preserves -- not an array index (#3369). */
@@ -5571,6 +5595,64 @@ static sp_RbVal sp_poly_sum_seed(sp_RbVal v, sp_RbVal seed) {
   return acc;
 }
 static sp_PolyArray *sp_poly_to_a_arr(sp_RbVal v);  /* defined below; hash -> pairs */
+/* The count-taking reads of Array's surface, for a receiver carried in a poly
+   slot -- an array read out of a nested Array or Hash answers Array to #class
+   but had no arm for these, so they raised NoMethodError (#3464). Each is the
+   contiguous-slice form where one exists, so a typed array stays typed. */
+/* The element list these reads work over: a hash contributes its [k, v] pairs,
+   exactly as Enumerable sees it. */
+static sp_RbVal sp_poly_arr_span(sp_RbVal v, mrb_int from, mrb_int n) {
+  SP_GC_ROOT_RBVAL(v);
+  sp_PolyArray *p = sp_poly_to_a_arr(v); SP_GC_ROOT(p);
+  return sp_box_poly_array(sp_PolyArray_slice(p, from, n));
+}
+static sp_RbVal sp_poly_arr_take(sp_RbVal v, mrb_int n) {
+  if (n < 0) sp_raise_cls("ArgumentError", "negative array size");
+  mrb_int alen = sp_poly_length(v);
+  return sp_poly_arr_span(v, 0, n > alen ? alen : n);
+}
+static sp_RbVal sp_poly_arr_last_n(sp_RbVal v, mrb_int n) {
+  if (n < 0) sp_raise_cls("ArgumentError", "negative array size");
+  mrb_int alen = sp_poly_length(v);
+  if (n > alen) n = alen;
+  return sp_poly_arr_span(v, alen - n, n);
+}
+static sp_RbVal sp_poly_arr_drop(sp_RbVal v, mrb_int n) {
+  if (n < 0) sp_raise_cls("ArgumentError", "attempt to drop negative size");
+  mrb_int alen = sp_poly_length(v);
+  if (n > alen) n = alen;
+  return sp_poly_arr_span(v, n, alen - n);
+}
+static sp_RbVal sp_poly_arr_rotate(sp_RbVal v, mrb_int n) {
+  SP_GC_ROOT_RBVAL(v);
+  sp_PolyArray *r = sp_PolyArray_dup(sp_poly_to_a_arr(v));
+  SP_GC_ROOT(r);
+  sp_PolyArray_rotate_bang(r, n);
+  return sp_box_poly_array(r);
+}
+static sp_RbVal sp_poly_arr_sample_n(sp_RbVal v, mrb_int n) {
+  if (n < 0) sp_raise_cls("ArgumentError", "negative sample number");
+  SP_GC_ROOT_RBVAL(v);
+  sp_PolyArray *r = sp_PolyArray_dup(sp_poly_to_a_arr(v));
+  SP_GC_ROOT(r);
+  sp_PolyArray_shuffle_bang(r);
+  if (n > r->len) n = r->len;
+  return sp_box_poly_array(sp_PolyArray_slice(r, 0, n));
+}
+/* Array#values_at indexes; Hash#values_at looks the keys up. */
+static sp_RbVal sp_poly_arr_values_at(sp_RbVal v, sp_PolyArray *idx) {
+  SP_GC_ROOT_RBVAL(v); SP_GC_ROOT(idx);
+  int is_hash = v.tag == SP_TAG_OBJ && sp_poly_is_hash_kind(v.cls_id);
+  mrb_int alen = is_hash ? 0 : sp_poly_arr_len(v);
+  sp_PolyArray *out = sp_PolyArray_new(); SP_GC_ROOT(out);
+  for (mrb_int i = 0; idx && i < idx->len; i++) {
+    if (is_hash) { sp_PolyArray_push(out, sp_poly_index_poly(v, idx->data[i])); continue; }
+    mrb_int k = sp_poly_to_i(idx->data[i]);
+    if (k < 0) k += alen;
+    sp_PolyArray_push(out, (k < 0 || k >= alen) ? sp_box_nil() : sp_poly_arr_get(v, k));
+  }
+  return sp_box_poly_array(out);
+}
 static sp_RbVal sp_poly_min(sp_RbVal v) {
   if (v.tag != SP_TAG_OBJ) return sp_box_nil();
   /* Enumerable#min on a boxed hash: the least [k, v] pair by pair comparison. */
@@ -5578,6 +5660,9 @@ static sp_RbVal sp_poly_min(sp_RbVal v) {
   switch (v.cls_id) {
     case SP_BUILTIN_INT_ARRAY:  { sp_IntArray *a = (sp_IntArray *)v.v.p; return (a && a->len) ? sp_box_int(sp_IntArray_min(a)) : sp_box_nil(); }
     case SP_BUILTIN_FLT_ARRAY:  { sp_FloatArray *a = (sp_FloatArray *)v.v.p; return (a && a->len) ? sp_box_float(sp_FloatArray_min(a)) : sp_box_nil(); }
+    /* a String array reached here through the default and answered nil (#3464) */
+    case SP_BUILTIN_STR_ARRAY:  { const char *m = sp_StrArray_min((sp_StrArray *)v.v.p); return m ? sp_box_str(m) : sp_box_nil(); }
+    case SP_BUILTIN_SYM_ARRAY:  return sp_PolyArray_min(sp_poly_to_poly_array(v));
     case SP_BUILTIN_POLY_ARRAY: return sp_PolyArray_min((sp_PolyArray *)v.v.p);
     default: return sp_box_nil();
   }
@@ -5588,6 +5673,8 @@ static sp_RbVal sp_poly_max(sp_RbVal v) {
   switch (v.cls_id) {
     case SP_BUILTIN_INT_ARRAY:  { sp_IntArray *a = (sp_IntArray *)v.v.p; return (a && a->len) ? sp_box_int(sp_IntArray_max(a)) : sp_box_nil(); }
     case SP_BUILTIN_FLT_ARRAY:  { sp_FloatArray *a = (sp_FloatArray *)v.v.p; return (a && a->len) ? sp_box_float(sp_FloatArray_max(a)) : sp_box_nil(); }
+    case SP_BUILTIN_STR_ARRAY:  { const char *m = sp_StrArray_max((sp_StrArray *)v.v.p); return m ? sp_box_str(m) : sp_box_nil(); }
+    case SP_BUILTIN_SYM_ARRAY:  return sp_PolyArray_max(sp_poly_to_poly_array(v));
     case SP_BUILTIN_POLY_ARRAY: return sp_PolyArray_max((sp_PolyArray *)v.v.p);
     default: return sp_box_nil();
   }
