@@ -18030,7 +18030,7 @@ else { memcpy(dir, sf, n); dir[n] = 0; } }
     }
     if (lrt == TY_STRING && lat == TY_STRING) {
       int tc = ++g_tmp;
-      buf_printf(b, "({ int _t%d = strcmp(", tc); emit_expr(c, recv, b); buf_puts(b, ", "); emit_expr(c, argv[0], b);
+      buf_printf(b, "({ int _t%d = sp_str_cmp_bytes(", tc); emit_expr(c, recv, b); buf_puts(b, ", "); emit_expr(c, argv[0], b);
       buf_printf(b, "); (_t%d > 0) - (_t%d < 0); })", tc, tc);
       return;
     }
@@ -18149,7 +18149,7 @@ else { memcpy(dir, sf, n); dir[n] = 0; } }
       return;
     }
     if (rt == TY_STRING) {
-      buf_puts(b, "(strcmp(");
+      buf_puts(b, "(sp_str_cmp_bytes(");
       emit_expr(c, recv, b); buf_puts(b, ", "); emit_expr(c, argv[0], b);
       buf_printf(b, ") %s 0)", name);
       return;
@@ -18544,8 +18544,8 @@ else { memcpy(dir, sf, n); dir[n] = 0; } }
     if (rt == TY_STRING) {
       int tv = ++g_tmp;
       buf_printf(b, "({ const char *_t%d = ", tv); emit_expr(c, recv, b);
-      buf_printf(b, "; (strcmp(_t%d, ", tv); emit_expr(c, argv[0], b);
-      buf_printf(b, ") >= 0 && strcmp(_t%d, ", tv); emit_expr(c, argv[1], b); buf_puts(b, ") <= 0); })");
+      buf_printf(b, "; (sp_str_cmp_bytes(_t%d, ", tv); emit_expr(c, argv[0], b);
+      buf_printf(b, ") >= 0 && sp_str_cmp_bytes(_t%d, ", tv); emit_expr(c, argv[1], b); buf_puts(b, ") <= 0); })");
       return;
     }
     /* A Bignum receiver: sp_Bigint* can't be compared with >=/<= (that is a
@@ -18949,7 +18949,7 @@ else { memcpy(dir, sf, n); dir[n] = 0; } }
         else {
           int ta = ++g_tmp;
           buf_printf(b, "({ const char *_t%d = ", ta); emit_expr(c, argv[0], b);
-          buf_puts(b, "; (strcmp("); emit_expr(c, lo, b); buf_printf(b, ", _t%d) <= 0 && strcmp(_t%d, ", ta, ta);
+          buf_puts(b, "; (sp_str_cmp_bytes("); emit_expr(c, lo, b); buf_printf(b, ", _t%d) <= 0 && sp_str_cmp_bytes(_t%d, ", ta, ta);
           emit_expr(c, hi, b); buf_printf(b, ") %s 0); })", excl ? "<" : "<=");
         }
         return;

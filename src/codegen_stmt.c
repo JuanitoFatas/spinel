@@ -3366,8 +3366,8 @@ static int emit_when_string_range(Compiler *c, int cond, int t, Buf *b) {
   /* A nil endpoint (NULL for a String-typed slot, e.g. an unset ivar) is an
      open bound in CRuby -- `(nil.."m") === "c"` is true -- so a NULL endpoint
      passes its side of the cover check rather than matching or dereferencing. */
-  if (left >= 0) buf_printf(b, " && (!_t%d || strcmp(_t%d, _t%d) <= 0)", tl, tl, t);
-  if (right >= 0) buf_printf(b, " && (!_t%d || strcmp(_t%d, _t%d) %s 0)", tr, t, tr, excl ? "<" : "<=");
+  if (left >= 0) buf_printf(b, " && (!_t%d || sp_str_cmp_bytes(_t%d, _t%d) <= 0)", tl, tl, t);
+  if (right >= 0) buf_printf(b, " && (!_t%d || sp_str_cmp_bytes(_t%d, _t%d) %s 0)", tr, t, tr, excl ? "<" : "<=");
   buf_puts(b, "; })");
   return 1;
 }

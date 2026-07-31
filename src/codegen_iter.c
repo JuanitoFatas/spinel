@@ -2928,7 +2928,7 @@ int emit_iteration_stmt(Compiler *c, int id, Buf *b, int indent) {
     emit_indent(b, indent); buf_printf(b, "const char *_t%d = ", te); emit_expr(c, argv[0], b); buf_puts(b, ";\n");
     emit_indent(b, indent); buf_printf(b, "const char *_t%d = ", tc); emit_expr(c, recv, b); buf_puts(b, ";\n");
     emit_indent(b, indent); buf_printf(b, "for (int _t%d = 0; _t%d < 4096; _t%d++) {\n", ti, ti, ti);
-    emit_indent(b, indent + 1); buf_printf(b, "int _t%d = strcmp(_t%d, _t%d);\n", tcmp, tc, te);
+    emit_indent(b, indent + 1); buf_printf(b, "int _t%d = sp_str_cmp_bytes(_t%d, _t%d);\n", tcmp, tc, te);
     emit_indent(b, indent + 1); buf_printf(b, "if (_t%d > 0) break;\n", tcmp);
     emit_indent(b, indent + 1); buf_printf(b, "lv_%s = _t%d;\n", p0, tc);
     emit_loop_body(c, body, b, indent + 1);
