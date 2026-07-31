@@ -1946,6 +1946,7 @@ static mrb_float sp_poly_to_f(sp_RbVal v) { if (v.tag == SP_TAG_FLT) return v.v.
    nullable int/float already tests for (#3458). */
 static mrb_int sp_poly_to_i_or_nil(sp_RbVal v) { return v.tag == SP_TAG_NIL ? SP_INT_NIL : sp_poly_to_i(v); }
 static mrb_float sp_poly_to_f_or_nil(sp_RbVal v) { return v.tag == SP_TAG_NIL ? sp_float_nil() : sp_poly_to_f(v); }
+static inline const char *sp_poly_to_s_or_nil(sp_RbVal v) { return v.tag == SP_TAG_NIL ? NULL : sp_poly_to_s(v); }
 /* Unbox to float? preserving nil as the float-nil sentinel. Used by the
    unpack1 literal-float-directive fast path: sp_str_unpack pads short input
    with nil, which must stay nil through the unboxed TY_FLOAT result (CRuby

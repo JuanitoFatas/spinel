@@ -1,0 +1,5 @@
+class W
+  def self.pi: (Integer? n) -> String
+  def self.pf: (Float? f) -> String
+  def self.ps: (String? s) -> String
+end

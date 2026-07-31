@@ -5690,7 +5690,7 @@ void emit_arg_or_default(Compiler *c, Scope *m, int idx, int provided, Buf *out)
         if (at == TY_NIL && pt == TY_INT) { buf_puts(out, "((void)("); emit_expr(c, provided, out); buf_puts(out, "), SP_INT_NIL)"); }
         else if (at == TY_NIL && pt == TY_FLOAT) { buf_puts(out, "((void)("); emit_expr(c, provided, out); buf_puts(out, "), sp_float_nil())"); }
         else if (at == TY_NIL && pt == TY_STRING) { buf_puts(out, "((void)("); emit_expr(c, provided, out); buf_puts(out, "), NULL)"); }
-        else if (at == TY_POLY && pt == TY_STRING) { buf_puts(out, "sp_poly_to_s("); emit_expr(c, provided, out); buf_puts(out, ")"); }
+        else if (at == TY_POLY && pt == TY_STRING) { buf_puts(out, "sp_poly_to_s_or_nil("); emit_expr(c, provided, out); buf_puts(out, ")"); }
         /* An unresolved call typed TY_UNKNOWN whose emitted value is the gate's
            sp_raise_nomethod(...) poly token, landing in a concretely-typed
            param slot (`raw(rec.created_at.strftime(...))` on a nilable
@@ -5699,9 +5699,16 @@ void emit_arg_or_default(Compiler *c, Scope *m, int idx, int provided, Buf *out)
         else if (at == TY_UNKNOWN && pt != TY_POLY && pt != TY_UNKNOWN) {
           emit_unresolved_coerced(c, provided, pt, out);
         }
-        else if (at == TY_POLY && pt == TY_FLOAT) { buf_puts(out, "sp_poly_to_f("); emit_expr(c, provided, out); buf_puts(out, ")"); }
+        else if (at == TY_POLY && pt == TY_FLOAT) { buf_puts(out, "sp_poly_to_f_or_nil("); emit_expr(c, provided, out); buf_puts(out, ")"); }
         else if (at == TY_POLY && pt == TY_SYMBOL) { buf_puts(out, "(sp_sym)sp_poly_to_i("); emit_expr(c, provided, out); buf_puts(out, ")"); }
-        else if (at == TY_POLY && (pt == TY_INT || pt == TY_BOOL)) { buf_puts(out, "sp_poly_to_i("); emit_expr(c, provided, out); buf_puts(out, ")"); }
+        /* A poly argument narrowing into a declared int/float/String parameter keeps
+           nil distinguishable: the plain conversions answer the type's zero, which
+           in those slots is a real value. A LITERAL nil already lands on the
+           sentinel just above; this is the case where nil-ness is only known at
+           run time -- an element of a mixed array, a Hash miss, an untyped call
+           (#3465). bool keeps the plain conversion: it has no sentinel. */
+        else if (at == TY_POLY && pt == TY_INT) { buf_puts(out, "sp_poly_to_i_or_nil("); emit_expr(c, provided, out); buf_puts(out, ")"); }
+        else if (at == TY_POLY && pt == TY_BOOL) { buf_puts(out, "sp_poly_to_i("); emit_expr(c, provided, out); buf_puts(out, ")"); }
         /* poly arg into an object or other pointer-backed param (array, proc,
            ...): unbox the pointer via emit_unbox_text (a nil box has v.p ==
            NULL, the pointer-nil representation). The callee's RBS asserts the
