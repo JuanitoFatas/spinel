@@ -863,6 +863,57 @@ static int emit_proc_cell_lvalue(Compiler *c, int scope_node, const char *nm, Bu
   return 1;
 }
 
+/* `Array.new(n) { ... }`: a generator that builds its container in place, so
+   the container's C form is free to follow the destination rather than the
+   node's own type. That matters wherever a pointer-array narrowing is a
+   decision about a SLOT (a local, a method's return) which never reached the
+   node the value is emitted from. */
+static int is_array_new_block(Compiler *c, int v) {
+  const NodeTable *nt = c->nt;
+  const char *vty = v >= 0 ? nt_type(nt, v) : NULL;
+  if (!vty || !sp_streq(vty, "CallNode")) return 0;
+  if (nt_ref(nt, v, "block") < 0) return 0;
+  const char *cn = nt_str(nt, v, "name");
+  if (!cn || !sp_streq(cn, "new")) return 0;
+  int r = nt_ref(nt, v, "receiver");
+  if (r < 0 || !nt_type(nt, r) || !sp_streq(nt_type(nt, r), "ConstantReadNode")) return 0;
+  const char *rn = nt_str(nt, r, "name");
+  return rn && sp_streq(rn, "Array");
+}
+
+/* Emit a value that BUILDS its container into a narrowed pointer array (an
+   object array, a table of int arrays). Every shape here constructs in place,
+   so the container's C form follows the destination -- which matters because
+   the narrowing is a decision about a SLOT (a local, an ivar, a method's
+   return) and never reached the node this value is emitted from. Answers 0
+   when the value is not one of those shapes and the caller should emit it its
+   usual way. */
+static int emit_ptr_array_build(Compiler *c, int v, TyKind want, Buf *b) {
+  const char *vty = v >= 0 ? nt_type(c->nt, v) : NULL;
+  if (!vty) return 0;
+  if (sp_streq(vty, "ArrayNode")) {
+    /* `[X.new, ...]` / `[[..], [..]]`: an sp_PtrArray of the unboxed element
+       pointers (each an object pointer or an sp_IntArray*), rooted while
+       constructing. An empty one is just the empty array. */
+    int t = ++g_tmp;
+    buf_printf(b, "({ sp_PtrArray *_t%d = sp_PtrArray_new(); SP_GC_ROOT(_t%d);", t, t);
+    int en = 0; const int *el = nt_arr(c->nt, v, "elements", &en);
+    for (int e = 0; e < en; e++) {
+      buf_printf(b, " sp_PtrArray_push(_t%d, ", t); emit_expr(c, el[e], b); buf_puts(b, ");");
+    }
+    buf_printf(b, " _t%d; })", t);
+    return 1;
+  }
+  if (is_array_new_block(c, v)) {
+    TyKind sv = c->ntype[v];
+    c->ntype[v] = want;
+    emit_expr(c, v, b);
+    c->ntype[v] = sv;
+    return 1;
+  }
+  return 0;
+}
+
 static int str_append_chain_base(Compiler *c, int id);
 void emit_assign(Compiler *c, int id, Buf *b, int indent) {
   const char *nm = nt_str(c->nt, id, "name");
@@ -982,35 +1033,8 @@ void emit_assign(Compiler *c, int id, Buf *b, int indent) {
        elements are GC-marked as ordinary heap objects. */
     buf_puts(b, "sp_PtrArray_new()");
   }
-  else if (lv && ty_is_ptr_array(lv->type) && vty && sp_streq(vty, "ArrayNode")) {
-    /* `a = [X.new, ...]` / `a = [[..], [..]]` for a narrowed pointer array:
-       build the sp_PtrArray with the unboxed element pointers (each an object
-       pointer or an sp_IntArray*, rooted while constructing). */
-    int t = ++g_tmp;
-    buf_printf(b, "({ sp_PtrArray *_t%d = sp_PtrArray_new(); SP_GC_ROOT(_t%d);", t, t);
-    int en = 0; const int *el = nt_arr(c->nt, v, "elements", &en);
-    for (int e = 0; e < en; e++) {
-      buf_printf(b, " sp_PtrArray_push(_t%d, ", t); emit_expr(c, el[e], b); buf_puts(b, ");");
-    }
-    buf_printf(b, " _t%d; })", t);
-  }
-  /* `a = Array.new(n) { <int array> }` into a narrowed pointer-array slot: the
-     generator emits from the NODE's type, which the narrowing (a slot-level
-     decision) left as the poly array. Lend it the slot's type for the emit, or
-     the sp_PolyArray * it builds lands in an sp_PtrArray * slot and every read
-     of the table dereferences the wrong shape. */
-  else if (lv && ty_is_ptr_array(lv->type) && vty && sp_streq(vty, "CallNode") &&
-           nt_ref(c->nt, v, "block") >= 0 && nt_str(c->nt, v, "name") &&
-           sp_streq(nt_str(c->nt, v, "name"), "new") &&
-           nt_ref(c->nt, v, "receiver") >= 0 &&
-           nt_type(c->nt, nt_ref(c->nt, v, "receiver")) &&
-           sp_streq(nt_type(c->nt, nt_ref(c->nt, v, "receiver")), "ConstantReadNode") &&
-           nt_str(c->nt, nt_ref(c->nt, v, "receiver"), "name") &&
-           sp_streq(nt_str(c->nt, nt_ref(c->nt, v, "receiver"), "name"), "Array")) {
-    TyKind sv = c->ntype[v];
-    c->ntype[v] = lv->type;
-    emit_expr(c, v, b);
-    c->ntype[v] = sv;
+  else if (lv && ty_is_ptr_array(lv->type) && emit_ptr_array_build(c, v, lv->type, b)) {
+    /* built in place at the slot's own container type */
   }
   else if (is_hash_new && nt_ref(c->nt, v, "block") >= 0) {
     /* Hash.new { |hash, key| ... }: emit through emit_call so the dproc
@@ -4356,6 +4380,14 @@ static void emit_tail_value(Compiler *c, int node, Buf *b) {
      no such coercion and is what needs the boundary materialize. Object-typed
      arrays have no generic per-element unbox (the box must already hold that exact
      object type), so those stay a loud compile-time diagnostic. */
+  /* The same build the assignment side does, for a method whose value narrowed
+     to a pointer array: a literal or a generator constructs its container from
+     the NODE's type, which a return-type narrowing never touched, so without
+     this the body builds an sp_PolyArray * and hands it back through an
+     sp_PtrArray * signature. Any other tail already carries the narrowed type
+     from the slot it reads. */
+  if (ty_is_ptr_array(g_ret_type) && comp_ntype(c, node) != g_ret_type &&
+      emit_ptr_array_build(c, node, g_ret_type, b)) return;
   {
     const char *vnty = nt_type(c->nt, node);
     if (comp_ntype(c, node) == TY_POLY_ARRAY && vnty && !sp_streq(vnty, "ArrayNode")) {

@@ -104,6 +104,21 @@ static int bare_rescue_spec_cid(Compiler *c, int rescue_id) {
   return -1;
 }
 
+/* Names the emitted program can reach with no CallNode of its own: the runtime
+   protocols. `5 + money` calls Money#coerce, `puts obj` calls to_s, a `for`
+   loop calls each. Reachability keeps such a method alive; a pass reasoning
+   about how a method is entered or what its C signature may be must likewise
+   treat it as having a caller it cannot see. */
+static int method_name_implicitly_invoked(const char *nm) {
+  static const char *const implicit[] = {
+    "to_s", "inspect", "==", "<=>", "eql?", "hash", "each", "coerce",
+    "to_str", "to_ary", "to_a", "to_i", "to_int", "to_h", "to_proc", "call",
+    "initialize_copy", NULL };
+  if (!nm) return 0;
+  for (int i = 0; implicit[i]; i++) if (sp_streq(implicit[i], nm)) return 1;
+  return 0;
+}
+
 void compute_reachable(Compiler *c) {
   /* Build per-scope call sets (CallNode names, not entering nested DefNodes). */
   char ***scope_calls = calloc((size_t)c->nscopes, sizeof(char **));
@@ -121,11 +136,6 @@ void compute_reachable(Compiler *c) {
     }
   }
 
-  /* Names that may be invoked implicitly (no explicit CallNode): keep live. */
-  static const char *const implicit[] = {
-    "to_s", "inspect", "==", "<=>", "eql?", "hash", "each", "coerce",
-    "to_str", "to_ary", "to_a", "to_i", "to_int", "to_h", "to_proc", "call",
-    "initialize_copy", NULL };
 
   /* BFS queue (scope indices). */
   int *queue = malloc((size_t)c->nscopes * sizeof(int));
@@ -134,9 +144,8 @@ void compute_reachable(Compiler *c) {
   for (int s = 0; s < c->nscopes; s++) {
     Scope *sc = &c->scopes[s];
     sc->reachable = 0;
-    int is_root = (s == 0 || !sc->name || sp_streq(sc->name, "initialize"));
-    if (!is_root)
-      for (int i = 0; implicit[i]; i++) if (sp_streq(implicit[i], sc->name)) { is_root = 1; break; }
+    int is_root = (s == 0 || !sc->name || sp_streq(sc->name, "initialize") ||
+                   method_name_implicitly_invoked(sc->name));
     if (is_root) { sc->reachable = 1; queue[qtail++] = s; }
   }
 
@@ -4816,7 +4825,7 @@ static int desugar_to_enum(Compiler *c) {
    Strictly conservative: any unmodeled use, class conflict, unresolved flow, or
    absent object evidence kills the component, leaving it TY_POLY_ARRAY. Runs
    ONCE, after the fixpoint, so the new type never feeds forward inference. */
-typedef struct { int sidx; LocalVar *lv; int cls; int alive; int uf; int needs_cmp; } OAS;
+typedef struct { int sidx; LocalVar *lv; int cls; int alive; int uf; int needs_cmp; int saw_call; } OAS;
 
 static int oa_find(OAS *sl, int n, int sidx, LocalVar *lv) {
   for (int i = 0; i < n; i++) if (sl[i].sidx == sidx && sl[i].lv == lv) return i;
@@ -5108,6 +5117,76 @@ static void narrow_locals_from_arrays(Compiler *c) {
   }
 }
 
+/* Classify one value flowing into slot S: an object or int-array literal is
+   element evidence, another slot (or a narrowable call's value) is an alias
+   edge, nil is neutral, and anything the pass does not model kills the slot.
+   Shared by a local's write sources and by a method's return expressions --
+   `t = build_table(n)` names one storage location in two scopes, so the
+   caller's local and the callee's value have to agree on one container type
+   or the call would hand an unboxed sp_PtrArray* to a boxed reader. */
+static void oa_classify_value(Compiler *c, OAS *sl, int n, const int *read_slot,
+                              const int *call_ret, char *claimed, int S, int v) {
+  const NodeTable *nt = c->nt;
+  const char *vty = v >= 0 ? nt_type(nt, v) : NULL;
+  if (!vty) { sl[S].alive = 0; return; }
+  if (sp_streq(vty, "ArrayNode")) {
+    int en = 0; const int *el = nt_arr(nt, v, "elements", &en);
+    for (int e = 0; e < en; e++) {
+      const char *ety = nt_type(nt, el[e]);
+      int ec = (ety && sp_streq(ety, "SplatNode")) ? -2 : oa_obj_class_of(c, el[e]);
+      /* OA_CLS_IA (int-array element) is a negative SENTINEL, not an
+         "invalid" -1/-2: it is real evidence, so it must not kill the slot
+         (an `[[a,b],[c,d]]` array-of-int-array literal narrows like a pushed
+         one already does -- the push arm never had this < 0 guard). */
+      if (ec < 0 && ec != OA_CLS_IA) { sl[S].alive = 0; break; }
+      sl[S].cls = oa_cls_join(sl[S].cls, ec);
+    }
+    return;
+  }
+  if (sp_streq(vty, "LocalVariableReadNode") && read_slot[v] >= 0) {
+    claimed[v] = 1; oa_uf_union(sl, S, read_slot[v]);
+    return;
+  }
+  if (sp_streq(vty, "NilNode")) return;   /* nullable, neutral */
+  if (sp_streq(vty, "CallNode")) {
+    /* `b = arr.sort` / `b = arr.sort!`: the sorted array shares arr's
+       element class -- an alias edge, like a plain slot-to-slot copy. */
+    const char *cn = nt_str(nt, v, "name");
+    int crecv = nt_ref(nt, v, "receiver");
+    int cargs = nt_ref(nt, v, "arguments");
+    int can = 0; if (cargs >= 0) nt_arr(nt, cargs, "arguments", &can);
+    if (cn && (sp_streq(cn, "sort") || sp_streq(cn, "sort!")) && can == 0 &&
+        nt_ref(nt, v, "block") < 0 && crecv >= 0 && read_slot[crecv] >= 0) {
+      claimed[crecv] = 1;
+      oa_uf_union(sl, S, read_slot[crecv]);
+    }
+    /* `t = Array.new(n) { <int array> }`: the generator block's value is the
+       element, so its type is the same evidence a pushed element gives. The
+       nested int table this builds is the one shape the pass still left on
+       the boxed poly path, so every read of it went through sp_poly_arr_get
+       and its arithmetic boxed. */
+    else if (cn && sp_streq(cn, "new") && crecv >= 0 &&
+             nt_type(nt, crecv) && sp_streq(nt_type(nt, crecv), "ConstantReadNode") &&
+             nt_str(nt, crecv, "name") && sp_streq(nt_str(nt, crecv, "name"), "Array") &&
+             nt_ref(nt, v, "block") >= 0) {
+      int gb = nt_ref(nt, v, "block");
+      int gbody = gb >= 0 ? nt_ref(nt, gb, "body") : -1;
+      int gn = 0;
+      const int *gs = gbody >= 0 ? nt_arr(nt, gbody, "body", &gn) : NULL;
+      int ec = (gs && gn > 0) ? oa_obj_class_of(c, gs[gn - 1]) : -1;
+      if (ec < 0 && ec != OA_CLS_IA) sl[S].alive = 0;
+      else sl[S].cls = oa_cls_join(sl[S].cls, ec);
+    }
+    /* a call whose own value is a tracked slot: join the two. */
+    else if (call_ret[v] >= 0) {
+      claimed[v] = 1; oa_uf_union(sl, S, call_ret[v]);
+    }
+    else sl[S].alive = 0;
+    return;
+  }
+  sl[S].alive = 0;
+}
+
 static void narrow_object_arrays(Compiler *c) {
   const NodeTable *nt = c->nt;
   /* 1. candidate slots: POLY_ARRAY locals/params (skip block params + rbs). */
@@ -5119,12 +5198,36 @@ static void narrow_object_arrays(Compiler *c) {
       LocalVar *lv = &sc->locals[li];
       if (lv->type != TY_POLY_ARRAY || lv->is_block_param || lv->rbs_seeded) continue;
       if (n >= cap) { cap *= 2; sl = (OAS *)realloc(sl, sizeof(OAS) * cap); if (!sl) { fprintf(stderr, "oom\n"); exit(1); } }
-      sl[n].sidx = s; sl[n].lv = lv; sl[n].cls = -1; sl[n].alive = 1; sl[n].uf = n; sl[n].needs_cmp = 0; n++;
+      sl[n].sidx = s; sl[n].lv = lv; sl[n].cls = -1; sl[n].alive = 1; sl[n].uf = n; sl[n].needs_cmp = 0; sl[n].saw_call = 0; n++;
     }
+  }
+  /* 1b. one more slot per method whose VALUE is a poly array. Factoring a
+        table out into `build_table(n)` puts the same storage in two scopes,
+        and with no slot for the callee's value the caller's `t = build_table(n)`
+        was an unmodeled write source that killed the caller's slot -- the
+        narrowing stopped at the first method boundary. A return slot carries a
+        NULL local; its scope index names the method. Bodies with no single C
+        return to retype (inlined yielders, proc-form clones, synthesized and
+        transplanted ones) and returns pinned by a seed stay out. */
+  for (int s = 0; s < c->nscopes; s++) {
+    Scope *sc = &c->scopes[s];
+    if (sc->ret != TY_POLY_ARRAY || !sc->name || sc->def_node < 0) continue;
+    if (sc->ret_rbs_seeded || sc->ret_specialized) continue;
+    if (sc->yields || sc->is_proc_form || sc->is_lowered_yield ||
+        sc->cs_synth || sc->is_transplanted_source) continue;
+    /* a runtime protocol enters the method with no call node to vet, and the
+       emitted protocol call reads the boxed array back (`5 + money` asks
+       Money#coerce for a pair) */
+    if (method_name_implicitly_invoked(sc->name)) continue;
+    if (n >= cap) { cap *= 2; sl = (OAS *)realloc(sl, sizeof(OAS) * cap); if (!sl) { fprintf(stderr, "oom\n"); exit(1); } }
+    sl[n].sidx = s; sl[n].lv = NULL; sl[n].cls = -1; sl[n].alive = 1; sl[n].uf = n; sl[n].needs_cmp = 0; sl[n].saw_call = 0; n++;
   }
   if (n == 0) { free(sl); return; }
   int nc = nt->count ? nt->count : 1;
   int *read_slot = (int *)malloc(sizeof(int) * nc);
+  /* call_ret[id]: the return slot this CallNode's value comes from, or -1. */
+  int *call_ret = (int *)malloc(sizeof(int) * nc);
+  for (int id = 0; id < nc; id++) call_ret[id] = -1;
   char *claimed = (char *)calloc(nc, 1);
   /* value_ok[id]: node id sits in statement position (a StatementsNode body
      entry) -- one modeled consumer for a `sort`/`sort!` result. The other
@@ -5241,13 +5344,15 @@ static void narrow_object_arrays(Compiler *c) {
         else if (ort == TY_POLY || ort == TY_UNKNOWN || ort == TY_NIL) {
           /* A dynamic receiver may dispatch to ANY same-named instance
              method at runtime (the poly dispatch arms), passing boxed
-             values; a param slot reachable that way must not narrow. */
+             values and expecting a boxed one back; neither a param slot nor
+             a return slot reachable that way must narrow. */
           for (int pi = 0; pi < n; pi++) {
             if (!sl[pi].alive) continue;
             Scope *PS = &c->scopes[sl[pi].sidx];
+            if (!PS->name || !sp_streq(PS->name, name)) continue;
+            if (!sl[pi].lv) { sl[pi].alive = 0; continue; }
             for (int pk = 0; pk < PS->nparams; pk++)
-              if (PS->pnames[pk] && PS->name && sp_streq(PS->name, name) &&
-                  scope_local(PS, PS->pnames[pk]) == sl[pi].lv)
+              if (PS->pnames[pk] && scope_local(PS, PS->pnames[pk]) == sl[pi].lv)
                 sl[pi].alive = 0;
           }
         }
@@ -5264,6 +5369,8 @@ static void narrow_object_arrays(Compiler *c) {
        free functions made edges, so an instance method's param narrowed
        with its callers' locals left poly. */
     if (oa_tmi >= 0) {
+      int R = oa_find(sl, n, oa_tmi, NULL);
+      if (R >= 0 && id < nc) { call_ret[id] = R; sl[R].saw_call = 1; }
       Scope *M = &c->scopes[oa_tmi];
       for (int k = 0; k < M->nparams; k++) {
         LocalVar *plv = M->pnames[k] ? scope_local(M, M->pnames[k]) : NULL;
@@ -5304,61 +5411,57 @@ static void narrow_object_arrays(Compiler *c) {
     LocalVar *lv = nm ? scope_local(&c->scopes[sidx], nm) : NULL;
     int S = lv ? oa_find(sl, n, sidx, lv) : -1;
     if (S < 0) continue;
-    int v = nt_ref(nt, id, "value");
-    const char *vty = v >= 0 ? nt_type(nt, v) : NULL;
-    if (!vty) { sl[S].alive = 0; continue; }
-    if (sp_streq(vty, "ArrayNode")) {
-      int en = 0; const int *el = nt_arr(nt, v, "elements", &en);
-      for (int e = 0; e < en; e++) {
-        const char *ety = nt_type(nt, el[e]);
-        int ec = (ety && sp_streq(ety, "SplatNode")) ? -2 : oa_obj_class_of(c, el[e]);
-        /* OA_CLS_IA (int-array element) is a negative SENTINEL, not an
-           "invalid" -1/-2: it is real evidence, so it must not kill the slot
-           (an `[[a,b],[c,d]]` array-of-int-array literal narrows like a pushed
-           one already does -- the push arm never had this < 0 guard). */
-        if (ec < 0 && ec != OA_CLS_IA) { sl[S].alive = 0; break; }
-        sl[S].cls = oa_cls_join(sl[S].cls, ec);
-      }
-    }
-    else if (sp_streq(vty, "LocalVariableReadNode") && read_slot[v] >= 0) {
-      claimed[v] = 1; oa_uf_union(sl, S, read_slot[v]);
-    }
-    else if (sp_streq(vty, "NilNode")) { /* nullable, neutral */ }
-    else if (sp_streq(vty, "CallNode")) {
-      /* `b = arr.sort` / `b = arr.sort!`: the sorted array shares arr's
-         element class -- an alias edge, like a plain slot-to-slot copy. */
-      const char *cn = nt_str(nt, v, "name");
-      int crecv = nt_ref(nt, v, "receiver");
-      int cargs = nt_ref(nt, v, "arguments");
-      int can = 0; if (cargs >= 0) nt_arr(nt, cargs, "arguments", &can);
-      if (cn && (sp_streq(cn, "sort") || sp_streq(cn, "sort!")) && can == 0 &&
-          nt_ref(nt, v, "block") < 0 && crecv >= 0 && read_slot[crecv] >= 0) {
-        claimed[crecv] = 1;
-        oa_uf_union(sl, S, read_slot[crecv]);
-      }
-      /* `t = Array.new(n) { <int array> }`: the generator block's value is the
-         element, so its type is the same evidence a pushed element gives. The
-         nested int table this builds is the one shape the pass still left on
-         the boxed poly path, so every read of it went through sp_poly_arr_get
-         and its arithmetic boxed. */
-      else if (cn && sp_streq(cn, "new") && crecv >= 0 &&
-               nt_type(nt, crecv) && sp_streq(nt_type(nt, crecv), "ConstantReadNode") &&
-               nt_str(nt, crecv, "name") && sp_streq(nt_str(nt, crecv, "name"), "Array") &&
-               nt_ref(nt, v, "block") >= 0) {
-        int gb = nt_ref(nt, v, "block");
-        int gbody = gb >= 0 ? nt_ref(nt, gb, "body") : -1;
-        int gn = 0;
-        const int *gs = gbody >= 0 ? nt_arr(nt, gbody, "body", &gn) : NULL;
-        int ec = (gs && gn > 0) ? oa_obj_class_of(c, gs[gn - 1]) : -1;
-        if (ec < 0 && ec != OA_CLS_IA) sl[S].alive = 0;
-        else sl[S].cls = oa_cls_join(sl[S].cls, ec);
-      }
-      else sl[S].alive = 0;
-    }
-    else sl[S].alive = 0;
+    oa_classify_value(c, sl, n, read_slot, call_ret, claimed, S, nt_ref(nt, id, "value"));
   }
 
-  /* 6. a slot read left unclaimed escaped into an unmodeled context -> kill. */
+  /* 5b. a return slot's own value: the method's tail expression and every
+         explicit `return`, classified exactly like a local's write sources. */
+  for (int i = 0; i < n; i++) {
+    if (sl[i].lv || !sl[i].alive) continue;
+    Scope *M = &c->scopes[sl[i].sidx];
+    int bn = 0; const int *bl = M->body >= 0 ? nt_arr(nt, M->body, "body", &bn) : NULL;
+    if (!bl || bn == 0) { sl[i].alive = 0; continue; }
+    oa_classify_value(c, sl, n, read_slot, call_ret, claimed, i, bl[bn - 1]);
+  }
+  for (int id = 0; id < nt->count; id++) {
+    const char *ty = nt_type(nt, id);
+    if (!ty || !sp_streq(ty, "ReturnNode")) continue;
+    int R = oa_find(sl, n, c->nscope[id], NULL);
+    if (R < 0) continue;
+    int ra = nt_ref(nt, id, "arguments");
+    int rn = 0; const int *rv = ra >= 0 ? nt_arr(nt, ra, "arguments", &rn) : NULL;
+    if (!rv || rn != 1) { sl[R].alive = 0; continue; }
+    oa_classify_value(c, sl, n, read_slot, call_ret, claimed, R, rv[0]);
+  }
+
+  /* 5c. a method reachable other than through a call site this pass resolved
+         can be entered by a path that still expects the boxed value: a symbol
+         anywhere names it for `send`/`method`/`define_method`/`&:m`, and
+         `super` reaches it with no call node at all. Retyping its C return
+         under either would hand back something the caller cannot read. */
+  for (int id = 0; id < nt->count; id++) {
+    const char *ty = nt_type(nt, id);
+    if (!ty) continue;
+    const char *mn = NULL;
+    if (sp_streq(ty, "SymbolNode")) mn = nt_str(nt, id, "value");
+    else if (sp_streq(ty, "SuperNode") || sp_streq(ty, "ForwardingSuperNode")) {
+      Scope *ssc = comp_scope_of(c, id);
+      mn = ssc ? ssc->name : NULL;
+    }
+    if (!mn) continue;
+    for (int i = 0; i < n; i++)
+      if (!sl[i].lv && c->scopes[sl[i].sidx].name &&
+          sp_streq(c->scopes[sl[i].sidx].name, mn)) sl[i].alive = 0;
+  }
+
+  /* 6. a slot read left unclaimed escaped into an unmodeled context -> kill.
+        A call whose value is a return slot is the same story: unless a slot
+        write claimed it above, the value went somewhere unmodeled. And a
+        return slot no call site reached at all is a method entered by some
+        route this pass never saw, so its C signature must not move. */
+  for (int id = 0; id < nt->count; id++)
+    if (call_ret[id] >= 0 && !claimed[id]) sl[call_ret[id]].alive = 0;
+  for (int i = 0; i < n; i++) if (!sl[i].lv && !sl[i].saw_call) sl[i].alive = 0;
   for (int id = 0; id < nt->count; id++)
     if (read_slot[id] >= 0 && !claimed[id]) sl[read_slot[id]].alive = 0;
 
@@ -5375,22 +5478,26 @@ static void narrow_object_arrays(Compiler *c) {
     int r = oa_uf_find(sl, i);
     if (!sl[r].alive) continue;
     if (sl[r].cls == -1 || sl[r].cls == -2) continue;  /* no evidence / conflict */
+    TyKind nty;
     if (sl[r].cls == OA_CLS_IA) {
       /* array-of-int-array: the codegen supports index/push/[]=/length/first/
          last but not the boxed sort/min/max comparators yet, so a component
          that used those (needs_cmp) stays on the poly path for now. */
       if (sl[r].needs_cmp) continue;
-      sl[i].lv->type = TY_INT_ARRAY_ARRAY;
-      continue;
+      nty = TY_INT_ARRAY_ARRAY;
     }
-    /* a component using no-block sort/min/max narrows only when the element
-       class can actually compare (has `<=>` in its chain); otherwise it stays
-       poly, where the boxed comparator raises the CRuby ArgumentError. */
-    if (sl[r].needs_cmp && comp_method_in_chain(c, sl[r].cls, "<=>", NULL) < 0) continue;
-    sl[i].lv->type = ty_obj_array(sl[r].cls);
+    else {
+      /* a component using no-block sort/min/max narrows only when the element
+         class can actually compare (has `<=>` in its chain); otherwise it stays
+         poly, where the boxed comparator raises the CRuby ArgumentError. */
+      if (sl[r].needs_cmp && comp_method_in_chain(c, sl[r].cls, "<=>", NULL) < 0) continue;
+      nty = ty_obj_array(sl[r].cls);
+    }
+    if (sl[i].lv) sl[i].lv->type = nty;
+    else c->scopes[sl[i].sidx].ret = nty;
   }
 
-  free(sl); free(read_slot); free(claimed); free(value_ok);
+  free(sl); free(read_slot); free(call_ret); free(claimed); free(value_ok);
 }
 
 /* ===== Post-fixpoint: narrow a poly local that is only ever used as an int =====
