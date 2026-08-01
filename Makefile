@@ -1079,6 +1079,11 @@ alloc-report-test: $(SPINEL) $(SP_RT_LIB)
 	grep -q '^done$$' "$$tmp/s.out" || { echo "alloc-report-test: FAIL (program output with sites)"; ok=0; }; \
 	if grep -qE '^alloc;.+;[A-Za-z(][^;]* [0-9]+$$' "$$tmp/s.folded"; then :; \
 	else grep -qE '^alloc;[A-Za-z(][^;]* [0-9]+$$' "$$tmp/s.folded" || { echo "alloc-report-test: FAIL (sites run produced neither shape)"; sed -n 1,5p "$$tmp/s.folded"; ok=0; }; fi; \
+	grep -qE '^alloc;[^;]*String [0-9]+$$' "$$tmp/t.folded" || { echo "alloc-report-test: FAIL (no String line without sites)"; ok=0; }; \
+	grep -qE '^# bytes .*String [0-9]+$$' "$$tmp/t.folded" || { echo "alloc-report-test: FAIL (no String bytes line)"; ok=0; }; \
+	if grep -qE '^alloc;.+;[A-Za-z(][^;]* [0-9]+$$' "$$tmp/s.folded"; then \
+	  grep -qE '^alloc;.+;String [0-9]+$$' "$$tmp/s.folded" || { echo "alloc-report-test: FAIL (String has no site while other types do)"; grep String "$$tmp/s.folded" | head -2; ok=0; }; \
+	fi; \
 	rm -rf "$$tmp"; \
 	if [ $$ok -eq 1 ]; then echo "alloc-report-test: pass"; else exit 1; fi
 
