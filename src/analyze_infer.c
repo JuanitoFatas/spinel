@@ -1526,6 +1526,15 @@ TyKind infer_call(Compiler *c, int id) {
         sp_streq(name, "real") || sp_streq(name, "conjugate") || sp_streq(name, "conj") ||
         sp_streq(name, "abs2") || sp_streq(name, "magnitude")) return TY_RATIONAL;
     TyKind a0r = argc == 1 ? comp_ntype(c, argv[0]) : TY_UNKNOWN;
+    /* a coercing user object on the right: coerce answers a pair of THAT
+       class, so the result is its own operator's return -- the rule the
+       Integer and Float arms already follow. Typing it Rational handed the
+       user object's result to sp_rational_to_s (#3489). */
+    if (argc == 1 && is_arith_op(name) && ty_is_object(a0r) &&
+        comp_method_in_chain(c, ty_object_class(a0r), "coerce", NULL) >= 0) {
+      int op_mi_r = comp_method_in_chain(c, ty_object_class(a0r), name, NULL);
+      if (op_mi_r >= 0) return (TyKind)c->scopes[op_mi_r].ret;
+    }
     if (argc == 1 && (sp_streq(name, "+") || sp_streq(name, "-") || sp_streq(name, "*") ||
                       sp_streq(name, "/") || sp_streq(name, "quo")))
       /* a boxed operand folds through sp_poly_<op>, whose value is boxed: the
@@ -5885,7 +5894,8 @@ else {
     }
     /* numeric receiver <op> a coercing user object: the result is what the
        object's own <op> returns (coerce yields a pair of that class). */
-    if ((rt == TY_INT || rt == TY_FLOAT) && ty_is_object(a0)) {
+    if ((rt == TY_INT || rt == TY_FLOAT || rt == TY_RATIONAL || rt == TY_BIGINT) &&
+        ty_is_object(a0)) {
       int acls = ty_object_class(a0);
       if (comp_method_in_chain(c, acls, "coerce", NULL) >= 0) {
         int op_mi = comp_method_in_chain(c, acls, name, NULL);

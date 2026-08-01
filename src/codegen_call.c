@@ -7229,11 +7229,15 @@ static int emit_array_arith_call(Compiler *c, int id, Buf *b) {
   }
 
   /* Numeric coerce protocol: `recv <op> arg` where recv is a builtin numeric
-     (Integer/Float) and arg is a user object defining coerce. CRuby asks the
+     and arg is a user object defining coerce. Rational and Bignum take the
+     same route as Integer and Float -- leaving them out made
+     `Rational(3, 2) * money` an "unsupported arithmetic" abort that took the
+     whole program down, even behind a rescue (#3489). CRuby asks the
      object to coerce: `a, b = arg.coerce(recv)` then computes `a.<op>(b)`. The
      standard `coerce` returns a pair of the object's own class, so dispatch the
      op on that class with both pair elements. */
-  if (recv >= 0 && argc == 1 && (rt == TY_INT || rt == TY_FLOAT) &&
+  if (recv >= 0 && argc == 1 &&
+      (rt == TY_INT || rt == TY_FLOAT || rt == TY_RATIONAL || rt == TY_BIGINT) &&
       ty_is_object(a0) && is_arith_op(name)) {
     int acls = ty_object_class(a0);
     int coerce_def = -1, op_def = -1;

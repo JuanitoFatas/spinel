@@ -3032,7 +3032,7 @@ int bind_coerce_operator_params(Compiler *c) {
     int recv = nt_ref(nt, id, "receiver");
     if (recv < 0) continue;
     TyKind rt = infer_type(c, recv);
-    if (!ty_is_numeric(rt)) continue;
+    if (rt != TY_INT && rt != TY_FLOAT && rt != TY_RATIONAL && rt != TY_BIGINT) continue;
     int ca = nt_ref(nt, id, "arguments");
     int argc = 0; const int *argv = ca >= 0 ? nt_arr(nt, ca, "arguments", &argc) : NULL;
     if (!argv || argc != 1) continue;
