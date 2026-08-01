@@ -142,6 +142,10 @@ typedef struct {
                           don't overwrite it from the shared body in the fixpoint */
   int ret_rbs_seeded;  /* ret pinned from an --rbs advisory seed: the fixpoint
                           must not recompute it from the body */
+  int ret_rbs_nilable; /* that seed was RBS's nilable form (`Integer?`), and the
+                          pinned kind is an unboxed scalar: the return can be
+                          the reserved sentinel, so a caller boxing it has to
+                          answer nil rather than the raw number (#3493) */
   TyKind ret_oa_pin;   /* the pointer-array return type the narrowing pass gave
                           this method, re-asserted every round for the same
                           reason LocalVar.oa_pin is. TY_UNKNOWN = not narrowed. */

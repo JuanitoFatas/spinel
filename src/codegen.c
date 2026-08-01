@@ -556,7 +556,11 @@ void emit_boxed(Compiler *c, int node, Buf *b) {
     case TY_INT:    fn = (g_promote_mode || call_returns_nullable_int(c, node) ||
                           nt_kind(c->nt, node) == NK_InstanceVariableReadNode)
                            ? "sp_box_int_or_nil" : "sp_box_int"; break;
-    case TY_FLOAT:  fn = "sp_box_float"; break;
+    /* A float slot has its own reserved nil sentinel, and the same rule
+       applies: box it as nil where the value can be one, or it goes out as an
+       ordinary Float and no literal nil matches it (#3493). */
+    case TY_FLOAT:  fn = call_returns_nullable_int(c, node) ? "sp_box_float_or_nil"
+                                                            : "sp_box_float"; break;
     case TY_BIGINT: fn = "sp_box_bigint"; break;
     case TY_STRING: fn = "sp_box_str";   break;
     case TY_BOOL:   fn = "sp_box_bool";  break;

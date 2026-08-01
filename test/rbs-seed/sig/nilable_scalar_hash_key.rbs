@@ -1,0 +1,15 @@
+class NkR
+  def initialize: (Integer?) -> void
+  def p_: () -> Integer?
+end
+
+class NkF
+  def initialize: (Float?) -> void
+  def val: () -> Float?
+end
+
+class NkRow
+  def initialize: (Integer, Integer?) -> void
+  def id: () -> Integer
+  def parent_id: () -> Integer?
+end

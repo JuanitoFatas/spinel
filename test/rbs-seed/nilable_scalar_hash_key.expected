@@ -1,0 +1,14 @@
+nil?      true
+== nil    true
+h[k]      "var"
+h[nil]    "var"
+fetch     "var"
+key?      true
+keys0nil? true
+g[k]      "literal"
+m.length  1
+fh[nil]   "f"
+fkeys0    true
+groups    3
+nil group [1, 3]
+one group [2]

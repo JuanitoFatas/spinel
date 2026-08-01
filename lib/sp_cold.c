@@ -2493,6 +2493,10 @@ mrb_int sp_float_to_i_checked(mrb_float f) {
    than a boxed INT_MIN. Used when an int? value (hash miss, rindex, nonzero?,
    ...) flows into a poly slot. */
 sp_RbVal sp_box_int_or_nil(mrb_int v) { return v == SP_INT_NIL ? sp_box_nil() : sp_box_int(v); }
+/* The float counterpart. A float slot spells nil with its own reserved
+   sentinel, and boxing that as an ordinary Float made it a Hash key that no
+   literal nil could match (#3493). */
+sp_RbVal sp_box_float_or_nil(mrb_float v) { return sp_float_is_nil(v) ? sp_box_nil() : sp_box_float(v); }
 /* box a sp_Bigint* into a poly slot (heterogeneous container element, or a
    promote-mode overflow result). */
 sp_RbVal sp_box_bigint(sp_Bigint *b) { sp_RbVal r; r.tag = SP_TAG_BIGINT; r.cls_id = 0; r.v.p = b; return r; }

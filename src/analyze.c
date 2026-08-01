@@ -1756,7 +1756,14 @@ void rename_shadowing_block_params(Compiler *c) {
 
 static int seed_class_index(Compiler *c, const char *name);
 
+/* Set by parse_seed_type when the token carried RBS's trailing `?`. An int or
+   float pin keeps the unboxed kind and spells nil with its reserved sentinel,
+   so every site that BOXES such a slot has to know -- otherwise the sentinel
+   goes out as an ordinary number (a Hash key that misses a literal nil, #3493).
+   Recorded here because the '?' is gone by the time the type is returned. */
+static int g_seed_nilable;
 static TyKind parse_seed_type(Compiler *c, const char *tok) {
+  g_seed_nilable = 0;
   if (!tok || !*tok) return TY_UNKNOWN;
   size_t n = strlen(tok);
   char buf[128];
@@ -1771,7 +1778,7 @@ static TyKind parse_seed_type(Compiler *c, const char *tok) {
      put nil and collapses it onto false / :"" (#3412). Those pin to the tagged
      union, which is what `bool | nil` means anyway. */
   int nilable = 0;
-  if (n > 0 && buf[n - 1] == '?') { buf[--n] = '\0'; nilable = 1; }
+  if (n > 0 && buf[n - 1] == '?') { buf[--n] = '\0'; nilable = 1; g_seed_nilable = 1; }
   if (sp_streq(buf, "int"))    return TY_INT;
   if (sp_streq(buf, "float"))  return TY_FLOAT;
   if (sp_streq(buf, "string") || sp_streq(buf, "str")) return TY_STRING;
@@ -1972,7 +1979,10 @@ static int method_in_override_family(Compiler *c, int class_id,
 static void seed_method(Compiler *c, Scope *s, const char *ret_tok, char *ptypes) {
   if (!s) return;
   TyKind rt = parse_seed_type(c, ret_tok);
-  if (rt != TY_UNKNOWN) { s->ret = rt; s->ret_rbs_seeded = 1; }
+  if (rt != TY_UNKNOWN) {
+    s->ret = rt; s->ret_rbs_seeded = 1;
+    s->ret_rbs_nilable = g_seed_nilable && (rt == TY_INT || rt == TY_FLOAT);
+  }
   if (!ptypes) return;
   char *p = ptypes;
   int pi = 0;
@@ -1982,7 +1992,12 @@ static void seed_method(Compiler *c, Scope *s, const char *ret_tok, char *ptypes
     TyKind pt = parse_seed_type(c, p);
     if (pt != TY_UNKNOWN) {
       LocalVar *lv = scope_local(s, s->pnames[pi]);
-      if (lv) { lv->type = pt; lv->rbs_seeded = 1; }
+      if (lv) {
+        lv->type = pt; lv->rbs_seeded = 1;
+        /* a nilable int parameter holds the sentinel like any other: mark it
+           so boxing it answers nil rather than INTPTR_MIN */
+        if (g_seed_nilable && (pt == TY_INT || pt == TY_FLOAT)) lv->nullable_int = 1;
+      }
     }
     pi++;
     if (!comma) break;
@@ -8227,7 +8242,30 @@ static int nullable_int_value(Compiler *c, int v) {
   const NodeTable *nt = c->nt;
   if (v < 0) return 0;
   if (nt_kind(nt, v) == NK_NilNode) return 1;
-  if (nt_kind(nt, v) == NK_CallNode) return nullable_int_call_name(nt_str(nt, v, "name"));
+  if (nt_kind(nt, v) == NK_CallNode) {
+    if (nullable_int_call_name(nt_str(nt, v, "name"))) return 1;
+    /* a method whose --rbs signature pins `Integer?`: the pin keeps the
+       unboxed kind, so its nil is the sentinel and a caller that boxes the
+       value has to answer nil. Resolved the way emission resolves it. */
+    const char *cn = nt_str(nt, v, "name");
+    int mi = cn ? comp_method_index(c, cn) : -1;
+    int rcv = nt_ref(nt, v, "receiver");
+    if (mi < 0 && cn) {
+      if (rcv < 0) {
+        Scope *self = comp_scope_of(c, v);
+        if (self && self->class_id >= 0) mi = comp_method_in_chain(c, self->class_id, cn, NULL);
+      }
+      else {
+        TyKind rt = infer_type(c, rcv);
+        if (ty_is_object(rt)) mi = comp_method_in_chain(c, ty_object_class(rt), cn, NULL);
+        else if (nt_kind(nt, rcv) == NK_ConstantReadNode) {
+          int rci = comp_class_index(c, nt_str(nt, rcv, "name"));
+          if (rci >= 0) mi = comp_cmethod_in_chain(c, rci, cn, NULL);
+        }
+      }
+    }
+    return mi >= 0 && c->scopes[mi].ret_rbs_nilable;
+  }
   if (nt_kind(nt, v) == NK_LocalVariableReadNode) {
     const char *rn = nt_str(nt, v, "name");
     Scope *rs = rn ? comp_scope_of(c, v) : NULL;
@@ -8248,7 +8286,7 @@ static void mark_nullable_int_locals(Compiler *c) {
       if (v < 0 || !ln) continue;
       Scope *sc = comp_scope_of(c, id);
       LocalVar *lv = sc ? scope_local(sc, ln) : NULL;
-      if (!lv || lv->type != TY_INT || lv->nullable_int) continue;
+      if (!lv || (lv->type != TY_INT && lv->type != TY_FLOAT) || lv->nullable_int) continue;
       /* An outright `i = nil` on a slot the other writes make an int leaves
          the sentinel in it just as a search miss does. */
       if (nullable_int_value(c, v)) { lv->nullable_int = 1; changed = 1; }
@@ -8276,7 +8314,7 @@ static void mark_nullable_int_locals(Compiler *c) {
       for (int k = 0; av && k < an && k < m->nparams; k++) {
         if (m->rest_idx >= 0 && k >= m->rest_idx) break;
         LocalVar *p = m->pnames[k] ? scope_local(m, m->pnames[k]) : NULL;
-        if (!p || p->type != TY_INT || p->nullable_int) continue;
+        if (!p || (p->type != TY_INT && p->type != TY_FLOAT) || p->nullable_int) continue;
         if (nullable_int_value(c, av[k])) { p->nullable_int = 1; changed = 1; }
       }
     }
@@ -8297,7 +8335,7 @@ static void mark_nullable_int_locals(Compiler *c) {
         const char *tn = nt_str(nt, tv2[k], "name");
         Scope *ts = tn ? comp_scope_of(c, tv2[k]) : NULL;
         LocalVar *tl = ts ? scope_local(ts, tn) : NULL;
-        if (tl && tl->type == TY_INT && !tl->nullable_int) { tl->nullable_int = 1; changed = 1; }
+        if (tl && (tl->type == TY_INT || tl->type == TY_FLOAT) && !tl->nullable_int) { tl->nullable_int = 1; changed = 1; }
       }
       /* a target after the splat is supplied only when the right side is long
          enough, which a static count almost never proves */
@@ -8307,7 +8345,7 @@ static void mark_nullable_int_locals(Compiler *c) {
         const char *tn = nt_str(nt, rv2[k], "name");
         Scope *ts = tn ? comp_scope_of(c, rv2[k]) : NULL;
         LocalVar *tl = ts ? scope_local(ts, tn) : NULL;
-        if (tl && tl->type == TY_INT && !tl->nullable_int) { tl->nullable_int = 1; changed = 1; }
+        if (tl && (tl->type == TY_INT || tl->type == TY_FLOAT) && !tl->nullable_int) { tl->nullable_int = 1; changed = 1; }
       }
     }
     if (!changed) break;
