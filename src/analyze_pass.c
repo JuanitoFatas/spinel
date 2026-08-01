@@ -2673,14 +2673,22 @@ else {
         if (merged != p->type) { p->type = merged; changed = 1; }
         any_kw_bound = 1;
       }
-      /* Ruby collapses trailing kwargs into a positional hash parameter when
-         the callee has no named keyword params (e.g. `def f(opts = {})`
-         called as `f(key: val)`). Bind the next unbound positional param
-         to TY_SYM_POLY_HASH so the backstop doesn't kill the method. */
+      /* Ruby collapses a trailing braceless hash into a positional hash
+         parameter when the callee has no named keyword params (`def f(opts)`
+         called as `f(key: val)`). Bind the param to the hash the ARGUMENT
+         actually is: a non-Symbol key cannot be a keyword at all, so
+         `f('m' => 1)` passes an ordinary string-keyed Hash, and pinning the
+         param to the symbol-keyed variant regardless left the callee reading
+         an sp_StrIntHash through an sp_SymPolyHash* -- one empty-symbol key
+         and no value, or a hang on integer and mixed keys (#3487). The
+         symbol-keyed default stays for the case it was written for: a
+         keyword call whose own type has not settled. */
       if (!any_kw_bound && pos_argc < max_bind && max_bind > 0) {
         LocalVar *p = m->pnames[pos_argc] ? scope_local(m, m->pnames[pos_argc]) : NULL;
         if (p && !p->rbs_seeded) {
-          TyKind merged = ty_unify(p->type, TY_SYM_POLY_HASH);
+          TyKind kwt = infer_type(c, kwh);
+          if (!ty_is_hash(kwt)) kwt = TY_SYM_POLY_HASH;
+          TyKind merged = ty_unify(p->type, kwt);
           if (merged != p->type) { p->type = merged; changed = 1; }
         }
       }
