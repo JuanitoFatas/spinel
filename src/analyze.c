@@ -7263,6 +7263,69 @@ static void an_append_scan(Compiler *c, int node, int *app, int *rd, int cap, in
   }
 }
 
+/* The same accumulator, written out flat: `io << chunk` repeated as N straight
+   statements rather than N times round a loop. A template compiler emits
+   exactly that -- one append per literal chunk, no loop -- and without the
+   handle each append reallocates and copies the whole page, so building it is
+   quadratic in bytes even though nothing repeats. A 15 KB page from 178
+   appends allocated 1.6 MB, and the collection pressure that follows dominated
+   the request (#3480).
+
+   The loop pass cannot see this: it scans loop bodies, and there is no loop.
+   What it can share is the safety argument. Reading the handle demotes through
+   a copy, so a read is only free once the appending is finished -- which for a
+   straight run means every read has to come after the last append. Statement
+   order is the list order here, not node ids, so "after" is exact. */
+static int promote_straight_line_appends(Compiler *c) {
+  const NodeTable *nt = c->nt;
+  int changed = 0;
+  for (int s = 0; s < c->nscopes; s++) {
+    Scope *sc = &c->scopes[s];
+    if (sc->body < 0) continue;
+    int sn = 0; const int *stmts = nt_arr(nt, sc->body, "body", &sn);
+    if (!stmts || sn < 2) continue;
+    enum { CAP = 256, NAMES = 32 };
+    const char *nm[NAMES]; int last_app[NAMES], n_app_of[NAMES], first_rd[NAMES], nn = 0;
+    for (int k = 0; k < sn; k++) {
+      int app[CAP], rd[CAP], n_app = 0, n_rd = 0;
+      an_append_scan(c, stmts[k], app, rd, CAP, &n_app, &n_rd);
+      for (int i = 0; i < n_app; i++) {
+        const char *vn = nt_str(nt, app[i], "name");
+        if (!vn || comp_scope_of(c, app[i]) != sc) continue;
+        int x = -1;
+        for (int j = 0; j < nn; j++) if (sp_streq(nm[j], vn)) { x = j; break; }
+        if (x < 0) {
+          if (nn >= NAMES) continue;
+          x = nn++; nm[x] = vn; n_app_of[x] = 0; first_rd[x] = -1;
+        }
+        n_app_of[x]++; last_app[x] = k;
+      }
+      for (int i = 0; i < n_rd; i++) {
+        const char *vn = nt_str(nt, rd[i], "name");
+        if (!vn || comp_scope_of(c, rd[i]) != sc) continue;
+        for (int j = 0; j < nn; j++)
+          if (sp_streq(nm[j], vn) && first_rd[j] < 0) first_rd[j] = k;
+      }
+    }
+    for (int j = 0; j < nn; j++) {
+      /* one append is not a quadratic, and promoting it only buys a demote */
+      if (n_app_of[j] < 2) continue;
+      /* a read before the appending is finished pays the demoting copy and
+         then re-grows: the very trade this promotion exists to avoid */
+      if (first_rd[j] >= 0 && first_rd[j] <= last_app[j]) continue;
+      LocalVar *lv = scope_local(sc, nm[j]);
+      if (!lv || lv->type != TY_STRING) continue;
+      if (lv->is_cell || lv->byref_out || lv->is_param || lv->is_block_param) continue;
+      if (!strbuf_slot_eligible_shape(c, nm[j], sc, lv)) continue;
+      if (strbuf_mut_kind(c, nm[j], sc) != 1) continue;
+      lv->type = TY_STRBUF;
+      lv->str_append = 1;
+      changed = 1;
+    }
+  }
+  return changed;
+}
+
 static int promote_append_accumulators(Compiler *c) {
   const NodeTable *nt = c->nt;
   int changed = 0;
@@ -7316,6 +7379,7 @@ static int promote_append_accumulators(Compiler *c) {
       changed = 1;
     }
   }
+  changed |= promote_straight_line_appends(c);
   return changed;
 }
 
