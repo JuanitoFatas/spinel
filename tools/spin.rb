@@ -1602,7 +1602,12 @@ when "build", "run", "test", "clean"
     if rest.include?("--")
       di = rest.index("--").to_i
       extra = rest[(di + 1)..-1].join(" ")
-      rest = rest[0..(di - 1)]
+      # `rest[0, di]`, not `rest[0..(di - 1)]`: with `--` first (`spin build --
+      # --profile`, no target named) di is 0 and `rest[0..-1]` is the WHOLE
+      # array, so `--` survives as a build target and the run dies with
+      # "no such executable: bin/--.rb" instead of building every bin with the
+      # extra flag.
+      rest = rest[0, di]
     end
     cmd_build(prj, rest, extra)
   when "run"
