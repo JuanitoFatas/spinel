@@ -2380,6 +2380,22 @@ int infer_write_types(Compiler *c) {
       else if (lv->type != TY_STRBUF) lv->str_append = 0;
     }
 
+  /* The same contract for a slot narrowed to a pointer array. The reset
+     re-derives it from its writes, which still read the poly array, and the
+     two array KINDS unify to the plain poly SCALAR -- strictly worse than
+     either. The narrowing is a decision about the slot, not about any one
+     write, so re-assert it inside the frame; a slot that no longer even
+     derives as a poly array has lost the precondition and the pin with it.
+     Without this the two passes trade the slot back and forth and every
+     compile ran to the 128-iteration cap. */
+  for (int s = 0; s < c->nscopes; s++)
+    for (int i = 0; i < c->scopes[s].nlocals; i++) {
+      LocalVar *lv = &c->scopes[s].locals[i];
+      if (lv->oa_pin == TY_UNKNOWN) continue;
+      if (lv->type == TY_POLY_ARRAY || lv->type == lv->oa_pin) lv->type = lv->oa_pin;
+      else lv->oa_pin = TY_UNKNOWN;
+    }
+
   /* detect change vs the stashed old types */
   for (int s = 0; s < c->nscopes; s++)
     for (int i = 0; i < c->scopes[s].nlocals; i++) {
@@ -8689,6 +8705,11 @@ int infer_return_types(Compiler *c) {
       }
       continue;
     }
+    /* A return narrowed to a pointer array is pinned the same way. The body
+       still reads the poly array, and those two array KINDS unify to the plain
+       poly SCALAR -- so re-deriving would make the slot strictly worse, and
+       reporting that as a change every round runs the fixpoint to its cap. */
+    if (sc->ret_oa_pin != TY_UNKNOWN) continue;
     /* synthesized compiler_state methods carry a fixed return type (no AST). */
     if (sc->cs_synth) continue;
     /* A lowered self-recursive yield method returns its block's value through
@@ -8807,6 +8828,7 @@ int infer_return_types(Compiler *c) {
     Scope *sc = &c->scopes[s];
     if (sc->ret != TY_VOID || sc->class_id < 0 || !sc->name) continue;
     if (sc->ret_specialized || sc->ret_rbs_seeded || sc->cs_synth) continue;
+    if (sc->ret_oa_pin != TY_UNKNOWN) continue;
     if (!scope_tail_raises(c, s)) continue;
     if (rn_nscopes != c->nscopes) rn_build(c);
     TyKind unified = TY_VOID;
@@ -8821,6 +8843,17 @@ int infer_return_types(Compiler *c) {
       unified = (unified == TY_VOID) ? ot->ret : ty_unify(unified, ot->ret);
     }
     if (unified != TY_VOID) { sc->ret = unified; changed = 1; }
+  }
+
+  /* A return narrowed to a pointer array keeps that decision across this pass,
+     for the reason the local pin is re-asserted in infer_write_types: the body
+     still reads the poly array, and re-deriving from it hands back the plain
+     poly SCALAR. Reported as no change, so the fixpoint can still settle. */
+  for (int s = 0; s < c->nscopes; s++) {
+    Scope *sc = &c->scopes[s];
+    if (sc->ret_oa_pin == TY_UNKNOWN) continue;
+    if (sc->ret == TY_POLY_ARRAY || sc->ret == sc->ret_oa_pin) sc->ret = sc->ret_oa_pin;
+    else sc->ret_oa_pin = TY_UNKNOWN;
   }
 
   free(ret_acc); free(has_ret); free(ret_head); free(ret_next); free(ret_narrow);

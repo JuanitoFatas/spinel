@@ -78,6 +78,12 @@ typedef struct {
                        whole accumulation. Durable, like str_shared: the type
                        is re-asserted after the fixpoint, which a later
                        assign-based pass would otherwise overwrite. */
+  TyKind oa_pin;    /* the pointer-array type the narrowing pass gave this slot,
+                       re-asserted on every fixpoint round. infer_write_types
+                       clears every local back to UNKNOWN and re-derives it from
+                       the writes, which still read the poly array -- and the
+                       two array kinds unify to the plain poly SCALAR, strictly
+                       worse than either. TY_UNKNOWN = not narrowed. */
   int poly_ctr;     /* (TY_POLY) a builtin Array or Hash is among the values
                        that flow into this slot. TY_POLY is a top type with no
                        member list, so a call on it cannot otherwise tell
@@ -136,6 +142,9 @@ typedef struct {
                           don't overwrite it from the shared body in the fixpoint */
   int ret_rbs_seeded;  /* ret pinned from an --rbs advisory seed: the fixpoint
                           must not recompute it from the body */
+  TyKind ret_oa_pin;   /* the pointer-array return type the narrowing pass gave
+                          this method, re-asserted every round for the same
+                          reason LocalVar.oa_pin is. TY_UNKNOWN = not narrowed. */
   int ret_proc_ret; /* when ret==TY_PROC: the returned proc's body return type
                        (TyKind), so a caller's `m.call` knows the result type */
   int blk_ret;      /* for a method with a &block param: the unified value type

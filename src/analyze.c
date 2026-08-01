@@ -4825,7 +4825,7 @@ static int desugar_to_enum(Compiler *c) {
    Strictly conservative: any unmodeled use, class conflict, unresolved flow, or
    absent object evidence kills the component, leaving it TY_POLY_ARRAY. Runs
    ONCE, after the fixpoint, so the new type never feeds forward inference. */
-typedef struct { int sidx; LocalVar *lv; int cls; int alive; int uf; int needs_cmp; int saw_call; } OAS;
+typedef struct { int sidx; LocalVar *lv; int cls; int alive; int uf; int needs_cmp; int saw_call; TyKind old_pin; } OAS;
 
 static int oa_find(OAS *sl, int n, int sidx, LocalVar *lv) {
   for (int i = 0; i < n; i++) if (sl[i].sidx == sidx && sl[i].lv == lv) return i;
@@ -5067,7 +5067,7 @@ static int narrow_int_table_ivars(Compiler *c) {
    early -- an ivar table narrowed by narrow_int_table_ivars has exactly
    that shape, and without this its rows stayed boxed and the narrowing
    bought nothing. */
-static void narrow_locals_from_arrays(Compiler *c) {
+static int narrow_locals_from_arrays(Compiler *c) {
   const NodeTable *nt = c->nt;
   /* dependent locals: `b = arr[i]` (arr now a narrowed obj array) makes `b`
         the element object type, so its field accesses unbox. Every write of the
@@ -5075,6 +5075,7 @@ static void narrow_locals_from_arrays(Compiler *c) {
         Iterated, because the narrowing chains: `a = rows[0]` narrows a to an
         int array only in this step, and only then can `m = a[1]` see an int
         (#3354). */
+  int any = 0;
   for (int prop = 0; prop < 8; prop++) {
   int prop_ch = 0;
   for (int s = 0; s < c->nscopes; s++) {
@@ -5110,11 +5111,12 @@ static void narrow_locals_from_arrays(Compiler *c) {
         if (elem == TY_UNKNOWN) elem = ec; else if (elem != ec) { ok = 0; break; }
         saw = 1;
       }
-      if (ok && saw && elem != TY_UNKNOWN) { lv->type = elem; prop_ch = 1; }
+      if (ok && saw && elem != TY_UNKNOWN) { lv->type = elem; prop_ch = 1; any = 1; }
     }
   }
   if (!prop_ch) break;
   }
+  return any;
 }
 
 /* Classify one value flowing into slot S: an object or int-array literal is
@@ -5187,8 +5189,21 @@ static void oa_classify_value(Compiler *c, OAS *sl, int n, const int *read_slot,
   sl[S].alive = 0;
 }
 
-static void narrow_object_arrays(Compiler *c) {
+static int narrow_object_arrays(Compiler *c) {
   const NodeTable *nt = c->nt;
+  int changed = 0;
+  /* Start every round from the same shape. A slot narrowed last round holds
+     its pointer-array type, which would keep it out of the candidate list
+     below and split its component; put it back on the poly array and let the
+     evidence decide again. Doing it this way rather than pinning-and-skipping
+     keeps the pass idempotent, so a slot that stops qualifying (a new escape
+     appeared as the fixpoint desugared the program) un-narrows instead of
+     keeping a type its uses no longer support. */
+  for (int s = 0; s < c->nscopes; s++) {
+    Scope *sc = &c->scopes[s];
+    for (int li = 0; li < sc->nlocals; li++)
+      if (sc->locals[li].oa_pin != TY_UNKNOWN) sc->locals[li].type = TY_POLY_ARRAY;
+  }
   /* 1. candidate slots: POLY_ARRAY locals/params (skip block params + rbs). */
   int cap = 16, n = 0;
   OAS *sl = (OAS *)malloc(sizeof(OAS) * cap);
@@ -5198,7 +5213,8 @@ static void narrow_object_arrays(Compiler *c) {
       LocalVar *lv = &sc->locals[li];
       if (lv->type != TY_POLY_ARRAY || lv->is_block_param || lv->rbs_seeded) continue;
       if (n >= cap) { cap *= 2; sl = (OAS *)realloc(sl, sizeof(OAS) * cap); if (!sl) { fprintf(stderr, "oom\n"); exit(1); } }
-      sl[n].sidx = s; sl[n].lv = lv; sl[n].cls = -1; sl[n].alive = 1; sl[n].uf = n; sl[n].needs_cmp = 0; sl[n].saw_call = 0; n++;
+      sl[n].sidx = s; sl[n].lv = lv; sl[n].cls = -1; sl[n].alive = 1; sl[n].uf = n; sl[n].needs_cmp = 0; sl[n].saw_call = 0;
+      sl[n].old_pin = lv->oa_pin; lv->oa_pin = TY_UNKNOWN; n++;
     }
   }
   /* 1b. one more slot per method whose VALUE is a poly array. Factoring a
@@ -5211,6 +5227,7 @@ static void narrow_object_arrays(Compiler *c) {
         transplanted ones) and returns pinned by a seed stay out. */
   for (int s = 0; s < c->nscopes; s++) {
     Scope *sc = &c->scopes[s];
+    if (sc->ret_oa_pin != TY_UNKNOWN) sc->ret = TY_POLY_ARRAY;   /* same reset */
     if (sc->ret != TY_POLY_ARRAY || !sc->name || sc->def_node < 0) continue;
     if (sc->ret_rbs_seeded || sc->ret_specialized) continue;
     if (sc->yields || sc->is_proc_form || sc->is_lowered_yield ||
@@ -5220,9 +5237,10 @@ static void narrow_object_arrays(Compiler *c) {
        Money#coerce for a pair) */
     if (method_name_implicitly_invoked(sc->name)) continue;
     if (n >= cap) { cap *= 2; sl = (OAS *)realloc(sl, sizeof(OAS) * cap); if (!sl) { fprintf(stderr, "oom\n"); exit(1); } }
-    sl[n].sidx = s; sl[n].lv = NULL; sl[n].cls = -1; sl[n].alive = 1; sl[n].uf = n; sl[n].needs_cmp = 0; sl[n].saw_call = 0; n++;
+    sl[n].sidx = s; sl[n].lv = NULL; sl[n].cls = -1; sl[n].alive = 1; sl[n].uf = n; sl[n].needs_cmp = 0; sl[n].saw_call = 0;
+    sl[n].old_pin = sc->ret_oa_pin; sc->ret_oa_pin = TY_UNKNOWN; n++;
   }
-  if (n == 0) { free(sl); return; }
+  if (n == 0) { free(sl); return 0; }
   int nc = nt->count ? nt->count : 1;
   int *read_slot = (int *)malloc(sizeof(int) * nc);
   /* call_ret[id]: the return slot this CallNode's value comes from, or -1. */
@@ -5493,11 +5511,19 @@ static void narrow_object_arrays(Compiler *c) {
       if (sl[r].needs_cmp && comp_method_in_chain(c, sl[r].cls, "<=>", NULL) < 0) continue;
       nty = ty_obj_array(sl[r].cls);
     }
-    if (sl[i].lv) sl[i].lv->type = nty;
-    else c->scopes[sl[i].sidx].ret = nty;
+    if (sl[i].lv) { sl[i].lv->type = nty; sl[i].lv->oa_pin = nty; }
+    else { c->scopes[sl[i].sidx].ret = nty; c->scopes[sl[i].sidx].ret_oa_pin = nty; }
+  }
+  /* the round changed something exactly when some slot's decision differs from
+     the one it carried in -- the fixpoint's convergence test depends on this
+     being false once the evidence settles. */
+  for (int i = 0; i < n; i++) {
+    TyKind now = sl[i].lv ? sl[i].lv->oa_pin : c->scopes[sl[i].sidx].ret_oa_pin;
+    if (now != sl[i].old_pin) { changed = 1; break; }
   }
 
   free(sl); free(read_slot); free(call_ret); free(claimed); free(value_ok);
+  return changed;
 }
 
 /* ===== Post-fixpoint: narrow a poly local that is only ever used as an int =====
@@ -8621,6 +8647,7 @@ void analyze_program(Compiler *c) {
   g_infer_optimistic = 1;
   for (int iter = 0; iter < 128; iter++) {
     int ch = 0;
+    if (getenv("OA_ITER")) fprintf(stderr, "iter %d\n", iter);
     sp_narrow_memo_bump();  /* invalidate per-iteration narrow-helper memo */
     build_ie_map(c);  /* refresh instance_exec receiver-class map each pass */
     ch |= register_ie_block_ivars(c);  /* slot ivars first assigned in iexec blocks */
@@ -8632,6 +8659,13 @@ void analyze_program(Compiler *c) {
        the locals read out of it (`row = @t[r]`) need one more write pass to
        re-derive from the narrowed type before the binding below sees them. */
     if (narrow_int_table_ivars(c)) ch |= infer_write_types(c);
+    /* The same timing argument for a table held in a LOCAL, or one that
+       crosses a call: the helper reading `row = t[i]` binds its parameter on
+       the round the call is first seen, and a parameter only ever widens. Run
+       after the ivar narrowing so a table read out of an ivar is already
+       typed when the local reading it is derived. */
+    if (narrow_object_arrays(c)) ch |= infer_write_types(c);
+    narrow_locals_from_arrays(c);
     ch |= infer_param_types(c);
     ch |= infer_param_hash_value(c);
     ch |= propagate_prep_params(c);
