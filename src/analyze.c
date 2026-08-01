@@ -3886,6 +3886,65 @@ int desugar_kernel_recv(Compiler *c) {
   return changed;
 }
 
+/* `Array[a, b, c]` and `Range.new(lo, hi)` are the constructor spellings of the
+   `[a, b, c]` and `(lo..hi)` literals, and both raised NoMethodError -- the
+   literal worked and the documented constructor for the same value did not
+   (#3485, #3486). Build the literal and carry it as the receiver of a marker
+   call that inference and emission both see through, the way `Hash[k: v]`
+   already reaches the hash literal. Everything downstream then types and emits
+   these exactly as the literal form, with no second implementation to keep in
+   step.
+
+   Left alone when the program owns the constructor: reopening Array is fine,
+   defining `Array.[]` means whatever it says. */
+static int desugar_class_literal_ctors(Compiler *c) {
+  NodeTable *nt = (NodeTable *)c->nt;
+  int changed = 0;
+  int n0 = nt->count;
+  for (int id = 0; id < n0; id++) {
+    if (nt_kind(nt, id) != NK_CallNode) continue;
+    int recv = nt_ref(nt, id, "receiver");
+    if (recv < 0 || nt_kind(nt, recv) != NK_ConstantReadNode) continue;
+    if (nt_ref(nt, id, "block") >= 0) continue;
+    const char *rn = nt_str(nt, recv, "name");
+    const char *mn = nt_str(nt, id, "name");
+    if (!rn || !mn) continue;
+    int ca = nt_ref(nt, id, "arguments");
+    int argc = 0; const int *argv = ca >= 0 ? nt_arr(nt, ca, "arguments", &argc) : NULL;
+    for (int k = 0; k < argc; k++)
+      if (nt_kind(nt, argv[k]) == NK_SplatNode) { argc = -1; break; }
+    if (argc < 0) continue;
+    int ci = comp_class_index(c, rn);
+    if (sp_streq(rn, "Array") && sp_streq(mn, "[]")) {
+      if (ci >= 0 && comp_cmethod_in_chain(c, ci, "[]", NULL) >= 0) continue;
+      int els[64];
+      if (argc > (int)(sizeof els / sizeof els[0])) continue;
+      for (int k = 0; k < argc; k++) els[k] = argv[k];
+      nt_node_reset(nt, id, "ArrayNode");
+      nt_node_set_arr(nt, id, "elements", els, argc);
+    }
+    else if (sp_streq(rn, "Range") && sp_streq(mn, "new") && (argc == 2 || argc == 3)) {
+      if (ci >= 0 && comp_cmethod_in_chain(c, ci, "new", NULL) >= 0) continue;
+      /* the exclusive flag is part of the literal's shape, so it has to be
+         readable here; a computed third argument keeps today's behaviour */
+      int excl = 0;
+      if (argc == 3) {
+        NodeKind ek = nt_kind(nt, argv[2]);
+        if (ek == NK_TrueNode) excl = 1;
+        else if (ek != NK_FalseNode && ek != NK_NilNode) continue;
+      }
+      int lo = argv[0], hi = argv[1];
+      nt_node_reset(nt, id, "RangeNode");
+      nt_node_set_ref(nt, id, "left", lo);
+      nt_node_set_ref(nt, id, "right", hi);
+      if (excl) nt_node_set_int(nt, id, "flags", 4);
+    }
+    else continue;
+    changed = 1;
+  }
+  return changed;
+}
+
 int desugar_include_math(Compiler *c) {
   NodeTable *nt = (NodeTable *)c->nt;
   int n0 = nt->count;
@@ -8806,6 +8865,7 @@ void analyze_program(Compiler *c) {
     ch |= desugar_builtin_method_obj(c);       /* builtin recv.method(:sym) -> wrapper def */
     ch |= desugar_include_math(c);             /* include Math: sqrt(x) -> Math.sqrt(x) */
     ch |= desugar_kernel_recv(c);              /* Kernel.puts x -> puts x */
+    ch |= desugar_class_literal_ctors(c);      /* Array[a,b] -> [a,b]; Range.new -> (a..b) */
     ch |= desugar_enum_method_recv(c);         /* obj.map{} -> obj.__enum_to_a.map{} */
     ch |= desugar_for_enumerable(c);           /* for x in obj -> for x in obj.__enum_to_a */
     ch |= desugar_to_enum(c);                  /* recv.to_enum(:m) -> generator/blockless */

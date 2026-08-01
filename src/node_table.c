@@ -380,6 +380,27 @@ int nt_new_node(NodeTable *nt, const char *type) {
   return id;
 }
 
+/* Turn an existing node INTO a node of another type, dropping every field it
+   carried. A desugar that rewrites one construct as another needs the result
+   to BE the new node rather than a wrapper around it, because consumers
+   pattern-match on the node type -- `p []` reads its argument's own kind to
+   build the empty literal, and a wrapper hides it. The id is stable, so
+   parents and the scope map keep pointing at the right place. */
+void nt_node_reset(NodeTable *nt, int id, const char *type) {
+  SpNode *nd = (SpNode *)node_at(nt, id);
+  if (!nd) return;
+  nt->version++;
+  free(nd->type); nd->type = NULL;
+  free(nd->content); nd->content = NULL;
+  for (int j = 0; j < nd->ns; j++) { free(nd->s[j].key); free(nd->s[j].val); }
+  for (int j = 0; j < nd->ni; j++) free(nd->i[j].key);
+  for (int j = 0; j < nd->nr; j++) free(nd->r[j].key);
+  for (int j = 0; j < nd->na; j++) { free(nd->a[j].key); free(nd->a[j].ids); }
+  nd->ns = nd->ni = nd->nr = nd->na = 0;
+  nd->kind = 0;
+  if (type) node_set_type(nd, type, strlen(type));
+}
+
 void nt_node_set_str(NodeTable *nt, int id, const char *key, const char *val) {
   SpNode *nd = (SpNode *)node_at(nt, id);
   if (!nd) return;
