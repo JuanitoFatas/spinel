@@ -4771,6 +4771,16 @@ else {
         }
         if (an_builtin_only) continue;   /* the builtin answer alone is wanted */
         int mi = comp_method_in_chain(c, k, name, NULL);
+        /* A candidate whose own return has not been derived yet contributes
+           nothing: "not known yet" is not an answer, and taking it as one is
+           permanent. `def zero?; @value.zero?; end` on a union receiver
+           resolves to ITSELF -- the only class defining the name -- so the
+           union was its own unfinished return and the method came out void,
+           answering nil for every receiver. `<=>` did the same and took
+           Comparable's operators down with it (#3488, #3490). With the
+           candidate skipped the builtin answer for the name applies, and once
+           the method's return does settle it unifies in on a later round. */
+        if (mi >= 0 && c->scopes[mi].ret == TY_UNKNOWN) continue;
         if (mi >= 0) { r = found ? ty_unify(r, c->scopes[mi].ret) : c->scopes[mi].ret; found = 1; continue; }
         int rdcls = -1;
         if (comp_reader_in_chain(c, k, name, &rdcls)) {
