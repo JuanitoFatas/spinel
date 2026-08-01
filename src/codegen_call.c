@@ -3681,10 +3681,13 @@ static int emit_poly_method_dispatch(Compiler *c, int id, Buf *b) {
        switch has no builtin arm, so the hash fell through to the nil seed. */
     int is_poly_to_a = sp_streq(name, "to_a") &&
                        (comp_ntype(c, id) == TY_POLY_ARRAY || comp_ntype(c, id) == TY_POLY);
-    int ncand = 0;
-    for (int k = 0; k < c->nclasses; k++)
-      if (comp_method_in_chain(c, k, name, NULL) >= 0 || comp_reader_in_chain(c, k, name, NULL) ||
-          (c->classes[k].is_native_class && comp_native_method_find(c, k, name, 0, 0) >= 0)) ncand++;
+    int ncand = 0, ncall_arm = 0;
+    for (int k = 0; k < c->nclasses; k++) {
+      int is_call = comp_method_in_chain(c, k, name, NULL) >= 0 ||
+                    (c->classes[k].is_native_class && comp_native_method_find(c, k, name, 0, 0) >= 0);
+      if (is_call || comp_reader_in_chain(c, k, name, NULL)) ncand++;
+      if (is_call) ncall_arm++;
+    }
     if (ncand > 0 || is_lengthlike || is_pred || is_class_named || is_ostruct || is_io_rewind || is_poly_to_a) {
       TyKind ret = comp_ntype(c, id);
       /* an OpenStruct member is a boxed value; but when analyze typed the
@@ -3697,9 +3700,16 @@ static int emit_poly_method_dispatch(Compiler *c, int id, Buf *b) {
       int tv = ++g_tmp, tr = ++g_tmp;
       /* Root the receiver temp: it can be the only live reference (r += f().m),
          methods do not root their own self, and an arm's callee may allocate
-         and trigger a collection while it runs (#3476). */
-      buf_printf(b, "({ sp_RbVal _t%d = ", tv); emit_expr(c, recv, b);
-      buf_printf(b, "; SP_GC_ROOT_RBVAL(_t%d); ", tv);
+         and trigger a collection while it runs (#3476). Only when an arm can
+         actually allocate, though. A dispatch whose every arm is an attr
+         reader is a cast and a field load with nothing in between that could
+         collect, and rooting it is pure cost on the hottest shape there is:
+         an AST walker reads `node.left` through exactly this dispatch, and
+         paying a root push and pop per read made one twice as slow (#282). */
+      int root_recv = ncall_arm > 0 || is_lengthlike || is_empty || is_pred ||
+                      is_class_named || is_ostruct || is_io_rewind || is_poly_to_a;
+      buf_printf(b, "({ sp_RbVal _t%d = ", tv); emit_expr(c, recv, b); buf_puts(b, "; ");
+      if (root_recv) buf_printf(b, "SP_GC_ROOT_RBVAL(_t%d); ", tv);
       emit_ctype(c, is_scalar_ret(ret) ? ret : TY_INT, b);
       buf_printf(b, " _t%d = %s; ", tr, is_scalar_ret(ret) ? default_value(ret) : "0");
       /* When the dispatch result feeds a poly context, tr is sp_RbVal, so the
