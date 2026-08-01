@@ -2555,7 +2555,8 @@ else {
     else if (lt == TY_INT)  buf_printf(&tcond, "(_t%d != SP_INT_NIL)", t);  /* a nullable int reads falsy at the sentinel; a plain int is always truthy */
     else if (lt == TY_FLOAT) buf_printf(&tcond, "(!sp_float_is_nil(_t%d))", t);
     else if (lt == TY_STRING || ty_is_array(lt) || ty_is_hash(lt) || ty_is_object(lt) ||
-             lt == TY_PROC || lt == TY_MATCHDATA || lt == TY_EXCEPTION)
+             lt == TY_PROC || lt == TY_MATCHDATA || lt == TY_EXCEPTION ||
+             ty_nullable_builtin_id(lt))
       buf_printf(&tcond, "(_t%d != 0)", t);  /* nullable pointer: NULL reads falsy */
     else if (lt == TY_SYMBOL) buf_printf(&tcond, "(_t%d != (sp_sym)-1)", t);  /* nilable symbol sentinel */
     else if (lt == TY_UNKNOWN && res == TY_BOOL) buf_printf(&tcond, "_t%d", t);  /* temp holds sp_poly_truthy(left) (#3276) */
@@ -2589,6 +2590,12 @@ else {
                         lt==TY_INT_ARRAY ? "SP_BUILTIN_INT_ARRAY" : lt==TY_FLOAT_ARRAY ? "SP_BUILTIN_FLT_ARRAY" : \
                         lt==TY_STR_ARRAY ? "SP_BUILTIN_STR_ARRAY" : "SP_BUILTIN_POLY_ARRAY"); \
                else if (lt == TY_MATCHDATA && is_and) buf_puts((TB), "sp_box_nil()"); /* MatchData has no poly box; in `m && x` the kept-left arm is reached only when m is NULL, i.e. nil (#2896) */ \
+               /* every remaining nullable builtin handle -- a Mutex, Queue,
+                  Fiber, Thread, ConditionVariable -- boxes like the object and
+                  container arms above. Without this the arm assigned a raw
+                  sp_mutex * where the sibling arm is an sp_RbVal, and the C
+                  compiler rejected the ternary outright (#3484). */ \
+               else if (ty_nullable_builtin_id(lt)) buf_printf((TB), "sp_box_nullable_obj((void *)_t%d, %s)", t, ty_nullable_builtin_id(lt)); \
                else buf_printf((TB), "_t%d", t); } \
              else buf_printf((TB), "_t%d", t); } \
     } while (0)

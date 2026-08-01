@@ -1661,6 +1661,16 @@ static const char *sp_poly_class_name(sp_RbVal v) {
             return SPL("File::Stat");
           return sp_io_kind_name(_iof);
         }
+        /* The concurrency handles: a boxed one reached the default arm and
+           answered an empty name, so `(:ok && queue).class` printed nothing
+           and a method on it raised NoMethodError with a blank class (#3484).
+           Mutex and Queue name themselves through the same helpers the typed
+           `.class` emit uses, so a Monitor and a SizedQueue stay distinct. */
+        case SP_BUILTIN_MUTEX: return sp_Mutex_class_name((sp_mutex *)v.v.p);
+        case SP_BUILTIN_QUEUE: return sp_Queue_class_name((sp_queue *)v.v.p);
+        case SP_BUILTIN_CONDVAR: return SPL("Thread::ConditionVariable");
+        case SP_BUILTIN_FIBER: return SPL("Fiber");
+        case SP_BUILTIN_THREAD: return SPL("Thread");
         case SP_BUILTIN_TMS: return SPL("Process::Tms");
         case SP_BUILTIN_OPENSTRUCT: return SPL("OpenStruct");
         case SP_BUILTIN_EXCEPTION: return sp_exc_class_name((volatile struct sp_Exception_s *)v.v.p);
@@ -3994,6 +4004,15 @@ static inline const char *sp_poly_inspect(sp_RbVal v) {
           if ((v.cls_id >= 0 || v.cls_id == SP_BUILTIN_OBJECT) && v.v.p)
             return sp_sprintf("#<%s:0x%016llx>", sp_poly_class_name(v),
                               (unsigned long long)(uintptr_t)v.v.p);
+          /* a builtin handle with no inspect of its own (a Fiber, a Queue, a
+             Mutex): name it rather than answering the useless "#<Object>" --
+             the tag knows what it is, and CRuby's default inspect is this
+             shape too */
+          if (v.v.p) {
+            const char *bn = sp_poly_class_name(v);
+            if (bn && bn[0])
+              return sp_sprintf("#<%s:0x%016llx>", bn, (unsigned long long)(uintptr_t)v.v.p);
+          }
           return SPL("#<Object>");
       }
     default:          return sp_str_empty;
