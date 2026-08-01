@@ -23,6 +23,35 @@ the symbol table is present; that is what `--profile` keeps. If `perf` is
 unavailable — `perf_event_paranoid` is locked down on many CI and hardened
 hosts — any sampler that reads frame pointers works the same way.
 
+### Reading the result
+
+`perf report --stdio --no-children` gives self time per function, which is
+usually the first question:
+
+```
+84.80%  sp_Interp_visit
+ 8.49%  sp_StrIntHash_get_opt
+ 1.82%  __memcmp_evex_movbe
+```
+
+`perf script` gives whole stacks, and with `-g` the inlined frames come back
+too — a helper the C compiler folded into its caller still appears by name:
+
+```
+    sp_str_byte_len+0x68f (inlined)
+    sp_String_append_bin+0x68f (inlined)
+    sp_gen_text+0x68f
+    main+0x68f
+```
+
+Fold those into one line per stack (`a;b;c count`) for a flamegraph renderer.
+`app.symbols.json` turns the C names in them back into Ruby ones.
+
+Two things to expect. Kernel frames stay unresolved unless
+`/proc/sys/kernel/kptr_restrict` allows otherwise, which does not affect
+anything above. And a build that discards unwind information reports no
+usable stacks at all — the same limit the allocation sites have below.
+
 ## Where the allocations come from: `SPINEL_ALLOC_REPORT`
 
 ```
