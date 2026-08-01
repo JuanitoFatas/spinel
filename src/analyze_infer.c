@@ -2413,14 +2413,28 @@ else {
           if (bn > 0 && bb) {
             TyKind et = infer_type(c, bb[bn - 1]);
             if (et != TY_UNKNOWN) return ty_array_of(et);
-            /* Element type unsettled. Stay UNKNOWN -- rather than latch
-               POLY_ARRAY -- ONLY while the block's index param is itself still
-               being inferred: its eventual type gives the element type, and a
-               premature POLY_ARRAY would bind monotonically into a callee param
-               that could never un-widen to the real INT_ARRAY, forcing a copy-
-               convert that drops in-place mutation (#3157). Once the param has
-               settled (or there is none) a still-unknown element -- e.g. an
-               empty `[]` -- falls through to POLY_ARRAY as before. */
+            /* Element type unsettled: stay UNKNOWN rather than latch
+               POLY_ARRAY. "I do not know what this holds yet" is not "it holds
+               anything" -- and the difference is permanent, because a
+               POLY_ARRAY binds monotonically into a callee parameter that can
+               never un-widen to the INT_ARRAY it really was.
+
+               That matters most where the answer feeds back into what it was
+               derived from. An extension-field add is
+               `Array.new(4) { |i| Field.add(a[i], b[i]) }`: answering
+               POLY_ARRAY on the round before Field.add's own return settles
+               makes the caller's accumulator poly, which makes this method's
+               own parameters poly, which makes `a[i]` poly -- and the cycle has
+               no way back. Waiting one round instead lets the concrete entry
+               point (an int-array literal, a zero element) propagate all the
+               way round, and the whole field settles on the Integer array.
+
+               The second stage, with g_infer_optimistic cleared, still answers
+               POLY_ARRAY for an element that genuinely never settles -- an
+               empty `[]`, a heterogeneous block. The narrower rule below is
+               what that stage keeps: an index param still being inferred gives
+               the element type once it arrives (#3157). */
+            if (g_infer_optimistic) return TY_UNKNOWN;
             int bpn = a_proc_params_node(c, id);   /* id is the Array.new call */
             int brn = 0; const int *breqs = bpn >= 0 ? nt_arr(nt, bpn, "requireds", &brn) : NULL;
             if (brn > 0 && breqs) {
