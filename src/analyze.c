@@ -8099,6 +8099,21 @@ static int nullable_int_call_name(const char *nm) {
    nil rather than as INTPTR_MIN. Boxing every int through the nil check costs
    ~8% on optcarrot -- every pixel goes through it -- so the marking is static
    and the hot path keeps the plain box. */
+/* Can this expression leave the sentinel in an int slot? */
+static int nullable_int_value(Compiler *c, int v) {
+  const NodeTable *nt = c->nt;
+  if (v < 0) return 0;
+  if (nt_kind(nt, v) == NK_NilNode) return 1;
+  if (nt_kind(nt, v) == NK_CallNode) return nullable_int_call_name(nt_str(nt, v, "name"));
+  if (nt_kind(nt, v) == NK_LocalVariableReadNode) {
+    const char *rn = nt_str(nt, v, "name");
+    Scope *rs = rn ? comp_scope_of(c, v) : NULL;
+    LocalVar *rv = rs ? scope_local(rs, rn) : NULL;
+    return rv && rv->nullable_int;
+  }
+  return 0;
+}
+
 static void mark_nullable_int_locals(Compiler *c) {
   const NodeTable *nt = c->nt;
   for (int round = 0; round < 4; round++) {
@@ -8111,16 +8126,66 @@ static void mark_nullable_int_locals(Compiler *c) {
       Scope *sc = comp_scope_of(c, id);
       LocalVar *lv = sc ? scope_local(sc, ln) : NULL;
       if (!lv || lv->type != TY_INT || lv->nullable_int) continue;
-      int nul = 0;
-      if (nt_kind(nt, v) == NK_CallNode && nullable_int_call_name(nt_str(nt, v, "name")))
-        nul = 1;
-      else if (nt_kind(nt, v) == NK_LocalVariableReadNode) {
-        const char *rn = nt_str(nt, v, "name");
-        Scope *rs = rn ? comp_scope_of(c, v) : NULL;
-        LocalVar *rv = rs ? scope_local(rs, rn) : NULL;
-        if (rv && rv->nullable_int) nul = 1;
+      /* An outright `i = nil` on a slot the other writes make an int leaves
+         the sentinel in it just as a search miss does. */
+      if (nullable_int_value(c, v)) { lv->nullable_int = 1; changed = 1; }
+    }
+    /* A PARAMETER bound from such a value carries the sentinel into the callee,
+       where boxing it (`other.inspect`, `x == other`) has the same problem the
+       local marking exists to prevent. */
+    NT_FOREACH_KIND(nt, NK_CallNode, id) {
+      int mi = comp_method_index(c, nt_str(nt, id, "name"));
+      if (mi < 0) {
+        int recv = nt_ref(nt, id, "receiver");
+        TyKind rt = recv >= 0 ? infer_type(c, recv) : TY_UNKNOWN;
+        if (recv < 0) {
+          Scope *self = comp_scope_of(c, id);
+          if (self && self->class_id >= 0)
+            mi = comp_method_in_chain(c, self->class_id, nt_str(nt, id, "name"), NULL);
+        }
+        else if (ty_is_object(rt))
+          mi = comp_method_in_chain(c, ty_object_class(rt), nt_str(nt, id, "name"), NULL);
       }
-      if (nul) { lv->nullable_int = 1; changed = 1; }
+      if (mi < 0) continue;
+      Scope *m = &c->scopes[mi];
+      int ca = nt_ref(nt, id, "arguments");
+      int an = 0; const int *av = ca >= 0 ? nt_arr(nt, ca, "arguments", &an) : NULL;
+      for (int k = 0; av && k < an && k < m->nparams; k++) {
+        if (m->rest_idx >= 0 && k >= m->rest_idx) break;
+        LocalVar *p = m->pnames[k] ? scope_local(m, m->pnames[k]) : NULL;
+        if (!p || p->type != TY_INT || p->nullable_int) continue;
+        if (nullable_int_value(c, av[k])) { p->nullable_int = 1; changed = 1; }
+      }
+    }
+    /* A destructuring target the right side cannot supply gets nil, through a
+       target node rather than a write node of its own -- `a, b, *c, d, e = 1`
+       leaves the sentinel in every int slot after the first. */
+    NT_FOREACH_KIND(nt, NK_MultiWriteNode, id) {
+      int v = nt_ref(nt, id, "value");
+      /* how many values the right side statically supplies: an array literal
+         supplies its elements, a scalar supplies exactly one, and anything
+         else (an array-valued call or local) is only known at runtime. */
+      int supply = 0;
+      if (v >= 0 && nt_kind(nt, v) == NK_ArrayNode) nt_arr(nt, v, "elements", &supply);
+      else if (v >= 0 && nt_kind(nt, v) != NK_NilNode && !ty_is_array(infer_type(c, v))) supply = 1;
+      int tn2 = 0; const int *tv2 = nt_arr(nt, id, "lefts", &tn2);
+      for (int k = 0; tv2 && k < tn2; k++) {
+        if (k < supply || nt_kind(nt, tv2[k]) != NK_LocalVariableTargetNode) continue;
+        const char *tn = nt_str(nt, tv2[k], "name");
+        Scope *ts = tn ? comp_scope_of(c, tv2[k]) : NULL;
+        LocalVar *tl = ts ? scope_local(ts, tn) : NULL;
+        if (tl && tl->type == TY_INT && !tl->nullable_int) { tl->nullable_int = 1; changed = 1; }
+      }
+      /* a target after the splat is supplied only when the right side is long
+         enough, which a static count almost never proves */
+      int rn2 = 0; const int *rv2 = nt_arr(nt, id, "rights", &rn2);
+      for (int k = 0; rv2 && k < rn2; k++) {
+        if (nt_kind(nt, rv2[k]) != NK_LocalVariableTargetNode) continue;
+        const char *tn = nt_str(nt, rv2[k], "name");
+        Scope *ts = tn ? comp_scope_of(c, rv2[k]) : NULL;
+        LocalVar *tl = ts ? scope_local(ts, tn) : NULL;
+        if (tl && tl->type == TY_INT && !tl->nullable_int) { tl->nullable_int = 1; changed = 1; }
+      }
     }
     if (!changed) break;
   }

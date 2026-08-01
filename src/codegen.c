@@ -2699,7 +2699,15 @@ else if (orecv >= 0 && onm) {
       const char *nilv = (pt == TY_INT || pt == TY_BOOL) ? "SP_INT_NIL"
                        : (pt == TY_FLOAT) ? "sp_float_nil()"
                        : (pt == TY_SYMBOL) ? "((sp_sym)-1)" : NULL;
-      if (nilv) buf_printf(pb, "(argc > %d) ? args[%d] : %s;\n", k, k, nilv);
+      if (nilv) {
+        buf_printf(pb, "(argc > %d) ? args[%d] : %s;\n", k, k, nilv);
+        /* The binding we just wrote is what makes this slot nullable: called
+           with fewer arguments the param holds the sentinel, so boxing it in
+           the body (`[a, b, c]`, `a == nil`) has to answer nil rather than
+           carry INTPTR_MIN through as a truthy integer. Marked here rather
+           than in analyze because this is where the fallback is decided. */
+        if (lv && pt == TY_INT) lv->nullable_int = 1;
+      }
       else if (pt == TY_PROC) {
         /* a Proc block param (e.g. the accumulator of a proc-composing reduce)
            rides the mrb_int slot as a stuffed pointer; cast it back rather than

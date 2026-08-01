@@ -1060,6 +1060,7 @@ LocalVar *scope_local_intern(Scope *s, const char *name) {
   lv->or_write_only = 0;
   lv->str_shared = 0;
   lv->str_append = 0;
+  lv->nullable_int = 0;
   lv->poly_ctr = 0;
   lv->oa_pin = TY_UNKNOWN;
   return lv;
