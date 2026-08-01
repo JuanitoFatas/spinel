@@ -5209,17 +5209,30 @@ static void narrow_object_arrays(Compiler *c) {
       else sl[S].alive = 0;
     }
     /* Resolve the call target the way emission will: a free function first,
-       then an implicit-self instance method of the enclosing class, then an
-       explicit receiver's class chain. -1 = unattributable here. */
+       then an implicit-self method of the enclosing class, then an explicit
+       receiver -- a constant names a class, so the target is that class's
+       chain of class methods; anything else goes by the receiver's type.
+       -1 = unattributable here. A module of `self.` methods calling its own
+       helpers is the whole shape of a Ruby module used as a namespace, and
+       without the class-method arms every slot passed between two of them
+       died here. */
     int oa_tmi = -1;
     if (name) {
       if (recv < 0) {
         oa_tmi = comp_method_index(c, name);
         if (oa_tmi < 0) {
           Scope *csc = comp_scope_of(c, id);
-          if (csc && csc->class_id >= 0)
+          if (csc && csc->class_id >= 0) {
             oa_tmi = comp_method_in_chain(c, csc->class_id, name, NULL);
+            if (oa_tmi < 0) oa_tmi = comp_cmethod_in_chain(c, csc->class_id, name, NULL);
+          }
         }
+      }
+      else if (nt_type(nt, recv) &&
+               (sp_streq(nt_type(nt, recv), "ConstantReadNode") ||
+                sp_streq(nt_type(nt, recv), "ConstantPathNode"))) {
+        int rci = comp_class_index(c, nt_str(nt, recv, "name"));
+        oa_tmi = rci >= 0 ? comp_cmethod_in_chain(c, rci, name, NULL) : -1;
       }
       else {
         TyKind ort = infer_type(c, recv);
