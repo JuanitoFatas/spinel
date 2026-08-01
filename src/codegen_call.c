@@ -10476,11 +10476,14 @@ void emit_call(Compiler *c, int id, Buf *b) {
     buf_puts(b, "(sp_proc_root("); emit_expr(c, recv, b); buf_puts(b, ") == sp_proc_root(");
     emit_expr(c, argv[0], b); buf_puts(b, "))"); return;
   }
-  /* the concurrency handles: never frozen, never nil (a live C pointer) (#3124) */
+  /* the concurrency handles: never nil (a live C pointer) (#3124). They DO
+     freeze, though -- see the freeze/frozen? arm in emit_call_recv, which
+     carries the GC-header bit the way every other heap instance does; this
+     used to answer a flat false here and swallow the state (#3483). */
   {
     TyKind hrt = recv >= 0 ? comp_ntype(c, recv) : TY_UNKNOWN;
     if ((hrt == TY_THREAD || hrt == TY_QUEUE || hrt == TY_MUTEX || hrt == TY_CONDVAR) &&
-        argc == 0 && (sp_streq(name, "frozen?") || sp_streq(name, "nil?"))) {
+        argc == 0 && sp_streq(name, "nil?")) {
       buf_puts(b, "((void)("); emit_expr(c, recv, b); buf_puts(b, "), (mrb_bool)0)");
       return;
     }
@@ -14087,9 +14090,14 @@ else { memcpy(dir, sf, n); dir[n] = 0; } }
                       c->classes[ty_object_class(recv_t)].is_native_class;
     /* freeze on a user instance or a boxed value has real state (the GC
        header bit / string marker) -- served by the receiver arms, not the
-       identity shortcut */
+       identity shortcut. A concurrency handle is a heap instance too, so its
+       freeze is equally stateful; taking the shortcut here made `freeze` a
+       no-op and left `frozen?` answering false right after it (#3483). */
     int freeze_stateful = sp_streq(name, "freeze") &&
-                          (ty_is_object(recv_t) || recv_t == TY_POLY);
+                          (ty_is_object(recv_t) || recv_t == TY_POLY ||
+                           recv_t == TY_MUTEX || recv_t == TY_QUEUE ||
+                           recv_t == TY_CONDVAR || recv_t == TY_FIBER ||
+                           recv_t == TY_THREAD);
     /* itself is pure identity for every receiver, hashes included; the
        hash exclusion below is for freeze/dup/clone, which need real
        handling on the reference types */

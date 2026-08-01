@@ -3077,3 +3077,12 @@ SP_NORETURN void sp_raise_nil_int_op(mrb_int a, mrb_int b, const char *op) {
   /* nil on the RIGHT is the coercion failure CRuby reports from Integer#+ */
   sp_raise_cls("TypeError", "nil can't be coerced into Integer");
 }
+
+/* `Queue#freeze` raises rather than freezing: a frozen queue could never be
+   pushed to again, so Ruby refuses it outright. Names the receiver the way
+   CRuby's message does, so a SizedQueue reports as one. */
+SP_NORETURN void sp_raise_cannot_freeze(const char *cls, void *p) {
+  sp_raise_cls("TypeError",
+               sp_sprintf("cannot freeze #<%s:0x%016llx>", cls ? cls : "Object",
+                          (unsigned long long)(uintptr_t)p));
+}

@@ -6900,18 +6900,37 @@ int emit_object_call(Compiler *c, int id, Buf *b) {
      the reflexive same-lvalue read is knowably true (the string arm's rule). */
   /* Object#eql? default (no user override) is identity, exactly equal? --
      route it through the same arm (#2361) */
-  /* Object#frozen? / #freeze on a concurrency handle: none of them can be
-     frozen, so frozen? is false and freeze answers self. A Fiber reached the
-     front-end reject where its Thread sibling did not (#3470). */
+  /* Object#frozen? / #freeze on a concurrency handle. A Mutex, Fiber, Thread
+     or ConditionVariable is an ordinary heap instance and freezes like one --
+     the answer used to be a flat "never frozen", so `freeze` was a no-op and
+     `frozen?` stayed false after it (#3483). A Queue is the exception Ruby
+     itself makes: freezing one raises, because a frozen queue could never be
+     pushed to again. (A Fiber reached the front-end reject where its Thread
+     sibling did not, #3470.) */
   if (recv >= 0 && argc == 0 && nt_ref(nt, id, "block") < 0 &&
       (rt == TY_MUTEX || rt == TY_QUEUE || rt == TY_CONDVAR ||
        rt == TY_FIBER || rt == TY_THREAD) &&
       (sp_streq(name, "frozen?") || sp_streq(name, "freeze")) &&
       !user_defines_or_reads(c, name)) {
-    if (sp_streq(name, "frozen?")) {
-      buf_puts(b, "((void)("); emit_expr(c, recv, b); buf_puts(b, "), (mrb_bool)0)");
+    int tq = ++g_tmp;
+    if (rt == TY_QUEUE) {
+      if (sp_streq(name, "frozen?")) {
+        buf_puts(b, "((void)("); emit_expr(c, recv, b); buf_puts(b, "), (mrb_bool)0)");
+      }
+      else {
+        buf_printf(b, "({ sp_queue *_t%d = ", tq); emit_expr(c, recv, b);
+        buf_printf(b, "; sp_raise_cannot_freeze(sp_Queue_class_name(_t%d), (void *)_t%d); _t%d; })",
+                   tq, tq, tq);
+      }
+      return 1;
     }
-    else emit_expr(c, recv, b);
+    if (sp_streq(name, "frozen?")) {
+      buf_puts(b, "sp_gc_is_frozen((void *)("); emit_expr(c, recv, b); buf_puts(b, "))");
+    }
+    else {
+      buf_puts(b, "(("); emit_ctype(c, rt, b); buf_puts(b, ")sp_gc_freeze((void *)(");
+      emit_expr(c, recv, b); buf_puts(b, ")))");
+    }
     return 1;
   }
   /* The concurrency handles are heap instances too -- a Mutex, Queue,

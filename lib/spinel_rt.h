@@ -518,6 +518,10 @@ static inline int sp_gc_bucket(size_t sz){int b=(int)(sz/16);return b<SP_GC_NBUC
    (see sp_IntArray); strings use the 0xff marker / wrapper bit. */
 static inline mrb_bool sp_gc_is_frozen(void *p) { if (!p) return FALSE; return ((sp_gc_hdr *)((char *)p - sizeof(sp_gc_hdr)))->frozen; }
 static inline void *sp_gc_freeze(void *p) { if (p) ((sp_gc_hdr *)((char *)p - sizeof(sp_gc_hdr)))->frozen = 1; return p; }
+/* `Queue#freeze` raises rather than freezing: a frozen queue could never be
+   pushed to again, so Ruby refuses it outright. Names the receiver the way
+   CRuby's message does. */
+SP_NORETURN SP_COLD void sp_raise_cannot_freeze(const char *cls, void *p);
 /* marker-prefixed message: see sp_raise_frozen_array (lib/sp_alloc.h) */
 static void __attribute__((noinline,cold)) sp_raise_frozen_hash(void){sp_raise_cls("FrozenError",(&("\xff" "can't modify frozen Hash")[1]));}
 /* Pool-aware alloc. The recycle hook is stored in the gc_hdr; sweep
