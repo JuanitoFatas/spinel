@@ -21,6 +21,18 @@ cd "$WORK"
 cd app
 expect "scaffold run" "Hello from app" "$("$SPIN" run 2>&1 | tail -1)"
 
+# --- `--` with no target ahead of it names every target, not `--` itself --------
+# `spin build -- --profile` passes a compiler flag and names no target. The
+# flag has to reach the compiler and every bin has to build; naming `--` as the
+# target is the bug (it looked for bin/--.rb and built nothing).
+"$SPIN" build -- --profile >/dev/null 2>&1 || fail "build -- <flag>: exited non-zero"
+[ -f build/bin/app ] || fail "build -- <flag>: built no target"
+[ -f build/bin/app.symbols.json ] || fail "build -- <flag>: flag never reached the compiler"
+"$SPIN" clean >/dev/null
+"$SPIN" build app -- --profile >/dev/null 2>&1 || fail "build <target> -- <flag>: exited non-zero"
+[ -f build/bin/app.symbols.json ] || fail "build <target> -- <flag>: flag never reached the compiler"
+"$SPIN" clean >/dev/null
+
 # --- library package (path dependency) --------------------------------------------
 cd "$WORK"
 "$SPIN" new spinel-ansi >/dev/null
