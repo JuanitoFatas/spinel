@@ -109,6 +109,19 @@ Two caveats:
   helper is attributed to whatever the compiler left as the caller. Read the
   addresses as "the code that asked for this", not as an exact source line.
 
+A program with more distinct *(type, site)* pairs than the stats table holds
+does not silently fold them together. What did not fit is reported on its own:
+
+```
+alloc;(unattributed) 3
+# bytes (unattributed) 78
+# note the stats table (8192 entries) was full: 3 allocation(s) could not be
+# attributed and are NOT counted in the rows above
+```
+
+Every row above that line is still exact -- the overflow is kept out of them
+rather than added to whichever row the probe happened to land on.
+
 ## Which one to reach for
 
 Start with `--profile` and a sampler: it tells you which method to look at.

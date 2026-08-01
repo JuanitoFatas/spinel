@@ -514,7 +514,9 @@ typedef struct { void *key; void *site; unsigned long long count, bytes; } sp_Al
    into the home slot -- the one failure mode that would quietly misattribute
    the numbers this feature exists to report. BSS, so the untouched tail costs
    nothing when the report is off. */
+#ifndef SP_ALLOC_STATS
 #define SP_ALLOC_STATS 8192
+#endif
 static sp_AllocStat sp_alloc_stats[SP_ALLOC_STATS];
 /* Type names live in their own table: one entry per scan fn, independent of
    how many sites allocate it. */
@@ -531,13 +533,21 @@ static const char *sp_alloc_name_of(void *key) {
   }
   return NULL;
 }
+/* Allocations the table had no room to attribute. They used to be added to
+   the probe's home slot -- a row belonging to a DIFFERENT (type, site) pair --
+   which reads exactly like a real count, so a saturated run reported plausible
+   and wrong numbers with nothing to say it had happened (#3481). Everything
+   that lands here is instead kept out of the per-row numbers entirely and
+   reported as its own line: the rows that remain are all true, and the part
+   that was lost is visible. */
+static sp_AllocStat sp_alloc_overflow;
 static sp_AllocStat *sp_alloc_stat_slot(void *key, void *site) {
   size_t h = (((size_t)(uintptr_t)key >> 4) ^ ((size_t)(uintptr_t)site >> 3)) % SP_ALLOC_STATS;
   for (size_t i = 0; i < SP_ALLOC_STATS; i++) {
     sp_AllocStat *s = &sp_alloc_stats[(h + i) % SP_ALLOC_STATS];
     if ((s->key == key && s->site == site) || s->key == NULL) { s->key = key; s->site = site; return s; }
   }
-  return &sp_alloc_stats[h];   /* table full: merge into the home slot */
+  return &sp_alloc_overflow;
 }
 /* The frame that asked for this allocation: skip this helper, the counter and
    the allocator itself. */
@@ -633,6 +643,16 @@ static void sp_alloc_report_dump(void) {
       }
       else fprintf(f, "%s%s %llu\n", lead, nm, v);
     }
+  }
+  /* Say it out loud when the table saturated: the rows above are complete and
+     correct as far as they go, and this is what they do not cover. Silence
+     here is the failure this report must not have. */
+  if (sp_alloc_overflow.count) {
+    fprintf(f, "alloc;(unattributed) %llu\n", sp_alloc_overflow.count);
+    fprintf(f, "# bytes (unattributed) %llu\n", sp_alloc_overflow.bytes);
+    fprintf(f, "# note the stats table (%d entries) was full: %llu allocation(s)"
+               " could not be attributed and are NOT counted in the rows above\n",
+            (int)SP_ALLOC_STATS, sp_alloc_overflow.count);
   }
   if (close_f) fclose(f);
 }
