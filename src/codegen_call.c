@@ -7673,6 +7673,11 @@ static int class_responds_to(Compiler *c, int ci, const char *qm) {
   for (int u = 0; cls_uni[u]; u++) if (sp_streq(qm, cls_uni[u])) return 1;
   /* `new`: a class responds, a module does not */
   if (sp_streq(qm, "new")) return !is_module;
+  /* A Struct or Data CLASS object carries the member list the same way its
+     instances do; the instance arm of the respond_to? fold already answered
+     these, so the class object saying false about its own `members` was the
+     odd one out (#3482). */
+  if ((c->classes[ci].is_struct || c->classes[ci].is_data) && sp_streq(qm, "members")) return 1;
   return 0;
 }
 
@@ -17323,8 +17328,19 @@ else { memcpy(dir, sf, n); dir[n] = 0; } }
       if (!resolved) {
         const char *rty = nt_type(nt, recv);
         if (rty && sp_streq(rty, "ConstantReadNode")) {
-          int ci = comp_class_index(c, nt_str(nt, recv, "name"));
-          if (ci >= 0) { resolved = 1; yes = class_responds_to(c, ci, qm); }
+          const char *rcn = nt_str(nt, recv, "name");
+          int ci = comp_class_index(c, rcn);
+          /* `Struct` and `Data` are core class objects with no user entry, and
+             the synthesized probe cannot type a bare `Struct.new` (it is the
+             class-building call, not a value), so both answered false for the
+             very constructor the same program calls (#3482). */
+          /* `members` belongs to the generated subclass, not to Struct itself
+             -- CRuby answers false there, and the test caught the overreach. */
+          if (!resolved && rcn && sp_streq(rcn, "Struct") && ci < 0 &&
+              sp_streq(qm, "new")) { resolved = 1; yes = 1; }
+          else if (!resolved && rcn && sp_streq(rcn, "Data") && ci < 0 &&
+                   sp_streq(qm, "define")) { resolved = 1; yes = 1; }
+          else if (ci >= 0) { resolved = 1; yes = class_responds_to(c, ci, qm); }
           /* A core class or module (String, Integer, Comparable, Thread) has no
              user class entry, and stopping here left the call unresolved -- it
              then raised NoMethodError, or was rejected outright by the front
