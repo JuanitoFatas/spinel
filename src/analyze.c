@@ -8855,6 +8855,7 @@ void analyze_program(Compiler *c) {
     if (narrow_object_arrays(c)) ch |= infer_write_types(c);
     narrow_locals_from_arrays(c);
     ch |= infer_param_types(c);
+    ch |= bind_coerce_operator_params(c);   /* 3 + obj calls obj's op WITH obj */
     ch |= infer_param_hash_value(c);
     ch |= propagate_prep_params(c);
     ch |= infer_string_params(c);
@@ -9021,6 +9022,7 @@ void analyze_program(Compiler *c) {
         int ch = 0;
         ch |= infer_write_types(c);
         ch |= infer_param_types(c);
+        ch |= bind_coerce_operator_params(c);   /* 3 + obj calls obj's op WITH obj */
         ch |= infer_param_hash_value(c);
         ch |= propagate_prep_params(c);
         ch |= infer_string_params(c);

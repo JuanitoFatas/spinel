@@ -125,6 +125,7 @@ int an_re_has_captures(const char *src);
 const char *an_regex_lit_src(Compiler *c, int nid);
 int str_in(const char *s, const char *const *set);
 int is_arith_op(const char *op);
+int bind_coerce_operator_params(Compiler *c);
 int is_cmp_op(const char *op);
 int is_eq_op(const char *op);
 int is_void_call(const char *name);

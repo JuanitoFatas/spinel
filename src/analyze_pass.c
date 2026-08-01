@@ -3015,6 +3015,43 @@ static int widen_proc_params_poly(Compiler *c, int ref) {
   return changed;
 }
 
+/* `3 + money` reaches the user operator through #coerce: Ruby asks
+   money.coerce(3), which by convention answers [Money(3), money], and then
+   calls `+` on the first element with the SECOND as its argument. That
+   argument is the user object itself, so the operator's parameter has to be
+   able to hold one. The direct call site (`money + 3`) is the only one with a
+   call node, so the parameter settled on Integer and the coerce path then read
+   a Money pointer out of the pair as a raw integer -- a pointer-sized number
+   that changed between runs (#3491). */
+int bind_coerce_operator_params(Compiler *c) {
+  const NodeTable *nt = c->nt;
+  int changed = 0;
+  NT_FOREACH_KIND(nt, NK_CallNode, id) {
+    const char *nm = nt_str(nt, id, "name");
+    if (!nm || !is_arith_op(nm) || nt_ref(nt, id, "block") >= 0) continue;
+    int recv = nt_ref(nt, id, "receiver");
+    if (recv < 0) continue;
+    TyKind rt = infer_type(c, recv);
+    if (!ty_is_numeric(rt)) continue;
+    int ca = nt_ref(nt, id, "arguments");
+    int argc = 0; const int *argv = ca >= 0 ? nt_arr(nt, ca, "arguments", &argc) : NULL;
+    if (!argv || argc != 1) continue;
+    TyKind a0 = infer_type(c, argv[0]);
+    if (!ty_is_object(a0)) continue;
+    int acls = ty_object_class(a0);
+    if (comp_method_in_chain(c, acls, "coerce", NULL) < 0) continue;
+    int op_mi = comp_method_in_chain(c, acls, nm, NULL);
+    if (op_mi < 0) continue;
+    Scope *m = &c->scopes[op_mi];
+    if (m->nparams < 1 || !m->pnames[0]) continue;
+    LocalVar *p = scope_local(m, m->pnames[0]);
+    if (!p || p->rbs_seeded) continue;
+    TyKind merged = ty_unify(p->type, a0);
+    if (merged != p->type) { p->type = merged; changed = 1; }
+  }
+  return changed;
+}
+
 int infer_param_types(Compiler *c) {
   const NodeTable *nt = c->nt;
   int changed = 0;
