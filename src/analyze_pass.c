@@ -3039,7 +3039,24 @@ int bind_coerce_operator_params(Compiler *c) {
     TyKind a0 = infer_type(c, argv[0]);
     if (!ty_is_object(a0)) continue;
     int acls = ty_object_class(a0);
-    if (comp_method_in_chain(c, acls, "coerce", NULL) < 0) continue;
+    int coerce_mi = comp_method_in_chain(c, acls, "coerce", NULL);
+    if (coerce_mi < 0) continue;
+    /* The coerce call this route emits has no node of its own either, and it
+       passes the numeric receiver BOXED. Nothing else binds that parameter:
+       left alone it stayed unknown until a late backstop -- too late to widen
+       the factory it feeds, so `Q.scalar(other)` took an sp_Q* and read a
+       boxed 10 as a pointer (#3497) -- or, where an explicit `m.coerce(4)`
+       did bind it, the two disagreed and the build failed (#3499). */
+    {
+      Scope *cm = &c->scopes[coerce_mi];
+      if (cm->nparams >= 1 && cm->pnames[0]) {
+        LocalVar *cp = scope_local(cm, cm->pnames[0]);
+        if (cp && !cp->rbs_seeded) {
+          TyKind cmg = ty_unify(cp->type, TY_POLY);
+          if (cmg != cp->type) { cp->type = cmg; changed = 1; }
+        }
+      }
+    }
     int op_mi = comp_method_in_chain(c, acls, nm, NULL);
     if (op_mi < 0) continue;
     Scope *m = &c->scopes[op_mi];
