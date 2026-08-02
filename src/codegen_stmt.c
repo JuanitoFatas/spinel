@@ -5659,6 +5659,12 @@ void emit_stmt_inner(Compiler *c, int id, Buf *b, int indent) {
                   buf_puts(b, "("); emit_expr(c, recv, b); buf_printf(b, ")->iv_%s = ", iv_c(base));
                 }
                 if (ivt == TY_POLY && comp_ntype(c, argv[0]) != TY_POLY) emit_boxed(c, argv[0], b);
+                /* A concrete slot takes the coercing emit: an unresolved rhs
+                   lowers to the gate's raising sp_RbVal token, which assigned
+                   raw into an object-pointer or scalar field is ill-typed C.
+                   Anything that is not the token still emits raw. */
+                else if (ivt != TY_POLY && ivt != TY_UNKNOWN)
+                  emit_unresolved_coerced(c, argv[0], ivt, b);
                 else emit_expr(c, argv[0], b);
                 buf_puts(b, fo ? "; }\n" : ";\n");
                 return;

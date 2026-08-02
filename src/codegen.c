@@ -255,6 +255,15 @@ void emit_scalar_operand(Compiler *c, int node, const char *zero, Buf *b) {
    local narrowed to String by `is_a?(String)`, which keeps an sp_RbVal
    representation) is unboxed via sp_poly_to_s; a string-typed value emits
    directly. Used at string-primitive arg boundaries (sp_str_include, ...). */
+/* The gate's raise tokens reach a slot inside a wrapping paren as often as
+   bare (an operand emitted as `(sp_raise_nomethod(...))`), so the token match
+   has to look past any leading ones or the coercion silently does not fire and
+   the sp_RbVal lands in the typed slot raw. */
+static const char *past_open_parens(const char *s) {
+  while (*s == '(') s++;
+  return s;
+}
+
 void emit_str_expr(Compiler *c, int node, Buf *b) {
   if (comp_ntype(c, node) == TY_POLY) {
     buf_puts(b, "sp_poly_to_s("); emit_expr(c, node, b); buf_puts(b, ")");
@@ -268,7 +277,7 @@ void emit_str_expr(Compiler *c, int node, Buf *b) {
   Buf tmp; memset(&tmp, 0, sizeof tmp);
   emit_expr(c, node, &tmp);
   const char *txt = tmp.p ? tmp.p : "";
-  if (strncmp(txt, "sp_raise_nomethod(", 18) == 0)
+  if (strncmp(past_open_parens(txt), "sp_raise_nomethod(", 18) == 0)
     buf_printf(b, "sp_poly_to_s(%s)", txt);
   else buf_puts(b, txt);
   free(tmp.p);
@@ -286,12 +295,12 @@ int emit_unresolved_coerced(Compiler *c, int node, TyKind target, Buf *b) {
   Buf tmp; memset(&tmp, 0, sizeof tmp);
   emit_expr(c, node, &tmp);
   const char *txt = tmp.p ? tmp.p : "";
-  int is_tok = strncmp(txt, "sp_raise_nomethod(", 18) == 0;
+  int is_tok = strncmp(past_open_parens(txt), "sp_raise_nomethod(", 18) == 0;
   /* The missing-super arm emits a `(sp_raise_cls(...), 0)` comma expression
      whose dummy tail is a bare int; in a pointer-typed slot that is ill-typed
      C. The raise never returns, so evaluate it for the raise and yield the
      slot's default instead. */
-  int is_cls_tok = strncmp(txt, "(sp_raise_cls(", 14) == 0;
+  int is_cls_tok = strncmp(past_open_parens(txt), "sp_raise_cls(", 13) == 0;
   if (is_tok) {
     if (target == TY_STRING) buf_printf(b, "sp_poly_to_s(%s)", txt);
     else if (target == TY_FLOAT) buf_printf(b, "sp_poly_to_f(%s)", txt);
