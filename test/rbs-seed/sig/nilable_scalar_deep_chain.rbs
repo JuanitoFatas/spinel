@@ -1,0 +1,4 @@
+class DcR
+  def initialize: (Integer?) -> void
+  def p_: () -> Integer?
+end

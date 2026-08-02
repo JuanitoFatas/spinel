@@ -35,6 +35,13 @@ void analyze_program(Compiler *c);
    reads the cached results via comp_ntype. */
 TyKind infer_type(Compiler *c, int id);
 
+/* True when node `id`'s value, held in an unboxed scalar slot, can be the
+   reserved nil sentinel (SP_INT_NIL / the float twin). The slot type alone
+   cannot say -- an `Integer?` and an `Integer` are both TY_INT -- so codegen
+   asks this before choosing between sp_box_int and sp_box_int_or_nil at a poly
+   boundary. Valid only after analyze_program has settled the marking. */
+int nullable_int_value(Compiler *c, int id);
+
 /* Re-infer every node of the subtree at `id` (children first), refreshing the
    whole type cache under the CURRENT scope-local types. The shadow-typing
    emitters (a block param pinned to the receiver's element type for the body's

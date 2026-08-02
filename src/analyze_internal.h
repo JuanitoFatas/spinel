@@ -136,6 +136,8 @@ int is_blk_param_call(Compiler *c, int node, int mi);
 TyKind scan_break_type(Compiler *c, int id, int depth);
 TyKind scan_throw_type(Compiler *c, const char *tag);
 TyKind yield_value_type(Compiler *c, int mi);
+/* Tail expressions of the blocks reaching `mi`'s yield (see analyze_util.c). */
+int yield_block_tails(Compiler *c, int mi, int *out, int max);
 /* The block value reaching `mi` from a child's `super` (see analyze_util.c). */
 TyKind yield_value_type_via_super(Compiler *c, int mi);
 int yield_value_diverges(Compiler *c, int mi);
