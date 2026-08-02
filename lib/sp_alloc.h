@@ -648,6 +648,7 @@ static inline mrb_bool sp_encoding_eq(sp_Encoding a,sp_Encoding b){const char*an
 
 /* ---- Box helper prototypes (0 optcarrot uses; bodies in lib/sp_cold.c). ---- */
 sp_RbVal sp_box_int_or_nil(mrb_int v);
+sp_RbVal sp_unsentinel(sp_RbVal v);
 sp_RbVal sp_box_float_or_nil(mrb_float v);
 sp_RbVal sp_box_bigint(sp_Bigint *b);
 sp_RbVal sp_box_encoding(sp_Encoding e);

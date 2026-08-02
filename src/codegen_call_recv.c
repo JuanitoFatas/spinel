@@ -9933,14 +9933,17 @@ int emit_poly_call(Compiler *c, int id, Buf *b) {
         buf_puts(b, ", "); emit_expr(c, argv[0], b); buf_puts(b, ")");
         return 1;
       }
-      if (at == TY_INT) {
-        buf_puts(b, "sp_poly_arr_get_hash("); emit_expr(c, recv, b);
+      if (at == TY_INT || at == TY_POLY) {
+        /* The runtime read boxes a TYPED array's element without the sentinel
+           check the hot path cannot afford, so a nilable scalar stored in one
+           comes back as an ordinary number. Correct it here, at the sites
+           analyze marked, rather than in the read itself (#3505). */
+        int uns = nullable_int_elem_read(c, id);
+        if (uns) buf_puts(b, "sp_unsentinel(");
+        buf_puts(b, at == TY_INT ? "sp_poly_arr_get_hash(" : "sp_poly_index_poly(");
+        emit_expr(c, recv, b);
         buf_puts(b, ", "); emit_expr(c, argv[0], b); buf_puts(b, ")");
-        return 1;
-      }
-      if (at == TY_POLY) {
-        buf_puts(b, "sp_poly_index_poly("); emit_expr(c, recv, b);
-        buf_puts(b, ", "); emit_expr(c, argv[0], b); buf_puts(b, ")");
+        if (uns) buf_puts(b, ")");
         return 1;
       }
       /* a non-poly key (e.g. a Method): box it, then index polymorphically */

@@ -66,3 +66,35 @@ p probe(true ? q.p_ : 3)
 p probe(NpW.new(q.p_).v)
 p probe([q.p_][0])
 p probe(maybe(q, true))
+
+# and one level in: an element that reaches a poly context through a container.
+# The array keeps its unboxed element type, so the runtime read boxes without
+# the sentinel check the hot path cannot afford; the correction is emitted only
+# where the receiver is known to be able to hold one.
+p probe([r].map { |x| x.p_ }[0])
+p probe([[r.p_]][0][0])
+p probe({ :a => [r.p_] }[:a][0])
+p probe(Array.new(1) { r.p_ }[0])
+p probe([r.p_].reduce { |x, y| x })
+
+def build(r); [r.p_]; end
+p probe(build(r)[0])
+def np_take(a); a[0]; end
+p probe(np_take([r.p_]))
+
+nested = [[r.p_]]
+p probe(nested[0][0])
+alias_of = [r.p_]
+same = alias_of
+p probe(same[0])
+
+class NpB
+  def initialize(r); @a = [r.p_]; end
+  def first_; @a[0]; end
+end
+p probe(NpB.new(r).first_)
+
+# a container with no sentinel in it keeps its numbers
+p probe([q.p_].first)
+p probe([[4]][0][0])
+p probe({ :a => [5] }[:a][0])

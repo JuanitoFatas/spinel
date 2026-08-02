@@ -191,6 +191,9 @@ typedef struct {
                                      by the marking fixpoint, alongside
                                      LocalVar.nullable_int and
                                      Scope.ret_nullable_int (#3505). */
+  unsigned char *ivar_nullable_int_elem; /* the same one level in: an int/float
+                                     ARRAY slot some element of which can be
+                                     the sentinel */
   unsigned char *ivar_int_table;  /* the slot is a table of int arrays, narrowed
                                      to TY_INT_ARRAY_ARRAY while the fixpoint
                                      runs so a parameter bound from `@t[k][j]`

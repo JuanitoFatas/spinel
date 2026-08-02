@@ -2497,6 +2497,15 @@ sp_RbVal sp_box_int_or_nil(mrb_int v) { return v == SP_INT_NIL ? sp_box_nil() : 
    sentinel, and boxing that as an ordinary Float made it a Hash key that no
    literal nil could match (#3493). */
 sp_RbVal sp_box_float_or_nil(mrb_float v) { return sp_float_is_nil(v) ? sp_box_nil() : sp_box_float(v); }
+/* An element read back out of a TYPED array boxes at the runtime read, which
+   has no room for the sentinel check the hot path cannot afford. Where analyze
+   knows a particular receiver's elements can hold one, it wraps that read in
+   this: the correction is paid at the marked site only (#3505). */
+sp_RbVal sp_unsentinel(sp_RbVal v) {
+  if (v.tag == SP_TAG_INT && v.v.i == SP_INT_NIL) return sp_box_nil();
+  if (v.tag == SP_TAG_FLT && sp_float_is_nil(v.v.f)) return sp_box_nil();
+  return v;
+}
 /* box a sp_Bigint* into a poly slot (heterogeneous container element, or a
    promote-mode overflow result). */
 sp_RbVal sp_box_bigint(sp_Bigint *b) { sp_RbVal r; r.tag = SP_TAG_BIGINT; r.cls_id = 0; r.v.p = b; return r; }

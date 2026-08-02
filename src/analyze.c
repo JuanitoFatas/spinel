@@ -8270,6 +8270,157 @@ static LocalVar *nullable_elem_local(Compiler *c, int at, const char *nm) {
   return (lv->type == TY_INT_ARRAY || lv->type == TY_FLOAT_ARRAY) ? lv : NULL;
 }
 
+/* The ivar an ivar read/write node names, for the element marking. */
+static int nullable_elem_ivar(Compiler *c, int at, ClassInfo **out) {
+  Scope *s = comp_scope_of(c, at);
+  int cid = s ? s->class_id : -1;
+  if (cid < 0) cid = comp_class_index(c, "Toplevel");
+  if (cid < 0 || cid >= c->nclasses) return -1;
+  *out = &c->classes[cid];
+  return comp_ivar_index(*out, nt_str(c->nt, at, "name"));
+}
+
+static int name_in(const char *nm, const char *const *set) {
+  if (!nm) return 0;
+  for (int i = 0; set[i]; i++) if (sp_streq(nm, set[i])) return 1;
+  return 0;
+}
+
+/* An array method whose result elements are the receiver's own, so element
+   nilability passes straight through it. `compact` is deliberately absent: it
+   is what REMOVES the nils. */
+static int elem_preserving_call(const char *nm) {
+  static const char *const N[] = { "select", "filter", "reject", "sort", "sort_by",
+                                   "uniq", "reverse", "rotate", "take", "drop",
+                                   "take_while", "drop_while", "shuffle", "to_a",
+                                   "dup", "clone", "freeze", "values_at", "slice",
+                                   "flatten", "first", "last", NULL };
+  return name_in(nm, N);
+}
+
+/* A method that hands back one ELEMENT of its receiver. */
+static int elem_returning_call(const char *nm) {
+  static const char *const N[] = { "[]", "at", "first", "last", "min", "max",
+                                   "sample", "pop", "shift", "fetch", "dig", NULL };
+  return name_in(nm, N);
+}
+
+/* The tail expression of a literal block attached to `call`, or -1. */
+static int call_block_tail(Compiler *c, int call) {
+  const NodeTable *nt = c->nt;
+  int blk = nt_ref(nt, call, "block");
+  if (blk < 0) return -1;
+  int body = nt_ref(nt, blk, "body");
+  if (body < 0 || nt_kind(nt, body) != NK_StatementsNode) return -1;
+  int n = 0; const int *st = nt_arr(nt, body, "body", &n);
+  return st && n > 0 ? st[n - 1] : -1;
+}
+
+/* Can an ELEMENT of this array-valued expression be the sentinel? A slot
+   answers from its own marking; an expression that builds or forwards an array
+   answers from what it was built out of, which is what lets a chain with no
+   local in it (`[r].map { |x| x.p_ }[0]`) be seen at all (#3505). */
+static int nullable_int_elem_expr(Compiler *c, int v, int depth);
+
+/* One level further in: can an element of a container HELD BY `v` be the
+   sentinel? `v` is the outer container -- an array of arrays, a hash whose
+   values are arrays, or a slot holding one -- so `v[k][j]` reaches the scalar. */
+static int nested_elem_nilable(Compiler *c, int v, int depth) {
+  const NodeTable *nt = c->nt;
+  if (v < 0 || depth > 8) return 0;
+  if (nt_kind(nt, v) == NK_ArrayNode || nt_kind(nt, v) == NK_HashNode) {
+    int en = 0; const int *els = nt_arr(nt, v, "elements", &en);
+    int hash = nt_kind(nt, v) == NK_HashNode;
+    for (int k = 0; els && k < en; k++) {
+      int e = hash ? nt_ref(nt, els[k], "value") : els[k];
+      if (nullable_int_elem_expr(c, e, depth + 1)) return 1;
+    }
+    return 0;
+  }
+  if (nt_kind(nt, v) == NK_LocalVariableReadNode) {
+    Scope *sc = comp_scope_of(c, v);
+    const char *nm = nt_str(nt, v, "name");
+    if (!sc || !nm) return 0;
+    for (int r = lw_shared_first(c, nm, (int)(sc - c->scopes)); r >= 0; r = lw_shared_next(r)) {
+      int id = lw_shared_node(r);
+      if (nt_kind(nt, id) != NK_LocalVariableWriteNode) continue;
+      const char *wn = nt_str(nt, id, "name");
+      if (!wn || !sp_streq(wn, nm) || comp_scope_of(c, id) != sc) continue;
+      if (nested_elem_nilable(c, nt_ref(nt, id, "value"), depth + 1)) return 1;
+    }
+  }
+  return 0;
+}
+
+static int nullable_int_elem_expr(Compiler *c, int v, int depth) {
+  const NodeTable *nt = c->nt;
+  if (v < 0 || depth > 8) return 0;
+  if (nt_kind(nt, v) == NK_ArrayNode) {
+    int en = 0; const int *els = nt_arr(nt, v, "elements", &en);
+    for (int k = 0; els && k < en; k++) if (nullable_int_value(c, els[k])) return 1;
+    return 0;
+  }
+  if (nt_kind(nt, v) == NK_LocalVariableReadNode) {
+    Scope *s = comp_scope_of(c, v);
+    const char *n = nt_str(nt, v, "name");
+    LocalVar *lv = n && s ? scope_local(s, n) : NULL;
+    return lv && lv->nullable_int_elem;
+  }
+  if (nt_kind(nt, v) == NK_InstanceVariableReadNode) {
+    ClassInfo *ci = NULL;
+    int iv = nullable_elem_ivar(c, v, &ci);
+    return iv >= 0 && ci->ivar_nullable_int_elem[iv];
+  }
+  if (nt_kind(nt, v) == NK_ParenthesesNode) {
+    int pb = nt_ref(nt, v, "body");
+    int pn = 0; const int *pd = pb >= 0 ? nt_arr(nt, pb, "body", &pn) : NULL;
+    return pd && pn == 1 ? nullable_int_elem_expr(c, pd[0], depth + 1) : 0;
+  }
+  if (nt_kind(nt, v) == NK_CallNode) {
+    const char *nm = nt_str(nt, v, "name");
+    int tail = call_block_tail(c, v);
+    /* the mapped element IS the block's value */
+    if (nm && tail >= 0 && (sp_streq(nm, "map") || sp_streq(nm, "collect") ||
+                            sp_streq(nm, "flat_map") || sp_streq(nm, "collect_concat")))
+      return nullable_int_value(c, tail);
+    int rc = nt_ref(nt, v, "receiver");
+    /* `Array.new(n) { ... }` / `Array.new(n, v)` builds its elements here */
+    if (nm && sp_streq(nm, "new") && rc >= 0 && nt_kind(nt, rc) == NK_ConstantReadNode) {
+      const char *rn = nt_str(nt, rc, "name");
+      if (rn && sp_streq(rn, "Array")) {
+        if (tail >= 0) return nullable_int_value(c, tail);
+        int ca = nt_ref(nt, v, "arguments"); int an = 0;
+        const int *av = ca >= 0 ? nt_arr(nt, ca, "arguments", &an) : NULL;
+        return an >= 2 && nullable_int_value(c, av[1]);
+      }
+    }
+    if (elem_preserving_call(nm)) return nullable_int_elem_expr(c, rc, depth + 1);
+    /* the value is one ELEMENT of the receiver, and that element is itself the
+       container being indexed into (`t[i][j]`, `h[:a][0]`) */
+    if (elem_returning_call(nm)) return nested_elem_nilable(c, rc, depth + 1);
+    /* a method returning such an array: its own tail decides */
+    if (nm && rc < 0) {
+      int mi = comp_method_index(c, nm);
+      if (mi > 0) return nullable_int_elem_expr(c, scope_body_last(c, mi), depth + 1);
+    }
+    return 0;
+  }
+  return 0;
+}
+
+/* An index read whose RECEIVER is an array that can hold the sentinel. The
+   value comes back already boxed by the runtime read, so codegen corrects it
+   there; asked receiver-first on purpose, since the general predicate resolves
+   a bare `[]` by name across the whole program and would wrap hot reads that
+   can never carry one. */
+int nullable_int_elem_read(Compiler *c, int call) {
+  const NodeTable *nt = c->nt;
+  if (call < 0 || nt_kind(nt, call) != NK_CallNode) return 0;
+  int recv = nt_ref(nt, call, "receiver");
+  return recv >= 0 && elem_returning_call(nt_str(nt, call, "name")) &&
+         nullable_int_elem_expr(c, recv, 0);
+}
+
 /* Can this expression leave the sentinel in an int slot? */
 int nullable_int_value(Compiler *c, int v) {
   const NodeTable *nt = c->nt;
@@ -8355,13 +8506,14 @@ int nullable_int_value(Compiler *c, int v) {
     const char *cn = nt_str(nt, v, "name");
     int rcv0 = nt_ref(nt, v, "receiver");
     /* an element read out of an array some element of which is the sentinel */
-    if (cn && sp_streq(cn, "[]") && rcv0 >= 0 &&
-        nt_kind(nt, rcv0) == NK_LocalVariableReadNode) {
-      Scope *rs = comp_scope_of(c, rcv0);
-      const char *rn0 = nt_str(nt, rcv0, "name");
-      LocalVar *rl = rn0 && rs ? scope_local(rs, rn0) : NULL;
-      if (rl && rl->nullable_int_elem) return 1;
+    if (rcv0 >= 0 && elem_returning_call(cn) && nullable_int_elem_expr(c, rcv0, 0)) return 1;
+    /* a fold's value is its block's, and `find`/`detect` hand back an element */
+    if (cn && (sp_streq(cn, "reduce") || sp_streq(cn, "inject"))) {
+      int ft = call_block_tail(c, v);
+      if (ft >= 0 && nullable_int_value(c, ft)) return 1;
     }
+    if (rcv0 >= 0 && cn && (sp_streq(cn, "find") || sp_streq(cn, "detect")) &&
+        nullable_int_elem_expr(c, rcv0, 0)) return 1;
     int mi = cn ? comp_method_index(c, cn) : -1;
     int rcv = nt_ref(nt, v, "receiver");
     if (mi < 0 && cn) {
@@ -8463,42 +8615,66 @@ static void mark_nullable_int_locals(Compiler *c) {
     for (int id = 0; id < nt->count; id++) {
       if (nt_kind(nt, id) != NK_LocalVariableWriteNode) continue;
       int v = nt_ref(nt, id, "value");
-      if (v < 0 || nt_kind(nt, v) != NK_ArrayNode) continue;
+      if (v < 0) continue;
       LocalVar *lv = nullable_elem_local(c, id, nt_str(nt, id, "name"));
       if (!lv) continue;
-      int en = 0; const int *els = nt_arr(nt, v, "elements", &en);
-      for (int k = 0; els && k < en; k++)
-        if (nullable_int_value(c, els[k])) { lv->nullable_int_elem = 1; changed = 1; break; }
+      /* the value is the array itself, however it was built: a literal, an
+         alias of another marked local, a chain, a method that returns one */
+      if (nullable_int_elem_expr(c, v, 0)) { lv->nullable_int_elem = 1; changed = 1; }
+    }
+    /* the same slot written through an ivar */
+    NT_FOREACH_KIND(nt, NK_InstanceVariableWriteNode, id) {
+      int v = nt_ref(nt, id, "value");
+      if (v < 0) continue;
+      ClassInfo *ci = NULL;
+      int iv = nullable_elem_ivar(c, id, &ci);
+      if (iv < 0 || ci->ivar_nullable_int_elem[iv]) continue;
+      if (ci->ivar_types[iv] != TY_INT_ARRAY && ci->ivar_types[iv] != TY_FLOAT_ARRAY) continue;
+      if (nullable_int_elem_expr(c, v, 0)) { ci->ivar_nullable_int_elem[iv] = 1; changed = 1; }
     }
     NT_FOREACH_KIND(nt, NK_CallNode, id) {
       const char *nm = nt_str(nt, id, "name");
       if (!nm || (!sp_streq(nm, "<<") && !sp_streq(nm, "push") && !sp_streq(nm, "unshift"))) continue;
       int recv = nt_ref(nt, id, "receiver");
-      if (recv < 0 || nt_kind(nt, recv) != NK_LocalVariableReadNode) continue;
-      LocalVar *lv = nullable_elem_local(c, recv, nt_str(nt, recv, "name"));
-      if (!lv) continue;
+      if (recv < 0) continue;
       int ca = nt_ref(nt, id, "arguments"); int an = 0;
       const int *av = ca >= 0 ? nt_arr(nt, ca, "arguments", &an) : NULL;
-      for (int k = 0; av && k < an; k++)
-        if (nullable_int_value(c, av[k])) { lv->nullable_int_elem = 1; changed = 1; break; }
+      int nilable = 0;
+      for (int k = 0; av && k < an && !nilable; k++) nilable = nullable_int_value(c, av[k]);
+      if (!nilable) continue;
+      if (nt_kind(nt, recv) == NK_LocalVariableReadNode) {
+        LocalVar *lv = nullable_elem_local(c, recv, nt_str(nt, recv, "name"));
+        if (lv) { lv->nullable_int_elem = 1; changed = 1; }
+      }
+      else if (nt_kind(nt, recv) == NK_InstanceVariableReadNode) {
+        ClassInfo *ci = NULL;
+        int iv = nullable_elem_ivar(c, recv, &ci);
+        if (iv >= 0 && !ci->ivar_nullable_int_elem[iv] &&
+            (ci->ivar_types[iv] == TY_INT_ARRAY || ci->ivar_types[iv] == TY_FLOAT_ARRAY)) {
+          ci->ivar_nullable_int_elem[iv] = 1; changed = 1;
+        }
+      }
     }
     /* `ks.each { |k| h[k] = ... }`: the block parameter IS the element. */
     NT_FOREACH_KIND(nt, NK_CallNode, id) {
       int recv = nt_ref(nt, id, "receiver"), blk = nt_ref(nt, id, "block");
-      if (recv < 0 || blk < 0 || nt_kind(nt, recv) != NK_LocalVariableReadNode) continue;
-      Scope *rsc = comp_scope_of(c, recv);
-      const char *rnm = nt_str(nt, recv, "name");
-      LocalVar *rlv = rnm && rsc ? scope_local(rsc, rnm) : NULL;
-      if (!rlv || !rlv->nullable_int_elem) continue;
+      if (recv < 0 || blk < 0) continue;
+      if (!nullable_int_elem_expr(c, recv, 0)) continue;
       int bp = nt_ref(nt, blk, "parameters");
       int params = bp >= 0 ? nt_ref(nt, bp, "parameters") : -1;
       int rn = 0; const int *reqs = params >= 0 ? nt_arr(nt, params, "requireds", &rn) : NULL;
-      if (!reqs || rn != 1) continue;   /* |v| only: |k, i| indexes are not elements */
-      const char *pnm = nt_str(nt, reqs[0], "name");
+      /* |v| is the element; `reduce`/`inject` bind BOTH parameters to one.
+         Anything else with two (`|k, i|`, `|k, v|`) has a non-element slot. */
+      const char *rnm2 = nt_str(nt, id, "name");
+      int fold = rnm2 && (sp_streq(rnm2, "reduce") || sp_streq(rnm2, "inject"));
+      if (!reqs || rn < 1 || (rn != 1 && !(fold && rn == 2))) continue;
       Scope *bsc = comp_scope_of(c, blk);
-      LocalVar *plv = pnm && bsc ? scope_local(bsc, pnm) : NULL;
-      if (!plv || (plv->type != TY_INT && plv->type != TY_FLOAT) || plv->nullable_int) continue;
-      plv->nullable_int = 1; changed = 1;
+      for (int pk = 0; pk < rn; pk++) {
+        const char *pnm = nt_str(nt, reqs[pk], "name");
+        LocalVar *plv = pnm && bsc ? scope_local(bsc, pnm) : NULL;
+        if (!plv || (plv->type != TY_INT && plv->type != TY_FLOAT) || plv->nullable_int) continue;
+        plv->nullable_int = 1; changed = 1;
+      }
     }
     /* An IVAR written from such a value hands the sentinel to every reader,
        including the attr_reader a caller goes through (`W.new(r.p_).v`). The
@@ -8549,7 +8725,10 @@ static void mark_nullable_int_locals(Compiler *c) {
       for (int k = 0; av && k < an && k < m->nparams; k++) {
         if (m->rest_idx >= 0 && k >= m->rest_idx) break;
         LocalVar *p = m->pnames[k] ? scope_local(m, m->pnames[k]) : NULL;
-        if (!p || (p->type != TY_INT && p->type != TY_FLOAT) || p->nullable_int) continue;
+        if (!p) continue;
+        if ((p->type == TY_INT_ARRAY || p->type == TY_FLOAT_ARRAY) && !p->nullable_int_elem &&
+            nullable_int_elem_expr(c, av[k], 0)) { p->nullable_int_elem = 1; changed = 1; }
+        if ((p->type != TY_INT && p->type != TY_FLOAT) || p->nullable_int) continue;
         if (nullable_int_value(c, av[k])) { p->nullable_int = 1; changed = 1; }
       }
     }
