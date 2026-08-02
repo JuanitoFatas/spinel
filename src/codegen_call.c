@@ -18261,8 +18261,15 @@ else { memcpy(dir, sf, n); dir[n] = 0; } }
       /* sp_poly_spaceship answers nil for incomparable runtime operands (the
          int-nil sentinel) but 0 for identical singletons -- `nil <=> nil` is 0
          even though the two are not "comparable" in the Comparable sense. */
+      /* The helper answers an mrb_int (the sentinel for nil). Where the
+         expression's own type is poly -- a `<=>` whose method has a `return
+         nil` guard, so the slot is sp_RbVal -- box it, or the raw compare goes
+         out through an sp_RbVal signature and the build fails (#3498). */
+      int cmp_poly = comp_ntype(c, id) == TY_POLY;
+      if (cmp_poly) buf_puts(b, "sp_box_int_or_nil(");
       buf_puts(b, "sp_poly_spaceship("); emit_boxed(c, recv, b);
       buf_puts(b, ", "); emit_boxed(c, argv[0], b); buf_puts(b, ")");
+      if (cmp_poly) buf_puts(b, ")");
       return;
     }
     /* Statically incomparable concrete operands (1 <=> "a"): Ruby answers

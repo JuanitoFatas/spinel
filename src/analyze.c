@@ -8229,7 +8229,10 @@ static int nullable_int_call_name(const char *nm) {
   if (!nm) return 0;
   static const char *const N[] = {
     "index", "rindex", "byteindex", "byterindex", "delete_at", "pop", "shift",
-    "delete", "nonzero?", "infinite?", "getbyte", "bsearch", "bsearch_index", NULL };
+    "delete", "nonzero?", "infinite?", "getbyte", "bsearch", "bsearch_index",
+    /* `a <=> b` answers nil when the two are not comparable, and the poly
+       helper spells that with the sentinel like every other nullable int */
+    "<=>", NULL };
   for (int i = 0; N[i]; i++) if (sp_streq(nm, N[i])) return 1;
   return 0;
 }
