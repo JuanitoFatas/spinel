@@ -1,0 +1,4 @@
+class NpR
+  def initialize: (Integer?) -> void
+  def p_: () -> Integer?
+end

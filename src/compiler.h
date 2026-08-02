@@ -51,6 +51,10 @@ typedef struct {
   int nullable_int; /* an int local that was assigned a value which can be the
                        nil sentinel (a search miss, a pop off an empty array):
                        boxing it has to yield nil, not INTPTR_MIN */
+  int nullable_int_elem; /* the same, one level in: an int/float ARRAY local
+                       some element of which can be the sentinel, so reading an
+                       element or binding a block parameter from it carries it
+                       out (#3505) */
   int push_widened; /* (params) a push through this parameter carried an element
                        its bound type could not hold, so it must stay the POLY
                        ARRAY: the call-site unification would otherwise collapse
@@ -180,6 +184,13 @@ typedef struct {
   unsigned char *ivar_str_shared; /* (#3227) the slot is a shared-mutable
                                      string handle (sp_String *): survives
                                      re-clears; post-fixpoint reasserts it */
+  unsigned char *ivar_nullable_int; /* the slot holds a nilable scalar: some
+                                     write to it can leave the nil sentinel, so
+                                     a read of it (or of its attr_reader) has to
+                                     box as nil rather than as the number. Set
+                                     by the marking fixpoint, alongside
+                                     LocalVar.nullable_int and
+                                     Scope.ret_nullable_int (#3505). */
   unsigned char *ivar_int_table;  /* the slot is a table of int arrays, narrowed
                                      to TY_INT_ARRAY_ARRAY while the fixpoint
                                      runs so a parameter bound from `@t[k][j]`

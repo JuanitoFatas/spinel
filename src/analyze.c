@@ -8261,6 +8261,15 @@ static int poly_dispatch_nullable(Compiler *c, const char *cn) {
   return 0;
 }
 
+/* The int/float-array local `nm` is read or written at `at`, and is a candidate
+   for the element marking: NULL when it is not one, or is already marked. */
+static LocalVar *nullable_elem_local(Compiler *c, int at, const char *nm) {
+  Scope *sc = nm ? comp_scope_of(c, at) : NULL;
+  LocalVar *lv = sc ? scope_local(sc, nm) : NULL;
+  if (!lv || lv->nullable_int_elem) return NULL;
+  return (lv->type == TY_INT_ARRAY || lv->type == TY_FLOAT_ARRAY) ? lv : NULL;
+}
+
 /* Can this expression leave the sentinel in an int slot? */
 int nullable_int_value(Compiler *c, int v) {
   const NodeTable *nt = c->nt;
@@ -8272,6 +8281,51 @@ int nullable_int_value(Compiler *c, int v) {
     int rv = nt_ref(nt, v, "arguments");
     int rn = 0; const int *ra = rv >= 0 ? nt_arr(nt, rv, "arguments", &rn) : NULL;
     return ra && rn == 1 ? nullable_int_value(c, ra[0]) : 0;
+  }
+  /* A conditional's value is one of its arms, so it carries the sentinel if any
+     arm can. A ternary, an `if`/`unless` or `case` used as an expression, a
+     begin/rescue and `a || b` all reach a Hash key this way (#3505). An arm
+     that is absent yields nil, which is the sentinel in an int slot. */
+  if (nt_kind(nt, v) == NK_StatementsNode) {
+    int n = 0; const int *st = nt_arr(nt, v, "body", &n);
+    return st && n > 0 ? nullable_int_value(c, st[n - 1]) : 0;
+  }
+  if (nt_kind(nt, v) == NK_ElseNode) return nullable_int_value(c, nt_ref(nt, v, "statements"));
+  if (nt_kind(nt, v) == NK_IfNode || nt_kind(nt, v) == NK_UnlessNode) {
+    if (nullable_int_value(c, nt_ref(nt, v, "statements"))) return 1;
+    int els = nt_ref(nt, v, nt_kind(nt, v) == NK_IfNode ? "subsequent" : "else_clause");
+    return els >= 0 ? nullable_int_value(c, els) : 1;
+  }
+  if (nt_kind(nt, v) == NK_CaseNode || nt_kind(nt, v) == NK_CaseMatchNode) {
+    int nw = 0; const int *whens = nt_arr(nt, v, "conditions", &nw);
+    for (int w = 0; w < nw; w++)
+      if (nullable_int_value(c, nt_ref(nt, whens[w], "statements"))) return 1;
+    int els = nt_ref(nt, v, "else_clause");
+    return els >= 0 ? nullable_int_value(c, nt_ref(nt, els, "statements")) : 1;
+  }
+  if (nt_kind(nt, v) == NK_BeginNode) {
+    if (nullable_int_value(c, nt_ref(nt, v, "statements"))) return 1;
+    for (int rs = nt_ref(nt, v, "rescue_clause"); rs >= 0; rs = nt_ref(nt, rs, "subsequent"))
+      if (nullable_int_value(c, nt_ref(nt, rs, "statements"))) return 1;
+    int els = nt_ref(nt, v, "else_clause");
+    return els >= 0 && nullable_int_value(c, nt_ref(nt, els, "statements"));
+  }
+  if (nt_kind(nt, v) == NK_RescueModifierNode)
+    return nullable_int_value(c, nt_ref(nt, v, "expression")) ||
+           nullable_int_value(c, nt_ref(nt, v, "rescue_expression"));
+  if (nt_kind(nt, v) == NK_OrNode || nt_kind(nt, v) == NK_AndNode)
+    return nullable_int_value(c, nt_ref(nt, v, "left")) ||
+           nullable_int_value(c, nt_ref(nt, v, "right"));
+  /* Reading a slot some write left the sentinel in: the reader method a caller
+     resolves to is this read, so its callers box through it too. */
+  if (nt_kind(nt, v) == NK_InstanceVariableReadNode) {
+    Scope *s = comp_scope_of(c, v);
+    int cid = s ? s->class_id : -1;
+    if (cid < 0) cid = comp_class_index(c, "Toplevel");
+    if (cid < 0 || cid >= c->nclasses) return 0;
+    ClassInfo *ci = &c->classes[cid];
+    int iv = comp_ivar_index(ci, nt_str(nt, v, "name"));
+    return iv >= 0 && ci->ivar_nullable_int[iv];
   }
   if (nt_kind(nt, v) == NK_ParenthesesNode) {
     int pb = nt_ref(nt, v, "body");
@@ -8299,6 +8353,15 @@ int nullable_int_value(Compiler *c, int v) {
        caller that boxes the value has to answer nil. Resolved the way emission
        resolves it. */
     const char *cn = nt_str(nt, v, "name");
+    int rcv0 = nt_ref(nt, v, "receiver");
+    /* an element read out of an array some element of which is the sentinel */
+    if (cn && sp_streq(cn, "[]") && rcv0 >= 0 &&
+        nt_kind(nt, rcv0) == NK_LocalVariableReadNode) {
+      Scope *rs = comp_scope_of(c, rcv0);
+      const char *rn0 = nt_str(nt, rcv0, "name");
+      LocalVar *rl = rn0 && rs ? scope_local(rs, rn0) : NULL;
+      if (rl && rl->nullable_int_elem) return 1;
+    }
     int mi = cn ? comp_method_index(c, cn) : -1;
     int rcv = nt_ref(nt, v, "receiver");
     if (mi < 0 && cn) {
@@ -8394,6 +8457,65 @@ static void mark_nullable_int_locals(Compiler *c) {
          the sentinel in it just as a search miss does. */
       if (nullable_int_value(c, v)) { lv->nullable_int = 1; changed = 1; }
     }
+    /* An int/float ARRAY local holding such a value hands it to every element
+       read and to the block parameter of every iteration over it. The array's
+       C element type is unchanged: only the boxing has to know (#3505). */
+    for (int id = 0; id < nt->count; id++) {
+      if (nt_kind(nt, id) != NK_LocalVariableWriteNode) continue;
+      int v = nt_ref(nt, id, "value");
+      if (v < 0 || nt_kind(nt, v) != NK_ArrayNode) continue;
+      LocalVar *lv = nullable_elem_local(c, id, nt_str(nt, id, "name"));
+      if (!lv) continue;
+      int en = 0; const int *els = nt_arr(nt, v, "elements", &en);
+      for (int k = 0; els && k < en; k++)
+        if (nullable_int_value(c, els[k])) { lv->nullable_int_elem = 1; changed = 1; break; }
+    }
+    NT_FOREACH_KIND(nt, NK_CallNode, id) {
+      const char *nm = nt_str(nt, id, "name");
+      if (!nm || (!sp_streq(nm, "<<") && !sp_streq(nm, "push") && !sp_streq(nm, "unshift"))) continue;
+      int recv = nt_ref(nt, id, "receiver");
+      if (recv < 0 || nt_kind(nt, recv) != NK_LocalVariableReadNode) continue;
+      LocalVar *lv = nullable_elem_local(c, recv, nt_str(nt, recv, "name"));
+      if (!lv) continue;
+      int ca = nt_ref(nt, id, "arguments"); int an = 0;
+      const int *av = ca >= 0 ? nt_arr(nt, ca, "arguments", &an) : NULL;
+      for (int k = 0; av && k < an; k++)
+        if (nullable_int_value(c, av[k])) { lv->nullable_int_elem = 1; changed = 1; break; }
+    }
+    /* `ks.each { |k| h[k] = ... }`: the block parameter IS the element. */
+    NT_FOREACH_KIND(nt, NK_CallNode, id) {
+      int recv = nt_ref(nt, id, "receiver"), blk = nt_ref(nt, id, "block");
+      if (recv < 0 || blk < 0 || nt_kind(nt, recv) != NK_LocalVariableReadNode) continue;
+      Scope *rsc = comp_scope_of(c, recv);
+      const char *rnm = nt_str(nt, recv, "name");
+      LocalVar *rlv = rnm && rsc ? scope_local(rsc, rnm) : NULL;
+      if (!rlv || !rlv->nullable_int_elem) continue;
+      int bp = nt_ref(nt, blk, "parameters");
+      int params = bp >= 0 ? nt_ref(nt, bp, "parameters") : -1;
+      int rn = 0; const int *reqs = params >= 0 ? nt_arr(nt, params, "requireds", &rn) : NULL;
+      if (!reqs || rn != 1) continue;   /* |v| only: |k, i| indexes are not elements */
+      const char *pnm = nt_str(nt, reqs[0], "name");
+      Scope *bsc = comp_scope_of(c, blk);
+      LocalVar *plv = pnm && bsc ? scope_local(bsc, pnm) : NULL;
+      if (!plv || (plv->type != TY_INT && plv->type != TY_FLOAT) || plv->nullable_int) continue;
+      plv->nullable_int = 1; changed = 1;
+    }
+    /* An IVAR written from such a value hands the sentinel to every reader,
+       including the attr_reader a caller goes through (`W.new(r.p_).v`). The
+       slot keeps its scalar C type, so only the boxing has to know (#3505). */
+    NT_FOREACH_KIND(nt, NK_InstanceVariableWriteNode, id) {
+      int v = nt_ref(nt, id, "value");
+      if (v < 0) continue;
+      Scope *s = comp_scope_of(c, id);
+      int cid = s ? s->class_id : -1;
+      if (cid < 0) cid = comp_class_index(c, "Toplevel");
+      if (cid < 0 || cid >= c->nclasses) continue;
+      ClassInfo *ci = &c->classes[cid];
+      int iv = comp_ivar_index(ci, nt_str(nt, id, "name"));
+      if (iv < 0 || ci->ivar_nullable_int[iv]) continue;
+      if (ci->ivar_types[iv] != TY_INT && ci->ivar_types[iv] != TY_FLOAT) continue;
+      if (nullable_int_value(c, v)) { ci->ivar_nullable_int[iv] = 1; changed = 1; }
+    }
     /* A PARAMETER bound from such a value carries the sentinel into the callee,
        where boxing it (`other.inspect`, `x == other`) has the same problem the
        local marking exists to prevent. */
@@ -8409,6 +8531,16 @@ static void mark_nullable_int_locals(Compiler *c) {
         }
         else if (ty_is_object(rt))
           mi = comp_method_in_chain(c, ty_object_class(rt), nt_str(nt, id, "name"), NULL);
+        /* `W.new(k)` binds initialize's parameters, and `W.build(k)` a class
+           method's: neither receiver is an instance, so the arm above cannot
+           see them and the sentinel stopped at the constructor (#3505). */
+        else if (nt_kind(nt, recv) == NK_ConstantReadNode) {
+          const char *cnm = nt_str(nt, id, "name");
+          int rci = comp_class_index(c, nt_str(nt, recv, "name"));
+          if (rci >= 0)
+            mi = sp_streq(cnm, "new") ? comp_method_in_chain(c, rci, "initialize", NULL)
+                                      : comp_cmethod_in_chain(c, rci, cnm, NULL);
+        }
       }
       if (mi < 0) continue;
       Scope *m = &c->scopes[mi];

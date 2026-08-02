@@ -311,11 +311,13 @@ int comp_ivar_intern(ClassInfo *ci, const char *name) {
     ci->ivar_types = realloc(ci->ivar_types, sizeof(TyKind) * (size_t)ci->civars);
     ci->ivar_str_shared = realloc(ci->ivar_str_shared, (size_t)ci->civars);
     ci->ivar_int_table = realloc(ci->ivar_int_table, (size_t)ci->civars);
+    ci->ivar_nullable_int = realloc(ci->ivar_nullable_int, (size_t)ci->civars);
   }
   ci->ivars[ci->nivars] = strdup(name);
   ci->ivar_types[ci->nivars] = TY_UNKNOWN;
   ci->ivar_str_shared[ci->nivars] = 0;
   ci->ivar_int_table[ci->nivars] = 0;
+  ci->ivar_nullable_int[ci->nivars] = 0;
   return ci->nivars++;
 }
 
