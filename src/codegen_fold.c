@@ -6952,8 +6952,20 @@ void emit_dispatch(Compiler *c, int cid, const char *name,
     Buf ab; memset(&ab, 0, sizeof ab);
     LocalVar *p = m ? scope_local(m, m->pnames[k]) : NULL;
     if (m && m->rest_idx >= 0 && k == m->rest_idx) {
-      /* rest param: pack remaining positional args into PolyArray */
-      emit_rest_pack(c, k, pos_argc_d, argv, &ab);
+      /* rest param: pack remaining positional args into PolyArray. An
+         unconsumed keyword hash degrades to one positional hash at the rest's
+         tail -- the same rule the other call path follows. Dropping it here
+         made `c.splat_only(id: :desc)` run with no arguments at all, silently,
+         while the identical top-level call kept it (#3503). */
+      int kwh_tail = -1;
+      if (kwh_d >= 0 && m->kwrest_idx < 0) {
+        int consumed = 0;
+        for (int pj = 0; pj < m->nparams && !consumed; pj++)
+          if (m->pnames[pj] && callee_has_kwarg(c, m, m->pnames[pj]) &&
+              kwh_lookup(nt, kwh_d, m->pnames[pj]) >= 0) consumed = 1;
+        if (!consumed) kwh_tail = kwh_d;
+      }
+      emit_rest_pack_kwh(c, k, pos_argc_d, argv, kwh_tail, &ab);
       emit_indent(g_pre, g_indent);
       buf_printf(g_pre, "sp_PolyArray *_t%d = %s;\n", atmp[k], ab.p ? ab.p : "sp_PolyArray_new()");
       atmp_ty[k] = TY_POLY_ARRAY;
