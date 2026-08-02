@@ -4816,6 +4816,14 @@ else {
           nt_ref(nt, id, "block") < 0 && poly_expr_flows_container(c, recv)) {
         return TY_POLY;
       }
+      /* A binary operator on a boxed receiver is lowered to sp_poly_<op>,
+         whose value is boxed however the runtime dispatches it. Taking the
+         user return from this union instead left the type and the emission
+         disagreeing, and the two met at the assignment (#3502). */
+      if (found && argc == 1 &&
+          (is_arith_op(name) || sp_streq(name, "<<") || sp_streq(name, ">>") ||
+           sp_streq(name, "&") || sp_streq(name, "|") || sp_streq(name, "^")))
+        return TY_POLY;
       if (found) return r;
       /* Numeric queries / rounding on a boxed value: the sp_poly_* helpers
          dispatch on the runtime tag (a non-numeric tag raises CRuby's
@@ -5905,7 +5913,13 @@ else {
     /* a poly operand makes the +,-,*,/ result poly: codegen lowers these to
        sp_poly_<op>, which returns a (boxed) poly, so the static type must agree. */
     if ((rt == TY_POLY || a0 == TY_POLY) &&
-        (sp_streq(name, "+") || sp_streq(name, "-") || sp_streq(name, "*") || sp_streq(name, "/")))
+        (sp_streq(name, "+") || sp_streq(name, "-") || sp_streq(name, "*") || sp_streq(name, "/") ||
+         /* every operator codegen lowers the same way. Left out, `>>` took the
+            user return from the poly-dispatch union while the emission still
+            produced an sp_RbVal, and the two met at the assignment (#3502). */
+         sp_streq(name, "%") || sp_streq(name, "**") ||
+         sp_streq(name, "<<") || sp_streq(name, ">>") ||
+         sp_streq(name, "&") || sp_streq(name, "|") || sp_streq(name, "^")))
       return TY_POLY;
     /* An Integer/Bignum arith op with a non-coercible (String/Symbol/nil/bool/
        Array/Hash/Range) argument raises TypeError at run time; type the raising

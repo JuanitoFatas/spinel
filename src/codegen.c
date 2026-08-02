@@ -4382,7 +4382,10 @@ static void emit_obj_cmp_dispatch(Compiler *c, Buf *b) {
    operand leaves handled FALSE and the caller's TypeError stands. */
 static void emit_user_binop_dispatch(Compiler *c, Buf *b) {
   static const char *const uops[] = {
-    "+", "-", "*", "/", "%", "**", "<<", ">>", "&", "|", "^", NULL };
+    "+", "-", "*", "/", "%", "**", "<<", ">>", "&", "|", "^",
+    /* the comparisons too: a boxed receiver reached sp_poly_cmp, which knows
+       nothing of a user `<`, and answered ArgumentError (#3501) */
+    "<", ">", "<=", ">=", "<=>", "==", NULL };
   buf_puts(b, "static sp_RbVal sp_user_binop_dispatch(const char *op, sp_RbVal a, sp_RbVal b, mrb_bool *handled) {\n");
   buf_puts(b, "  *handled = FALSE;\n  switch (a.cls_id) {\n");
   for (int k = 0; k < c->nclasses; k++) {
@@ -4433,6 +4436,42 @@ static void emit_user_binop_dispatch(Compiler *c, Buf *b) {
       buf_puts(b, "        *handled = TRUE; return ");
       emit_boxed_text(c, m->ret, callbuf, b);
       buf_puts(b, ";\n      }\n");
+    }
+    /* Comparable's `==` is derived from `<=>`: a class that defines the
+       compare but not the equality still answers `a == b` as `(a <=> b) == 0`.
+       Without an arm the boxed path fell through to identity and said false
+       for two equal values (#3501). */
+    if (comp_method_in_chain(c, k, "==", NULL) < 0) {
+      int cmp_defcls = -1;
+      int cmp_mi = comp_method_in_chain(c, k, "<=>", &cmp_defcls);
+      if (cmp_mi >= 0) {
+        Scope *cm2 = &c->scopes[cmp_mi];
+        if (cm2->reachable && !cm2->yields && !scope_is_shadowed(c, cmp_mi) &&
+            !cm2->is_transplanted_source && cm2->nparams == 1 && cm2->rest_idx < 0) {
+          LocalVar *cp2 = scope_local(cm2, cm2->pnames[0]);
+          TyKind cpt = (cp2 && cp2->type != TY_UNKNOWN) ? cp2->type : TY_POLY;
+          const char *ccn = c->classes[cmp_defcls].c_name;
+          int cvt = c->classes[cmp_defcls].is_value_type;
+          if (ty_is_object(cpt) || cpt == TY_POLY) {
+            char cargs[160];
+            const char *cguard = NULL;
+            static char cgb[64];
+            if (ty_is_object(cpt)) {
+              int pcls2 = ty_object_class(cpt);
+              snprintf(cgb, sizeof cgb, "b.tag == SP_TAG_OBJ && b.cls_id == %d",
+                       comp_class_index(c, c->classes[pcls2].name));
+              cguard = cgb;
+              snprintf(cargs, sizeof cargs, "%s(sp_%s *)b.v.p",
+                       c->classes[pcls2].is_value_type ? "*" : "", c->classes[pcls2].name);
+            }
+            else snprintf(cargs, sizeof cargs, "b");
+            buf_printf(b, "      if (strcmp(op, \"==\") == 0%s%s%s) {\n",
+                       cguard ? " && (" : "", cguard ? cguard : "", cguard ? ")" : "");
+            buf_printf(b, "        *handled = TRUE; return sp_box_bool(sp_%s_%s(%s(sp_%s *)a.v.p, %s) == 0);\n      }\n",
+                       ccn, mc(cm2->name ? cm2->name : "<=>"), cvt ? "*" : "", ccn, cargs);
+          }
+        }
+      }
     }
     buf_puts(b, "      break;\n    }\n");
   }

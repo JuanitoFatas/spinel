@@ -54,6 +54,7 @@ static void wrn_build(Compiler *c) {
     wrn_next[id] = wrn_head[b]; wrn_head[b] = id;
   }
 }
+static int recv_has_array_write(Compiler *c, int recv);
 static int recv_has_scalar_numeric_write(Compiler *c, int recv) {
   const NodeTable *nt = c->nt;
   const char *rty = recv >= 0 ? nt_type(nt, recv) : NULL;
@@ -81,6 +82,34 @@ static int recv_has_scalar_numeric_write(Compiler *c, int recv) {
     if (vty && (sp_streq(vty, "IntegerNode") || sp_streq(vty, "FloatNode"))) return 1;
     TyKind vt = infer_type(c, v);
     if (vt == TY_INT || vt == TY_FLOAT || vt == TY_BIGINT) return 1;
+  }
+  return 0;
+}
+
+/* Does the receiver slot have a write that is definitely an array? Used to
+   tell a genuine push accumulator (`out = []` ... `out << e`) from a slot
+   whose `<<` is a user class's own operator. */
+static int recv_has_array_write(Compiler *c, int recv) {
+  const NodeTable *nt = c->nt;
+  const char *rty = recv >= 0 ? nt_type(nt, recv) : NULL;
+  if (!rty) return 0;
+  int is_ivar = sp_streq(rty, "InstanceVariableReadNode");
+  int is_local = sp_streq(rty, "LocalVariableReadNode");
+  if (!is_ivar && !is_local) return 0;
+  const char *rnm = nt_str(nt, recv, "name");
+  if (!rnm) return 0;
+  Scope *rscope = is_local ? comp_scope_of(c, recv) : NULL;
+  const char *wkind = is_ivar ? "InstanceVariableWriteNode" : "LocalVariableWriteNode";
+  for (int id = 0; id < nt->count; id++) {
+    const char *ty = nt_type(nt, id);
+    if (!ty || !sp_streq(ty, wkind)) continue;
+    const char *wnm = nt_str(nt, id, "name");
+    if (!wnm || !sp_streq(wnm, rnm)) continue;
+    if (is_local && comp_scope_of(c, id) != rscope) continue;
+    int v = nt_ref(nt, id, "value");
+    if (v < 0) continue;
+    if (nt_kind(nt, v) == NK_ArrayNode) return 1;
+    if (ty_is_array(infer_type(c, v))) return 1;
   }
   return 0;
 }
@@ -1829,6 +1858,15 @@ int infer_write_types(Compiler *c) {
            receiver is a shift, so don't promote its slot to an array. push/append
            take any number of arguments; every one of them is element evidence. */
         if (sp_streq(name, "<<") && recv_has_scalar_numeric_write(c, recv)) continue;
+        /* `<<` is ambiguous a third way: a user class can own it. A slot whose
+           value comes from a container -- a fused loop variable over an array
+           of such objects -- has no array evidence of its own, and reading its
+           `<<` as a push typed it an int array, so the element assignment and
+           every later call went to the wrong type (#3502). Only decline where
+           the reading is a guess: a slot the program does write an array into
+           keeps the push promotion. */
+        if (sp_streq(name, "<<") && recv >= 0 && an_user_defines_method(c, "<<") &&
+            !recv_has_array_write(c, recv)) continue;
         is_push = 1; vt = push_elem_ty(c, argv[0]);
         for (int ai = 1; ai < an; ai++) vt = ty_unify(vt, push_elem_ty(c, argv[ai]));
       }
