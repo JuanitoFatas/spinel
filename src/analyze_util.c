@@ -146,6 +146,33 @@ int str_in(const char *s, const char *const *set) {
   for (int i = 0; set[i]; i++) if (sp_streq(s, set[i])) return 1;
   return 0;
 }
+/* A construct whose VALUE is an empty container. Its type reads UNKNOWN
+   because it carries no element type, which is not the same as producing no
+   value -- and the two were conflated wherever an expression's type decides
+   whether to keep its result. In a `rescue` that meant the array was built
+   and thrown away (`x = ([] rescue 0)` assigned nil), and in a begin/rescue
+   the value unified to the handler's Integer and the array pointer went into
+   an mrb_int slot (#3495, #3496). */
+int node_is_empty_container(const NodeTable *nt, int node) {
+  if (node < 0) return 0;
+  NodeKind k = nt_kind(nt, node);
+  if (k == NK_ArrayNode || k == NK_HashNode || k == NK_KeywordHashNode) {
+    int n = 0;
+    nt_arr(nt, node, k == NK_ArrayNode ? "elements" : "elements", &n);
+    return n == 0;
+  }
+  if (k != NK_CallNode || nt_ref(nt, node, "block") >= 0) return 0;
+  const char *nm = nt_str(nt, node, "name");
+  if (!nm || !sp_streq(nm, "new")) return 0;
+  int r = nt_ref(nt, node, "receiver");
+  if (r < 0 || nt_kind(nt, r) != NK_ConstantReadNode) return 0;
+  const char *rn = nt_str(nt, r, "name");
+  if (!rn || (!sp_streq(rn, "Array") && !sp_streq(rn, "Hash"))) return 0;
+  int ca = nt_ref(nt, node, "arguments");
+  int argc = 0; if (ca >= 0) nt_arr(nt, ca, "arguments", &argc);
+  return argc == 0;
+}
+
 int is_arith_op(const char *op) {
   static const char *const set[] = {"+", "-", "*", "/", "%", "**", NULL};
   return str_in(op, set);

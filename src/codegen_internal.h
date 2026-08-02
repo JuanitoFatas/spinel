@@ -632,6 +632,7 @@ void emit_ds_param_extract(Compiler *c, Scope *m, int i, int ds_hash_tmp,
 /* analyze-side helpers also called from codegen (defined in analyze_util.c /
    analyze_scope.c; canonical declarations live in analyze_internal.h) */
 int is_arith_op(const char *op);
+int node_is_empty_container(const NodeTable *nt, int node);
 TyKind ffi_spec_to_ty(const char *spec);
 int local_sole_range_node(Compiler *c, int recv);
 int range_float_begin(Compiler *c, int recv);

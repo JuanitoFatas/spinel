@@ -2636,7 +2636,10 @@ else {
     buf_puts(b, "if (setjmp(sp_exc_stack[sp_exc_top-1]) == 0) {\n");
     /* expression arm — assign result to temp (skip diverging exprs like raise) */
     TyKind et = e >= 0 ? comp_ntype(c, e) : TY_UNKNOWN;
-    int e_diverges = (et == TY_UNKNOWN || et == TY_VOID);
+    /* An empty container's type reads UNKNOWN for want of an element type; it
+       still produces a value, so it must be assigned rather than emitted for
+       effect and discarded (#3495). */
+    int e_diverges = (et == TY_UNKNOWN || et == TY_VOID) && !node_is_empty_container(nt, e);
     /* A call spinel folds into an unconditional raise carries whatever C type
        that raise helper returns, which need not match the merged slot (the
        constant-folded `nil.clone(freeze: false)` yields an int against an

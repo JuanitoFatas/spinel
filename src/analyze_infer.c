@@ -6885,10 +6885,23 @@ TyKind infer_uncached(Compiler *c, int id) {
           r = TY_VOID;
       }
     }
+    /* An empty container body reads UNKNOWN for want of an element type, not
+       because it diverges. Left as "no value" the begin took the handler's
+       type alone, and the array pointer went into an mrb_int slot (#3496).
+       It carries a value, so the two arms are a union: poly. */
+    if (r == TY_UNKNOWN && body >= 0) {
+      int bn2 = 0; const int *bs2 = nt_arr(nt, body, "body", &bn2);
+      if (bs2 && bn2 > 0 && node_is_empty_container(nt, bs2[bn2 - 1])) r = TY_POLY;
+    }
     int have = !(r == TY_UNKNOWN || r == TY_VOID);
     for (int rs = nt_ref(nt, id, "rescue_clause"); rs >= 0; rs = nt_ref(nt, rs, "subsequent")) {
       int st = nt_ref(nt, rs, "statements");
       TyKind at = st >= 0 ? infer_type(c, st) : TY_NIL;
+      /* the same on the handler side: an empty container arm carries a value */
+      if (at == TY_UNKNOWN && st >= 0) {
+        int an2 = 0; const int *as2 = nt_arr(nt, st, "body", &an2);
+        if (as2 && an2 > 0 && node_is_empty_container(nt, as2[an2 - 1])) at = TY_POLY;
+      }
       if (at == TY_UNKNOWN || at == TY_VOID) continue;  /* this arm diverges too */
       r = have ? ty_unify(r, at) : at;
       have = 1;
@@ -6911,6 +6924,8 @@ TyKind infer_uncached(Compiler *c, int id) {
        rescue arm's value correctly. */
     if (et == TY_VOID || et == TY_NIL) return rt;
     if (et == TY_UNKNOWN) {
+      /* an empty container carries a value; the union of the two arms is poly */
+      if (node_is_empty_container(nt, e)) return TY_POLY;
       /* a KNOWN diverging form never produces a try value however the
          fixpoint settles: keep the rescue arm's type for it */
       const char *ety = e >= 0 ? nt_type(nt, e) : NULL;
