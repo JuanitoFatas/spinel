@@ -7646,6 +7646,21 @@ static int rt_probe_answer(Compiler *c, int id, int *yes) {
   return 1;
 }
 
+/* The Class/Module surface every class object carries, `new` included (a
+   MODULE object answers everything here except `new`, which its callers gate).
+   One list, so a core class object and a user one answer alike (#3494). */
+static int class_object_universal_method(const char *qm) {
+  static const char *const cls_uni[] = {
+    "new",
+    "name", "instance_methods", "public_instance_methods",
+    "private_instance_methods", "protected_instance_methods",
+    "instance_method", "method_defined?", "superclass", "ancestors",
+    "include?", "const_get", "const_set", "const_defined?",
+    "define_method", "allocate", "<", "<=", ">", ">=", NULL };
+  for (int u = 0; cls_uni[u]; u++) if (sp_streq(qm, cls_uni[u])) return 1;
+  return 0;
+}
+
 static int class_responds_to(Compiler *c, int ci, const char *qm) {
   const NodeTable *nt = c->nt;
   if (comp_cmethod_in_chain(c, ci, qm, NULL) >= 0) return 1;
@@ -7668,13 +7683,7 @@ static int class_responds_to(Compiler *c, int ci, const char *qm) {
      module object itself does NOT respond to -- answering true for those made
      `Greeter.respond_to?(:greet)` disagree with CRuby (#3467). */
   /* builtin Class/Module methods every class object inherits */
-  static const char *const cls_uni[] = {
-    "name", "instance_methods", "public_instance_methods",
-    "private_instance_methods", "protected_instance_methods",
-    "instance_method", "method_defined?", "superclass", "ancestors",
-    "include?", "const_get", "const_set", "const_defined?",
-    "define_method", "allocate", "<", "<=", ">", ">=", NULL };
-  for (int u = 0; cls_uni[u]; u++) if (sp_streq(qm, cls_uni[u])) return 1;
+  if (class_object_universal_method(qm) && !sp_streq(qm, "new")) return 1;
   /* `new`: a class responds, a module does not */
   if (sp_streq(qm, "new")) return !is_module;
   /* A Struct or Data CLASS object carries the member list the same way its
@@ -17338,9 +17347,21 @@ else { memcpy(dir, sf, n); dir[n] = 0; } }
              the synthesized probe cannot type a bare `Struct.new` (it is the
              class-building call, not a value), so both answered false for the
              very constructor the same program calls (#3482). */
+          /* A CORE class object answers the Class/Module surface every class
+             has -- `new`, `instance_method`, `ancestors` -- but it has no user
+             entry, so class_responds_to was never consulted and the probe
+             cannot type a bare `Range.new` (#3494). Answer those here. A
+             module is excluded from `new` the same way class_responds_to
+             excludes it. */
+          if (!resolved && rcn && ci < 0 && builtin_class_id(rcn) != 0 &&
+              class_object_universal_method(qm) &&
+              !(sp_streq(qm, "new") && is_builtin_module_name(rcn))) { resolved = 1; yes = 1; }
+          /* Symbol's own class method */
+          else if (!resolved && rcn && ci < 0 && sp_streq(rcn, "Symbol") &&
+                   sp_streq(qm, "all_symbols")) { resolved = 1; yes = 1; }
           /* `members` belongs to the generated subclass, not to Struct itself
              -- CRuby answers false there, and the test caught the overreach. */
-          if (!resolved && rcn && sp_streq(rcn, "Struct") && ci < 0 &&
+          else if (!resolved && rcn && sp_streq(rcn, "Struct") && ci < 0 &&
               sp_streq(qm, "new")) { resolved = 1; yes = 1; }
           else if (!resolved && rcn && sp_streq(rcn, "Data") && ci < 0 &&
                    sp_streq(qm, "define")) { resolved = 1; yes = 1; }
