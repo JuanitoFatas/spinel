@@ -8329,10 +8329,6 @@ int nullable_int_value(Compiler *c, int v) {
   return 0;
 }
 
-/* Runaway backstop for the marking fixpoint below, not its exit condition --
-   see the comment on the loop. */
-#define NULLABLE_MARK_ROUNDS 32
-
 /* Mark the int locals that can hold that sentinel, so codegen boxes them as
    nil rather than as INTPTR_MIN. Boxing every int through the nil check costs
    ~8% on optcarrot -- every pixel goes through it -- so the marking is static
@@ -8350,10 +8346,20 @@ static void mark_nullable_int_locals(Compiler *c) {
      `changed` is the real exit and the cap is a runaway backstop: measured over
      the 2636 test + benchmark programs, 2563 settle in one round, 72 in two and
      one in three. A chain deeper than the cap would stop early and silently
-     under-mark -- the unsafe direction -- hence the wide margin AND the
-     did-not-converge check after the loop rather than a silent stop. */
+     under-mark -- the unsafe direction -- hence the did-not-converge check
+     after the loop rather than a silent stop.
+
+     Which is why the cap is derived from the program rather than fixed. A
+     round that changes anything sets at least one of these flags and never
+     clears one, so the rounds cannot outnumber the flags: methods propagate in
+     definition order, so a chain of pass-through methods written in reverse
+     advances one link per round, and a fixed cap of 32 refused to compile a
+     legal 40-deep one. Past this bound the pass is not monotone, which is the
+     only thing the check is here to catch. */
+  long rounds_max = c->nscopes + 2;
+  for (int s = 0; s < c->nscopes; s++) rounds_max += c->scopes[s].nlocals;
   int converged = 0;
-  for (int round = 0; round < NULLABLE_MARK_ROUNDS; round++) {
+  for (long round = 0; round < rounds_max; round++) {
     int changed = 0;
     /* A method whose own return expression can be the sentinel hands it to
        every caller. Without this, only an --rbs-seeded signature made a method
@@ -8452,14 +8458,14 @@ static void mark_nullable_int_locals(Compiler *c) {
      literal nil matches, with no error at compile or run time (#3505). That is
      the exact silent-wrong-output this pass exists to prevent, so refuse to
      emit rather than emit something quietly wrong. Unreachable for a monotone
-     predicate at any realistic chain depth (the deepest program in the tree
-     settles in 3 rounds), so this firing means either a pathological chain or a
-     marking arm that is not monotone -- both worth a bug report. */
+     predicate whatever the program (the bound counts the flags themselves), so
+     this firing means a marking arm that is not monotone -- worth a bug
+     report. */
   if (!converged) {
     fprintf(stderr, "spinel: internal: nilable-scalar marking did not converge in "
-                    "%d rounds; refusing to emit (a nil sentinel would box as an "
+                    "%ld rounds; refusing to emit (a nil sentinel would box as an "
                     "ordinary number). Please report this with the source.\n",
-            NULLABLE_MARK_ROUNDS);
+            rounds_max);
     exit(1);
   }
 }
