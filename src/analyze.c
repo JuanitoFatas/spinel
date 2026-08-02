@@ -10668,14 +10668,19 @@ void analyze_program(Compiler *c) {
      (doom's `opts = @menu.options`: a PolyPolyHash_get over the actual
      SymPolyHash object segfaulted in respawn_player). Runs LAST so it
      sees final ivar types; widens the local to TY_POLY and repoints the
-     node-type cache so subscripts go through the runtime dispatch. */
+     node-type cache so subscripts go through the runtime dispatch.
+     Rational and Complex need the same reconciliation: they are by-value
+     structs, so a local that kept the value type while the slot finished
+     poly is a C type error rather than a bad cast, and the program does not
+     build at all (#3500). */
   for (int id = 0; id < c->nt->count; id++) {
     const char *nty = nt_type(c->nt, id);
     if (!nty || !sp_streq(nty, "LocalVariableWriteNode")) continue;
     const char *nm = nt_str(c->nt, id, "name");
     Scope *lsc = comp_scope_of(c, id);
     LocalVar *lv = nm && lsc ? scope_local(lsc, nm) : NULL;
-    if (!lv || !ty_is_hash(lv->type)) continue;
+    int val_struct = (lv && (lv->type == TY_RATIONAL || lv->type == TY_COMPLEX));
+    if (!lv || (!ty_is_hash(lv->type) && !val_struct)) continue;
     int v = nt_ref(c->nt, id, "value");
     if (v < 0) continue;
     const char *vty2 = nt_type(c->nt, v);
@@ -10711,7 +10716,8 @@ void analyze_program(Compiler *c) {
         const char *n4 = nt_str(c->nt, nid2, "name");
         if (!n4 || !sp_streq(n4, nm)) continue;
         if (comp_scope_of(c, nid2) != lsc) continue;
-        if (ty_is_hash(c->ntype[nid2])) c->ntype[nid2] = TY_POLY;
+        if (ty_is_hash(c->ntype[nid2]) || c->ntype[nid2] == TY_RATIONAL ||
+            c->ntype[nid2] == TY_COMPLEX) c->ntype[nid2] = TY_POLY;
       }
     }
   }
