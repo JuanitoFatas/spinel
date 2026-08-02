@@ -8236,20 +8236,68 @@ static int nullable_int_call_name(const char *nm) {
   for (int i = 0; N[i]; i++) if (sp_streq(nm, N[i])) return 1;
   return 0;
 }
-/* Mark the int locals that can hold that sentinel, so codegen boxes them as
-   nil rather than as INTPTR_MIN. Boxing every int through the nil check costs
-   ~8% on optcarrot -- every pixel goes through it -- so the marking is static
-   and the hot path keeps the plain box. */
+/* A scalar slot on a class the fixpoint could not pin to a receiver still
+   dispatches at runtime: codegen emits a cls_id switch over every class that
+   defines the name. Ask whether ANY of those targets can answer the sentinel.
+   Over-marking here only costs the boxing branch; missing one is the
+   silent-wrong hash key of #3505, so the conservative direction is `yes`. */
+static int poly_dispatch_nullable(Compiler *c, const char *cn) {
+  if (!cn) return 0;
+  for (int si = 1; si < c->nscopes; si++)
+    if (c->scopes[si].name && sp_streq(c->scopes[si].name, cn) &&
+        c->scopes[si].ret_nullable_int) return 1;
+  /* an attr_reader over a scalar ivar: those slots are sentinel-defaulted
+     (ivar_scalar_nil_init), so the read carries the sentinel like a `return
+     nil` would -- the resolved-receiver twin of this lives in codegen's
+     call_returns_nullable_int */
+  for (int ci = 0; ci < c->nclasses; ci++) {
+    if (!comp_reader_in_chain(c, ci, cn, NULL)) continue;
+    char ivb[300];
+    snprintf(ivb, sizeof ivb, "@%s", comp_resolve_alias(c, ci, cn));
+    int iv = comp_ivar_index(&c->classes[ci], ivb);
+    if (iv >= 0 && (c->classes[ci].ivar_types[iv] == TY_INT ||
+                    c->classes[ci].ivar_types[iv] == TY_FLOAT)) return 1;
+  }
+  return 0;
+}
+
 /* Can this expression leave the sentinel in an int slot? */
-static int nullable_int_value(Compiler *c, int v) {
+int nullable_int_value(Compiler *c, int v) {
   const NodeTable *nt = c->nt;
   if (v < 0) return 0;
   if (nt_kind(nt, v) == NK_NilNode) return 1;
+  /* `return e` / `(e)` carry their inner value unchanged; a block tail can be
+     either, and so can a method's own tail statement. */
+  if (nt_kind(nt, v) == NK_ReturnNode) {
+    int rv = nt_ref(nt, v, "arguments");
+    int rn = 0; const int *ra = rv >= 0 ? nt_arr(nt, rv, "arguments", &rn) : NULL;
+    return ra && rn == 1 ? nullable_int_value(c, ra[0]) : 0;
+  }
+  if (nt_kind(nt, v) == NK_ParenthesesNode) {
+    int pb = nt_ref(nt, v, "body");
+    int pn = 0; const int *pd = pb >= 0 ? nt_arr(nt, pb, "body", &pn) : NULL;
+    return pd && pn == 1 ? nullable_int_value(c, pd[0]) : 0;
+  }
+  /* The value of `yield x` is the BLOCK's, decided per call site. The yield's
+     own type says only TY_INT, which an `Integer?` and an `Integer` share, so
+     ask the blocks themselves (#3505). */
+  if (nt_kind(nt, v) == NK_YieldNode) {
+    Scope *ys = comp_scope_of(c, v);
+    int ymi = ys ? (int)(ys - c->scopes) : -1;
+    if (ymi < 0) return 0;
+    int tails[32];
+    int n = yield_block_tails(c, ymi, tails, (int)(sizeof tails / sizeof tails[0]));
+    /* no literal block in sight (an escaping &blk called through the proc ABI):
+       its value arrives boxed, so nothing unboxed carries a sentinel */
+    for (int i = 0; i < n; i++) if (nullable_int_value(c, tails[i])) return 1;
+    return 0;
+  }
   if (nt_kind(nt, v) == NK_CallNode) {
     if (nullable_int_call_name(nt_str(nt, v, "name"))) return 1;
-    /* a method whose --rbs signature pins `Integer?`: the pin keeps the
-       unboxed kind, so its nil is the sentinel and a caller that boxes the
-       value has to answer nil. Resolved the way emission resolves it. */
+    /* a method whose --rbs signature pins `Integer?`, or whose own return
+       expression can be the sentinel: either way its nil is the sentinel and a
+       caller that boxes the value has to answer nil. Resolved the way emission
+       resolves it. */
     const char *cn = nt_str(nt, v, "name");
     int mi = cn ? comp_method_index(c, cn) : -1;
     int rcv = nt_ref(nt, v, "receiver");
@@ -8265,9 +8313,12 @@ static int nullable_int_value(Compiler *c, int v) {
           int rci = comp_class_index(c, nt_str(nt, rcv, "name"));
           if (rci >= 0) mi = comp_cmethod_in_chain(c, rci, cn, NULL);
         }
+        /* the receiver stayed poly, so no single callee resolves -- fall back
+           to the runtime dispatch set */
+        else if (rt == TY_POLY) return poly_dispatch_nullable(c, cn);
       }
     }
-    return mi >= 0 && c->scopes[mi].ret_rbs_nilable;
+    return mi >= 0 && c->scopes[mi].ret_nullable_int;
   }
   if (nt_kind(nt, v) == NK_LocalVariableReadNode) {
     const char *rn = nt_str(nt, v, "name");
@@ -8278,10 +8329,53 @@ static int nullable_int_value(Compiler *c, int v) {
   return 0;
 }
 
+/* Runaway backstop for the marking fixpoint below, not its exit condition --
+   see the comment on the loop. */
+#define NULLABLE_MARK_ROUNDS 32
+
+/* Mark the int locals that can hold that sentinel, so codegen boxes them as
+   nil rather than as INTPTR_MIN. Boxing every int through the nil check costs
+   ~8% on optcarrot -- every pixel goes through it -- so the marking is static
+   and the hot path keeps the plain box. */
 static void mark_nullable_int_locals(Compiler *c) {
   const NodeTable *nt = c->nt;
-  for (int round = 0; round < 4; round++) {
+  /* An --rbs `Integer?` return is the seeded form of the same property the
+     rounds below infer, so start the propagation from it. */
+  for (int mi = 1; mi < c->nscopes; mi++)
+    if (c->scopes[mi].ret_rbs_nilable) c->scopes[mi].ret_nullable_int = 1;
+  /* Method returns propagate through this fixpoint too (a pass-through method
+     is nilable because its callee is), so the cap has to clear a chain of
+     them rather than the single hop the local marking used to need. Every
+     sub-pass below skips what is already marked and only ever sets a flag, so
+     `changed` is the real exit and the cap is a runaway backstop: measured over
+     the 2636 test + benchmark programs, 2563 settle in one round, 72 in two and
+     one in three. A chain deeper than the cap would stop early and silently
+     under-mark -- the unsafe direction -- hence the wide margin AND the
+     did-not-converge check after the loop rather than a silent stop. */
+  int converged = 0;
+  for (int round = 0; round < NULLABLE_MARK_ROUNDS; round++) {
     int changed = 0;
+    /* A method whose own return expression can be the sentinel hands it to
+       every caller. Without this, only an --rbs-seeded signature made a method
+       nilable, so `def pass(x) = x.p_` silently laundered the sentinel into a
+       plain int at the caller (#3505). */
+    for (int mi = 1; mi < c->nscopes; mi++) {
+      Scope *s = &c->scopes[mi];
+      if (s->ret_nullable_int || (s->ret != TY_INT && s->ret != TY_FLOAT)) continue;
+      int tail = scope_body_last(c, mi);
+      if (tail >= 0 && nullable_int_value(c, tail)) { s->ret_nullable_int = 1; changed = 1; }
+    }
+    /* an explicit `return e` exits the method just as its tail does. Blocks
+       share the enclosing method's scope, so a `return` inside one attributes
+       to the method it returns from. */
+    NT_FOREACH_KIND(nt, NK_ReturnNode, id) {
+      Scope *rs = comp_scope_of(c, id);
+      int rmi = rs ? (int)(rs - c->scopes) : -1;
+      if (rmi < 1 || rmi >= c->nscopes) continue;
+      Scope *s = &c->scopes[rmi];
+      if (s->ret_nullable_int || (s->ret != TY_INT && s->ret != TY_FLOAT)) continue;
+      if (nullable_int_value(c, id)) { s->ret_nullable_int = 1; changed = 1; }
+    }
     for (int id = 0; id < nt->count; id++) {
       if (nt_kind(nt, id) != NK_LocalVariableWriteNode) continue;
       int v = nt_ref(nt, id, "value");
@@ -8351,7 +8445,22 @@ static void mark_nullable_int_locals(Compiler *c) {
         if (tl && (tl->type == TY_INT || tl->type == TY_FLOAT) && !tl->nullable_int) { tl->nullable_int = 1; changed = 1; }
       }
     }
-    if (!changed) break;
+    if (!changed) { converged = 1; break; }
+  }
+  /* Running out of rounds means some slot that CAN hold the sentinel is still
+     unmarked, and codegen would box it as an ordinary number -- a Hash key no
+     literal nil matches, with no error at compile or run time (#3505). That is
+     the exact silent-wrong-output this pass exists to prevent, so refuse to
+     emit rather than emit something quietly wrong. Unreachable for a monotone
+     predicate at any realistic chain depth (the deepest program in the tree
+     settles in 3 rounds), so this firing means either a pathological chain or a
+     marking arm that is not monotone -- both worth a bug report. */
+  if (!converged) {
+    fprintf(stderr, "spinel: internal: nilable-scalar marking did not converge in "
+                    "%d rounds; refusing to emit (a nil sentinel would box as an "
+                    "ordinary number). Please report this with the source.\n",
+            NULLABLE_MARK_ROUNDS);
+    exit(1);
   }
 }
 

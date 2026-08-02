@@ -328,6 +328,12 @@ int emit_unresolved_coerced(Compiler *c, int node, TyKind target, Buf *b) {
 static int call_returns_nullable_int(Compiler *c, int node) {
   const NodeTable *nt = c->nt;
   const char *nty = nt_type(nt, node);
+  /* The analyzer's own answer, which knows the shapes only whole-program
+     inference can see: a `yield` (nilable per the block at each call site), a
+     method whose nilable return no RBS signature declared, and a call through a
+     receiver that stayed poly (#3505). The arms below stay as the local,
+     name-based backstop for the builtins analyze does not model. */
+  if (nullable_int_value(c, node)) return 1;
   /* A local that was assigned one of these results carries the sentinel just
      as the call did: `i = s.index("z")` then `i == nil` has to answer true.
      analyze marks the local; boxing an ordinary int stays on the plain path,

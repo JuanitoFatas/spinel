@@ -1,0 +1,11 @@
+yield  len=1 val="literal" cls=NilClass nil?=true
+yield! len=1 val="literal"
+pass   len=1 val="literal" cls=NilClass nil?=true
+pass!  len=1 val="literal"
+poly   len=1 val="literal" cls=NilClass nil?=true
+poly!  len=1 val="literal"
+float  len=1 val="literal" cls=NilClass nil?=true
+groups 3
+roots  [1, 3]
+kids   [2]
+mixed  len=2 seven="seven" nil="literal"

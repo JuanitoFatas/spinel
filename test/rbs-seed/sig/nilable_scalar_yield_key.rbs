@@ -1,0 +1,15 @@
+class YkR
+  def initialize: (Integer?) -> void
+  def p_: () -> Integer?
+end
+
+class YkF
+  def initialize: (Float?) -> void
+  def val: () -> Float?
+end
+
+class YkRow
+  def initialize: (Integer, Integer?) -> void
+  def id: () -> Integer
+  def parent_id: () -> Integer?
+end

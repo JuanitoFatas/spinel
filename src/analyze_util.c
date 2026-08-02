@@ -720,6 +720,53 @@ static void yvt_build(Compiler *c) {
     yvt_ids[yvt_n++] = cid;
   }
 }
+/* Which method does block-passing call site `cid` reach? Shared by
+   yield_value_type and yield_block_tails so the two agree on what counts as a
+   call site of a given method. */
+static int yvt_callee_index(Compiler *c, int cid) {
+  const NodeTable *nt = c->nt;
+  const char *cn = nt_str(nt, cid, "name");
+  int crecv = nt_ref(nt, cid, "receiver");
+  int rmi = -1;
+  if (crecv < 0) {
+    rmi = comp_method_index(c, cn);
+    if (rmi < 0) {
+      Scope *cs = comp_scope_of(c, cid);
+      if (cs->class_id >= 0) {
+        rmi = comp_method_in_chain(c, cs->class_id, cn, NULL);
+        /* an implicit-self call inside a class method resolves to a CLASS
+           method; its block/forward feeds that method's blk_ret too */
+        if (rmi < 0) rmi = comp_cmethod_in_chain(c, cs->class_id, cn, NULL);
+      }
+    }
+  }
+  else {
+    TyKind crt = infer_type(c, crecv);
+    if (ty_is_object(crt)) rmi = comp_method_in_chain(c, ty_object_class(crt), cn, NULL);
+    /* `Klass.new { block }`: the block feeds the class's initialize. A
+       scoped receiver (`NS::Klass`) resolves by its leaf name, the key
+       classes are indexed under. */
+    else if (cn && sp_streq(cn, "new") && nt_type(nt, crecv) &&
+             (sp_streq(nt_type(nt, crecv), "ConstantReadNode") ||
+              sp_streq(nt_type(nt, crecv), "ConstantPathNode"))) {
+      int nci = comp_class_index(c, nt_str(nt, crecv, "name"));
+      if (nci >= 0) rmi = comp_method_in_chain(c, nci, "initialize", NULL);
+    }
+    /* `Klass.m { block }` / `Mod.m { block }` / `NS::Klass.m { block }`: a
+       class/module self-method (singleton). Resolve the constant and look
+       up its singleton method so the block's value type flows back to m's
+       return type -- instance methods resolve via the ty_is_object arm
+       above (#1446). */
+    else if (nt_type(nt, crecv) &&
+             (sp_streq(nt_type(nt, crecv), "ConstantReadNode") ||
+              sp_streq(nt_type(nt, crecv), "ConstantPathNode"))) {
+      int nci = comp_class_index(c, nt_str(nt, crecv, "name"));
+      if (nci >= 0) rmi = comp_cmethod_in_chain(c, nci, cn, NULL);
+    }
+  }
+  return rmi;
+}
+
 TyKind yield_value_type(Compiler *c, int mi) {
   for (int i = 0; i < g_yvt_depth; i++)
     if (g_yvt_mi[i] == mi) return TY_UNKNOWN;
@@ -738,46 +785,7 @@ TyKind yield_value_type(Compiler *c, int mi) {
     /* skip calls that live inside method mi itself (recursive self-calls);
        only external call sites provide a concrete block value type */
     if ((int)(comp_scope_of(c, cid) - c->scopes) == mi) continue;
-    const char *cn = nt_str(nt, cid, "name");
-    int crecv = nt_ref(nt, cid, "receiver");
-    int rmi = -1;
-    if (crecv < 0) {
-      rmi = comp_method_index(c, cn);
-      if (rmi < 0) {
-        Scope *cs = comp_scope_of(c, cid);
-        if (cs->class_id >= 0) {
-          rmi = comp_method_in_chain(c, cs->class_id, cn, NULL);
-          /* an implicit-self call inside a class method resolves to a CLASS
-             method; its block/forward feeds that method's blk_ret too */
-          if (rmi < 0) rmi = comp_cmethod_in_chain(c, cs->class_id, cn, NULL);
-        }
-      }
-    }
-else {
-      TyKind crt = infer_type(c, crecv);
-      if (ty_is_object(crt)) rmi = comp_method_in_chain(c, ty_object_class(crt), cn, NULL);
-      /* `Klass.new { block }`: the block feeds the class's initialize. A
-         scoped receiver (`NS::Klass`) resolves by its leaf name, the key
-         classes are indexed under. */
-      else if (cn && sp_streq(cn, "new") && nt_type(nt, crecv) &&
-               (sp_streq(nt_type(nt, crecv), "ConstantReadNode") ||
-                sp_streq(nt_type(nt, crecv), "ConstantPathNode"))) {
-        int nci = comp_class_index(c, nt_str(nt, crecv, "name"));
-        if (nci >= 0) rmi = comp_method_in_chain(c, nci, "initialize", NULL);
-      }
-      /* `Klass.m { block }` / `Mod.m { block }` / `NS::Klass.m { block }`: a
-         class/module self-method (singleton). Resolve the constant and look
-         up its singleton method so the block's value type flows back to m's
-         return type -- instance methods resolve via the ty_is_object arm
-         above (#1446). */
-      else if (nt_type(nt, crecv) &&
-               (sp_streq(nt_type(nt, crecv), "ConstantReadNode") ||
-                sp_streq(nt_type(nt, crecv), "ConstantPathNode"))) {
-        int nci = comp_class_index(c, nt_str(nt, crecv, "name"));
-        if (nci >= 0) rmi = comp_cmethod_in_chain(c, nci, cn, NULL);
-      }
-    }
-    if (rmi != mi) continue;
+    if (yvt_callee_index(c, cid) != mi) continue;
     /* `mi(&b)` / `mi(...)`: the call forwards the block of its enclosing
        method rather than passing a literal. The value `mi` yields is then
        whatever that forwarded block produces -- the enclosing method's
@@ -816,6 +824,48 @@ else {
   }
   g_yvt_depth--;
   return result;
+}
+
+/* The tail expression of every literal block that can reach `mi`'s yield.
+   This is yield_value_type's call-site scan answering with NODES instead of a
+   unified type, because nilability is a property of the producing EXPRESSION,
+   not of the type it settles on -- an `Integer?` and an `Integer` both arrive
+   as TY_INT, so the type alone cannot say whether the value can be the
+   reserved scalar nil sentinel (#3505). A forwarded block (`m(&b)` / `m(...)`)
+   has no literal of its own and delegates to the enclosing method's tails.
+   Unlike yield_value_type this collects EVERY site rather than stopping at the
+   first concrete one: the caller ORs the results, and a single nilable block
+   anywhere is enough to make the slot nilable. Writes at most `max` ids and
+   returns how many. */
+int yield_block_tails(Compiler *c, int mi, int *out, int max) {
+  if (max <= 0) return 0;
+  for (int i = 0; i < g_yvt_depth; i++)
+    if (g_yvt_mi[i] == mi) return 0;
+  if (g_yvt_depth >= MAX_YVT_DEPTH) return 0;
+  g_yvt_mi[g_yvt_depth++] = mi;
+
+  const NodeTable *nt = c->nt;
+  int n = 0;
+  if (yvt_nt != nt || yvt_ntc != nt->count) yvt_build(c);
+  for (int ii = 0; ii < yvt_n && n < max; ii++) {
+    int cid = yvt_ids[ii];
+    int blk = nt_ref(nt, cid, "block");
+    int fwd_args = yvt_call_forwards_block(nt, cid);
+    if ((int)(comp_scope_of(c, cid) - c->scopes) == mi) continue;
+    if (yvt_callee_index(c, cid) != mi) continue;
+    const char *blkty = blk >= 0 ? nt_type(nt, blk) : NULL;
+    if (fwd_args || (blkty && sp_streq(blkty, "BlockArgumentNode"))) {
+      Scope *encl = comp_scope_of(c, cid);
+      int emi = encl ? (int)(encl - c->scopes) : -1;
+      if (emi >= 0 && emi != mi) n += yield_block_tails(c, emi, out + n, max - n);
+      continue;
+    }
+    int bb = nt_ref(nt, blk, "body");
+    int bn = 0; const int *bd = bb >= 0 ? nt_arr(nt, bb, "body", &bn) : NULL;
+    if (bd && bn > 0) out[n++] = bd[bn - 1];
+  }
+  g_yvt_depth--;
+  return n;
 }
 /* The block value that reaches `mi` from BELOW: a child method whose `super`
    lands on mi forwards its own caller's block down. Only the middle link of a

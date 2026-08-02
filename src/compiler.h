@@ -146,6 +146,13 @@ typedef struct {
                           pinned kind is an unboxed scalar: the return can be
                           the reserved sentinel, so a caller boxing it has to
                           answer nil rather than the raw number (#3493) */
+  int ret_nullable_int; /* the same property, INFERRED rather than seeded: this
+                           method's scalar return can be the reserved sentinel
+                           because its own return expression can be. Seeded from
+                           ret_rbs_nilable, then propagated through pass-through
+                           methods (`def pass(x) = x.p_`) and methods whose value
+                           is their block's (`def key_of(x) = yield x`), which no
+                           RBS signature covers (#3505). */
   TyKind ret_oa_pin;   /* the pointer-array return type the narrowing pass gave
                           this method, re-asserted every round for the same
                           reason LocalVar.oa_pin is. TY_UNKNOWN = not narrowed. */
