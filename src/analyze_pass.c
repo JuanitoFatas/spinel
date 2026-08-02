@@ -3064,6 +3064,22 @@ static int widen_proc_params_poly(Compiler *c, int ref) {
 int bind_coerce_operator_params(Compiler *c) {
   const NodeTable *nt = c->nt;
   int changed = 0;
+  /* `coerce` is the numeric protocol's entry point, so its parameter holds a
+     value of whatever type the other operand had. Bind it poly for every
+     definition, not only the ones a `3 + obj` in this program reaches: with no
+     such call site the slot stayed unknown for the whole fixpoint and only a
+     late backstop lifted it to poly, too late for the factory it feeds (the
+     `Q.scalar(other)` -> `Q.new` chain then took an sp_Rational parameter and
+     the build failed). */
+  for (int s = 0; s < c->nscopes; s++) {
+    Scope *sc = &c->scopes[s];
+    if (!sc->name || !sp_streq(sc->name, "coerce")) continue;
+    if (sc->class_id < 0 || sc->nparams < 1 || !sc->pnames[0]) continue;
+    LocalVar *cp = scope_local(sc, sc->pnames[0]);
+    if (!cp || cp->rbs_seeded) continue;
+    TyKind mg = ty_unify(cp->type, TY_POLY);
+    if (mg != cp->type) { cp->type = mg; changed = 1; }
+  }
   NT_FOREACH_KIND(nt, NK_CallNode, id) {
     const char *nm = nt_str(nt, id, "name");
     if (!nm || !is_arith_op(nm) || nt_ref(nt, id, "block") >= 0) continue;
