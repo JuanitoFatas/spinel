@@ -1,0 +1,7 @@
+class PxBag
+  def []: (untyped) -> String
+end
+class PxRel
+  def initialize: (untyped items) -> void
+  def group: () { (untyped) -> untyped } -> Hash[untyped, Array[untyped]]
+end

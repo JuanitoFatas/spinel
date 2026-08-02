@@ -4693,6 +4693,27 @@ else {
         else {
           buf_printf(b, " case SP_BUILTIN_INT_ARRAY: _t%d = sp_IntArray_get((sp_IntArray *)_t%d.v.p, %s); break;", tr, tv, idxref);
         }
+        /* The arms above enumerate the ARRAY kinds. A Hash reaching the same
+           read matched none of them, and with no default the result kept its
+           nil initializer -- the read answered nil with nothing raised
+           (#3507). Send anything else through the runtime index, which
+           dispatches on the receiver's own kind and raises where there is no
+           `[]` at all. The key goes boxed: a Hash key is not an offset. */
+        Buf kb; memset(&kb, 0, sizeof kb);
+        {
+          char keyt[64]; snprintf(keyt, sizeof keyt, "_t%d", atmp[0]);
+          if (atmp_ty[0] == TY_POLY) buf_puts(&kb, keyt);
+          else emit_boxed_text(c, atmp_ty[0], keyt, &kb);
+        }
+        {
+          char gen[256];
+          snprintf(gen, sizeof gen, "sp_poly_index_poly(_t%d, %s)", tv, kb.p ? kb.p : "sp_box_nil()");
+          buf_printf(b, " default: _t%d = ", tr);
+          if (ret == TY_POLY) buf_puts(b, gen);
+          else emit_unbox_text(c, is_scalar_ret(ret) ? ret : TY_INT, gen, b);
+          buf_puts(b, "; break;");
+        }
+        free(kb.p);
       }
       if (is_push) {
         /* The value is a builtin array: append each (boxed) arg via sp_poly_shl,
