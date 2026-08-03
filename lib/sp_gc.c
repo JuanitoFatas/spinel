@@ -125,18 +125,34 @@ static void sp_gc_fault_report(int sig) {
 }
 __attribute__((constructor)) static void sp_gc_debug_env(void){
   const char *v=getenv("SPINEL_GC_VERIFY"); sp_gc_verify=(v&&*v&&*v!='0');
+  { const char *g=getenv("SPINEL_GC_VERIFY_GEN"); sp_gc_verify_gen=(g&&*g&&*g!='0');
+    const char *mn=getenv("SPINEL_GC_MINOR"); sp_gc_minor_on=(mn&&*mn&&*mn!='0');
+    if(sp_gc_verify_gen) sp_gc_minor_on=1; }
   if (sp_gc_verify) { signal(SIGSEGV, sp_gc_fault_report); signal(SIGBUS, sp_gc_fault_report); }
 }
 
 /* Tag byte preceding `obj`: 0xfe heap-unmarked -> 0xfc; 0xfc/0xff/0xfd/0xf1
  * skipped; else a real GC object reached through its scan hook. */
-void sp_gc_mark(void*obj){if(!obj)return;unsigned char pm=((unsigned char*)obj)[-1];if(pm==0xfe){((char*)obj)[-1]=(char)0xfc;return;}if(pm==0xfc||pm==0xff||pm==0xfd||pm==0xf1)return;sp_gc_hdr*h=(sp_gc_hdr*)((char*)obj-sizeof(sp_gc_hdr));if(sp_gc_verify&&!sp_gc_obj_registered(h))sp_gc_verify_fail(obj,h);if(h->marked==sp_gc_mark_gen)return;h->marked=sp_gc_mark_gen;if(h->scan){if(sp_gc_mark_stack&&sp_gc_mark_top<SP_GC_MARK_STACK_MAX){sp_gc_mark_stack[sp_gc_mark_top++]=obj;}
+void sp_gc_mark(void*obj){if(!obj)return;unsigned char pm=((unsigned char*)obj)[-1];if(pm==0xfe){((char*)obj)[-1]=(char)0xfc;return;}if(pm==0xfc||pm==0xff||pm==0xfd||pm==0xf1)return;sp_gc_hdr*h=(sp_gc_hdr*)((char*)obj-sizeof(sp_gc_hdr));if(sp_gc_verify&&!sp_gc_obj_registered(h))sp_gc_verify_fail(obj,h);if(sp_gc_verify_probe_on){if(!h->old&&h->marked!=sp_gc_verify_probe)sp_gc_verify_probe_hit=1;return;}if(h->marked==sp_gc_mark_gen)return;if(sp_gc_minor&&h->old)return;h->marked=sp_gc_mark_gen;if(h->scan){if(sp_gc_mark_stack&&sp_gc_mark_top<SP_GC_MARK_STACK_MAX){sp_gc_mark_stack[sp_gc_mark_top++]=obj;}
 else{h->scan(obj);}}}
 
+void sp_gc_mark_drain(void){
+  while(sp_gc_mark_top>0){void*obj=sp_gc_mark_stack[--sp_gc_mark_top];
+    sp_gc_hdr*h=(sp_gc_hdr*)((char*)obj-sizeof(sp_gc_hdr));if(h->scan)h->scan(obj);}
+}
 void sp_gc_mark_all(void){if(!sp_gc_mark_stack)sp_gc_mark_stack=(void**)malloc(sizeof(void*)*SP_GC_MARK_STACK_MAX);sp_gc_mark_top=0;if(sp_gc_verify)sp_gc_verify_snapshot();int vd=sp_gc_verify;for(int i=0;i<sp_gc_nroots;i++){void**e=sp_gc_roots[i];if(vd){sp_gc_dbg_phase="root";sp_gc_dbg_ctx=(void*)e;}if((uintptr_t)e&(uintptr_t)3){sp_gc_mark_root_entry(e);}
-else{void*obj=*e;if(obj)sp_gc_mark(obj);}}if(vd)sp_gc_dbg_phase="fibers";if(sp_gc_mark_suspended_fibers_hook)sp_gc_mark_suspended_fibers_hook();if(vd)sp_gc_dbg_phase="globals";if(sp_gc_mark_globals_hook)sp_gc_mark_globals_hook();while(sp_gc_mark_top>0){void*obj=sp_gc_mark_stack[--sp_gc_mark_top];if(vd){sp_gc_dbg_phase="scan";sp_gc_dbg_ctx=obj;}sp_gc_hdr*h=(sp_gc_hdr*)((char*)obj-sizeof(sp_gc_hdr));if(h->scan)h->scan(obj);}if(vd){sp_gc_dbg_phase="?";sp_gc_dbg_ctx=NULL;}}
+else{void*obj=*e;if(obj)sp_gc_mark(obj);}}if(vd)sp_gc_dbg_phase="fibers";if(sp_gc_mark_suspended_fibers_hook)sp_gc_mark_suspended_fibers_hook();if(vd)sp_gc_dbg_phase="globals";if(sp_gc_mark_globals_hook)sp_gc_mark_globals_hook();sp_gc_mark_drain();if(vd){sp_gc_dbg_phase="?";sp_gc_dbg_ctx=NULL;}}
 
 unsigned sp_gc_mark_gen = 0;
+/* Set for the duration of a minor mark: an object already promoted is not
+   walked, because the sweep does not free the old list on a minor cycle and
+   the remembered set carries the old->young references the walk would miss. */
+int sp_gc_minor = 0;
+int sp_gc_minor_on = 0;
+int sp_gc_verify_gen = 0;
+int sp_gc_verify_gen_fail = 0;
+int sp_gc_verify_probe_on = 0, sp_gc_verify_probe_hit = 0;
+unsigned sp_gc_verify_probe = 0;
 void *sp_gc_remembered[SP_GC_REMEMBERED_MAX];
 int sp_gc_nremembered = 0;
 int sp_gc_rem_overflow = 0;
@@ -151,7 +167,7 @@ void (*sp_gc_obj_retune_hook)(size_t before) = NULL;
 static void sp_gc_sweep_young(sp_gc_hdr **pp){
   while(*pp){sp_gc_hdr*h=*pp;if(h->marked!=sp_gc_mark_gen){*pp=h->next;if(h->recycle){h->recycle(h);}
   else{if(h->finalize)h->finalize((char*)h+sizeof(sp_gc_hdr));free(h);}}
-  else{*pp=h->next;h->next=sp_gc_old_heap;sp_gc_old_heap=h;sp_gc_old_bytes+=h->size;sp_gc_bytes+=h->size;}}
+  else{*pp=h->next;h->next=sp_gc_old_heap;sp_gc_old_heap=h;h->old=1;sp_gc_old_bytes+=h->size;sp_gc_bytes+=h->size;}}
 }
 #ifdef SP_THREADS
 /* One worker's young list, swept BY THAT WORKER while it is parked at the
@@ -180,6 +196,7 @@ void sp_gc_sweep_slot(int wid, sp_gc_hdr **out_head, sp_gc_hdr **out_tail, size_
     else {
       h->next = head; head = h;
       if (!tail) tail = h;
+      h->old = 1;                 /* survivor: joins the old list (see sp_gc_wb) */
       live += h->size;
     }
   }
@@ -212,7 +229,65 @@ void sp_gc_collect(void){
     for(sp_gc_hdr*hh=sp_gc_heap;hh;hh=hh->next)hh->marked=0;
 #endif
   }
+  /* Opt-in while the barrier's coverage is being completed: the emitted stores
+     are covered, the runtime's container mutators are being swept through, and
+     SPINEL_GC_VERIFY_GEN is what finds what is left. Default off means the
+     collector behaves exactly as it did before the barrier landed. */
+  sp_gc_minor = sp_gc_minor_on && !full && !sp_gc_rem_overflow;
   sp_gc_mark_all();
+  if(sp_gc_minor){
+    /* the remembered set is the rest of the root set for a minor: each entry is
+       an old object holding a reference the walk above did not follow. */
+    sp_gc_minor = 0;
+    for(int ri=0;ri<sp_gc_nremembered;ri++){
+      sp_gc_hdr *rh=(sp_gc_hdr*)sp_gc_remembered[ri]-1;
+      if(rh->scan) rh->scan(sp_gc_remembered[ri]);
+    }
+    sp_gc_mark_drain();
+  }
+  sp_gc_minor = 0;
+  /* Verification: re-run the mark whole-heap and compare. Anything the full
+     mark reaches that the minor did not is a reference the barrier failed to
+     record -- the one failure mode of this design, silent until it is a use
+     after free. Off unless SPINEL_GC_VERIFY_GEN is set. */
+  if(!full && sp_gc_verify_gen){
+    unsigned minor_gen = sp_gc_mark_gen;
+    sp_gc_mark_gen = (sp_gc_mark_gen + 1) & 0x1fffffffu;
+    if(!sp_gc_mark_gen) sp_gc_mark_gen = 1;
+    sp_gc_mark_all();
+    int leaked = 0;
+    for(sp_gc_hdr*h=sp_gc_old_heap;h;h=h->next)
+      if(h->marked==sp_gc_mark_gen && h->old) { /* old objects are expected to differ */ }
+#ifdef SP_THREADS
+    { int n=sp_active_workers; if(n<1)n=1; if(n>SP_MAX_WORKERS)n=SP_MAX_WORKERS;
+      for(int i=0;i<n;i++)
+        for(sp_gc_hdr*h=sp_gc_wslot[i].young;h;h=h->next)
+          if(h->marked==sp_gc_mark_gen && h->marked!=minor_gen && !h->old) leaked++; }
+#else
+    for(sp_gc_hdr*h=sp_gc_heap;h;h=h->next)
+      if(h->marked==sp_gc_mark_gen && !h->old) leaked++;
+#endif
+    if(leaked){
+      fprintf(stderr,"spinel: GC generational check: %d young object(s) reachable only "
+                     "through an old one the barrier did not record\n", leaked);
+      /* name the holders: any OLD object that reaches an unrecorded young one
+         is where the missing barrier is, and its scan function names the type */
+      for(sp_gc_hdr*h=sp_gc_old_heap;h;h=h->next){
+        if(h->dirty||!h->scan) continue;
+        sp_gc_verify_probe_hit=0; sp_gc_verify_probe=minor_gen; sp_gc_verify_probe_on=1;
+        h->scan((char*)h+sizeof(sp_gc_hdr));
+        sp_gc_verify_probe_on=0;
+        if(sp_gc_verify_probe_hit)
+          fprintf(stderr,"spinel:   holder scan=%p\n",(void*)h->scan);
+      }
+      sp_gc_verify_gen_fail = 1;
+    }
+  }
+  if(full){
+    /* a full cycle re-marks everything, so the set starts over */
+    for(int ri=0;ri<sp_gc_nremembered;ri++)((sp_gc_hdr*)sp_gc_remembered[ri]-1)->dirty=0;
+    sp_gc_nremembered=0; sp_gc_rem_overflow=0;
+  }
   if(full){
     sp_gc_hdr**pp=&sp_gc_old_heap;sp_gc_old_bytes=0;
     while(*pp){sp_gc_hdr*h=*pp;if(h->marked!=sp_gc_mark_gen){*pp=h->next;if(h->recycle){h->recycle(h);}
@@ -244,7 +319,13 @@ void sp_gc_collect(void){
      dead string at worst survives until the next string sweep (delayed
      reclamation, not a leak), and the sweep itself resets marks for the next
      cycle. The retune keeps the trigger tracking the live size. */
-  if(sp_gc_str_sweep_hook)sp_gc_str_sweep_hook();
+  /* Only on a full cycle now. The string heap has no generation of its own, so
+     its sweep frees anything the mark did not reach -- and a minor mark does
+     not reach a string held by an old object, because it does not walk old
+     objects at all. Sweeping strings on a minor cycle therefore reaped live
+     ones (test/file_basename_gc). Deferring to the full cycle is the same
+     delayed reclamation the trigger already allowed. */
+  if((full||!sp_gc_minor_on)&&sp_gc_str_sweep_hook)sp_gc_str_sweep_hook();
   /* malloc_trim walks the allocator arena; once per full cycle was ~10% of
      collection time on allocation-heavy runs. Every 4th full keeps the RSS
      benefit at a fraction of the cost. */

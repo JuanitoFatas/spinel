@@ -248,6 +248,13 @@ extern const char *sp_gc_dbg_phase;   /* which root group the mark walk is in */
 extern void *sp_gc_dbg_ctx;
 void sp_gc_mark(void *obj);
 void sp_gc_mark_all(void);
+void sp_gc_mark_drain(void);
+extern int sp_gc_minor;
+extern int sp_gc_minor_on;
+extern int sp_gc_verify_gen;
+extern int sp_gc_verify_gen_fail;
+extern int sp_gc_verify_probe_on, sp_gc_verify_probe_hit;
+extern unsigned sp_gc_verify_probe;
 void sp_gc_collect(void);
 #ifdef SP_THREADS
 /* Sweep one worker's young list on that worker (see sp_gc.c). Survivors come

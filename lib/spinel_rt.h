@@ -2669,8 +2669,8 @@ double sp_lgamma_pos(double x);
 /* sp_math_lgamma: moved to lib/sp_cold.c */
 sp_PolyArray *sp_math_lgamma(double x);
 static sp_RbVal sp_PolyArray_shift(sp_PolyArray *a) { if (!a || a->len <= 0) return sp_box_nil(); if (a->frozen) { sp_raise_frozen_array_at(a, SP_BUILTIN_POLY_ARRAY); return sp_box_nil(); } sp_RbVal v = a->data[0]; memmove(a->data, a->data+1, (size_t)(--a->len)*sizeof(sp_RbVal)); return v; }
-static sp_RbVal sp_PolyArray_delete_at(sp_PolyArray *a, mrb_int i) { if (!a) return sp_box_nil(); if (i < 0) i += a->len; if (i < 0 || i >= a->len) return sp_box_nil(); sp_RbVal v = a->data[i]; for (mrb_int j = i; j < a->len - 1; j++) a->data[j] = a->data[j+1]; a->len--; return v; }
-static void sp_PolyArray_insert(sp_PolyArray *a, mrb_int i, sp_RbVal v) { if (!a) return; if (a->frozen) { sp_raise_frozen_array_at(a, SP_BUILTIN_POLY_ARRAY); return; } mrb_int orig = i; if (i < 0) i += a->len + 1; if (i < 0) sp_raise_cls("IndexError", sp_sprintf("index %lld too small for array; minimum: %lld", (long long)orig, (long long)(-(a->len + 1)))); while (i > a->len) sp_PolyArray_push(a, sp_box_nil()); /* CRuby pads with nils past the end */ sp_PolyArray_push(a, sp_box_nil()); for (mrb_int j = a->len - 1; j > i; j--) a->data[j] = a->data[j-1]; a->data[i] = v; }
+static sp_RbVal sp_PolyArray_delete_at(sp_PolyArray *a, mrb_int i) {sp_gc_wb((void*)a);  if (!a) return sp_box_nil(); if (i < 0) i += a->len; if (i < 0 || i >= a->len) return sp_box_nil(); sp_RbVal v = a->data[i]; for (mrb_int j = i; j < a->len - 1; j++) a->data[j] = a->data[j+1]; a->len--; return v; }
+static void sp_PolyArray_insert(sp_PolyArray *a, mrb_int i, sp_RbVal v) {sp_gc_wb((void*)a);  if (!a) return; if (a->frozen) { sp_raise_frozen_array_at(a, SP_BUILTIN_POLY_ARRAY); return; } mrb_int orig = i; if (i < 0) i += a->len + 1; if (i < 0) sp_raise_cls("IndexError", sp_sprintf("index %lld too small for array; minimum: %lld", (long long)orig, (long long)(-(a->len + 1)))); while (i > a->len) sp_PolyArray_push(a, sp_box_nil()); /* CRuby pads with nils past the end */ sp_PolyArray_push(a, sp_box_nil()); for (mrb_int j = a->len - 1; j > i; j--) a->data[j] = a->data[j-1]; a->data[i] = v; }
 /* Array#delete(v): removes every element sp_poly_eq to v, returns v (or
    nil if not found). Was missing for TY_POLY_ARRAY -- only TY_INT_ARRAY/
    TY_STR_ARRAY had it -- which blocked the array-backed Set package's
@@ -2678,7 +2678,7 @@ static void sp_PolyArray_insert(sp_PolyArray *a, mrb_int i, sp_RbVal v) { if (!a
    sp_array.c, home of sp_IntArray_delete et al) because it needs
    sp_poly_eq, which is inline-per-TU in this file, not linkable from the
    separately-compiled cold array library. */
-static sp_RbVal sp_PolyArray_delete(sp_PolyArray *a, sp_RbVal v) {
+static sp_RbVal sp_PolyArray_delete(sp_PolyArray *a, sp_RbVal v) {sp_gc_wb((void*)a); 
   if (a && a->frozen) { sp_raise_frozen_array_at(a, SP_BUILTIN_POLY_ARRAY); return sp_box_nil(); }
   if (!a) return sp_box_nil();
   /* sp_poly_eq can allocate (bigint promotion) and so trigger a collection
@@ -3215,7 +3215,7 @@ static sp_RbVal sp_poly_arr_range(sp_RbVal recv, sp_Range r) {
    no-op (the call sites that reach a nil poly are dead-guarded in Ruby). */
 /* sp_poly_replace: moved to lib/sp_cold.c */
 sp_RbVal sp_poly_replace(sp_RbVal recv, sp_RbVal src);
-static sp_PolyArray *sp_PolyArray_slice_bang(sp_PolyArray *a, mrb_int from, mrb_int n) {
+static sp_PolyArray *sp_PolyArray_slice_bang(sp_PolyArray *a, mrb_int from, mrb_int n) {sp_gc_wb((void*)a); 
   if (!a) return sp_PolyArray_new();
   if (a->frozen) { sp_raise_frozen_array_at(a, SP_BUILTIN_POLY_ARRAY); return sp_PolyArray_new(); }
   if (from < 0) from += a->len;
@@ -3307,7 +3307,7 @@ static sp_PolyArray *sp_PolyArray_union(sp_PolyArray *a, sp_PolyArray *b) { sp_P
 static sp_PolyArray *sp_PolyArray_difference(sp_PolyArray *a, sp_PolyArray *b) { sp_PolyArray *r = sp_PolyArray_new(); SP_GC_ROOT(r); if (!a) return r; for (mrb_int i = 0; i < a->len; i++) { sp_RbVal v = a->data[i]; if (!sp_PolyArray_include_val(b, v)) sp_PolyArray_push(r, v); } return r; }
 /* Array#compact for poly_array: keep elements whose tag is not SP_TAG_NIL. */
 static sp_PolyArray *sp_PolyArray_compact(sp_PolyArray *a) { SP_GC_ROOT(a); sp_PolyArray *b = sp_PolyArray_new(); SP_GC_ROOT(b); if (!a) return b; for (mrb_int i = 0; i < a->len; i++) { if (a->data[i].tag != SP_TAG_NIL) sp_PolyArray_push(b, a->data[i]); } return b; }
-static sp_PolyArray *sp_PolyArray_compact_bang(sp_PolyArray *a) { if (!a) return a; mrb_int w = 0; for (mrb_int i = 0; i < a->len; i++) { if (a->data[i].tag != SP_TAG_NIL) a->data[w++] = a->data[i]; } a->len = w; return a; }
+static sp_PolyArray *sp_PolyArray_compact_bang(sp_PolyArray *a) {sp_gc_wb((void*)a);  if (!a) return a; mrb_int w = 0; for (mrb_int i = 0; i < a->len; i++) { if (a->data[i].tag != SP_TAG_NIL) a->data[w++] = a->data[i]; } a->len = w; return a; }
 /* Array#flatten -- walk into nested array values recursively. Each
    array-tagged element (IntArray / StrArray / SymArray / FloatArray /
    PolyArray) is expanded inline; scalars are appended as-is. Issue
@@ -3346,7 +3346,7 @@ static sp_PolyArray *sp_PolyArray_flatten_depth(sp_PolyArray *a, mrb_int d) {
 }
 /* Array#flatten!: replace the receiver's contents with the flattened run
    (aliases observe the mutation). */
-static sp_PolyArray *sp_PolyArray_flatten_bang(sp_PolyArray *a) {
+static sp_PolyArray *sp_PolyArray_flatten_bang(sp_PolyArray *a) {sp_gc_wb((void*)a); 
   if (!a) return NULL;
   if (a->frozen) sp_raise_frozen_array_at(a, SP_BUILTIN_POLY_ARRAY);
   SP_GC_ROOT(a);
@@ -3745,8 +3745,8 @@ static sp_PolyArray *sp_PolyArray_from_float_array(sp_FloatArray *a) { sp_PolyAr
 static sp_StrArray *sp_StrArray_from_poly_array(sp_PolyArray *a) { sp_StrArray *r = sp_StrArray_new(); if (!a) return r; SP_GC_ROOT(a); SP_GC_ROOT(r); for (mrb_int i = 0; i < a->len; i++) sp_StrArray_push(r, sp_poly_to_s(a->data[i])); return r; }
 static sp_IntArray *sp_IntArray_from_poly_array(sp_PolyArray *a) { sp_IntArray *r = sp_IntArray_new(); if (!a) return r; SP_GC_ROOT(a); SP_GC_ROOT(r); for (mrb_int i = 0; i < a->len; i++) sp_IntArray_push(r, sp_poly_to_i(a->data[i])); return r; }
 static sp_FloatArray *sp_FloatArray_from_poly_array(sp_PolyArray *a) { sp_FloatArray *r = sp_FloatArray_new(); if (!a) return r; SP_GC_ROOT(a); SP_GC_ROOT(r); for (mrb_int i = 0; i < a->len; i++) sp_FloatArray_push(r, sp_poly_to_f(a->data[i])); return r; }
-static void sp_PolyArray_reverse_bang(sp_PolyArray *a) { if (!a || a->frozen) { if (a && a->frozen) sp_raise_frozen_array_at(a, SP_BUILTIN_POLY_ARRAY); return; } for (mrb_int i = 0, j = a->len - 1; i < j; i++, j--) { sp_RbVal t = a->data[i]; a->data[i] = a->data[j]; a->data[j] = t; } }
-static void sp_PolyArray_shuffle_bang(sp_PolyArray *a) { if (!a || a->frozen) { if (a && a->frozen) sp_raise_frozen_array_at(a, SP_BUILTIN_POLY_ARRAY); return; } for (mrb_int i = a->len - 1; i > 0; i--) { mrb_int j = sp_krand_below(i + 1); sp_RbVal t = a->data[i]; a->data[i] = a->data[j]; a->data[j] = t; } }
+static void sp_PolyArray_reverse_bang(sp_PolyArray *a) {sp_gc_wb((void*)a);  if (!a || a->frozen) { if (a && a->frozen) sp_raise_frozen_array_at(a, SP_BUILTIN_POLY_ARRAY); return; } for (mrb_int i = 0, j = a->len - 1; i < j; i++, j--) { sp_RbVal t = a->data[i]; a->data[i] = a->data[j]; a->data[j] = t; } }
+static void sp_PolyArray_shuffle_bang(sp_PolyArray *a) {sp_gc_wb((void*)a);  if (!a || a->frozen) { if (a && a->frozen) sp_raise_frozen_array_at(a, SP_BUILTIN_POLY_ARRAY); return; } for (mrb_int i = a->len - 1; i > 0; i--) { mrb_int j = sp_krand_below(i + 1); sp_RbVal t = a->data[i]; a->data[i] = a->data[j]; a->data[j] = t; } }
 /* poly.reverse: `reverse` is both Array#reverse and String#reverse, so a poly
    receiver dispatches on the runtime kind -- an array yields a reversed poly
    array, anything else reverses its string form (#2905). */
@@ -3826,7 +3826,7 @@ static void _sp_poly_msort(sp_PolyArray *a, int (*cmp)(const void *, const void 
 }
 /* max/min over boxed elements: numerics/strings via sp_poly_cmp, int arrays
    lexicographically. Returns nil for an empty array. */
-static sp_RbVal sp_PolyArray_max(sp_PolyArray *a) {
+static sp_RbVal sp_PolyArray_max(sp_PolyArray *a) {sp_gc_wb((void*)a); 
   if (!a || a->len == 0) return sp_box_nil();
   SP_GC_ROOT(a);  /* sp_poly_cmp can allocate; keep a (and best, which is one of
                      its elements) reachable across the comparisons. */
@@ -3840,7 +3840,7 @@ static sp_RbVal sp_PolyArray_max(sp_PolyArray *a) {
   }
   return best;
 }
-static sp_RbVal sp_PolyArray_min(sp_PolyArray *a) {
+static sp_RbVal sp_PolyArray_min(sp_PolyArray *a) {sp_gc_wb((void*)a); 
   if (!a || a->len == 0) return sp_box_nil();
   SP_GC_ROOT(a);  /* sp_poly_cmp can allocate; keep a (and best, which is one of
                      its elements) reachable across the comparisons. */
@@ -3901,7 +3901,7 @@ static sp_PtrArray *sp_PtrArray_sort_obj(sp_PtrArray *a, int cls_id) {
   return r;
 }
 static void sp_PtrArray_sort_obj_bang(sp_PtrArray *a, int cls_id) __attribute__((unused));
-static void sp_PtrArray_sort_obj_bang(sp_PtrArray *a, int cls_id) {
+static void sp_PtrArray_sort_obj_bang(sp_PtrArray *a, int cls_id) {sp_gc_wb((void*)a); 
   if (!a) return;
   if (a->frozen) { sp_raise_frozen_array_at(a, SP_BUILTIN_PTR_ARRAY); return; }
   SP_GC_ROOT(a);
@@ -3912,7 +3912,7 @@ static void sp_PtrArray_sort_obj_bang(sp_PtrArray *a, int cls_id) {
 }
 /* min/max over an object array; empty -> NULL (the object-typed nil). */
 static void *sp_PtrArray_minmax_obj(sp_PtrArray *a, int cls_id, int want_max) __attribute__((unused));
-static void *sp_PtrArray_minmax_obj(sp_PtrArray *a, int cls_id, int want_max) {
+static void *sp_PtrArray_minmax_obj(sp_PtrArray *a, int cls_id, int want_max) {sp_gc_wb((void*)a); 
   if (!a || a->len == 0) return NULL;
   SP_GC_ROOT(a);
   void *best = a->data[0];
@@ -4003,7 +4003,7 @@ static sp_RbVal sp_PolyArray_flatten_bangq(sp_PolyArray *a) {
   sp_PolyArray_flatten_bang(a);
   return sp_box_poly_array(a);
 }
-static sp_RbVal sp_PolyArray_flatten_bangq_depth(sp_PolyArray *a, mrb_int d) {
+static sp_RbVal sp_PolyArray_flatten_bangq_depth(sp_PolyArray *a, mrb_int d) {sp_gc_wb((void*)a); 
   if (!a) return sp_box_nil();
   if (a->frozen) sp_raise_frozen_array_at(a, SP_BUILTIN_POLY_ARRAY);
   SP_GC_ROOT(a);
@@ -4024,7 +4024,7 @@ static sp_RbVal sp_IntArray_uniq_bangq(sp_IntArray *a) {
 }
 /* uniq dedups with eql? (class-strict: 1 and 1.0 both survive), as CRuby. */
 static mrb_bool sp_poly_eql(sp_RbVal a, sp_RbVal b);
-static void sp_PolyArray_uniq_bang(sp_PolyArray*a){if(!a||a->frozen){if(a&&a->frozen)sp_raise_frozen_array_at(a, SP_BUILTIN_POLY_ARRAY);return;}for(mrb_int i=0;i<a->len;){int dup=0;for(mrb_int j=0;j<i;j++){if(sp_poly_eql(a->data[j],a->data[i])){dup=1;break;}}if(dup){for(mrb_int k2=i;k2<a->len-1;k2++)a->data[k2]=a->data[k2+1];a->len--;}
+static void sp_PolyArray_uniq_bang(sp_PolyArray*a){sp_gc_wb((void*)a); if(!a||a->frozen){if(a&&a->frozen)sp_raise_frozen_array_at(a, SP_BUILTIN_POLY_ARRAY);return;}for(mrb_int i=0;i<a->len;){int dup=0;for(mrb_int j=0;j<i;j++){if(sp_poly_eql(a->data[j],a->data[i])){dup=1;break;}}if(dup){for(mrb_int k2=i;k2<a->len-1;k2++)a->data[k2]=a->data[k2+1];a->len--;}
 else i++;}}
 static sp_RbVal sp_PolyArray_sample(sp_PolyArray *a) { if (a->len <= 0) return sp_box_nil(); return a->data[sp_krand_below(a->len)]; }
 
