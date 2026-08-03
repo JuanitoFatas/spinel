@@ -313,6 +313,7 @@ int comp_ivar_intern(ClassInfo *ci, const char *name) {
     ci->ivar_int_table = realloc(ci->ivar_int_table, (size_t)ci->civars);
     ci->ivar_nullable_int = realloc(ci->ivar_nullable_int, (size_t)ci->civars);
     ci->ivar_nullable_int_elem = realloc(ci->ivar_nullable_int_elem, (size_t)ci->civars);
+    ci->ivar_arr_elem_arr_or_nil = realloc(ci->ivar_arr_elem_arr_or_nil, (size_t)ci->civars);
   }
   ci->ivars[ci->nivars] = strdup(name);
   ci->ivar_types[ci->nivars] = TY_UNKNOWN;
@@ -320,6 +321,7 @@ int comp_ivar_intern(ClassInfo *ci, const char *name) {
   ci->ivar_int_table[ci->nivars] = 0;
   ci->ivar_nullable_int[ci->nivars] = 0;
   ci->ivar_nullable_int_elem[ci->nivars] = 0;
+  ci->ivar_arr_elem_arr_or_nil[ci->nivars] = 0;
   return ci->nivars++;
 }
 
@@ -1066,6 +1068,7 @@ LocalVar *scope_local_intern(Scope *s, const char *name) {
   lv->str_append = 0;
   lv->nullable_int = 0;
   lv->nullable_int_elem = 0;
+  lv->arr_or_nil = 0;
   lv->poly_ctr = 0;
   lv->oa_pin = TY_UNKNOWN;
   return lv;

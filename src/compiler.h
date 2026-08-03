@@ -51,6 +51,11 @@ typedef struct {
   int nullable_int; /* an int local that was assigned a value which can be the
                        nil sentinel (a search miss, a pop off an empty array):
                        boxing it has to yield nil, not INTPTR_MIN */
+  int arr_or_nil;   /* a poly slot proven to hold only a poly array or nil, so
+                       an index read of it takes the runtime's inline array arm
+                       -- which neither allocates nor re-enters Ruby code. That
+                       is what lets its GC root be elided: the value stays
+                       reachable from the container it was read out of. */
   int nullable_int_elem; /* the same, one level in: an int/float ARRAY local
                        some element of which can be the sentinel, so reading an
                        element or binding a block parameter from it carries it
@@ -191,6 +196,9 @@ typedef struct {
                                      by the marking fixpoint, alongside
                                      LocalVar.nullable_int and
                                      Scope.ret_nullable_int (#3505). */
+  unsigned char *ivar_arr_elem_arr_or_nil; /* every element of this container
+                                     slot is a poly array or nil (see
+                                     LocalVar.arr_or_nil) */
   unsigned char *ivar_nullable_int_elem; /* the same one level in: an int/float
                                      ARRAY slot some element of which can be
                                      the sentinel */

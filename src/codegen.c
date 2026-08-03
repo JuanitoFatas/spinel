@@ -1181,6 +1181,89 @@ static void gc_save_take_back(Buf *b, size_t off, size_t save_len) {
   buf_erase(b, off, save_len);
 }
 
+/* Escape hatch: `--no-root-elision` keeps every root, so a suspected
+   miscompile can be bisected against the same binary. */
+int g_no_root_elision = 0;
+
+/* ---- GC root elision (M1') ----
+
+   A root exists so a precise GC can find a value only the C stack references.
+   A poly local proven to hold nothing but a poly array or nil does not need
+   one: its index read takes the runtime's inline array arm, which neither
+   allocates nor re-enters Ruby code, so nothing in the local's live range can
+   collect or move the element -- the container it was read out of still holds
+   it. Taking `&local` for the root is what forces the local into memory for the
+   whole function and gives it a frame, so dropping it is worth several percent
+   in a per-pixel function.
+
+   Everything here is a veto: the region between the root and the local's last
+   mention must contain only calls known to stay inside the runtime, and the
+   poly reads among them must be reading THIS local. Anything unrecognised
+   keeps the root. */
+static int gc_elide_call_ok(const char *id, size_t n, const char *lvname) {
+  static const char *const KW[] = { "if", "while", "for", "switch", "return",
+                                    "sizeof", "do", "else", NULL };
+  static const char *const SAFE[] = {
+    "sp_box_int", "sp_box_bool", "sp_box_nil", "sp_box_sym", "sp_box_float",
+    "sp_box_obj", "sp_box_nullable_obj", "sp_box_poly_array", "sp_box_int_or_nil",
+    "sp_box_float_or_nil", "sp_poly_to_i", "sp_poly_to_f", "sp_poly_truthy",
+    "sp_poly_length", "sp_imod", "sp_idiv", "sp_int_bit",
+    "sp_IntArray_get", "sp_FloatArray_get", "sp_StrArray_get", "sp_PolyArray_get",
+    "sp_IntArray_length", "sp_PolyArray_length", NULL };
+  for (int i = 0; KW[i]; i++) if (strlen(KW[i]) == n && !strncmp(id, KW[i], n)) return 1;
+  for (int i = 0; SAFE[i]; i++) if (strlen(SAFE[i]) == n && !strncmp(id, SAFE[i], n)) return 1;
+  /* the poly index reads: safe only on the local this root protects, whose
+     values are arrays or nil and so cannot reach the allocating arms */
+  static const char *const RD[] = { "sp_poly_arr_get_hash", "sp_poly_arr_get",
+                                    "sp_poly_massign_get", NULL };
+  for (int i = 0; RD[i]; i++) {
+    if (strlen(RD[i]) != n || strncmp(id, RD[i], n)) continue;
+    const char *a = id + n;
+    while (*a == '(' || *a == ' ') a++;
+    size_t ln = strlen(lvname);
+    return !strncmp(a, lvname, ln) && (a[ln] == ',' || a[ln] == ' ');
+  }
+  return 0;
+}
+
+/* The region [from, to) calls nothing that could collect or re-enter. */
+static int gc_region_inert(const char *from, const char *to, const char *lvname) {
+  for (const char *p = from; p < to; p++) {
+    if (*p != '(') continue;
+    const char *e = p;
+    while (e > from && (isalnum((unsigned char)e[-1]) || e[-1] == '_')) e--;
+    if (e == p) continue;                       /* `(` after an operator */
+    if (!gc_elide_call_ok(e, (size_t)(p - e), lvname)) return 0;
+  }
+  return 1;
+}
+
+static void gc_roots_take_back(Compiler *c, Scope *s, Buf *b, size_t fn_off) {
+  if (fn_off >= b->len) return;
+  /* straight-line functions only: with a backward edge the text order is not
+     the execution order, so "the last mention" says nothing about liveness. */
+  {
+    const char *fn = b->p + fn_off;
+    if (strstr(fn, "setjmp") || strstr(fn, "while (") || strstr(fn, "for (") ||
+        strstr(fn, "do {") || strstr(fn, "goto ")) return;
+  }
+  for (int i = 0; i < s->nlocals; i++) {
+    LocalVar *lv = &s->locals[i];
+    if (!lv->arr_or_nil || lv->type != TY_POLY) continue;
+    char lvname[300], rootline[340];
+    snprintf(lvname, sizeof lvname, "lv_%s", lv->name);
+    snprintf(rootline, sizeof rootline, "    SP_GC_ROOT_RBVAL(%s);\n", lvname);
+    char *at = strstr(b->p + fn_off, rootline);
+    if (!at) continue;
+    size_t rl = strlen(rootline);
+    const char *body = at + rl;
+    const char *last = NULL;
+    for (const char *q = strstr(body, lvname); q; q = strstr(q + 1, lvname)) last = q;
+    if (last && !gc_region_inert(body, last, lvname)) continue;
+    buf_erase(b, (size_t)(at - b->p), rl);
+  }
+}
+
 void emit_method(Compiler *c, Scope *s, Buf *b) {
   /* A proc form holds its block in a real parameter, so its `yield`s are calls
      on that proc rather than an inline splice (#3399). */
@@ -1335,6 +1418,7 @@ void emit_method(Compiler *c, Scope *s, Buf *b) {
   g_brk_ser_var = saved_bser; g_brk_skip_id = saved_bskip;
   g_yield_proc_ref = sv_ypr9; g_yield_slot_ty = sv_yst9;
   buf_puts(b, "}\n");
+  if (!g_no_root_elision) gc_roots_take_back(c, s, b, gc_save_off);
   gc_save_take_back(b, gc_save_off, gc_save_len);
 }
 

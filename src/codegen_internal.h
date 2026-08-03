@@ -30,6 +30,7 @@ typedef struct { char *p; size_t len, cap; } Buf;
 void buf_putn(Buf *b, const char *s, size_t n);
 void buf_puts(Buf *b, const char *s);
 void buf_erase(Buf *b, size_t off, size_t n);
+extern int g_no_root_elision;
 void buf_printf(Buf *b, const char *fmt, ...);
 
 static inline void emit_indent(Buf *b, int n) { for (int i = 0; i < n; i++) buf_puts(b, "  "); }

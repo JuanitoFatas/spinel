@@ -31,6 +31,8 @@
   #include <mach-o/dyld.h>
 #endif
 #include <sys/wait.h>
+
+extern int g_no_root_elision;
 #define PATH_SEP '/'
 #define EXE_SUFFIX ""
 
@@ -239,6 +241,9 @@ int main(int argc, char **argv) {
     else if (sp_streq(a, "--profile"))     { profile = 1; want_g = 1; i++; }
     else if (sp_streq(a, "--line-map"))    { line_map = 1; i++; }
     else if (sp_streq(a, "--no-line-map")) { line_map = 0; i++; }
+    /* keep every GC root, so a suspected miscompile can be bisected against
+       the same binary rather than against a different build. */
+    else if (sp_streq(a, "--no-root-elision")) { g_no_root_elision = 1; i++; }
     else if (sp_streq(a, "-c"))            { c_only = 1; i++; }
     else if (sp_streq(a, "-I"))            { if (++i < argc) sp_add_feature_root(argv[i]); i++; }
     else if (!strncmp(a, "-I", 2) && a[2]) { sp_add_feature_root(a + 2); i++; }

@@ -3505,7 +3505,7 @@ void inherit_members(Compiler *c) {
     ClassInfo *pc = &c->classes[p];
 
     char **old = ci->ivars; TyKind *oldt = ci->ivar_types; int oldn = ci->nivars;
-    ci->ivars = NULL; ci->ivar_types = NULL; ci->ivar_nullable_int = NULL; ci->ivar_nullable_int_elem = NULL; ci->nivars = ci->civars = 0;
+    ci->ivars = NULL; ci->ivar_types = NULL; ci->ivar_nullable_int = NULL; ci->ivar_nullable_int_elem = NULL; ci->ivar_arr_elem_arr_or_nil = NULL; ci->nivars = ci->civars = 0;
     for (int k = 0; k < pc->nivars; k++) {
       int idx = comp_ivar_intern(ci, pc->ivars[k]);
       ci->ivar_types[idx] = pc->ivar_types[k];

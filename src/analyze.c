@@ -8544,6 +8544,147 @@ int nullable_int_value(Compiler *c, int v) {
   return 0;
 }
 
+/* ---- array-or-nil proof (GC root elision) ----
+
+   A poly slot proven to hold only a poly array or nil has an index read that
+   takes the runtime's inline array arm: no allocation, and no re-entry into
+   Ruby code (the Struct arm calls a generated `to_h`, the String arm allocates
+   a character). That is what lets codegen drop the slot's GC root -- the value
+   stays reachable from the container it was read out of, and nothing in its
+   live range can move it. Conservative in both directions: anything the walk
+   does not recognise answers "no". */
+static int aon_value(Compiler *c, int v, int depth);
+
+/* Is every ELEMENT of the container-valued expression `v` an array or nil? */
+static int aon_container(Compiler *c, int v, int depth) {
+  const NodeTable *nt = c->nt;
+  if (v < 0 || depth > 8) return 0;
+  if (nt_kind(nt, v) == NK_ArrayNode) {
+    int en = 0; const int *els = nt_arr(nt, v, "elements", &en);
+    for (int k = 0; els && k < en; k++) if (!aon_value(c, els[k], depth + 1)) return 0;
+    return en > 0;
+  }
+  if (nt_kind(nt, v) == NK_CallNode) {
+    const char *nm = nt_str(nt, v, "name");
+    int rc = nt_ref(nt, v, "receiver");
+    /* `[nil] * n` and `Array.new(n)` fill with nil; `xs.map { [..] }` fills
+       with whatever the block's tail builds. */
+    if (nm && sp_streq(nm, "*") && rc >= 0) return aon_container(c, rc, depth + 1);
+    if (nm && (sp_streq(nm, "map") || sp_streq(nm, "collect"))) {
+      int blk = nt_ref(nt, v, "block");
+      int body = blk >= 0 ? nt_ref(nt, blk, "body") : -1;
+      if (body < 0 || nt_kind(nt, body) != NK_StatementsNode) return 0;
+      int bn = 0; const int *bs = nt_arr(nt, body, "body", &bn);
+      return bs && bn > 0 && aon_value(c, bs[bn - 1], depth + 1);
+    }
+    if (nm && sp_streq(nm, "new") && rc >= 0 && nt_kind(nt, rc) == NK_ConstantReadNode) {
+      const char *rn = nt_str(nt, rc, "name");
+      int blk = nt_ref(nt, v, "block");
+      if (rn && sp_streq(rn, "Array") && blk < 0) {
+        int ca = nt_ref(nt, v, "arguments"); int an = 0;
+        const int *av = ca >= 0 ? nt_arr(nt, ca, "arguments", &an) : NULL;
+        return an == 1 || (an >= 2 && aon_value(c, av[1], depth + 1));
+      }
+    }
+    return 0;
+  }
+  /* container LOCALS are not tracked: the shapes that matter hold theirs in an
+     ivar, and a local container would need the same write scan again. */
+  if (nt_kind(nt, v) == NK_InstanceVariableReadNode) {
+    ClassInfo *ci = NULL;
+    int iv = nullable_elem_ivar(c, v, &ci);
+    return iv >= 0 && ci->ivar_arr_elem_arr_or_nil[iv];
+  }
+  return 0;
+}
+
+/* Is the value of `v` an array or nil? */
+static int aon_value(Compiler *c, int v, int depth) {
+  const NodeTable *nt = c->nt;
+  if (v < 0 || depth > 8) return 0;
+  switch (nt_kind(nt, v)) {
+    case NK_NilNode: case NK_ArrayNode: return 1;
+    /* `a[i] = x = <expr>`: an assignment's value is what it assigned */
+    case NK_LocalVariableWriteNode:
+    case NK_InstanceVariableWriteNode:
+      return aon_value(c, nt_ref(nt, v, "value"), depth + 1);
+    case NK_LocalVariableReadNode: {
+      Scope *sc = comp_scope_of(c, v);
+      const char *nm = nt_str(nt, v, "name");
+      LocalVar *lv = nm && sc ? scope_local(sc, nm) : NULL;
+      return lv && lv->arr_or_nil == 1;
+    }
+    case NK_CallNode: {
+      const char *nm = nt_str(nt, v, "name");
+      int rc = nt_ref(nt, v, "receiver");
+      if (!nm || rc < 0) return 0;
+      /* one element out of a container whose elements are all arrays or nil */
+      if (sp_streq(nm, "[]") || sp_streq(nm, "at") || sp_streq(nm, "fetch"))
+        return aon_container(c, rc, depth + 1);
+      return 0;
+    }
+    default: return 0;
+  }
+}
+
+/* Prove the flags to a fixpoint: a local reads out of an ivar whose elements
+   come from another ivar, so one pass is not enough. Monotone (flags only get
+   set), bounded by the number of flags. */
+static void mark_array_or_nil_slots(Compiler *c) {
+  const NodeTable *nt = c->nt;
+  long rounds = c->nscopes + 2;
+  for (int ci = 0; ci < c->nclasses; ci++) rounds += c->classes[ci].nivars;
+  for (long round = 0; round < rounds; round++) {
+    int changed = 0;
+    /* container ivars: every write must fill with arrays or nil */
+    NT_FOREACH_KIND(nt, NK_InstanceVariableWriteNode, id) {
+      ClassInfo *ci = NULL;
+      int iv = nullable_elem_ivar(c, id, &ci);
+      if (iv < 0 || ci->ivar_arr_elem_arr_or_nil[iv]) continue;
+      if (ci->ivar_types[iv] != TY_POLY_ARRAY) continue;
+      int v = nt_ref(nt, id, "value");
+      if (v < 0 || !aon_container(c, v, 0)) continue;
+      /* every element STORE into it must agree too */
+      int ok = 1;
+      NT_FOREACH_KIND(nt, NK_CallNode, w) {
+        const char *wn = nt_str(nt, w, "name");
+        if (!wn || (!sp_streq(wn, "[]=") && !sp_streq(wn, "push") &&
+                    !sp_streq(wn, "<<") && !sp_streq(wn, "unshift"))) continue;
+        int wr = nt_ref(nt, w, "receiver");
+        if (wr < 0 || nt_kind(nt, wr) != NK_InstanceVariableReadNode) continue;
+        ClassInfo *wc = NULL;
+        int wiv = nullable_elem_ivar(c, wr, &wc);
+        if (wc != ci || wiv != iv) continue;
+        int ca = nt_ref(nt, w, "arguments"); int an = 0;
+        const int *av = ca >= 0 ? nt_arr(nt, ca, "arguments", &an) : NULL;
+        int val = sp_streq(wn, "[]=") ? (an >= 2 ? av[an - 1] : -1) : (an >= 1 ? av[0] : -1);
+        if (!aon_value(c, val, 0)) { ok = 0; break; }
+      }
+      if (ok) { ci->ivar_arr_elem_arr_or_nil[iv] = 1; changed = 1; }
+    }
+    /* locals: every write must be an array, nil, or such an element read */
+    for (int s = 0; s < c->nscopes; s++) {
+      Scope *sc = &c->scopes[s];
+      for (int i = 0; i < sc->nlocals; i++) {
+        LocalVar *lv = &sc->locals[i];
+        if (lv->arr_or_nil || lv->type != TY_POLY || lv->is_param || lv->is_block_param) continue;
+        if (lv->is_cell || lv->rbs_seeded) continue;
+        int saw = 0, ok = 1;
+        for (int r = lw_shared_first(c, lv->name, s); r >= 0 && ok; r = lw_shared_next(r)) {
+          int id = lw_shared_node(r);
+          if (nt_kind(nt, id) != NK_LocalVariableWriteNode) continue;
+          const char *wn = nt_str(nt, id, "name");
+          if (!wn || !sp_streq(wn, lv->name) || comp_scope_of(c, id) != sc) continue;
+          saw = 1;
+          if (!aon_value(c, nt_ref(nt, id, "value"), 0)) ok = 0;
+        }
+        if (saw && ok) { lv->arr_or_nil = 1; changed = 1; }
+      }
+    }
+    if (!changed) break;
+  }
+}
+
 /* Mark the int locals that can hold that sentinel, so codegen boxes them as
    nil rather than as INTPTR_MIN. Boxing every int through the nil check costs
    ~8% on optcarrot -- every pixel goes through it -- so the marking is static
@@ -11169,6 +11310,7 @@ void analyze_program(Compiler *c) {
   /* An --rbs seed the settled types statically contradict is a compile error,
      not something to emit a reinterpretation for. */
   mark_nullable_int_locals(c);
+  mark_array_or_nil_slots(c);
   check_seed_contradictions(c);
 
   /* Last: the capture pass again, on the settled types. a_block_is_lifted asks
