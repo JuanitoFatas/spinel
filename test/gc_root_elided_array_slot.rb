@@ -63,3 +63,35 @@ p sp.pixel(0, 4)
 sp.place(2, false, false, 3)
 GC.start
 p sp.pixel(2, 4)
+
+# The destructuring shape, where the value lives in a temp rather than a named
+# local: a pair read out of a frozen lookup table and split across two slots.
+# The temp's proof has to come out of the container ivar, which is filled from
+# a hash whose values are array literals.
+class Lut
+  def initialize(n)
+    entries = {}
+    @lut = (0...n).map { |i|
+      entries[i] ||= [i * 2, i * 3]
+      entries[i]
+    }.freeze
+    @a = 0
+    @b = 0
+  end
+
+  def load(i)
+    @a, @b = @lut[i]
+    @a + @b
+  end
+end
+
+lut = Lut.new(6)
+p lut.load(0)
+p lut.load(4)
+GC.start
+p lut.load(4)
+noise = []
+150.times { |k| noise << [k, "s#{k}"] }
+GC.start
+p lut.load(5)
+p noise.length

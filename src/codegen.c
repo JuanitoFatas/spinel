@@ -1238,6 +1238,44 @@ static int gc_region_inert(const char *from, const char *to, const char *lvname)
   return 1;
 }
 
+/* The same proof for a TEMP. A temp has no LocalVar to carry a flag, so its
+   evidence has to be read back out of the text it was just emitted from: a
+   temp initialized straight from an element of a container ivar whose elements
+   analyze proved array-or-nil is the same value under a different name. This
+   is the destructuring shape -- `@io_addr, @lut = @attr_lut[i]` puts the pair
+   in a temp and reads it twice. */
+static int gc_temp_is_arr_or_nil(Compiler *c, Scope *s, const char *fn,
+                                 const char *rootline, const char *tname) {
+  if (s->class_id < 0 || s->class_id >= c->nclasses) return 0;
+  /* the declaration sits just before the root: `sp_RbVal _tN = <init>;` */
+  size_t off = (size_t)(rootline - fn);
+  char decl[320];
+  snprintf(decl, sizeof decl, "sp_RbVal %s = ", tname);
+  const char *d = NULL;
+  for (const char *q = strstr(fn, decl); q && (size_t)(q - fn) < off; q = strstr(q + 1, decl)) d = q;
+  if (!d) return 0;
+  const char *init = d + strlen(decl);
+  static const char *const READ[] = { "sp_PolyArray_get(", "sp_poly_arr_get_hash(",
+                                      "sp_poly_arr_get(", NULL };
+  const char *arg = NULL;
+  for (int i = 0; READ[i] && !arg; i++)
+    if (!strncmp(init, READ[i], strlen(READ[i]))) arg = init + strlen(READ[i]);
+  if (!arg) return 0;
+  /* the container must be an ivar of this class, proven element-wise */
+  static const char *const SELF = "self->iv_";
+  if (strncmp(arg, SELF, strlen(SELF))) return 0;
+  const char *fname = arg + strlen(SELF);
+  size_t fn_len = 0;
+  while (fname[fn_len] && (isalnum((unsigned char)fname[fn_len]) || fname[fn_len] == '_')) fn_len++;
+  ClassInfo *ci = &c->classes[s->class_id];
+  for (int i = 0; i < ci->nivars; i++) {
+    const char *m = iv_c(ci->ivars[i] + 1);
+    if (strlen(m) == fn_len && !strncmp(m, fname, fn_len))
+      return ci->ivar_arr_elem_arr_or_nil[i];
+  }
+  return 0;
+}
+
 static void gc_roots_take_back(Compiler *c, Scope *s, Buf *b, size_t fn_off) {
   if (fn_off >= b->len) return;
   /* straight-line functions only: with a backward edge the text order is not
@@ -1261,6 +1299,31 @@ static void gc_roots_take_back(Compiler *c, Scope *s, Buf *b, size_t fn_off) {
     for (const char *q = strstr(body, lvname); q; q = strstr(q + 1, lvname)) last = q;
     if (last && !gc_region_inert(body, last, lvname)) continue;
     buf_erase(b, (size_t)(at - b->p), rl);
+  }
+  /* temps, by the same rule */
+  for (;;) {
+    const char *fn = b->p + fn_off;
+    const char *at = NULL;
+    char tname[64] = {0}, rootline[128];
+    for (const char *q = strstr(fn, "SP_GC_ROOT_RBVAL(_t"); q; q = strstr(q + 1, "SP_GC_ROOT_RBVAL(_t")) {
+      const char *nm = q + strlen("SP_GC_ROOT_RBVAL(");
+      size_t n = 0;
+      while (nm[n] && nm[n] != ')' && n < sizeof tname - 1) { tname[n] = nm[n]; n++; }
+      tname[n] = '\0';
+      if (nm[n] != ')') continue;
+      snprintf(rootline, sizeof rootline, "SP_GC_ROOT_RBVAL(%s);", tname);
+      if (!gc_temp_is_arr_or_nil(c, s, fn, q, tname)) continue;
+      const char *body = q + strlen(rootline);
+      const char *lastq = NULL;
+      for (const char *r = strstr(body, tname); r; r = strstr(r + 1, tname)) lastq = r;
+      if (lastq && !gc_region_inert(body, lastq, tname)) continue;
+      at = q; break;
+    }
+    if (!at) break;
+    /* take the whole statement, and the run of spaces before it */
+    size_t start = (size_t)(at - b->p), len = strlen(rootline);
+    while (start > fn_off && (b->p[start - 1] == ' ' || b->p[start - 1] == '\n')) { start--; len++; }
+    buf_erase(b, start, len);
   }
 }
 

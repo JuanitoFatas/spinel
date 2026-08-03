@@ -8569,7 +8569,10 @@ static int aon_container(Compiler *c, int v, int depth) {
     int rc = nt_ref(nt, v, "receiver");
     /* `[nil] * n` and `Array.new(n)` fill with nil; `xs.map { [..] }` fills
        with whatever the block's tail builds. */
-    if (nm && sp_streq(nm, "*") && rc >= 0) return aon_container(c, rc, depth + 1);
+    if (nm && rc >= 0 && (sp_streq(nm, "*") || sp_streq(nm, "freeze") ||
+                          sp_streq(nm, "dup") || sp_streq(nm, "clone") ||
+                          sp_streq(nm, "to_a")))
+      return aon_container(c, rc, depth + 1);
     if (nm && (sp_streq(nm, "map") || sp_streq(nm, "collect"))) {
       int blk = nt_ref(nt, v, "block");
       int body = blk >= 0 ? nt_ref(nt, blk, "body") : -1;
@@ -8588,12 +8591,58 @@ static int aon_container(Compiler *c, int v, int depth) {
     }
     return 0;
   }
-  /* container LOCALS are not tracked: the shapes that matter hold theirs in an
-     ivar, and a local container would need the same write scan again. */
   if (nt_kind(nt, v) == NK_InstanceVariableReadNode) {
     ClassInfo *ci = NULL;
     int iv = nullable_elem_ivar(c, v, &ci);
     return iv >= 0 && ci->ivar_arr_elem_arr_or_nil[iv];
+  }
+  /* a container LOCAL: the same scan as the ivar case, over its own writes and
+     over every store into it. `entries[key] ||= [..]` fills a hash this way,
+     and an `.map` over it is what the ivar above ends up holding. */
+  if (nt_kind(nt, v) == NK_LocalVariableReadNode) {
+    Scope *sc = comp_scope_of(c, v);
+    const char *nm = nt_str(nt, v, "name");
+    if (!sc || !nm) return 0;
+    int saw = 0;
+    for (int r = lw_shared_first(c, nm, (int)(sc - c->scopes)); r >= 0; r = lw_shared_next(r)) {
+      int id = lw_shared_node(r);
+      if (nt_kind(nt, id) != NK_LocalVariableWriteNode) continue;
+      const char *wn = nt_str(nt, id, "name");
+      if (!wn || !sp_streq(wn, nm) || comp_scope_of(c, id) != sc) continue;
+      int wv = nt_ref(nt, id, "value");
+      /* an empty literal carries no element evidence of its own; the stores
+         below are what fill it */
+      if (wv >= 0 && (nt_kind(nt, wv) == NK_HashNode || nt_kind(nt, wv) == NK_ArrayNode)) {
+        int en = 0; nt_arr(nt, wv, "elements", &en);
+        if (en == 0) { saw = 1; continue; }
+      }
+      if (!aon_container(c, wv, depth + 1)) return 0;
+      saw = 1;
+    }
+    if (!saw) return 0;
+    /* every store into it must put an array or nil there */
+    NT_FOREACH_KIND(nt, NK_CallNode, w) {
+      const char *wn2 = nt_str(nt, w, "name");
+      if (!wn2 || (!sp_streq(wn2, "[]=") && !sp_streq(wn2, "push") &&
+                   !sp_streq(wn2, "<<") && !sp_streq(wn2, "unshift") &&
+                   !sp_streq(wn2, "store"))) continue;
+      int wr = nt_ref(nt, w, "receiver");
+      if (wr < 0 || nt_kind(nt, wr) != NK_LocalVariableReadNode) continue;
+      const char *rn2 = nt_str(nt, wr, "name");
+      if (!rn2 || !sp_streq(rn2, nm) || comp_scope_of(c, wr) != sc) continue;
+      int ca = nt_ref(nt, w, "arguments"); int an = 0;
+      const int *av = ca >= 0 ? nt_arr(nt, ca, "arguments", &an) : NULL;
+      int val = an >= 1 ? av[an - 1] : -1;
+      if (!aon_value(c, val, depth + 1)) return 0;
+    }
+    NT_FOREACH_KIND(nt, NK_IndexOrWriteNode, w) {
+      int wr = nt_ref(nt, w, "receiver");
+      if (wr < 0 || nt_kind(nt, wr) != NK_LocalVariableReadNode) continue;
+      const char *rn2 = nt_str(nt, wr, "name");
+      if (!rn2 || !sp_streq(rn2, nm) || comp_scope_of(c, wr) != sc) continue;
+      if (!aon_value(c, nt_ref(nt, w, "value"), depth + 1)) return 0;
+    }
+    return 1;
   }
   return 0;
 }
