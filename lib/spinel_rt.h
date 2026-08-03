@@ -5013,10 +5013,15 @@ static sp_RbVal sp_poly_massign_get(sp_RbVal v, mrb_int i) {
   }
   return i == 0 ? v : sp_box_nil();
 }
-static sp_RbVal sp_poly_arr_get_hash(sp_RbVal a, mrb_int i) {
-  /* A poly array is the common receiver here (an element read out of a
-     container, a destructured pair): answer it before the Struct, Integer-bit
-     and String arms below, each of which is a branch this path never wants. */
+/* The poly array is the common receiver here (an element read out of a
+   container, a destructured pair), and reaching it through a call cost more
+   than the read itself: keeping only that arm inline and pushing every other
+   receiver kind out of line is worth 4% on optcarrot, whose inner loops index
+   poly arrays per pixel. The cold half carries the arms this path never wants
+   -- Struct member order, Integer bit, String character, the hash kinds. */
+static SP_NOINLINE sp_RbVal sp_poly_arr_get_hash_cold(sp_RbVal a, mrb_int i);
+
+static SP_INLINE sp_RbVal sp_poly_arr_get_hash(sp_RbVal a, mrb_int i) {
   if (a.tag == SP_TAG_OBJ && a.cls_id == SP_BUILTIN_POLY_ARRAY) {
     sp_PolyArray *ar = (sp_PolyArray *)a.v.p;
     if (!ar) return sp_box_nil();
@@ -5024,6 +5029,10 @@ static sp_RbVal sp_poly_arr_get_hash(sp_RbVal a, mrb_int i) {
     if (k < 0 || k >= ar->len) return sp_box_nil();
     return ar->data[k];
   }
+  return sp_poly_arr_get_hash_cold(a, i);
+}
+
+static SP_NOINLINE sp_RbVal sp_poly_arr_get_hash_cold(sp_RbVal a, mrb_int i) {
   /* Struct#[n] is the nth MEMBER in declaration order, not an array index --
      a Struct read out of a poly container reaches here (#3369). */
   if (a.tag == SP_TAG_OBJ && a.cls_id >= 0 && sp_obj_to_h_fn) {
