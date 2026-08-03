@@ -49,3 +49,22 @@ p [10, 20][1]
 p ["a", "b"][0]
 p [1.5, 2.5][1]
 p [[1], [2]][0]
+
+# `fetch` reaches the same dispatch, and its arms cover only string- and
+# symbol-keyed hashes: a float-keyed one emitted no dispatch at all and raised
+# NoMethodError naming Hash. It ends in the runtime fetch now, which knows a
+# Hash miss from an Array one and raises the right error for each.
+flt = PxRel.new([1, 2]).group { |n| n * 1.5 }
+p flt.fetch(1.5, "miss")
+p flt.fetch(9.9, "miss")
+p flt.fetch(3.0)
+p (flt.fetch(9.9) rescue $!.class)
+
+ints = PxRel.new([1, 2]).group { |n| n }
+p ints.fetch(1, "miss")
+p ints.fetch(9, "miss")
+p (ints.fetch(9) rescue $!.class)
+
+strs = PxRel.new(["a"]).group { |s| s }
+p strs.fetch("a", "miss")
+p strs.fetch("z", "miss")

@@ -9,3 +9,12 @@ nil
 "a"
 2.5
 [1]
+[1]
+"miss"
+[2]
+KeyError
+[1]
+"miss"
+KeyError
+["a"]
+"miss"

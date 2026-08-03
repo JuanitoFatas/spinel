@@ -5143,6 +5143,32 @@ static mrb_bool sp_poly_has_key(sp_RbVal recv, sp_RbVal key) {
   }
 }
 
+/* Kind-dispatching `fetch` for a poly receiver. The emitted switch enumerates
+   the receiver kinds someone thought to add, so a receiver of any other kind
+   reached no arm and raised NoMethodError naming Hash. Here the receiver
+   answers for itself: a Hash misses into the caller's default or a KeyError,
+   an Array into the default or an IndexError, and anything with no `fetch`
+   still says so. `has_dflt` separates `fetch(k)` from `fetch(k, nil)`, which
+   are different calls. */
+static sp_RbVal sp_poly_fetch(sp_RbVal recv, sp_RbVal key, int has_dflt, sp_RbVal dflt) {
+  if (recv.tag == SP_TAG_OBJ && sp_poly_is_hash_kind(recv.cls_id)) {
+    if (sp_poly_has_key(recv, key)) return sp_poly_index_poly(recv, key);
+    if (has_dflt) return dflt;
+    sp_raise_key_not_found(key);
+  }
+  if (recv.tag == SP_TAG_OBJ && sp_poly_is_array_kind(recv.cls_id)) {
+    mrb_int n = sp_poly_length(recv), i = sp_poly_to_i(key);
+    if (i < 0) i += n;
+    if (i >= 0 && i < n) return sp_poly_index_poly(recv, key);
+    if (has_dflt) return dflt;
+    sp_raise_cls("IndexError",
+                 sp_sprintf("index %lld outside of array bounds: %lld...%lld",
+                            (long long)sp_poly_to_i(key), (long long)-n, (long long)n));
+  }
+  sp_raise_nomethod(sp_nomethod_msg("fetch", recv));
+  return sp_box_nil();
+}
+
 /* Integer-returning counterpart of sp_poly_index_poly for `poly[int]` where
    the poly element holds an int-returning callable/container -- a bound
    method (called with the int arg, int ABI) or an int array. Used when

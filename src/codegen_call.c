@@ -4237,9 +4237,11 @@ static int emit_poly_method_dispatch(Compiler *c, int id, Buf *b) {
        hash: without a user `fetch` candidate the dispatch was skipped and the
        call collapsed to default_value (an empty string), dropping the lookup.
        The str/sym-keyed hash arms below handle it, so admit it here. */
-    int is_fetch = sp_streq(name, "fetch") && (argc == 1 || argc == 2) &&
-                   (infer_type(c, argv[0]) == TY_STRING || infer_type(c, argv[0]) == TY_SYMBOL ||
-                    infer_type(c, argv[0]) == TY_POLY || infer_type(c, argv[0]) == TY_UNKNOWN);
+    /* Any key kind: the arms below cover the string- and symbol-keyed hashes,
+       and the default at the end of the switch answers for every other
+       receiver and key. Restricted to those key types, a `fetch` on a
+       float-keyed hash emitted no dispatch at all and raised NoMethodError. */
+    int is_fetch = sp_streq(name, "fetch") && (argc == 1 || argc == 2);
     int is_include = (sp_streq(name, "include?") || sp_streq(name, "member?") ||
                       sp_streq(name, "has_key?") || sp_streq(name, "key?")) && argc == 1;
     /* intersect? on a poly value that is a builtin array. The typed-receiver
@@ -4973,18 +4975,29 @@ else {
          answered nil with nothing raised (#3507). The runtime index dispatches
          on the receiver's own kind, and raises where there is no `[]` at all.
          The key goes boxed, since a Hash key is not an offset. */
-      else if (is_aref) {
+      else if (is_aref || is_fetch) {
         Buf kb; memset(&kb, 0, sizeof kb);
         { char keyt[64]; snprintf(keyt, sizeof keyt, "_t%d", atmp[0]);
           if (atmp_ty[0] == TY_POLY) buf_puts(&kb, keyt);
           else emit_boxed_text(c, atmp_ty[0], keyt, &kb); }
-        char gen[256];
-        snprintf(gen, sizeof gen, "sp_poly_index_poly(_t%d, %s)", tv, kb.p ? kb.p : "sp_box_nil()");
+        Buf db; memset(&db, 0, sizeof db);
+        if (is_fetch && argc == 2) {
+          char dn[64]; snprintf(dn, sizeof dn, "_t%d", atmp[1]);
+          if (atmp_ty[1] == TY_POLY) buf_puts(&db, dn);
+          else emit_boxed_text(c, atmp_ty[1], dn, &db);
+        }
+        char gen[400];
+        if (is_fetch)
+          snprintf(gen, sizeof gen, "sp_poly_fetch(_t%d, %s, %d, %s)", tv,
+                   kb.p ? kb.p : "sp_box_nil()", argc == 2,
+                   db.p ? db.p : "sp_box_nil()");
+        else
+          snprintf(gen, sizeof gen, "sp_poly_index_poly(_t%d, %s)", tv, kb.p ? kb.p : "sp_box_nil()");
         buf_printf(b, " default: _t%d = ", tr);
         if (ret == TY_POLY) buf_puts(b, gen);
         else emit_unbox_text(c, is_scalar_ret(ret) ? ret : TY_INT, gen, b);
         buf_puts(b, "; break;");
-        free(kb.p);
+        free(kb.p); free(db.p);
       }
       buf_printf(b, " } _t%d; })", tr);
       free(atmp);
