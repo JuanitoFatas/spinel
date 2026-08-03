@@ -208,6 +208,32 @@ static int coerce_const_raise(const char *txt, const char *zero, Buf *b) {
 /* Emit a node as an mrb_int, coercing a poly value through sp_poly_to_i. Used
    where the runtime ABI demands a raw integer (array indices, etc.) but the
    expression's static type widened to poly. */
+/* The value of a `yield` is the block's, and the block differs per call site:
+   comp_ntype answers the union over every site. An emitter that unboxes has to
+   ask the block being spliced right here, or a site whose block returns a
+   scalar gets an unbox over a value that is already one -- ill-typed C, not
+   even a silent wrong answer. Falls back to the union where there is no
+   literal block (the proc ABI) or the tail's own type does not describe the
+   emitted value (a control-flow tail can diverge or carry a `next`). */
+TyKind yield_site_type(Compiler *c, int node) {
+  TyKind u = comp_ntype(c, node);
+  const NodeTable *nt = c->nt;
+  if (node < 0 || nt_kind(nt, node) != NK_YieldNode || g_block_id < 0) return u;
+  int body = nt_ref(nt, g_block_id, "body");
+  if (body < 0 || nt_kind(nt, body) != NK_StatementsNode) return u;
+  int n = 0; const int *st = nt_arr(nt, body, "body", &n);
+  if (!st || n <= 0) return u;
+  switch (nt_kind(nt, st[n - 1])) {
+    case NK_IfNode: case NK_UnlessNode: case NK_CaseNode: case NK_CaseMatchNode:
+    case NK_BeginNode: case NK_NextNode: case NK_BreakNode: case NK_ReturnNode:
+    case NK_RescueModifierNode: case NK_StatementsNode:
+      return u;
+    default: break;
+  }
+  TyKind t = comp_ntype(c, st[n - 1]);
+  return (t == TY_UNKNOWN || t == TY_VOID || t == TY_NIL) ? u : t;
+}
+
 void emit_int_expr(Compiler *c, int node, Buf *b) {
   const char *nty = nt_type(c->nt, node);
   /* `*a` forwarded into a scalar int slot (a builtin arg): the value is the
@@ -219,7 +245,7 @@ void emit_int_expr(Compiler *c, int node, Buf *b) {
     buf_puts(b, ")), 0))");
     return;
   }
-  if (comp_ntype(c, node) == TY_POLY) {
+  if (yield_site_type(c, node) == TY_POLY) {
     buf_puts(b, "sp_poly_to_i("); emit_expr(c, node, b); buf_puts(b, ")");
     return;
   }
@@ -229,7 +255,7 @@ void emit_int_expr(Compiler *c, int node, Buf *b) {
 /* Emit a node as an mrb_float. A poly value is unboxed via sp_poly_to_f; any
    other (numeric) value is plain-cast, matching the legacy `(mrb_float)(...)`. */
 void emit_float_expr(Compiler *c, int node, Buf *b) {
-  if (comp_ntype(c, node) == TY_POLY) {
+  if (yield_site_type(c, node) == TY_POLY) {
     buf_puts(b, "sp_poly_to_f("); emit_expr(c, node, b); buf_puts(b, ")");
     return;
   }
@@ -265,7 +291,7 @@ static const char *past_open_parens(const char *s) {
 }
 
 void emit_str_expr(Compiler *c, int node, Buf *b) {
-  if (comp_ntype(c, node) == TY_POLY) {
+  if (yield_site_type(c, node) == TY_POLY) {
     buf_puts(b, "sp_poly_to_s("); emit_expr(c, node, b); buf_puts(b, ")");
     return;
   }

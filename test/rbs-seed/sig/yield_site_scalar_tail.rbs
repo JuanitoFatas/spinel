@@ -1,0 +1,7 @@
+class YsBag
+  def []: (untyped) -> String
+end
+class YsRel
+  def initialize: (untyped items) -> void
+  def group: () { (untyped) -> untyped } -> Hash[untyped, Array[untyped]]
+end

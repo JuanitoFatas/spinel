@@ -732,6 +732,7 @@ const char *hash_box_cls(TyKind t);
 void emit_boxed_text(Compiler *c, TyKind t, const char *expr, Buf *b);
 void emit_unbox_text(Compiler *c, TyKind t, const char *expr, Buf *b);
 void emit_boxed(Compiler *c, int node, Buf *b);
+TyKind yield_site_type(Compiler *c, int node);
 void emit_int_expr(Compiler *c, int node, Buf *b);
 void emit_str_expr(Compiler *c, int node, Buf *b);
 int emit_unresolved_coerced(Compiler *c, int node, TyKind target, Buf *b);

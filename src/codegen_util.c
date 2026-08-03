@@ -626,7 +626,10 @@ int strbuf_ivar_owner(Compiler *c, int node) {
    strbuf local, <self>-><iv_x> (or civ_Toplevel_x) for a strbuf ivar.
    Returns 1 and fills `out`, or 0 when the receiver is neither (#3227). */
 int emit_poly_rhs_coerced(Compiler *c, TyKind slot, int v, Buf *b) {
-  if (v < 0 || comp_ntype(c, v) != TY_POLY) return 0;
+  /* yield_site_type, not comp_ntype: a `yield` carries the union over every
+     call site, and the block spliced HERE may already hand back the scalar
+     this slot wants. Coercing that would unbox a value that is not boxed. */
+  if (v < 0 || yield_site_type(c, v) != TY_POLY) return 0;
   const char *fn = (slot == TY_INT || slot == TY_BOOL) ? "sp_poly_to_i"
                  : slot == TY_FLOAT  ? "sp_poly_to_f"
                  : slot == TY_STRING ? "sp_poly_to_s" : NULL;
