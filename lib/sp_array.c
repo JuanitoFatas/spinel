@@ -218,6 +218,35 @@ void sp_IntArray_rotate_bang(sp_IntArray*a,mrb_int n){
   if(a->len<=0)return;
   n=((n%a->len)+a->len)%a->len;
   if(n==0)return;
+  /* Rotating left by n is "the first n elements move to the end", and the
+     window already carries its own start offset (the same one push_grow slides
+     home). So it is one copy of n words and an index bump, where the in-place
+     form below costs a copy of n, a move of len-n, and a copy back -- three
+     times the traffic for optcarrot's 16-word pixel window rotated by eight,
+     twice per tile. Headroom past the window is what pays for it: grow once to
+     hold a few rotations, and slide home when it runs out, which amortizes to
+     well under the old cost. */
+  if(a->start+a->len+n>a->cap && a->len+n<=a->cap && a->start>0){
+    memmove(a->data,a->data+a->start,sizeof(mrb_int)*(size_t)a->len);
+    a->start=0;
+  }
+  /* Only grow for a window small enough that the headroom is cheap and the
+     rotation is plausibly repeated (a pixel window, a ring of recent values).
+     A one-shot rotate of a large array would pay a doubled buffer for a copy
+     it never repeats, so that keeps the in-place form. */
+  if(a->start+a->len+n>a->cap && a->len+n>a->cap && a->len<=256){
+    mrb_int nc=a->len*2+n;
+    mrb_int*nd=(mrb_int*)malloc(sizeof(mrb_int)*(size_t)nc);
+    if(nd){
+      memcpy(nd,a->data+a->start,sizeof(mrb_int)*(size_t)a->len);
+      free(a->data); a->data=nd; a->start=0; a->cap=nc;
+    }
+  }
+  if(a->start+a->len+n<=a->cap){
+    memcpy(a->data+a->start+a->len,a->data+a->start,sizeof(mrb_int)*(size_t)n);
+    a->start+=n;
+    return;
+  }
   mrb_int*d=a->data+a->start;
   mrb_int rest=a->len-n;
   mrb_int keep=n<rest?n:rest;          /* the side we buffer */
