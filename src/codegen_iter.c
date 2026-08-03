@@ -1684,7 +1684,10 @@ int emit_iter_value_expr(Compiler *c, int id, Buf *b) {
   if (block < 0 || recv < 0) return 0;
   if (!nt_type(nt, block) || !sp_streq(nt_type(nt, block), "BlockNode")) return 0;
   TyKind rt = comp_ntype(c, recv);
-  if (rt == TY_UNKNOWN || rt == TY_POLY) return 0;
+  /* A poly receiver is allowed: `each` answers the receiver whatever kind it
+     turns out to hold, and the loop below walks it through the poly surface.
+     Bails on its own below when the iteration cannot be emitted. */
+  if (rt == TY_UNKNOWN) return 0;
   if (g_n_argov >= MAX_ARG_OVERRIDE) return 0;
   /* When the receiver was rewritten to `obj.__enum_to_a` (a user Enumerable or
      Struct routed through its synthesized member array, #2546/#2547), the block
@@ -1712,7 +1715,8 @@ int emit_iter_value_expr(Compiler *c, int id, Buf *b) {
   buf_printf(b, " _t%d = ", ta);
   emit_expr(c, recv, b);
   buf_puts(b, "; ");
-  if (!is_scalar_ret(rt) && rt != TY_RANGE) buf_printf(b, "SP_GC_ROOT(_t%d); ", ta);
+  if (rt == TY_POLY) buf_printf(b, "SP_GC_ROOT_RBVAL(_t%d); ", ta);
+  else if (!is_scalar_ret(rt) && rt != TY_RANGE) buf_printf(b, "SP_GC_ROOT(_t%d); ", ta);
   buf_puts(b, body.p ? body.p : "");
   free(body.p);
   /* yield the original Enumerable receiver, not the intermediate member array:

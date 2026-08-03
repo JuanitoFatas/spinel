@@ -927,6 +927,15 @@ TyKind infer_call(Compiler *c, int id) {
         (sp_streq(name, "each") || sp_streq(name, "each_with_index") ||
          sp_streq(name, "reverse_each") || sp_streq(name, "each_entry")))
       return rt;
+    /* A poly receiver that provably carries a container answers `each` with
+       itself, exactly as the typed kinds do. Left UNKNOWN, a chained
+       `h.each { }.length` had nothing to dispatch on and raised NoMethodError
+       naming nothing. */
+    if (rt == TY_POLY && nt_ref(nt, id, "block") >= 0 &&
+        poly_expr_flows_container(c, recv) &&
+        (sp_streq(name, "each") || sp_streq(name, "each_with_index") ||
+         sp_streq(name, "reverse_each") || sp_streq(name, "each_entry")))
+      return TY_POLY;
     if (ty_is_hash(rt) &&
         (sp_streq(name, "each_value") || sp_streq(name, "each_key") ||
          sp_streq(name, "each_pair")))
@@ -4738,6 +4747,10 @@ else {
          TY_STRING (-> poly) instead of replacing it. No user class keeps the
          concrete TY_STRING, like the rt==TY_STRING rule. */
       if (sp_streq(name, "delete") && argc == 1) {
+        /* Unless the receiver provably carries a container, in which case the
+           answer is the deleted VALUE (a hash) or the object (an array), not
+           a string and not whatever user class owns the name. */
+        if (poly_expr_flows_container(c, recv)) return TY_POLY;
         TyKind dr = TY_STRING;
         for (int k = 0; k < c->nclasses; k++) {
           int mi = comp_method_in_chain(c, k, name, NULL);

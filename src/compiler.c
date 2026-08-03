@@ -1134,7 +1134,11 @@ const char *poly_enum_op_for(const char *name) {
 int poly_container_read_p(const char *name) {
   static const char *const N[] = {
     "first", "last", "keys", "values", "min", "max", "sum", "sort",
-    "reverse", "index", NULL };
+    "reverse", "index",
+    /* the surface serves these now: each ends the dispatch in a runtime
+       helper that lets the receiver answer for itself, so the call's type is
+       the union rather than whichever user method owns the name */
+    "delete", "dig", "values_at", NULL };
   if (!name) return 0;
   for (int i = 0; N[i]; i++) if (sp_streq(name, N[i])) return 1;
   return 0;

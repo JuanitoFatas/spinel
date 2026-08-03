@@ -1,0 +1,4 @@
+class PcRel
+  def initialize: (untyped items) -> void
+  def group: () { (untyped) -> untyped } -> Hash[untyped, Array[untyped]]
+end
