@@ -218,7 +218,7 @@ void *sp_gc_alloc(size_t sz, void (*fin)(void *), void (*scn)(void *)) {
   size_t need = sizeof(sp_gc_hdr) + sz;
   sp_gc_hdr *h = (sp_gc_hdr *)calloc(1, need);
   if (!h) sp_oom_die();
-  h->finalize = fin; h->scan = scn; h->size = need; h->marked = 0;
+  h->finalize = fin; h->scan = scn; h->size = need; h->marked = 0; h->old = 0; h->dirty = 0;
   if (sp_alloc_report_on) sp_alloc_report_count((void *)scn, sz);
   SP_GC_HEAP_PUSH(h); sp_gc_bytes_add(need);
   return (char *)h + sizeof(sp_gc_hdr);
@@ -234,7 +234,7 @@ void *sp_gc_alloc(size_t sz, void (*fin)(void *), void (*scn)(void *)) {
   size_t need = sizeof(sp_gc_hdr) + sz;
   sp_gc_hdr *h = (sp_gc_hdr *)calloc(1, need);
   if (!h) sp_oom_die();
-  h->finalize = fin; h->scan = scn; h->size = need; h->marked = 0;
+  h->finalize = fin; h->scan = scn; h->size = need; h->marked = 0; h->old = 0; h->dirty = 0;
   if (sp_alloc_report_on) sp_alloc_report_count((void *)scn, sz);
   SP_GC_HEAP_PUSH(h); sp_gc_bytes_add(need);
   SP_HEAP_UNLOCK();
@@ -245,7 +245,7 @@ void *sp_gc_alloc_nogc(size_t sz, void (*fin)(void *), void (*scn)(void *)) {
   size_t need = sizeof(sp_gc_hdr) + sz;
   sp_gc_hdr *h = (sp_gc_hdr *)calloc(1, need);
   if (!h) sp_oom_die();
-  h->finalize = fin; h->scan = scn; h->size = need; h->marked = 0;
+  h->finalize = fin; h->scan = scn; h->size = need; h->marked = 0; h->old = 0; h->dirty = 0;
   if (sp_alloc_report_on) sp_alloc_report_count((void *)scn, sz);
   SP_HEAP_LOCK();
   SP_GC_HEAP_PUSH(h); sp_gc_bytes_add(need);

@@ -1348,18 +1348,51 @@ static void gc_roots_take_back(Compiler *c, Scope *s, Buf *b, size_t fn_off) {
 
    Only reference fields: a barrier on every ivar store, scalars included,
    costs 14% on optcarrot where the reference-only one costs 0.5%. */
-static int wb_field_is_ref(Compiler *c, const char *fld, size_t n) {
-  /* the emitted field is "iv_" + the mangled ivar name */
+/* The class whose struct is named `sp_<name>`, or -1. */
+static int wb_class_by_cname(Compiler *c, const char *nm, size_t n) {
+  for (int k = 0; k < c->nclasses; k++) {
+    const char *cn = c->classes[k].c_name;
+    if (cn && strlen(cn) == n && !strncmp(cn, nm, n)) return k;
+  }
+  return -1;
+}
+
+/* `only` >= 0 restricts the question to that class, which is what the holder's
+   own C type gives us; -1 falls back to asking whether ANY class declares the
+   name as a reference, which over-approximates in the safe direction. */
+static int wb_field_is_ref_in(Compiler *c, int only, const char *fld, size_t n) {
   if (n <= 3 || strncmp(fld, "iv_", 3)) return 0;
   fld += 3; n -= 3;
   for (int k = 0; k < c->nclasses; k++) {
+    if (only >= 0 && k != only) continue;
     ClassInfo *ci = &c->classes[k];
     for (int i = 0; i < ci->nivars; i++) {
       const char *m = iv_c(ci->ivars[i] + 1);
       if (strlen(m) != n || strncmp(m, fld, n)) continue;
+      /* A value-type class lives inline -- on the C stack or inside another
+         object -- so it has no GC header of its own and the barrier's
+         `(hdr *)obj - 1` would be reading something else entirely. Its own
+         fields are rooted individually where it is declared. */
+      if (ci->is_value_type) continue;
       TyKind t = ci->ivar_types[i];
       if (needs_root(t) && !comp_ty_value_obj(c, t)) return 1;
     }
+  }
+  return 0;
+}
+static int wb_field_is_ref(Compiler *c, const char *fld, size_t n) {
+  return wb_field_is_ref_in(c, -1, fld, n);
+}
+/* Does class `k` declare the emitted field `fld` (which carries the "iv_"
+   prefix)? Used to check that a holder class resolved from the text is really
+   the one being written to before letting it suppress a barrier. */
+static int wb_class_has_field(Compiler *c, int k, const char *fld, size_t n) {
+  if (k < 0 || k >= c->nclasses || n <= 3 || strncmp(fld, "iv_", 3)) return 0;
+  fld += 3; n -= 3;
+  ClassInfo *ci = &c->classes[k];
+  for (int i = 0; i < ci->nivars; i++) {
+    const char *m = iv_c(ci->ivars[i] + 1);
+    if (strlen(m) == n && !strncmp(m, fld, n)) return 1;
   }
   return 0;
 }
@@ -1395,18 +1428,67 @@ static size_t wb_lvalue_start(const char *p, size_t end) {
   }
 }
 
+/* The class of the object a store writes into, from its own C type: `self` in
+   a function whose signature says `sp_X *self`, or an explicit `(sp_X *)` cast
+   in front of the lvalue. -1 when the text does not say, which falls back to
+   the name-based question. Knowing the class is what keeps the barrier off a
+   value-type holder, which has no header for it to reach. */
+static int wb_holder_class(Compiler *c, const char *p, size_t st, size_t fn_off,
+                           size_t lv_end, int cur_self_cls) {
+  size_t n = lv_end - st;
+  if (n == 4 && !strncmp(p + st, "self", 4)) return cur_self_cls;
+  /* `((sp_X *)expr)` or `(sp_X *)expr` */
+  const char *q = p + st;
+  size_t k = 0;
+  while (k < n && (q[k] == '(' || q[k] == ' ')) k++;
+  if (k + 3 < n && !strncmp(q + k, "sp_", 3)) {
+    size_t e = k + 3;
+    while (e < n && (isalnum((unsigned char)q[e]) || q[e] == '_')) e++;
+    size_t sp = e;
+    while (sp < n && q[sp] == ' ') sp++;
+    if (sp < n && q[sp] == '*') return wb_class_by_cname(c, q + k + 3, e - k - 3);
+  }
+  (void)fn_off;
+  return -1;
+}
+
 static void gc_wb_insert(Compiler *c, Buf *b, size_t fn_off) {
   if (g_no_write_barrier) return;
+  int cur_self_cls = -1;
   for (size_t i = fn_off; i + 4 < b->len; i++) {
+    /* track the enclosing function's receiver type */
+    if (b->p[i] == '\n' && !strncmp(b->p + i + 1, "static ", 7)) {
+      const char *ln = b->p + i + 1;
+      const char *sf = strstr(ln, "*self");
+      const char *nl = strchr(ln, '\n');
+      cur_self_cls = -1;
+      if (sf && (!nl || sf < nl)) {
+        const char *t = sf;
+        while (t > ln && (t[-1] == ' ' || t[-1] == '*')) t--;
+        const char *e = t;
+        while (t > ln && (isalnum((unsigned char)t[-1]) || t[-1] == '_')) t--;
+        if ((size_t)(e - t) > 3 && !strncmp(t, "sp_", 3))
+          cur_self_cls = wb_class_by_cname(c, t + 3, (size_t)(e - t) - 3);
+      }
+    }
     if (b->p[i] != '-' || b->p[i+1] != '>' || strncmp(b->p + i + 2, "iv_", 3)) continue;
     size_t f = i + 2, e = f;
     while (e < b->len && (isalnum((unsigned char)b->p[e]) || b->p[e] == '_')) e++;
     size_t q = e;
     while (q < b->len && b->p[q] == ' ') q++;
     if (q >= b->len || b->p[q] != '=' || b->p[q+1] == '=') continue;   /* a read, or == */
-    if (!wb_field_is_ref(c, b->p + f, e - f)) continue;
     size_t st = wb_lvalue_start(b->p, i);
     if (st >= i) continue;
+    /* The holder's own C type is used to EXCLUDE, not to decide: a value-type
+       class lives inline and has no header for the barrier to reach, and
+       writing through `(hdr *)obj - 1` there is memory it does not own. Which
+       fields are references stays the permissive question, since a store whose
+       holder the text does not name still has to be covered. */
+    int hc = wb_holder_class(c, b->p, st, fn_off, i, cur_self_cls);
+    if (hc >= 0 && wb_class_has_field(c, hc, b->p + f, e - f)) {
+      if (!wb_field_is_ref_in(c, hc, b->p + f, e - f)) continue;
+    }
+    else if (!wb_field_is_ref(c, b->p + f, e - f)) continue;
     /* already wrapped (a nested store re-scanned) */
     if (st >= 7 && !strncmp(b->p + st - 7, "SP_WBO(", 7)) continue;
     if (st >= 14 && !strncmp(b->p + st - 14, "sp_gc_wb((void ", 15 - 1)) continue;

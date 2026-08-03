@@ -478,7 +478,7 @@ static inline sp_PolyArray *sp_PolyArray_new(void) {
   if (ph) {
     /* re-link into the live heap (the sweep unhooked it); size still counts
        header + retained data buffer, so the byte accounting stays exact */
-    ph->marked = 0;
+    ph->marked = 0; ph->old = 0; ph->dirty = 0;
     ph->recycle = sp_PolyArray_pool_recycle;
     SP_GC_HEAP_PUSH(ph);
     sp_gc_bytes_add(ph->size);
