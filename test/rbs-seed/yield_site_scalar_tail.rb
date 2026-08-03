@@ -44,3 +44,7 @@ p int_keyed.length
 str_keyed = YsRel.new([1, 22]).group { |n| n.to_s }
 p str_keyed["1"]
 p str_keyed["22"]
+# a float-valued block over the same union
+flt_keyed = YsRel.new([1, 2]).group { |n| n * 1.5 }
+p flt_keyed[1.5]
+p flt_keyed[3.0]
