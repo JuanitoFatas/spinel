@@ -3080,6 +3080,31 @@ int bind_coerce_operator_params(Compiler *c) {
     TyKind mg = ty_unify(cp->type, TY_POLY);
     if (mg != cp->type) { cp->type = mg; changed = 1; }
   }
+  /* An operator reached through a POLY receiver goes out to the runtime's
+     user-binop dispatch, which hands the argument over boxed -- it cannot know
+     what the argument is. So the operator's parameter has to be able to hold
+     anything: typed from the one call site the compiler could resolve, the
+     dispatch arm was guarded on that argument's class and a call with any
+     other argument fell through to NoMethodError on a method the class
+     defines (#3511). */
+  NT_FOREACH_KIND(nt, NK_CallNode, id) {
+    const char *nm = nt_str(nt, id, "name");
+    if (!nm || !is_arith_op(nm) || nt_ref(nt, id, "block") >= 0) continue;
+    int recv = nt_ref(nt, id, "receiver");
+    if (recv < 0 || infer_type(c, recv) != TY_POLY) continue;
+    int ca = nt_ref(nt, id, "arguments");
+    int argc = 0; if (ca >= 0) nt_arr(nt, ca, "arguments", &argc);
+    if (argc != 1) continue;
+    for (int k = 0; k < c->nclasses; k++) {
+      int mi = comp_method_in_chain(c, k, nm, NULL);
+      if (mi < 0) continue;
+      Scope *m = &c->scopes[mi];
+      if (m->nparams < 1 || !m->pnames[0]) continue;
+      LocalVar *p = scope_local(m, m->pnames[0]);
+      if (!p || p->rbs_seeded || p->type == TY_POLY) continue;
+      p->type = TY_POLY; changed = 1;
+    }
+  }
   NT_FOREACH_KIND(nt, NK_CallNode, id) {
     const char *nm = nt_str(nt, id, "name");
     if (!nm || !is_arith_op(nm) || nt_ref(nt, id, "block") >= 0) continue;
