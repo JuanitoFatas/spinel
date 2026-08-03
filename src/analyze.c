@@ -11277,6 +11277,7 @@ void analyze_program(Compiler *c) {
   }
 
 
+  int widened_a_read = 0;
   /* Final safety pass: a hash-typed LOCAL assigned from a plain TY_POLY
      value, or from a reader whose backing ivar finished on a different
      type, cannot assume its variant -- codegen would cast the boxed
@@ -11334,7 +11335,33 @@ void analyze_program(Compiler *c) {
         if (comp_scope_of(c, nid2) != lsc) continue;
         if (ty_is_hash(c->ntype[nid2]) || c->ntype[nid2] == TY_RATIONAL ||
             c->ntype[nid2] == TY_COMPLEX) c->ntype[nid2] = TY_POLY;
+        widened_a_read = 1;
       }
+    }
+  }
+
+  /* The reads are repointed above, but what CONSUMED them still carries the
+     type it was inferred with. An arithmetic operator on a poly receiver
+     lowers to sp_poly_<op>, whose value is boxed, so a node still typed
+     Rational or Complex from before the widening met the emission at its
+     consumer and the C did not compile. Bring those in line with the rule
+     inference already states for a poly receiver. Iterated: a chain widens one
+     link at a time. */
+  if (widened_a_read) {
+    for (int iter = 0; iter < 16; iter++) {
+      int ch2 = 0;
+      NT_FOREACH_KIND(c->nt, NK_CallNode, id) {
+        const char *nm = nt_str(c->nt, id, "name");
+        if (!nm || !is_arith_op(nm)) continue;
+        int r2 = nt_ref(c->nt, id, "receiver");
+        int a2 = nt_ref(c->nt, id, "arguments");
+        int an2 = 0; if (a2 >= 0) nt_arr(c->nt, a2, "arguments", &an2);
+        if (r2 < 0 || an2 != 1) continue;
+        if (c->ntype[r2] != TY_POLY || c->ntype[id] == TY_POLY) continue;
+        if (c->ntype[id] == TY_UNKNOWN || c->ntype[id] == TY_VOID) continue;
+        c->ntype[id] = TY_POLY; ch2 = 1;
+      }
+      if (!ch2) break;
     }
   }
 
