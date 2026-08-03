@@ -32,6 +32,15 @@ void buf_putn(Buf *b, const char *s, size_t n) {
   b->p[b->len] = '\0';
 }
 void buf_puts(Buf *b, const char *s) { buf_putn(b, s, strlen(s)); }
+/* Remove `n` bytes at `off`. Used to take back a prologue line the emitter had
+   to write before it could know whether the body would need it. */
+void buf_erase(Buf *b, size_t off, size_t n) {
+  if (off > b->len || n == 0) return;
+  if (off + n > b->len) n = b->len - off;
+  memmove(b->p + off, b->p + off + n, b->len - off - n);
+  b->len -= n;
+  b->p[b->len] = '\0';
+}
 void buf_printf(Buf *b, const char *fmt, ...) {
   char tmp[512];
   va_list ap; va_start(ap, fmt);

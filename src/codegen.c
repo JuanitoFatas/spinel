@@ -1163,6 +1163,24 @@ static void inherit_transplant_locals(Compiler *c, Scope *s) {
   }
 }
 
+/* SP_GC_SAVE restores the root-stack depth on the way out. A function that
+   registers no root of its own moved nothing to restore, so the save is dead
+   weight -- and it is what stops the C compiler from leaving such a function
+   frameless. It has to be emitted before the body is known, so it is taken back
+   here rather than predicted.
+
+   Kept whenever the body catches a longjmp (`setjmp`) or touches the depth
+   directly (`sp_gc_nroots`): an unwind skips the cleanup attributes of every
+   frame it passes, so the landing frame is the one that has to put the depth
+   back, whether or not it pushed anything itself. */
+static void gc_save_take_back(Buf *b, size_t off, size_t save_len) {
+  if (off + save_len > b->len) return;
+  const char *body = b->p + off + save_len;
+  if (strstr(body, "SP_GC_ROOT") || strstr(body, "setjmp") ||
+      strstr(body, "sp_gc_nroots")) return;
+  buf_erase(b, off, save_len);
+}
+
 void emit_method(Compiler *c, Scope *s, Buf *b) {
   /* A proc form holds its block in a real parameter, so its `yield`s are calls
      on that proc rather than an inline splice (#3399). */
@@ -1204,7 +1222,9 @@ void emit_method(Compiler *c, Scope *s, Buf *b) {
   emit_line_directive(c, s->def_node, b);
   emit_method_signature(c, s, b);
   buf_puts(b, " {\n");
+  size_t gc_save_off = b->len;
   buf_puts(b, "    SP_GC_SAVE();\n");
+  size_t gc_save_len = b->len - gc_save_off;
   emit_scope_decls(c, s, b);
   TyKind saved_rt = g_ret_type;
   int saved_ed = g_ensure_depth; g_ensure_depth = 0;
@@ -1315,6 +1335,7 @@ void emit_method(Compiler *c, Scope *s, Buf *b) {
   g_brk_ser_var = saved_bser; g_brk_skip_id = saved_bskip;
   g_yield_proc_ref = sv_ypr9; g_yield_slot_ty = sv_yst9;
   buf_puts(b, "}\n");
+  gc_save_take_back(b, gc_save_off, gc_save_len);
 }
 
 /* ---- first-class Proc ---- */
