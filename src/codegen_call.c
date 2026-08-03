@@ -1084,6 +1084,16 @@ int diagnose_eval_call(Compiler *c, int id) {
     const char *rnm = nt_str(nt, recv, "name");
     if (!rnm || !sp_streq(rnm, "Kernel")) return 0;
   }
+  else {
+    /* A receiverless `eval(x)` is Kernel#eval only if nothing nearer owns the
+       name. A tree-walking interpreter calls its own `eval` from inside the
+       class that defines it, and refusing that is refusing the program the
+       method belongs to. */
+    Scope *self = comp_scope_of(c, id);
+    if (self && self->class_id >= 0 &&
+        comp_method_in_chain(c, self->class_id, "eval", NULL) >= 0) return 0;
+    if (comp_method_index(c, "eval") >= 0) return 0;
+  }
   unsupported(c, id, "eval of a runtime string is not supported by AOT compilation (define the code statically)");
   return 1;
 }
