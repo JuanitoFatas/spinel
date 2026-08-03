@@ -5116,10 +5116,16 @@ static SP_NOINLINE sp_RbVal sp_poly_arr_get_hash_cold(sp_RbVal a, mrb_int i) {
   }
   if (a.tag == SP_TAG_OBJ && a.cls_id == SP_BUILTIN_POLY_POLY_HASH)
     return sp_PolyPolyHash_get((sp_PolyPolyHash*)a.v.p, sp_box_int(i));
+  /* These two read `i` as a symbol id (and as that id's name): an emitter that
+     lowered a symbol key to an int relies on it. That makes a genuine Integer
+     key on a symbol-keyed hash answer whatever symbol sits at that number
+     rather than nil -- sp_poly_index_poly, which is handed the key boxed and
+     can tell the two apart, resolves it before reaching here. */
   if (a.tag == SP_TAG_OBJ && a.cls_id == SP_BUILTIN_SYM_POLY_HASH)
     return sp_SymPolyHash_get((sp_SymPolyHash*)a.v.p, (sp_sym)i);
   if (a.tag == SP_TAG_OBJ && a.cls_id == SP_BUILTIN_STR_POLY_HASH)
     return sp_StrPolyHash_get((sp_StrPolyHash*)a.v.p, sp_sym_name_fn ? sp_sym_name_fn((sp_sym)i) : "");
+
   if (a.tag == SP_TAG_OBJ && a.cls_id == SP_BUILTIN_INT_INT_HASH) {
     sp_IntIntHash *h = (sp_IntIntHash *)a.v.p;
     return sp_IntIntHash_has_key(h, i) ? sp_box_int(sp_IntIntHash_get(h, i)) : sp_box_nil();
@@ -5186,6 +5192,22 @@ static sp_RbVal sp_poly_index_poly(sp_RbVal recv, sp_RbVal idx) {
       if (k < 0 || k >= n) return sp_box_nil();
       return sh->vals[sh->order[k]];
     }
+  }
+  /* An Integer key is an Integer key. The generic read below takes a bare
+     mrb_int and, for a symbol- or string-keyed hash, reads it as that kind's
+     key -- so `h[0]` on `{a: 1}` came back as whatever symbol 0 happens to be
+     rather than nil (#3509). Those storages cannot hold an Integer key at all,
+     so the answer is nil; the two that can look it up. */
+  if (idx.tag == SP_TAG_INT && recv.tag == SP_TAG_OBJ && sp_poly_is_hash_kind(recv.cls_id)) {
+    if (recv.cls_id == SP_BUILTIN_INT_INT_HASH) {
+      sp_IntIntHash *h = (sp_IntIntHash *)recv.v.p;
+      return sp_IntIntHash_has_key(h, i) ? sp_box_int(sp_IntIntHash_get(h, i)) : sp_box_nil();
+    }
+    if (recv.cls_id == SP_BUILTIN_INT_STR_HASH) {
+      sp_IntStrHash *h = (sp_IntStrHash *)recv.v.p;
+      return sp_IntStrHash_has_key(h, i) ? sp_box_str(sp_IntStrHash_get(h, i)) : sp_box_nil();
+    }
+    return sp_box_nil();
   }
   return sp_poly_arr_get_hash(recv, i);
 }

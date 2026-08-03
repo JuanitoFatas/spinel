@@ -9313,6 +9313,35 @@ int emit_poly_call(Compiler *c, int id, Buf *b) {
     buf_puts(b, "), "); emit_str_expr(c, argv[0], b); buf_puts(b, ")");
     return 1;
   }
+  /* `dig` on a receiver that stayed poly: the arms above are per container
+     kind, and with none matching the call was coerced to a hash and raised
+     NoMethodError on an Array that answers it. The runtime walk dispatches on
+     the receiver's own kind at each step (#3509). */
+  if (recv >= 0 && rt == TY_POLY && sp_streq(name, "dig") && argc >= 1 &&
+      nt_ref(nt, id, "block") < 0) {
+    int has_user_dig = 0;
+    if (!g_poly_builtin_arm)
+    for (int kk = 0; kk < c->nclasses && !has_user_dig; kk++)
+      if (comp_method_in_chain(c, kk, name, NULL) >= 0 ||
+          comp_reader_in_chain(c, kk, name, NULL)) has_user_dig = 1;
+    if (!has_user_dig) {
+      if (argc == 1 && nt_kind(nt, argv[0]) == NK_SplatNode) {
+        buf_puts(b, "sp_poly_dig_list("); emit_boxed(c, recv, b);
+        buf_puts(b, ", sp_poly_to_poly_array("); emit_boxed(c, argv[0], b); buf_puts(b, "))");
+        return 1;
+      }
+      int any_splat = 0;
+      for (int a = 0; a < argc; a++)
+        if (nt_kind(nt, argv[a]) == NK_SplatNode) any_splat = 1;
+      if (!any_splat) {
+        buf_printf(b, "sp_poly_dig_n("); emit_boxed(c, recv, b);
+        buf_printf(b, ", %d, (sp_RbVal[]){", argc);
+        for (int a = 0; a < argc; a++) { if (a) buf_puts(b, ", "); emit_boxed(c, argv[a], b); }
+        buf_puts(b, "})");
+        return 1;
+      }
+    }
+  }
   /* The one-argument numeric methods, the same rule the no-argument table
      below uses: dispatch on the runtime tag unless a user class owns the name.
      They were missing entirely, so an exact Rational reaching divmod / modulo
