@@ -4242,6 +4242,13 @@ static int emit_poly_method_dispatch(Compiler *c, int id, Buf *b) {
        receiver and key. Restricted to those key types, a `fetch` on a
        float-keyed hash emitted no dispatch at all and raised NoMethodError. */
     int is_fetch = sp_streq(name, "fetch") && (argc == 1 || argc == 2);
+    /* Names a user class can own, replacing the whole dispatch with its arms:
+       a Hash or Array arriving at the same call matched nothing and raised
+       NoMethodError naming its own class. They end in a runtime helper that
+       lets the receiver answer for itself (the default at the switch's end). */
+    int is_pdelete = sp_streq(name, "delete") && argc == 1;
+    int is_pdig = sp_streq(name, "dig") && argc >= 1;
+    int is_pvalues_at = sp_streq(name, "values_at") && argc >= 1;
     int is_include = (sp_streq(name, "include?") || sp_streq(name, "member?") ||
                       sp_streq(name, "has_key?") || sp_streq(name, "key?")) && argc == 1;
     /* intersect? on a poly value that is a builtin array. The typed-receiver
@@ -4315,7 +4322,7 @@ static int emit_poly_method_dispatch(Compiler *c, int id, Buf *b) {
        receiver (#3234): builtin pre-arms, no user candidates required */
     int is_cover = sp_streq(name, "cover?") && argc == 1 && !diag_user_defines(c, name);
     int is_gcdlcm = sp_streq(name, "gcdlcm") && argc == 1 && !diag_user_defines(c, name);
-    if (ncand > 0 || is_index || is_include || is_fetch || is_push || is_pred || is_strftime || is_intersect || is_arr_index || is_cover || is_gcdlcm) {
+    if (ncand > 0 || is_index || is_pdelete || is_pdig || is_pvalues_at || is_include || is_fetch || is_push || is_pred || is_strftime || is_intersect || is_arr_index || is_cover || is_gcdlcm) {
       TyKind ret = comp_ntype(c, id);
       int tv = ++g_tmp, tr = ++g_tmp;
       int *atmp = malloc(sizeof(int) * argc);
@@ -4945,7 +4952,8 @@ else {
          so those names keep their existing answer rather than gain a
          mislabelled raise (#3394). */
       if (!is_pred && !is_strftime && !is_aref && !is_fetch && !is_include &&
-          !is_push && !is_cover && !is_gcdlcm && !is_strdel && !is_strsplit) {
+          !is_push && !is_cover && !is_gcdlcm && !is_strdel && !is_strsplit &&
+          !is_pdelete && !is_pdig && !is_pvalues_at) {
         buf_puts(b, " default:");
         /* index/rindex also belong to String, whose box carries no cls_id, so
            no case above can claim it. Answer it here, ahead of the raise, or a
@@ -4975,6 +4983,27 @@ else {
          answered nil with nothing raised (#3507). The runtime index dispatches
          on the receiver's own kind, and raises where there is no `[]` at all.
          The key goes boxed, since a Hash key is not an offset. */
+      else if (is_pdelete || is_pdig || is_pvalues_at) {
+        Buf ab; memset(&ab, 0, sizeof ab);
+        for (int a = 0; a < argc; a++) {
+          char tn[32]; snprintf(tn, sizeof tn, "_t%d", atmp[a]);
+          if (a) buf_puts(&ab, ", ");
+          if (atmp_ty[a] == TY_POLY) buf_puts(&ab, tn);
+          else emit_boxed_text(c, atmp_ty[a], tn, &ab);
+        }
+        char gen[512];
+        if (is_pdelete)
+          snprintf(gen, sizeof gen, "sp_poly_delete_key(_t%d, %s)", tv, ab.p ? ab.p : "sp_box_nil()");
+        else
+          snprintf(gen, sizeof gen, "sp_poly_%s(_t%d, %d, (sp_RbVal[]){%s})",
+                   is_pdig ? "dig_n" : "values_at_n", tv, argc, ab.p ? ab.p : "sp_box_nil()");
+        /* Only when the result temp is the boxed one. The generic answer is
+           whatever the receiver's own kind returns, and a switch whose result
+           was typed from the user arm alone has no room for it: unboxing an
+           Array into a `const char *` slot is worse than the raise. */
+        if (ret == TY_POLY) buf_printf(b, " default: _t%d = %s; break;", tr, gen);
+        free(ab.p);
+      }
       else if (is_aref || is_fetch) {
         Buf kb; memset(&kb, 0, sizeof kb);
         { char keyt[64]; snprintf(keyt, sizeof keyt, "_t%d", atmp[0]);
@@ -4993,10 +5022,10 @@ else {
                    db.p ? db.p : "sp_box_nil()");
         else
           snprintf(gen, sizeof gen, "sp_poly_index_poly(_t%d, %s)", tv, kb.p ? kb.p : "sp_box_nil()");
-        buf_printf(b, " default: _t%d = ", tr);
-        if (ret == TY_POLY) buf_puts(b, gen);
-        else emit_unbox_text(c, is_scalar_ret(ret) ? ret : TY_INT, gen, b);
-        buf_puts(b, "; break;");
+        if (ret == TY_POLY) buf_printf(b, " default: _t%d = %s; break;", tr, gen);
+        else { buf_printf(b, " default: _t%d = ", tr);
+               emit_unbox_text(c, is_scalar_ret(ret) ? ret : TY_INT, gen, b);
+               buf_puts(b, "; break;"); }
         free(kb.p); free(db.p);
       }
       buf_printf(b, " } _t%d; })", tr);

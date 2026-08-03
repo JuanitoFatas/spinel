@@ -18,3 +18,7 @@ KeyError
 KeyError
 ["a"]
 "miss"
+[1]
+nil
+[1]
+1

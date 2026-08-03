@@ -5143,6 +5143,54 @@ static mrb_bool sp_poly_has_key(sp_RbVal recv, sp_RbVal key) {
   }
 }
 
+/* Kind-dispatching `delete`, `dig` and `values_at` for a poly receiver. Each
+   name is one a user class can own, and owning it replaces the whole dispatch
+   with that class's arms -- a Hash or Array arriving at the same call then
+   matched nothing and raised NoMethodError naming its own class. The receiver
+   answers for itself here instead. */
+static sp_RbVal sp_poly_delete_key(sp_RbVal recv, sp_RbVal key) {
+  if (recv.tag == SP_TAG_OBJ && sp_poly_is_hash_kind(recv.cls_id)) {
+    if (!sp_poly_has_key(recv, key)) return sp_box_nil();
+    sp_RbVal was = sp_poly_index_poly(recv, key);
+    switch (recv.cls_id) {
+      case SP_BUILTIN_POLY_POLY_HASH: sp_PolyPolyHash_delete((sp_PolyPolyHash *)recv.v.p, key); break;
+      case SP_BUILTIN_STR_POLY_HASH:  sp_StrPolyHash_delete((sp_StrPolyHash *)recv.v.p, key.v.s); break;
+      case SP_BUILTIN_STR_STR_HASH:   sp_StrStrHash_delete((sp_StrStrHash *)recv.v.p, key.v.s); break;
+      case SP_BUILTIN_STR_INT_HASH:   sp_StrIntHash_delete((sp_StrIntHash *)recv.v.p, key.v.s); break;
+      case SP_BUILTIN_SYM_POLY_HASH:  sp_SymPolyHash_delete((sp_SymPolyHash *)recv.v.p, (sp_sym)key.v.i); break;
+      case SP_BUILTIN_INT_STR_HASH:   sp_IntStrHash_delete((sp_IntStrHash *)recv.v.p, key.v.i); break;
+      case SP_BUILTIN_INT_INT_HASH:   sp_IntIntHash_delete((sp_IntIntHash *)recv.v.p, key.v.i); break;
+      default: return sp_box_nil();
+    }
+    return was;
+  }
+  if (recv.tag == SP_TAG_OBJ && sp_poly_is_array_kind(recv.cls_id)) {
+    sp_PolyArray *a = sp_poly_to_poly_array(recv);
+    mrb_int w = 0, found = 0;
+    for (mrb_int i = 0; a && i < a->len; i++) {
+      if (sp_poly_eq(a->data[i], key)) { found = 1; continue; }
+      a->data[w++] = a->data[i];
+    }
+    if (a) a->len = w;
+    return found ? key : sp_box_nil();
+  }
+  sp_raise_nomethod(sp_nomethod_msg("delete", recv));
+  return sp_box_nil();
+}
+static sp_RbVal sp_poly_dig_n(sp_RbVal recv, mrb_int n, const sp_RbVal *keys) {
+  sp_RbVal cur = recv;
+  for (mrb_int i = 0; i < n; i++) {
+    if (cur.tag == SP_TAG_NIL) return cur;
+    cur = sp_poly_index_poly(cur, keys[i]);
+  }
+  return cur;
+}
+static sp_RbVal sp_poly_values_at_n(sp_RbVal recv, mrb_int n, const sp_RbVal *keys) {
+  sp_PolyArray *out = sp_PolyArray_new();
+  for (mrb_int i = 0; i < n; i++) sp_PolyArray_push(out, sp_poly_index_poly(recv, keys[i]));
+  return sp_box_poly_array(out);
+}
+
 /* Kind-dispatching `fetch` for a poly receiver. The emitted switch enumerates
    the receiver kinds someone thought to add, so a receiver of any other kind
    reached no arm and raised NoMethodError naming Hash. Here the receiver

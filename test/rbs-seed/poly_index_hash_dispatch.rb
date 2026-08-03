@@ -68,3 +68,12 @@ p (ints.fetch(9) rescue $!.class)
 strs = PxRel.new(["a"]).group { |s| s }
 p strs.fetch("a", "miss")
 p strs.fetch("z", "miss")
+
+# `dig` is one more name a user class can own, taking the whole dispatch with
+# it: a Hash arriving at the same call raised NoMethodError naming Hash. It
+# ends in the runtime helper too, so the receiver answers for itself.
+p flt.dig(1.5)
+p flt.dig(9.9)
+p ints.dig(1)
+nested = PxRel.new([1]).group { |n| n }
+p nested.dig(1, 0)
