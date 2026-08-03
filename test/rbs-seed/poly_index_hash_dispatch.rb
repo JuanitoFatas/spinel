@@ -77,3 +77,22 @@ p flt.dig(9.9)
 p ints.dig(1)
 nested = PxRel.new([1]).group { |n| n }
 p nested.dig(1, 0)
+
+# Keyed by a nil literal, on the same dispatch. `hash[nil]` is the root lookup
+# of the group_by-then-find-the-parentless idiom, and a nil key is neither an
+# offset nor one of the enumerated hash-key kinds, so it reached the default
+# only once the default stopped living in the integer-key branch (#3508).
+roots = PxRel.new([1, 2, 3]).group { |x| x == 1 ? nil : x }
+p roots[nil]
+p roots[2]
+p roots.fetch(nil, "miss")
+p roots.dig(nil)
+p roots.length
+
+mixed = {}
+mixed["a"] = [1]
+mixed[nil] = [2]
+p PxBag.new[:sym]
+p mixed[nil]
+p mixed["a"]
+p mixed[:missing]
