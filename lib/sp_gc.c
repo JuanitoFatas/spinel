@@ -133,7 +133,7 @@ __attribute__((constructor)) static void sp_gc_debug_env(void){
 
 /* Tag byte preceding `obj`: 0xfe heap-unmarked -> 0xfc; 0xfc/0xff/0xfd/0xf1
  * skipped; else a real GC object reached through its scan hook. */
-void sp_gc_mark(void*obj){if(!obj)return;unsigned char pm=((unsigned char*)obj)[-1];if(pm==0xfe){((char*)obj)[-1]=(char)0xfc;return;}if(pm==0xfc||pm==0xff||pm==0xfd||pm==0xf1)return;sp_gc_hdr*h=(sp_gc_hdr*)((char*)obj-sizeof(sp_gc_hdr));if(sp_gc_verify&&!sp_gc_obj_registered(h))sp_gc_verify_fail(obj,h);if(sp_gc_verify_probe_on){if(!h->old&&h->marked!=sp_gc_verify_probe)sp_gc_verify_probe_hit=1;return;}if(h->marked==sp_gc_mark_gen)return;if(sp_gc_minor&&h->old)return;h->marked=sp_gc_mark_gen;if(h->scan){if(sp_gc_mark_stack&&sp_gc_mark_top<SP_GC_MARK_STACK_MAX){sp_gc_mark_stack[sp_gc_mark_top++]=obj;}
+void sp_gc_mark(void*obj){if(!obj)return;unsigned char pm=((unsigned char*)obj)[-1];if(pm==0xfe){((char*)obj)[-1]=(char)0xfc;return;}if(pm==0xfc||pm==0xff||pm==0xfd||pm==0xf1)return;sp_gc_hdr*h=(sp_gc_hdr*)((char*)obj-sizeof(sp_gc_hdr));if(sp_gc_verify&&!sp_gc_obj_registered(h))sp_gc_verify_fail(obj,h);if(sp_gc_verify_probe_on){if(!h->old&&h->marked==sp_gc_verify_probe)sp_gc_verify_probe_hit=1;return;}if(h->marked==sp_gc_mark_gen)return;if(sp_gc_minor&&h->old)return;h->marked=sp_gc_mark_gen;if(h->scan){if(sp_gc_mark_stack&&sp_gc_mark_top<SP_GC_MARK_STACK_MAX){sp_gc_mark_stack[sp_gc_mark_top++]=obj;}
 else{h->scan(obj);}}}
 
 void sp_gc_mark_drain(void){
@@ -251,37 +251,48 @@ void sp_gc_collect(void){
      record -- the one failure mode of this design, silent until it is a use
      after free. Off unless SPINEL_GC_VERIFY_GEN is set. */
   if(!full && sp_gc_verify_gen){
+    /* Snapshot the young objects the minor did NOT reach, then mark whole-heap
+       and see which of them the full mark does: each one is held only through
+       an old object the barrier failed to record. Without the snapshot the
+       full mark's own stamps make the two indistinguishable. */
     unsigned minor_gen = sp_gc_mark_gen;
+    size_t cap = 4096, n = 0;
+    sp_gc_hdr **cand = (sp_gc_hdr **)malloc(sizeof(sp_gc_hdr *) * cap);
+    if (cand) {
+#ifdef SP_THREADS
+      { int w=sp_active_workers; if(w<1)w=1; if(w>SP_MAX_WORKERS)w=SP_MAX_WORKERS;
+        for(int i=0;i<w;i++)
+          for(sp_gc_hdr*h=sp_gc_wslot[i].young;h;h=h->next)
+            if(!h->old && h->marked!=minor_gen){
+              if(n==cap){cap*=2;cand=(sp_gc_hdr**)realloc(cand,sizeof(sp_gc_hdr*)*cap);if(!cand)break;}
+              cand[n++]=h; } }
+#else
+      for(sp_gc_hdr*h=sp_gc_heap;h;h=h->next)
+        if(!h->old && h->marked!=minor_gen){
+          if(n==cap){cap*=2;cand=(sp_gc_hdr**)realloc(cand,sizeof(sp_gc_hdr*)*cap);if(!cand)break;}
+          cand[n++]=h; }
+#endif
+    }
     sp_gc_mark_gen = (sp_gc_mark_gen + 1) & 0x1fffffffu;
     if(!sp_gc_mark_gen) sp_gc_mark_gen = 1;
     sp_gc_mark_all();
-    int leaked = 0;
-    for(sp_gc_hdr*h=sp_gc_old_heap;h;h=h->next)
-      if(h->marked==sp_gc_mark_gen && h->old) { /* old objects are expected to differ */ }
-#ifdef SP_THREADS
-    { int n=sp_active_workers; if(n<1)n=1; if(n>SP_MAX_WORKERS)n=SP_MAX_WORKERS;
-      for(int i=0;i<n;i++)
-        for(sp_gc_hdr*h=sp_gc_wslot[i].young;h;h=h->next)
-          if(h->marked==sp_gc_mark_gen && h->marked!=minor_gen && !h->old) leaked++; }
-#else
-    for(sp_gc_hdr*h=sp_gc_heap;h;h=h->next)
-      if(h->marked==sp_gc_mark_gen && !h->old) leaked++;
-#endif
+    size_t leaked = 0;
+    for(size_t i=0;cand&&i<n;i++) if(cand[i]->marked==sp_gc_mark_gen) leaked++;
     if(leaked){
-      fprintf(stderr,"spinel: GC generational check: %d young object(s) reachable only "
+      fprintf(stderr,"spinel: GC generational check: %zu young object(s) reachable only "
                      "through an old one the barrier did not record\n", leaked);
-      /* name the holders: any OLD object that reaches an unrecorded young one
-         is where the missing barrier is, and its scan function names the type */
+      /* Name the holders: an old object that reaches one of them is where the
+         missing barrier is, and its scan function names the type. */
       for(sp_gc_hdr*h=sp_gc_old_heap;h;h=h->next){
         if(h->dirty||!h->scan) continue;
-        sp_gc_verify_probe_hit=0; sp_gc_verify_probe=minor_gen; sp_gc_verify_probe_on=1;
+        sp_gc_verify_probe_hit=0; sp_gc_verify_probe=sp_gc_mark_gen; sp_gc_verify_probe_on=1;
         h->scan((char*)h+sizeof(sp_gc_hdr));
         sp_gc_verify_probe_on=0;
-        if(sp_gc_verify_probe_hit)
-          fprintf(stderr,"spinel:   holder scan=%p\n",(void*)h->scan);
+        if(sp_gc_verify_probe_hit) fprintf(stderr,"spinel:   holder scan=%p\n",(void*)h->scan);
       }
       sp_gc_verify_gen_fail = 1;
     }
+    free(cand);
   }
   if(full){
     /* a full cycle re-marks everything, so the set starts over */
