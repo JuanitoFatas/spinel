@@ -9313,6 +9313,29 @@ int emit_poly_call(Compiler *c, int id, Buf *b) {
     buf_puts(b, "), "); emit_str_expr(c, argv[0], b); buf_puts(b, ")");
     return 1;
   }
+  /* The one-argument numeric methods, the same rule the no-argument table
+     below uses: dispatch on the runtime tag unless a user class owns the name.
+     They were missing entirely, so an exact Rational reaching divmod / modulo
+     / quo through a block parameter raised NoMethodError on methods it
+     answers (#3512). */
+  if (recv >= 0 && rt == TY_POLY && argc == 1 && nt_ref(nt, id, "block") < 0) {
+    const char *pfn1 =
+      sp_streq(name, "divmod")  ? "sp_poly_divmod" :
+      sp_streq(name, "modulo")  ? "sp_poly_mod" :
+      sp_streq(name, "quo")     ? "sp_poly_quo" : NULL;
+    if (pfn1) {
+      int has_user1 = 0;
+      if (!g_poly_builtin_arm)
+      for (int kk = 0; kk < c->nclasses && !has_user1; kk++)
+        if (comp_method_in_chain(c, kk, name, NULL) >= 0 ||
+            comp_reader_in_chain(c, kk, name, NULL)) has_user1 = 1;
+      if (!has_user1) {
+        buf_printf(b, "%s(", pfn1); emit_expr(c, recv, b);
+        buf_puts(b, ", "); emit_boxed(c, argv[0], b); buf_puts(b, ")");
+        return 1;
+      }
+    }
+  }
   if (recv >= 0 && rt == TY_POLY && argc == 0) {
     if (sp_streq(name, "nil?")) { buf_puts(b, "sp_poly_nil_p("); emit_expr(c, recv, b); buf_puts(b, ")"); return 1; }
     /* to_a on a runtime-tagged value: nil -> [], array -> itself, hash -> its

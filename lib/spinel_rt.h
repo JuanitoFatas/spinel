@@ -2196,7 +2196,7 @@ static mrb_bool sp_poly_negative_p(sp_RbVal v) { if (v.tag == SP_TAG_INT) return
 /* abs of a negative int goes through SP_POLY_INT_OP(sub, 0, x): plain -x is
    UB for INT_MIN; promote mode boxes it as a bigint, wrap mode keeps the
    documented wrapping C arithmetic. fabs covers -0.0 -> 0.0 too. */
-static sp_RbVal sp_poly_abs(sp_RbVal v) { if (v.tag == SP_TAG_INT) { if (v.v.i >= 0) return v; return SP_POLY_INT_OP(sub, (mrb_int)0, v.v.i); } if (v.tag == SP_TAG_FLT) return sp_box_float(fabs(v.v.f)); if (v.tag == SP_TAG_BIGINT) { sp_Bigint *b = (sp_Bigint *)v.v.p; return sp_bigint_sign(b) < 0 ? sp_box_bigint(sp_bigint_sub(sp_bigint_new_int(0), b)) : v; } if (v.tag == SP_TAG_OBJ && v.cls_id == SP_BUILTIN_COMPLEX) return sp_complex_abs_v(*(sp_Complex *)v.v.p); sp_raise_poly_nomethod("abs", v); }
+static sp_RbVal sp_poly_abs(sp_RbVal v) { if (v.tag == SP_TAG_INT) { if (v.v.i >= 0) return v; return SP_POLY_INT_OP(sub, (mrb_int)0, v.v.i); } if (v.tag == SP_TAG_FLT) return sp_box_float(fabs(v.v.f)); if (v.tag == SP_TAG_BIGINT) { sp_Bigint *b = (sp_Bigint *)v.v.p; return sp_bigint_sign(b) < 0 ? sp_box_bigint(sp_bigint_sub(sp_bigint_new_int(0), b)) : v; } if (v.tag == SP_TAG_OBJ && v.cls_id == SP_BUILTIN_COMPLEX) return sp_complex_abs_v(*(sp_Complex *)v.v.p); if (sp_poly_is_rational(v)) return sp_box_rational(sp_rational_abs(sp_poly_as_rational(v))); sp_raise_poly_nomethod("abs", v); }
 static sp_RbVal sp_poly_abs2(sp_RbVal v) { if (v.tag == SP_TAG_OBJ && v.cls_id == SP_BUILTIN_COMPLEX) return sp_complex_abs2_v(*(sp_Complex *)v.v.p); if (sp_poly_numeric_p(v)) { sp_RbVal a = sp_poly_abs(v); return sp_poly_mul(a, a); } sp_raise_poly_nomethod("abs2", v); }
 /* No-arg floor/ceil/round/truncate return Integer in Ruby: an int/bigint tag
    is already its own floor (returned unchanged, lossless for bigints), a
@@ -2455,7 +2455,44 @@ static void sp_sort_idx_by_poly(mrb_int *idx, const sp_RbVal *keys, mrb_int n) {
 }
 static sp_RbVal sp_poly_div(sp_RbVal a, sp_RbVal b) { if ((sp_poly_is_brat(a) || sp_poly_is_brat(b))) { if (a.tag == SP_TAG_FLT || b.tag == SP_TAG_FLT) return sp_box_float(sp_poly_to_f(a) / sp_poly_to_f(b)); return sp_brat_div_poly(a, b); } if ((sp_poly_is_rational(a) || sp_poly_is_rational(b)) && a.tag != SP_TAG_FLT && b.tag != SP_TAG_FLT) return sp_box_rational(sp_rational_div(sp_poly_as_rational(a), sp_poly_as_rational(b))); if ((a.tag == SP_TAG_OBJ && a.cls_id == SP_BUILTIN_COMPLEX) || (b.tag == SP_TAG_OBJ && b.cls_id == SP_BUILTIN_COMPLEX)) return sp_box_complex(sp_complex_div(sp_poly_as_complex(a), sp_poly_as_complex(b))); if (a.tag == SP_TAG_FLT || b.tag == SP_TAG_FLT) return sp_box_float(sp_poly_to_f_with_rational(a) / sp_poly_to_f_with_rational(b)); if (sp_poly_is_user_obj(a)) return sp_poly_binop_bad("/", a, b); return sp_box_int(sp_idiv(sp_poly_to_i(a), sp_poly_to_i(b))); }
 static sp_RbVal sp_poly_str_mod(sp_RbVal a, sp_RbVal b);  /* fwd: defined beside the format helper */
-static sp_RbVal sp_poly_mod(sp_RbVal a, sp_RbVal b) { if (a.tag == SP_TAG_STR || sp_poly_is_strbuf(a)) return sp_poly_str_mod(sp_poly_strbuf_deref(a), b); if (a.tag == SP_TAG_FLT || b.tag == SP_TAG_FLT) return sp_box_float(sp_fmod(sp_poly_to_f(a), sp_poly_to_f(b))); if (sp_poly_is_user_obj(a)) return sp_poly_binop_bad("%", a, b); return sp_box_int(sp_imod(sp_poly_to_i(a), sp_poly_to_i(b))); }  /* sp_fmod: CRuby divisor-sign result + zero-divisor raise */
+static sp_RbVal sp_poly_mod(sp_RbVal a, sp_RbVal b) { if (a.tag == SP_TAG_STR || sp_poly_is_strbuf(a)) return sp_poly_str_mod(sp_poly_strbuf_deref(a), b); if (a.tag == SP_TAG_FLT || b.tag == SP_TAG_FLT) return sp_box_float(sp_fmod(sp_poly_to_f(a), sp_poly_to_f(b))); if (sp_poly_is_user_obj(a)) return sp_poly_binop_bad("%", a, b); if (sp_poly_is_rational(a) || sp_poly_is_rational(b)) return sp_box_rational(sp_rational_mod(sp_poly_as_rational(a), sp_poly_as_rational(b))); return sp_box_int(sp_imod(sp_poly_to_i(a), sp_poly_to_i(b))); }  /* sp_fmod: CRuby divisor-sign result + zero-divisor raise */
+/* divmod / quo on a boxed receiver. The typed paths build these inline per
+   receiver kind; the poly path had neither, so an exact Rational reaching them
+   through a block parameter raised NoMethodError on a method it answers (#3512).
+   Exactness is the point: `quo` is Ruby's exact division, and a Rational
+   divmod's remainder is a Rational. */
+static sp_PolyArray *sp_PolyArray_new(void);                     /* fwd */
+static void sp_PolyArray_push(sp_PolyArray *a, sp_RbVal v);      /* fwd */
+static sp_RbVal sp_poly_divmod(sp_RbVal a, sp_RbVal b) {
+  sp_PolyArray *out = sp_PolyArray_new();
+  SP_GC_ROOT(out);
+  if (sp_poly_is_rational(a) || sp_poly_is_rational(b)) {
+    sp_Rational ra = sp_poly_as_rational(a), rb = sp_poly_as_rational(b);
+    mrb_int q = sp_rational_floor_i(sp_rational_div(ra, rb));
+    sp_Rational rem = sp_rational_sub(ra, sp_rational_mul(sp_rational_new(q, 1), rb));
+    sp_PolyArray_push(out, sp_box_int(q));
+    sp_PolyArray_push(out, sp_box_rational(rem));
+    return sp_box_poly_array(out);
+  }
+  if (a.tag == SP_TAG_FLT || b.tag == SP_TAG_FLT) {
+    mrb_float fa = sp_poly_to_f(a), fb = sp_poly_to_f(b);
+    mrb_float q = floor(fa / fb);
+    sp_PolyArray_push(out, sp_box_float(q));
+    sp_PolyArray_push(out, sp_box_float(sp_fmod(fa, fb)));
+    return sp_box_poly_array(out);
+  }
+  {
+    mrb_int ia = sp_poly_to_i(a), ib = sp_poly_to_i(b);
+    sp_PolyArray_push(out, sp_box_int(sp_idiv(ia, ib)));
+    sp_PolyArray_push(out, sp_box_int(sp_imod(ia, ib)));
+    return sp_box_poly_array(out);
+  }
+}
+static sp_RbVal sp_poly_quo(sp_RbVal a, sp_RbVal b) {
+  if (a.tag == SP_TAG_FLT || b.tag == SP_TAG_FLT)
+    return sp_box_float(sp_poly_to_f_with_rational(a) / sp_poly_to_f_with_rational(b));
+  return sp_box_rational(sp_rational_div(sp_poly_as_rational(a), sp_poly_as_rational(b)));
+}
 /* Comparable#clamp on boxed numerics, faithful to CRuby: the result is the
    applied operand returned UNCHANGED, so an in-range Integer receiver stays
    Integer while a Float bound that clamps stays Float (5.clamp(1.0, 3.0) is
@@ -2547,6 +2584,27 @@ static sp_RbVal sp_poly_pow(sp_RbVal a, sp_RbVal b) {
     return sp_box_bigint(sp_bigint_pow((sp_Bigint *)a.v.p, e));
   }
   if (sp_poly_is_user_obj(a)) return sp_poly_binop_bad("**", a, b);
+  /* An exact receiver keeps its class through `**`, as it does on the typed
+     path: a Rational raised to an integer is a Rational, and a Complex is a
+     Complex. Falling to pow(double, double) evaluated them in floats, which is
+     a different answer as well as a different class (#3510). */
+  if (sp_poly_is_rational(a)) {
+    sp_Rational ra = sp_poly_as_rational(a);
+    if (b.tag == SP_TAG_INT) return sp_box_rational(sp_rational_pow(ra, b.v.i));
+    if (sp_poly_is_rational(b)) {
+      sp_Rational rb = sp_poly_as_rational(b);
+      if (rb.den == 1) return sp_box_rational(sp_rational_pow(ra, rb.num));
+    }
+  }
+  if (a.tag == SP_TAG_OBJ && a.cls_id == SP_BUILTIN_COMPLEX) {
+    sp_Complex ca = sp_poly_as_complex(a);
+    if (b.tag == SP_TAG_INT) return sp_box_complex(sp_complex_pow(ca, b.v.i));
+    if (sp_poly_is_rational(b)) return sp_box_complex(sp_complex_pow_rational(ca, sp_poly_as_rational(b)));
+    if (b.tag == SP_TAG_OBJ && b.cls_id == SP_BUILTIN_COMPLEX)
+      return sp_box_complex(sp_complex_pow_c(ca, sp_poly_as_complex(b)));
+    if (b.tag == SP_TAG_FLT)
+      return sp_box_complex(sp_complex_pow_c(ca, (sp_Complex){b.v.f, 0.0, SP_CPLX_RE_F | SP_CPLX_IM_F}));
+  }
   double r = pow((double)sp_poly_to_f(a), (double)sp_poly_to_f(b));
   return sp_box_float((mrb_float)r);
 }
