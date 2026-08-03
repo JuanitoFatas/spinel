@@ -33,6 +33,7 @@
 #include <sys/wait.h>
 
 extern int g_no_root_elision;
+extern int g_no_write_barrier;
 #define PATH_SEP '/'
 #define EXE_SUFFIX ""
 
@@ -244,6 +245,7 @@ int main(int argc, char **argv) {
     /* keep every GC root, so a suspected miscompile can be bisected against
        the same binary rather than against a different build. */
     else if (sp_streq(a, "--no-root-elision")) { g_no_root_elision = 1; i++; }
+    else if (sp_streq(a, "--no-write-barrier")) { g_no_write_barrier = 1; i++; }
     else if (sp_streq(a, "-c"))            { c_only = 1; i++; }
     else if (sp_streq(a, "-I"))            { if (++i < argc) sp_add_feature_root(argv[i]); i++; }
     else if (!strncmp(a, "-I", 2) && a[2]) { sp_add_feature_root(a + 2); i++; }

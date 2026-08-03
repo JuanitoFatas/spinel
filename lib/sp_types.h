@@ -192,7 +192,15 @@ typedef struct{const char *name;}sp_Encoding;
    full-list walks (old unmark + minor re-mark) that made every minor
    collection O(live) even when the live set was untouched. 0 never equals a
    generation (the counter skips it), so freshly-calloc'd headers are unmarked. */
-typedef struct sp_gc_hdr { struct sp_gc_hdr *next; void (*finalize)(void *); void (*scan)(void *); size_t size; unsigned marked : 30; unsigned frozen : 1; void (*recycle)(struct sp_gc_hdr *); } sp_gc_hdr;
+typedef struct sp_gc_hdr { struct sp_gc_hdr *next; void (*finalize)(void *); void (*scan)(void *); size_t size; unsigned marked : 29; unsigned frozen : 1;
+   /* `old` says the object has survived a sweep and lives on the old list, so
+      a reference stored into it may point at a younger object a minor mark
+      would not reach on its own; `dirty` says it is already on the remembered
+      set, so the write barrier's push happens once per collection rather than
+      once per store. `marked` gives up a bit for them: it is a wrapping
+      generation counter whose wrap path re-clears every stamp, and 2^29
+      collections between wraps is far past anything real. */
+   unsigned old : 1; unsigned dirty : 1; void (*recycle)(struct sp_gc_hdr *); } sp_gc_hdr;
 /* size/len packed to uint32 (4 GB per-string cap, far beyond any real
    string) so the cached FNV `hash` fits without growing the 24-byte
    header -- i.e. zero per-string RSS cost vs the pre-cache layout.

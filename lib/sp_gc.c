@@ -137,6 +137,9 @@ void sp_gc_mark_all(void){if(!sp_gc_mark_stack)sp_gc_mark_stack=(void**)malloc(s
 else{void*obj=*e;if(obj)sp_gc_mark(obj);}}if(vd)sp_gc_dbg_phase="fibers";if(sp_gc_mark_suspended_fibers_hook)sp_gc_mark_suspended_fibers_hook();if(vd)sp_gc_dbg_phase="globals";if(sp_gc_mark_globals_hook)sp_gc_mark_globals_hook();while(sp_gc_mark_top>0){void*obj=sp_gc_mark_stack[--sp_gc_mark_top];if(vd){sp_gc_dbg_phase="scan";sp_gc_dbg_ctx=obj;}sp_gc_hdr*h=(sp_gc_hdr*)((char*)obj-sizeof(sp_gc_hdr));if(h->scan)h->scan(obj);}if(vd){sp_gc_dbg_phase="?";sp_gc_dbg_ctx=NULL;}}
 
 unsigned sp_gc_mark_gen = 0;
+void *sp_gc_remembered[SP_GC_REMEMBERED_MAX];
+int sp_gc_nremembered = 0;
+int sp_gc_rem_overflow = 0;
 /* Object-threshold retune, installed by sp_alloc.c. Running it INSIDE every
    collection (not only on the object-triggered wrapper) keeps the trigger
    tracking the live size whichever heap initiated the collect; the old
@@ -199,7 +202,7 @@ void sp_gc_collect(void){
   /* new mark generation: every object becomes unmarked without touching it.
      On the (30-bit) wrap, clear the whole heap once so no stale stamp can
      alias the reused generation value. */
-  sp_gc_mark_gen=(sp_gc_mark_gen+1)&0x3fffffffu;
+  sp_gc_mark_gen=(sp_gc_mark_gen+1)&0x1fffffffu;   /* marked is 29 bits (see sp_gc_hdr) */
   if(!sp_gc_mark_gen){
     sp_gc_mark_gen=1;
     for(sp_gc_hdr*hh=sp_gc_old_heap;hh;hh=hh->next)hh->marked=0;

@@ -97,6 +97,39 @@ static inline void sp_gc_cleanup(int *p) { sp_gc_nroots = *p; }
    header walk. Use this for string parameters in runtime helpers. */
 #define SP_GC_ROOT_STR(v) int __attribute__((cleanup(_sp_gc_root_pop))) _SP_GC_CONCAT(_sp_gcr_, __COUNTER__) = _sp_gc_root_push((void**)((uintptr_t)&(v) | (uintptr_t)2))
 #define SP_GC_RESTORE() sp_gc_nroots = _gc_saved
+
+/* ---- write barrier ----
+   A generational mark walks the young objects and whatever the roots reach; an
+   old object it does not walk can still be the only thing holding a young one.
+   The barrier records those: when a reference is stored into an object that has
+   already been promoted, that object joins the remembered set, which a minor
+   collection treats as an extra root.
+
+   Cost is one load of a header bit already on the store's own cache line and a
+   branch that steady state does not take -- measured at 0.5% on optcarrot when
+   it fires on reference stores only, and 14% when it fires on every ivar store
+   including the scalar ones, which is why the emitter discriminates.
+
+   The set is a plain array with a dirty bit for deduplication. Overflow is
+   safe rather than fatal: a full set means the next collection marks whole-heap
+   (sp_gc_rem_overflow), which is exactly what today's collector always does. */
+/* Wrap the OBJECT of a reference store: runs the barrier and yields the object
+   itself, so it works wherever the store appears -- a statement, or an
+   assignment inside a larger expression. The statement expression evaluates the
+   object once, which a comma form would not. */
+#define SP_WBO(x) ({ __typeof__(x) _sp_wbo = (x); sp_gc_wb((void *)_sp_wbo); _sp_wbo; })
+#define SP_GC_REMEMBERED_MAX 65536
+extern void *sp_gc_remembered[SP_GC_REMEMBERED_MAX];
+extern int sp_gc_nremembered;
+extern int sp_gc_rem_overflow;
+static inline void sp_gc_wb(void *obj) {
+  if (!obj) return;
+  sp_gc_hdr *h = (sp_gc_hdr *)obj - 1;
+  if (!h->old || h->dirty) return;
+  h->dirty = 1;
+  if (sp_gc_nremembered < SP_GC_REMEMBERED_MAX) sp_gc_remembered[sp_gc_nremembered++] = obj;
+  else sp_gc_rem_overflow = 1;
+}
 /* Young object heap. Threaded build: per-worker lists (one pusher each, since a
    started thread is pinned to its worker), so allocation pushes without the
    CAS-on-shared-head that made object-heavy parallel workloads bounce a cache

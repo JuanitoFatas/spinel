@@ -1184,6 +1184,9 @@ static void gc_save_take_back(Buf *b, size_t off, size_t save_len) {
 /* Escape hatch: `--no-root-elision` keeps every root, so a suspected
    miscompile can be bisected against the same binary. */
 int g_no_root_elision = 0;
+/* Escape hatch: `--no-write-barrier` emits the stores bare, so a suspected
+   miscompile can be bisected against the same binary. */
+int g_no_write_barrier = 0;
 
 /* ---- GC root elision (M1') ----
 
@@ -1209,7 +1212,10 @@ static int gc_elide_call_ok(const char *id, size_t n, const char *lvname) {
     "sp_box_float_or_nil", "sp_poly_to_i", "sp_poly_to_f", "sp_poly_truthy",
     "sp_poly_length", "sp_imod", "sp_idiv", "sp_int_bit",
     "sp_IntArray_get", "sp_FloatArray_get", "sp_StrArray_get", "sp_PolyArray_get",
-    "sp_IntArray_length", "sp_PolyArray_length", NULL };
+    "sp_IntArray_length", "sp_PolyArray_length",
+    /* the write barrier touches the remembered set and nothing else: it cannot
+       allocate, and it cannot reach Ruby code */
+    "sp_gc_wb", "SP_WBO", NULL };
   for (int i = 0; KW[i]; i++) if (strlen(KW[i]) == n && !strncmp(id, KW[i], n)) return 1;
   for (int i = 0; SAFE[i]; i++) if (strlen(SAFE[i]) == n && !strncmp(id, SAFE[i], n)) return 1;
   /* the poly index reads: safe only on the local this root protects, whose
@@ -1324,6 +1330,120 @@ static void gc_roots_take_back(Compiler *c, Scope *s, Buf *b, size_t fn_off) {
     size_t start = (size_t)(at - b->p), len = strlen(rootline);
     while (start > fn_off && (b->p[start - 1] == ' ' || b->p[start - 1] == '\n')) { start--; len++; }
     buf_erase(b, start, len);
+  }
+}
+
+/* ---- write barrier insertion ----
+
+   A reference stored into an object that has already been promoted can be the
+   only thing holding a young object, and a generational mark would not reach
+   it. The barrier records those stores. Which ivars need it is a question about
+   the field's type, and which stores exist is a question about what the
+   emitters actually produced -- there are three dozen of them -- so this reads
+   the emitted text rather than trusting a list of emission sites to stay
+   complete. A store the scan does not recognise keeps its old shape, which is
+   correct today and would be a missed barrier under a generational mark, so
+   the scan is checked by counting rather than by inspection (see
+   SPINEL_WB_REPORT).
+
+   Only reference fields: a barrier on every ivar store, scalars included,
+   costs 14% on optcarrot where the reference-only one costs 0.5%. */
+static int wb_field_is_ref(Compiler *c, const char *fld, size_t n) {
+  /* the emitted field is "iv_" + the mangled ivar name */
+  if (n <= 3 || strncmp(fld, "iv_", 3)) return 0;
+  fld += 3; n -= 3;
+  for (int k = 0; k < c->nclasses; k++) {
+    ClassInfo *ci = &c->classes[k];
+    for (int i = 0; i < ci->nivars; i++) {
+      const char *m = iv_c(ci->ivars[i] + 1);
+      if (strlen(m) != n || strncmp(m, fld, n)) continue;
+      TyKind t = ci->ivar_types[i];
+      if (needs_root(t) && !comp_ty_value_obj(c, t)) return 1;
+    }
+  }
+  return 0;
+}
+
+/* Walk back from `end` (exclusive) over one C postfix expression: an
+   identifier or a balanced parenthesised group, then any `->`/`.`/`[...]`
+   chain in front of it. Returns the offset where it starts. */
+static size_t wb_lvalue_start(const char *p, size_t end) {
+  size_t i = end;
+  for (;;) {
+    while (i > 0 && (p[i-1] == ' ' || p[i-1] == '\n' || p[i-1] == '\t')) i--;
+    if (i == 0) return i;
+    if (p[i-1] == ')' || p[i-1] == ']') {
+      char open = p[i-1] == ')' ? '(' : '[', close = p[i-1];
+      int depth = 0;
+      while (i > 0) {
+        i--;
+        if (p[i] == close) depth++;
+        else if (p[i] == open) { depth--; if (!depth) break; }
+      }
+      if (i == 0) return i;
+    }
+    else if (isalnum((unsigned char)p[i-1]) || p[i-1] == '_') {
+      while (i > 0 && (isalnum((unsigned char)p[i-1]) || p[i-1] == '_')) i--;
+    }
+    else return i;
+    /* a chain link in front of what we just consumed? */
+    size_t j = i;
+    while (j > 0 && (p[j-1] == ' ' || p[j-1] == '\n')) j--;
+    if (j >= 2 && p[j-1] == '>' && p[j-2] == '-') { i = j - 2; continue; }
+    if (j >= 1 && p[j-1] == '.' && !(j >= 2 && isdigit((unsigned char)p[j-2]))) { i = j - 1; continue; }
+    return i;
+  }
+}
+
+static void gc_wb_insert(Compiler *c, Buf *b, size_t fn_off) {
+  if (g_no_write_barrier) return;
+  for (size_t i = fn_off; i + 4 < b->len; i++) {
+    if (b->p[i] != '-' || b->p[i+1] != '>' || strncmp(b->p + i + 2, "iv_", 3)) continue;
+    size_t f = i + 2, e = f;
+    while (e < b->len && (isalnum((unsigned char)b->p[e]) || b->p[e] == '_')) e++;
+    size_t q = e;
+    while (q < b->len && b->p[q] == ' ') q++;
+    if (q >= b->len || b->p[q] != '=' || b->p[q+1] == '=') continue;   /* a read, or == */
+    if (!wb_field_is_ref(c, b->p + f, e - f)) continue;
+    size_t st = wb_lvalue_start(b->p, i);
+    if (st >= i) continue;
+    /* already wrapped (a nested store re-scanned) */
+    if (st >= 7 && !strncmp(b->p + st - 7, "SP_WBO(", 7)) continue;
+    if (st >= 14 && !strncmp(b->p + st - 14, "sp_gc_wb((void ", 15 - 1)) continue;
+    /* A bare identifier can be named twice, so the barrier goes in front as its
+       own statement -- which the C compiler optimizes far better than the
+       statement expression the general form needs (8% vs noise on optcarrot).
+       Anything else, and any store inside a larger expression, takes the
+       wrapper, which evaluates the object exactly once. */
+    int simple = 1;
+    for (size_t k = st; k < i; k++)
+      if (!isalnum((unsigned char)b->p[k]) && b->p[k] != '_') { simple = 0; break; }
+    size_t bol = st;
+    while (bol > fn_off && b->p[bol-1] != '\n' && b->p[bol-1] != ';' && b->p[bol-1] != '{') bol--;
+    int at_stmt = 1;
+    for (size_t k = bol; k < st; k++)
+      if (b->p[k] != ' ' && b->p[k] != '\t') { at_stmt = 0; break; }
+    Buf ins; memset(&ins, 0, sizeof ins);
+    if (simple && at_stmt) {
+      buf_puts(&ins, "sp_gc_wb((void *)");
+      buf_putn(&ins, b->p + st, i - st);
+      buf_puts(&ins, "); ");
+      buf_putn(&ins, b->p + st, i - st);
+    }
+    else {
+      buf_puts(&ins, "SP_WBO(");
+      buf_putn(&ins, b->p + st, i - st);
+      buf_puts(&ins, ")");
+    }
+    /* splice `ins` in place of the lvalue text: grow, shift the tail up, write */
+    size_t grew = ins.len - (i - st);
+    size_t tail = b->len - i;
+    for (size_t g = 0; g < grew; g++) buf_putn(b, "\0", 1);
+    memmove(b->p + st + ins.len, b->p + st + (i - st), tail);
+    memcpy(b->p + st, ins.p, ins.len);
+    b->p[b->len] = '\0';
+    i = st + ins.len + 1;                    /* continue past what was inserted */
+    free(ins.p);
   }
 }
 
@@ -6794,6 +6914,10 @@ char *codegen_program(const NodeTable *nt) {
   buf_puts(&b, body->p ? body->p : "");
   free(body->p);
   free(body);
+  /* Over the whole program, not per function: methods, procs, block bodies,
+     constructors and main are emitted by different paths, and hooking them one
+     at a time left a quarter of the stores bare. */
+  gc_wb_insert(c, &b, 0);
   free(g_procs.p); free(g_proc_protos.p);
   memset(&g_procs, 0, sizeof g_procs);
   memset(&g_proc_protos, 0, sizeof g_proc_protos);
