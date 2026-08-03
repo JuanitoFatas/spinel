@@ -96,3 +96,12 @@ p PxBag.new[:sym]
 p mixed[nil]
 p mixed["a"]
 p mixed[:missing]
+
+# `dig(*keys)` hands the dispatch one temp holding an array, not one temp per
+# key, so the arms cannot address the keys -- admitting the name would emit
+# argument temps that do not even type-check. The splat form keeps whatever the
+# general path emits.
+def dig_splat(c, ks)
+  c.dig(*ks)
+end
+p (dig_splat(flt, [1.5]) rescue $!.class)

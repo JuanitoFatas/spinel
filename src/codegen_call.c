@@ -4246,9 +4246,18 @@ static int emit_poly_method_dispatch(Compiler *c, int id, Buf *b) {
        a Hash or Array arriving at the same call matched nothing and raised
        NoMethodError naming its own class. They end in a runtime helper that
        lets the receiver answer for itself (the default at the switch's end). */
-    int is_pdelete = sp_streq(name, "delete") && argc == 1;
-    int is_pdig = sp_streq(name, "dig") && argc >= 1;
-    int is_pvalues_at = sp_streq(name, "values_at") && argc >= 1;
+    /* A splatted list is one temp holding an array, not one temp per key, so
+       the arms below cannot address the keys at all -- and admitting the name
+       into the dispatch is what makes those temps exist. Leave the splat form
+       exactly as it was before this arm: whatever the general path emits. */
+    int has_splat_arg = 0;
+    for (int a = 0; a < argc; a++) {
+      const char *at2 = argv ? nt_type(nt, argv[a]) : NULL;
+      if (at2 && sp_streq(at2, "SplatNode")) { has_splat_arg = 1; break; }
+    }
+    int is_pdelete = sp_streq(name, "delete") && argc == 1 && !has_splat_arg;
+    int is_pdig = sp_streq(name, "dig") && argc >= 1 && !has_splat_arg;
+    int is_pvalues_at = sp_streq(name, "values_at") && argc >= 1 && !has_splat_arg;
     int is_include = (sp_streq(name, "include?") || sp_streq(name, "member?") ||
                       sp_streq(name, "has_key?") || sp_streq(name, "key?")) && argc == 1;
     /* intersect? on a poly value that is a builtin array. The typed-receiver
