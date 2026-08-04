@@ -1992,6 +1992,7 @@ sp_PolyArray *sp_Enumerator_take(sp_Enumerator *e, mrb_int n) {
   return r;
 }
 sp_PolyArray *sp_Enumerator_to_a(sp_Enumerator *e) {
+  SP_GC_ROOT(e);   /* the allocation below can collect it */
   sp_PolyArray *r = sp_PolyArray_new();
   SP_GC_ROOT(r);
   if (!e) return r;
