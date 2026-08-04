@@ -93,6 +93,7 @@ extern size_t sp_str_old_threshold_init; /* recompute floor for the above */
 extern size_t sp_str_threshold;          /* string-GC trigger (own heuristic) */
 extern size_t sp_str_threshold_init;     /* recompute floor */
 extern int    sp_str_stress_checked;     /* one-shot SPINEL_GC_STRESS check */
+extern int    sp_gc_stress_pin;          /* stress caps the retunes at the 2048 base (#3513) */
 #ifdef SP_THREADS
 void sp_alloc_stress_init(void);         /* race-free one-shot stress check (pre-helpers) */
 void sp_alloc_worker_tune(int workers); /* size the collection budget for N workers (pre-helpers) */
@@ -177,7 +178,7 @@ static inline char *sp_str_alloc(size_t len) {
      so. Threshold recompute mirrors sp_gc_alloc's. */
 #ifdef SP_THREADS
   int wid = sp_worker_id;
-  if (!sp_str_stress_checked) { sp_str_stress_checked = 1; const char *e = getenv("SPINEL_GC_STRESS"); if (e && *e && *e != '0') { sp_str_threshold = 2048; sp_str_threshold_init = 2048; } }
+  if (!sp_str_stress_checked) { sp_str_stress_checked = 1; const char *e = getenv("SPINEL_GC_STRESS"); if (e && *e && *e != '0') { sp_str_threshold = 2048; sp_str_threshold_init = 2048; sp_gc_stress_pin = 1; } }
   /* Per-worker trigger: the fast path reads only this worker's own byte count,
      no shared state. Each worker fires at the full threshold, so the aggregate
      bound scales with the worker count -- keeping the stop-the-world frequency
@@ -198,7 +199,7 @@ static inline char *sp_str_alloc(size_t len) {
   SP_GC_CTR_ADD(sp_str_wslot[wid].young_bytes, total);
 #else
   SP_HEAP_LOCK();
-  if (!sp_str_stress_checked) { sp_str_stress_checked = 1; const char *e = getenv("SPINEL_GC_STRESS"); if (e && *e && *e != '0') { SP_GC_CTR_SET(sp_str_threshold, 2048); sp_str_threshold_init = 2048; } }
+  if (!sp_str_stress_checked) { sp_str_stress_checked = 1; const char *e = getenv("SPINEL_GC_STRESS"); if (e && *e && *e != '0') { SP_GC_CTR_SET(sp_str_threshold, 2048); sp_str_threshold_init = 2048; sp_gc_stress_pin = 1; } }
   if (SP_GC_CTR_GET(sp_str_heap_bytes) > sp_str_threshold) {
     sp_str_collect_retune();         /* sp_gc_collect runs sp_str_sweep */
   }

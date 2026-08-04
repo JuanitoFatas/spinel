@@ -63,6 +63,12 @@ int sp_ffi_bin_len = 0;   /* see sp_alloc.h: byte count for :binstr / :cbinstr *
 size_t sp_gc_threshold = 256 * 1024;
 size_t sp_gc_threshold_init = 256 * 1024;
 int sp_gc_stress_checked = 0;
+/* Stress pins the threshold instead of merely seeding it: the retunes float
+   the trigger to live*4 with the base as a FLOOR, so on any program whose
+   live set outgrows the base, stress stopped stressing after the first
+   collection -- request-time bugs sat behind a cadence identical to the
+   default's while boot-time ones reproduced instantly (#3513). */
+int sp_gc_stress_pin = 0;
 
 #ifdef SP_THREADS
 pthread_mutex_t sp_heap_lock = PTHREAD_MUTEX_INITIALIZER;   /* see sp_alloc.h */
@@ -79,11 +85,11 @@ void sp_alloc_stress_init(void) {
   int stress = (e && *e && *e != '0');
   if (!sp_str_stress_checked) {
     sp_str_stress_checked = 1;
-    if (stress) { sp_str_threshold = 2048; sp_str_threshold_init = 2048; }
+    if (stress) { sp_str_threshold = 2048; sp_str_threshold_init = 2048; sp_gc_stress_pin = 1; }
   }
   if (!sp_gc_stress_checked) {
     sp_gc_stress_checked = 1;
-    if (stress) { SP_GC_CTR_SET(sp_gc_threshold, 2048); sp_gc_threshold_init = 2048; }
+    if (stress) { SP_GC_CTR_SET(sp_gc_threshold, 2048); sp_gc_threshold_init = 2048; sp_gc_stress_pin = 1; }
   }
 }
 
@@ -130,6 +136,7 @@ void sp_alloc_worker_tune(int workers) {
 /* Re-tune the object / string GC thresholds from the pre-collect live bytes
    (the heuristic mirrors the original inline code in sp_gc_alloc / sp_str_alloc). */
 void sp_gc_retune_object(size_t before) {
+  if (sp_gc_stress_pin) { sp_gc_threshold = sp_gc_threshold_init; return; }
   size_t freed = before - sp_gc_bytes;
   if (freed < before / 4) { sp_gc_threshold = before * 2; }
   else if (sp_gc_bytes > 0) { sp_gc_threshold = sp_gc_bytes * 4; if (sp_gc_threshold < sp_gc_threshold_init) sp_gc_threshold = sp_gc_threshold_init; }
@@ -142,6 +149,7 @@ void sp_gc_retune_object(size_t before) {
    cycle -- retuning on the aggregate would grow it geometrically for long-lived
    strings. The single-threaded build works in absolute bytes (N == 1). */
 static void sp_str_retune(size_t before, size_t promoted) {
+  if (sp_gc_stress_pin) { sp_str_threshold = sp_str_threshold_init; return; }
 #ifdef SP_THREADS
   int nw = sp_active_workers; if (nw < 1) nw = 1;
   size_t after = (sp_str_bytes_total() + promoted) / (size_t)nw;
@@ -213,7 +221,7 @@ void *sp_gc_alloc(size_t sz, void (*fin)(void *), void (*scn)(void *)) {
      moved off it. Removals happen only under stop-the-world with every mutator
      parked, so a push never races the sweep. The stress-threshold one-shot is
      idempotent under a race. */
-  if (!sp_gc_stress_checked) { sp_gc_stress_checked = 1; const char *e = getenv("SPINEL_GC_STRESS"); if (e && *e && *e != '0') { SP_GC_CTR_SET(sp_gc_threshold, 2048); sp_gc_threshold_init = 2048; } }
+  if (!sp_gc_stress_checked) { sp_gc_stress_checked = 1; const char *e = getenv("SPINEL_GC_STRESS"); if (e && *e && *e != '0') { SP_GC_CTR_SET(sp_gc_threshold, 2048); sp_gc_threshold_init = 2048; sp_gc_stress_pin = 1; } }
   if (SP_GC_CTR_GET(sp_gc_bytes) > SP_GC_CTR_GET(sp_gc_threshold)) sp_stw_collect();
   size_t need = sizeof(sp_gc_hdr) + sz;
   sp_gc_hdr *h = (sp_gc_hdr *)calloc(1, need);
@@ -227,7 +235,7 @@ void *sp_gc_alloc(size_t sz, void (*fin)(void *), void (*scn)(void *)) {
   /* The threshold store is atomic: sp_gc_collection_wanted reads it without
      the heap lock. threshold_init stays plain -- only retune reads it, under
      stop-the-world, ordered after this by the writer's park. */
-  if (!sp_gc_stress_checked) { sp_gc_stress_checked = 1; const char *e = getenv("SPINEL_GC_STRESS"); if (e && *e && *e != '0') { SP_GC_CTR_SET(sp_gc_threshold, 2048); sp_gc_threshold_init = 2048; } }
+  if (!sp_gc_stress_checked) { sp_gc_stress_checked = 1; const char *e = getenv("SPINEL_GC_STRESS"); if (e && *e && *e != '0') { SP_GC_CTR_SET(sp_gc_threshold, 2048); sp_gc_threshold_init = 2048; sp_gc_stress_pin = 1; } }
   if (SP_GC_CTR_GET(sp_gc_bytes) > sp_gc_threshold) {
     sp_gc_collect_retune();
   }
