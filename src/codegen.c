@@ -1369,10 +1369,15 @@ static int wb_field_is_ref_in(Compiler *c, int only, const char *fld, size_t n) 
     for (int i = 0; i < ci->nivars; i++) {
       const char *m = iv_c(ci->ivars[i] + 1);
       if (strlen(m) != n || strncmp(m, fld, n)) continue;
-      /* A value-type class lives inline -- on the C stack or inside another
-         object -- so it has no GC header of its own and the barrier's
-         `(hdr *)obj - 1` would be reading something else entirely. Its own
-         fields are rooted individually where it is declared. */
+      /* A value-type class lives inline and has no GC header of its own, so
+         the barrier's `(hdr *)obj - 1` would read something else entirely.
+
+         Skipping it loses nothing, which is worth stating because it looks
+         like it should: a value type cannot be reached FROM the heap either.
+         analyze disqualifies a class from the by-value layout as soon as an
+         instance is stored into an ivar, a constant, a global or a container
+         element, so one only ever lives on the C stack or inside another
+         value type. There is no old holder for a store into it to record. */
       if (ci->is_value_type) continue;
       TyKind t = ci->ivar_types[i];
       if (needs_root(t) && !comp_ty_value_obj(c, t)) return 1;
