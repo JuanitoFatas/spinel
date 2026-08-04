@@ -40,7 +40,7 @@ void sp_proc_lambda_arity_check(mrb_int argc, mrb_int req, mrb_int opt, mrb_bool
    non-positional kind untouched -- exactly CRuby's parameters(lambda:) rule.
    mode: 1 = lambda view, 0 = proc view, -1 = the receiver's own nature.
    req_id/opt_id are the generated TU's interned ids for those kinds. #2693 */
-sp_PolyArray *sp_proc_parameters_ids(sp_Proc *p, int mode, sp_sym req_id, sp_sym opt_id) {
+sp_PolyArray *sp_proc_parameters_ids(sp_Proc *p, int mode, sp_sym req_id, sp_sym opt_id) { SP_GC_ROOT(p);
   sp_PolyArray *r = sp_PolyArray_new();
   if (!p || p->param_count <= 0 || !p->param_kinds) return r;
   SP_GC_ROOT(r);
@@ -55,7 +55,7 @@ sp_PolyArray *sp_proc_parameters_ids(sp_Proc *p, int mode, sp_sym req_id, sp_sym
   }
   return r;
 }
-sp_PolyArray *sp_proc_parameters(sp_Proc *p) { sp_PolyArray *r = sp_PolyArray_new(); if (!p || p->param_count <= 0 || !p->param_kinds) return r; SP_GC_ROOT(r); for (mrb_int i = 0; i < p->param_count; i++) { sp_PolyArray *pair = sp_PolyArray_new(); sp_PolyArray_push(pair, sp_box_sym(p->param_kinds[i])); if (p->param_names && p->param_names[i] >= 0) sp_PolyArray_push(pair, sp_box_sym(p->param_names[i])); sp_PolyArray_push(r, sp_box_poly_array(pair)); } return r; }
+sp_PolyArray *sp_proc_parameters(sp_Proc *p) { SP_GC_ROOT(p); sp_PolyArray *r = sp_PolyArray_new(); if (!p || p->param_count <= 0 || !p->param_kinds) return r; SP_GC_ROOT(r); for (mrb_int i = 0; i < p->param_count; i++) { sp_PolyArray *pair = sp_PolyArray_new(); sp_PolyArray_push(pair, sp_box_sym(p->param_kinds[i])); if (p->param_names && p->param_names[i] >= 0) sp_PolyArray_push(pair, sp_box_sym(p->param_names[i])); sp_PolyArray_push(r, sp_box_poly_array(pair)); } return r; }
 void sp_curry_scan(void *p) { sp_Curry *c = (sp_Curry *)p; if (c->target) sp_gc_mark(c->target); for (mrb_int i = 0; i < c->nargs && i < 16; i++) sp_mark_rbval(c->args[i]); }
 sp_Curry *sp_curry_new(sp_Proc *p) {
   SP_GC_ROOT(p);  /* the target proc has no other root across this alloc */

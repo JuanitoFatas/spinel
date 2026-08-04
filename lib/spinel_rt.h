@@ -7794,6 +7794,11 @@ static sp_RbVal sp_penum_call2(sp_Proc *blk, sp_RbVal v, sp_RbVal w) {
 }
 static sp_RbVal sp_poly_enum_proc(sp_RbVal recv, int op, sp_Proc *blk) {
   SP_GC_ROOT_RBVAL(recv);
+  /* The block is this loop's only handle on its own captures: the caller's
+     temp holding it can be dead by now, and everything the block
+     accumulates into hangs off its capture cells. Rooted here rather than
+     in sp_penum_call1, which runs per element. */
+  SP_GC_ROOT(blk);
   /* sp_poly_arr_len_ex / sp_poly_each_elem, the pair the spliced poly-each
      loop uses: they render a Hash entry as a boxed [k, v] pair, so a hash
      receiver walks its entries here exactly as it would there. */
@@ -8013,7 +8018,7 @@ mrb_int sp_process_kill1(sp_RbVal sig, mrb_int pid);
 
 /* ENV.delete_if/keep_if/select!/reject!/filter!: the proc judges each
    snapshot pair; `keep` selects which verdict survives (#2832). */
-static mrb_int sp_env_filter_core(sp_Proc *p, int keep) {
+static mrb_int sp_env_filter_core(sp_Proc *p, int keep) { SP_GC_ROOT(p);
   sp_StrStrHash *snap = sp_env_to_h();
   SP_GC_ROOT(snap);
   mrb_int removed = 0;
@@ -8039,7 +8044,7 @@ static sp_StrStrHash *sp_env_filter_bang(sp_Proc *p, int keep) {
 }
 /* ENV.update/merge!(hash) { |key, old, new| } -- the block resolves a key that
    is already set; its (stringified) result becomes the value (#2998). */
-static sp_StrStrHash *sp_env_update_h_blk(sp_StrStrHash *h, sp_Proc *p) {
+static sp_StrStrHash *sp_env_update_h_blk(sp_StrStrHash *h, sp_Proc *p) { SP_GC_ROOT(p);
   if (h) {
     SP_GC_ROOT(h);
     for (mrb_int i = 0; i < h->len; i++) {
@@ -8071,7 +8076,7 @@ static sp_RbVal sp_env_filter_bang_opt(sp_Proc *p, int keep) {
   if (sp_env_filter_core(p, keep) == 0) return sp_box_nil();
   return sp_box_obj(sp_env_to_h(), SP_BUILTIN_STR_STR_HASH);
 }
-static void sp_proc_call_spread(sp_Proc *p, sp_RbVal arr) {
+static void sp_proc_call_spread(sp_Proc *p, sp_RbVal arr) { SP_GC_ROOT(p);
   if (!p || !p->fn) return;
   mrb_int n = sp_poly_length(arr);
   if (n > 16) n = 16;
@@ -8130,7 +8135,7 @@ static mrb_int sp_proc_compose_fn(void *cap, mrb_int argc, mrb_int *args) {
      return is unread (the call site reads the slot). */
   return sp_proc_call(c->outer, 1, outer_args);
 }
-static sp_Proc *sp_proc_compose(sp_Proc *outer, sp_Proc *inner) {
+static sp_Proc *sp_proc_compose(sp_Proc *outer, sp_Proc *inner) { SP_GC_ROOT(outer);
   sp_ProcCompose *c = (sp_ProcCompose *)sp_gc_alloc(sizeof(sp_ProcCompose), NULL, sp_proc_compose_scan);
   c->outer = outer;
   c->inner = inner;
