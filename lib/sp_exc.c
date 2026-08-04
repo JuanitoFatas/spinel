@@ -196,6 +196,10 @@ sp_Exception *sp_exc_dup(sp_Exception *e) {
 void *sp_exc_apply_staged(const char *cls, const char *msg, void *obj) {
   sp_Exception *e = (sp_Exception *)obj;
   if (!e) e = sp_exc_new(cls, msg);
+  /* `obj` is a caller-supplied exception that may have been promoted long ago
+     (`raise SomeError` on a constant instance, a re-raised one), and the three
+     stores below put young values into it. */
+  sp_gc_wb((void *)e);
   if (sp_pending_exc_flags & 1) { e->xrecv = sp_pending_exc_recv; e->has_recv = 1; }
   if (sp_pending_exc_flags & 2) { e->xkey = sp_pending_exc_key; e->has_key = 1; }
   if (sp_pending_exc_flags & 4) e->result = sp_pending_exc_val;
