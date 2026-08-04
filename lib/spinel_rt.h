@@ -4287,6 +4287,7 @@ static sp_StrPolyHash*sp_StrPolyHash_from_str_str_hash(sp_StrStrHash*h){sp_StrPo
 static sp_StrPolyHash *sp_md_named_captures(sp_MatchData *m) {
   sp_StrPolyHash *h = sp_StrPolyHash_new();
   if (!m) return h;
+  SP_GC_ROOT(h);      /* sp_str_dup and the aref below allocate */
   int n = re_num_named(m->pat);
   for (int i = 0; i < n; i++) {
     int g = -1;
@@ -4399,6 +4400,7 @@ static sp_sym sp_sym_intern(const char *s);
 static sp_SymPolyHash *sp_md_named_captures_sym(sp_MatchData *m) {
   sp_SymPolyHash *h = sp_SymPolyHash_new();
   if (!m) return h;
+  SP_GC_ROOT(h);      /* sp_sym_intern and the aref below allocate */
   int n = re_num_named(m->pat);
   for (int i = 0; i < n; i++) {
     int g = -1;
