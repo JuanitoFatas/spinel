@@ -8844,6 +8844,17 @@ int infer_return_types(Compiler *c) {
         if (has_ret && has_ret[s]) br = ty_unify(br, ret_acc[s]);
         if (br == TY_STR_POLY_HASH) { sc->ret = TY_STR_POLY_HASH; changed = 1; }
       }
+      /* Same shape, and the same reason. RBS `Integer` covers both machine
+         ints and bignums, so a body that grew a bignum is a valid inhabitant
+         of the declared type -- but the seed had already pinned the signature
+         to mrb_int, and returning an sp_Bigint* through it truncates the
+         pointer and answers garbage. Declaring the type correctly made the
+         program worse than not declaring it at all (#3518). */
+      else if (sc->ret == TY_INT) {
+        TyKind br = sc->body >= 0 ? infer_type(c, sc->body) : TY_UNKNOWN;
+        if (has_ret && has_ret[s]) br = ty_unify(br, ret_acc[s]);
+        if (br == TY_BIGINT) { sc->ret = TY_BIGINT; changed = 1; }
+      }
       continue;
     }
     /* A return narrowed to a pointer array is pinned the same way. The body

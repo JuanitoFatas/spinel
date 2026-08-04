@@ -1,0 +1,6 @@
+class Backoff
+  @mult: Integer
+  @base: Integer
+  def initialize: () -> void
+  def compute: (Integer n) -> Integer
+end
