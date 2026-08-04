@@ -66,6 +66,16 @@ static size_t sp_gc_max_bytes = 0;
 static int sp_gc_max_bytes_init = 0;
 #define SP_GC_FULL_INTERVAL 8
 
+/* Major-collection cadence. A compile-time constant until the measurements in
+   docs/internals/gc-string-minor-design.md showed it is where essentially all
+   of a minor mark's remaining cost lives (231 ms at 8 against 46 at 64 on a
+   retained-heavy array workload). Runtime state, in this file, so the header
+   every generated TU includes does not change. */
+#define SP_GC_FULL_INTERVAL_MAX 128
+static int sp_gc_full_interval = SP_GC_FULL_INTERVAL;
+static int sp_gc_full_interval_fixed = 0;   /* SPINEL_GC_FULL_INTERVAL pins it */
+int sp_gc_full_runs = 0;    /* read by GC.stat (lib/sp_cold.c) */
+
 /* Issue #755: bail out cleanly on OOM rather than returning NULL into a
    caller that would deref it next. */
 void sp_oom_die(void){fputs("unhandled exception: out of memory\n",stderr);exit(1);}
@@ -130,6 +140,8 @@ static void sp_gc_fault_report(int sig) {
 }
 __attribute__((constructor)) static void sp_gc_debug_env(void){
   const char *v=getenv("SPINEL_GC_VERIFY"); sp_gc_verify=(v&&*v&&*v!='0');
+  { const char *fi=getenv("SPINEL_GC_FULL_INTERVAL");
+    if(fi&&*fi){ int n=atoi(fi); if(n>0&&n<=4096){ sp_gc_full_interval=n; sp_gc_full_interval_fixed=1; } } }
   { const char *g=getenv("SPINEL_GC_VERIFY_GEN"); sp_gc_verify_gen=(g&&*g&&*g!='0');
     const char *mn=getenv("SPINEL_GC_MINOR"); sp_gc_minor_on=(mn&&*mn&&*mn!='0');
     if(sp_gc_verify_gen) sp_gc_minor_on=1; }
@@ -221,7 +233,8 @@ void sp_gc_promote_slot(sp_gc_hdr *head, sp_gc_hdr *tail, size_t bytes) {
 #endif
 void sp_gc_collect(void){
   size_t ob_before = sp_gc_bytes;
-  int full=(sp_gc_cycle%SP_GC_FULL_INTERVAL==0);sp_gc_cycle++;
+  int full=(sp_gc_cycle%sp_gc_full_interval==0);sp_gc_cycle++;
+  if(full)sp_gc_full_runs++;
   /* new mark generation: every object becomes unmarked without touching it.
      On the (30-bit) wrap, clear the whole heap once so no stale stamp can
      alias the reused generation value. */
@@ -317,10 +330,27 @@ void sp_gc_collect(void){
     free(cand);
   }
   if(full){
+    size_t old_before=sp_gc_old_bytes;
     sp_gc_hdr**pp=&sp_gc_old_heap;sp_gc_old_bytes=0;
     while(*pp){sp_gc_hdr*h=*pp;if(h->marked!=sp_gc_mark_gen){*pp=h->next;if(h->recycle){h->recycle(h);}
     else{if(h->finalize)h->finalize((char*)h+sizeof(sp_gc_hdr));free(h);}}
     else{h->dirty=0;sp_gc_old_bytes+=h->size;pp=&h->next;}}
+    /* Retune the cadence on what this sweep actually reclaimed. A heap the
+       full cycle barely touches is one the minor mark was re-walking for
+       nothing, and the interval can grow; a heap it empties is one where
+       promoted objects are dying, and every cycle the interval adds is memory
+       held past its death. The second case is not hypothetical: at a fixed
+       interval of 128 a workload that promotes and then drops 20k arrays per
+       round peaked at 285 MB against 26 at 8, and ran slower for it. */
+    if(old_before>0&&!sp_gc_full_interval_fixed){
+      size_t kept=sp_gc_old_bytes;
+      if(kept>old_before-(old_before>>2)){            /* >75% survived */
+        if(sp_gc_full_interval<SP_GC_FULL_INTERVAL_MAX) sp_gc_full_interval*=2;
+      }
+      else if(kept<(old_before>>1)){                  /* <50% survived */
+        if(sp_gc_full_interval>SP_GC_FULL_INTERVAL) sp_gc_full_interval/=2;
+      }
+    }
   }
   /* minor: the old list is not walked at all -- an old object's stale stamp
      simply reads as unmarked next generation, which is what a fresh unmark
@@ -402,7 +432,7 @@ void sp_gc_collect(void){
   /* malloc_trim walks the allocator arena; once per full cycle was ~10% of
      collection time on allocation-heavy runs. Every 4th full keeps the RSS
      benefit at a fraction of the cost. */
-  if(full&&(sp_gc_cycle%(SP_GC_FULL_INTERVAL*4))==1)malloc_trim(0);
+  if(full&&(sp_gc_full_runs%4)==1)malloc_trim(0);
   if(sp_gc_obj_retune_hook)sp_gc_obj_retune_hook(ob_before);
 }
 
