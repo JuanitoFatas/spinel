@@ -438,7 +438,7 @@ sp_PtrArray*sp_PtrArray_shuffle(sp_PtrArray*a){sp_PtrArray*b=sp_PtrArray_dup(a);
 void *sp_PtrArray_sample(sp_PtrArray*a){if(a->len<=0)return NULL;return a->data[sp_krand_below(a->len)];}
 
 /* ============================= sp_StrArray ============================ */
-void sp_StrArray_replace(sp_StrArray*dst,sp_StrArray*src){dst->len=0;if(src->len>dst->cap){sp_gc_hdr*h=(sp_gc_hdr*)((char*)dst-sizeof(sp_gc_hdr));void*nd;if(dst->data==dst->inline_data){nd=malloc(sizeof(const char*)*src->len);if(!nd){perror("malloc");exit(1);}}
+void sp_StrArray_replace(sp_StrArray*dst,sp_StrArray*src){ sp_gc_wb((void*)dst);dst->len=0;if(src->len>dst->cap){sp_gc_hdr*h=(sp_gc_hdr*)((char*)dst-sizeof(sp_gc_hdr));void*nd;if(dst->data==dst->inline_data){nd=malloc(sizeof(const char*)*src->len);if(!nd){perror("malloc");exit(1);}}
 else{sp_gc_bytes_sub(sizeof(const char*)*dst->cap);h->size-=sizeof(const char*)*dst->cap;nd=realloc(dst->data,sizeof(const char*)*src->len);if(!nd){perror("realloc");exit(1);}}dst->data=(const char**)nd;dst->cap=src->len;h->size+=sizeof(const char*)*dst->cap;sp_gc_bytes_add(sizeof(const char*)*dst->cap);}memcpy(dst->data,src->data,sizeof(const char*)*src->len);dst->len=src->len;}
 const char*sp_StrArray_pop(sp_StrArray*a){if(!a||a->len<=0)return NULL;if(a->frozen){sp_raise_frozen_array_at(a, SP_BUILTIN_STR_ARRAY);return NULL;}return a->data[--a->len];}
 const char*sp_StrArray_shift(sp_StrArray*a){if(!a||a->len<=0)return NULL;if(a->frozen){sp_raise_frozen_array_at(a, SP_BUILTIN_STR_ARRAY);return NULL;}const char*v=a->data[0];memmove(a->data,a->data+1,(size_t)(--a->len)*sizeof(const char*));return v;}
@@ -446,7 +446,7 @@ const char*sp_StrArray_shift(sp_StrArray*a){if(!a||a->len<=0)return NULL;if(a->f
    length-clamping semantics as sp_IntArray_slice. */
 sp_StrArray*sp_StrArray_slice(sp_StrArray*a,mrb_int start,mrb_int len){SP_GC_ROOT(a);if(start<0)start+=a->len;if(start<0)start=0;sp_StrArray*b=sp_StrArray_new();if(start>=a->len||len<=0)return b;if(len>a->len-start)len=a->len-start;for(mrb_int i=0;i<len;i++)sp_StrArray_push(b,a->data[start+i]);return b;}
 sp_StrArray*sp_StrArray_slice_range(sp_StrArray*a,mrb_int start,mrb_int end_,mrb_int excl){if(end_<0)end_+=a->len;if(start<0)start+=a->len;mrb_int n=end_-start+(excl?0:1);if(n<0||start<0)n=0;return sp_StrArray_slice(a,start,n);}
-void sp_StrArray_reverse_bang(sp_StrArray*a){if(!a)return;if(a->frozen){sp_raise_frozen_array_at(a, SP_BUILTIN_STR_ARRAY);return;}for(mrb_int i=0,j=a->len-1;i<j;i++,j--){const char*t=a->data[i];a->data[i]=a->data[j];a->data[j]=t;}}
+void sp_StrArray_reverse_bang(sp_StrArray*a){ sp_gc_wb((void*)a);if(!a)return;if(a->frozen){sp_raise_frozen_array_at(a, SP_BUILTIN_STR_ARRAY);return;}for(mrb_int i=0,j=a->len-1;i<j;i++,j--){const char*t=a->data[i];a->data[i]=a->data[j];a->data[j]=t;}}
 void sp_StrArray_rotate_bang(sp_StrArray*a,mrb_int n){
   if(!a)return;
   if(a->frozen){sp_raise_frozen_array_at(a, SP_BUILTIN_STR_ARRAY);return;}
@@ -473,7 +473,7 @@ void sp_StrArray_rotate_bang(sp_StrArray*a,mrb_int n){
 }
 static int _sp_str_cmp(const void*a,const void*b){return sp_str_cmp_bytes(*(const char*const*)a,*(const char*const*)b);}
 void sp_StrArray_sort_bang(sp_StrArray*a){if(!a)return;if(a->frozen){sp_raise_frozen_array_at(a, SP_BUILTIN_STR_ARRAY);return;}qsort(a->data,a->len,sizeof(const char*),_sp_str_cmp);}
-void sp_StrArray_uniq_bang(sp_StrArray*a){if(!a||a->frozen){if(a&&a->frozen)sp_raise_frozen_array_at(a, SP_BUILTIN_STR_ARRAY);return;}for(mrb_int i=0;i<a->len;){int dup=0;for(mrb_int j=0;j<i;j++){if(a->data[j]==a->data[i]||(a->data[j]&&a->data[i]&&!sp_str_cmp_bytes(a->data[j],a->data[i]))){dup=1;break;}}if(dup){for(mrb_int k2=i;k2<a->len-1;k2++)a->data[k2]=a->data[k2+1];a->len--;}
+void sp_StrArray_uniq_bang(sp_StrArray*a){ sp_gc_wb((void*)a);if(!a||a->frozen){if(a&&a->frozen)sp_raise_frozen_array_at(a, SP_BUILTIN_STR_ARRAY);return;}for(mrb_int i=0;i<a->len;){int dup=0;for(mrb_int j=0;j<i;j++){if(a->data[j]==a->data[i]||(a->data[j]&&a->data[i]&&!sp_str_cmp_bytes(a->data[j],a->data[i]))){dup=1;break;}}if(dup){for(mrb_int k2=i;k2<a->len-1;k2++)a->data[k2]=a->data[k2+1];a->len--;}
 else i++;}}
 sp_StrArray*sp_StrArray_uniq(sp_StrArray*a){SP_GC_ROOT(a);sp_StrArray*b=sp_StrArray_new();if(!a)return b;for(mrb_int i=0;i<a->len;i++){int found=0;for(mrb_int j=0;j<b->len;j++){if(b->data[j]==a->data[i]||(b->data[j]&&a->data[i]&&!sp_str_cmp_bytes(b->data[j],a->data[i]))){found=1;break;}}if(!found)sp_StrArray_push(b,a->data[i]);}return b;}
 const char*sp_StrArray_join(sp_StrArray*a,const char*sep){size_t sl=strlen(sep),cap=256;char*buf=(char*)malloc(cap);size_t len=0;for(mrb_int i=0;i<a->len;i++){if(i>0){if(len+sl>=cap){cap*=2;buf=(char*)realloc(buf,cap);}memcpy(buf+len,sep,sl);len+=sl;}const char*_e=a->data[i]?a->data[i]:"";size_t el=strlen(_e);if(len+el>=cap){cap=((len+el)*2)+1;buf=(char*)realloc(buf,cap);}memcpy(buf+len,_e,el);len+=el;}buf[len]=0;char*r=sp_str_alloc(len);memcpy(r,buf,len);free(buf);return r;}
@@ -493,11 +493,11 @@ sp_StrArray*sp_StrArray_compact(sp_StrArray*a){SP_GC_ROOT(a);sp_StrArray*r=sp_St
    behind (the SP_INT_NIL / NaN sentinel), so compact has to filter. */
 sp_IntArray*sp_IntArray_compact(sp_IntArray*a){SP_GC_ROOT(a);sp_IntArray*r=sp_IntArray_new();if(!a)return r;for(mrb_int i=0;i<a->len;i++){mrb_int v=a->data[a->start+i];if(v!=SP_INT_NIL)sp_IntArray_push(r,v);}return r;}
 sp_FloatArray*sp_FloatArray_compact(sp_FloatArray*a){SP_GC_ROOT(a);sp_FloatArray*r=sp_FloatArray_new();if(!a)return r;for(mrb_int i=0;i<a->len;i++){mrb_float v=a->data[i];if(!sp_float_is_nil(v))sp_FloatArray_push(r,v);}return r;}
-const char*sp_StrArray_delete_at(sp_StrArray*a,mrb_int i){if(!a)return NULL;if(a->frozen){sp_raise_frozen_array_at(a, SP_BUILTIN_STR_ARRAY);return NULL;}if(i<0)i+=a->len;if(i<0||i>=a->len)return NULL;const char*v=a->data[i];for(mrb_int j=i;j<a->len-1;j++)a->data[j]=a->data[j+1];a->len--;return v;}
-const char*sp_StrArray_delete(sp_StrArray*a,const char*v){if(!a)return NULL;if(a->frozen){sp_raise_frozen_array_at(a, SP_BUILTIN_STR_ARRAY);return NULL;}mrb_int w=0;const char*found=NULL;for(mrb_int i=0;i<a->len;i++){if(sp_str_cmp_bytes(a->data[i],v)!=0){a->data[w]=a->data[i];w++;}
+const char*sp_StrArray_delete_at(sp_StrArray*a,mrb_int i){ sp_gc_wb((void*)a);if(!a)return NULL;if(a->frozen){sp_raise_frozen_array_at(a, SP_BUILTIN_STR_ARRAY);return NULL;}if(i<0)i+=a->len;if(i<0||i>=a->len)return NULL;const char*v=a->data[i];for(mrb_int j=i;j<a->len-1;j++)a->data[j]=a->data[j+1];a->len--;return v;}
+const char*sp_StrArray_delete(sp_StrArray*a,const char*v){ sp_gc_wb((void*)a);if(!a)return NULL;if(a->frozen){sp_raise_frozen_array_at(a, SP_BUILTIN_STR_ARRAY);return NULL;}mrb_int w=0;const char*found=NULL;for(mrb_int i=0;i<a->len;i++){if(sp_str_cmp_bytes(a->data[i],v)!=0){a->data[w]=a->data[i];w++;}
 else{found=a->data[i];}}a->len=w;return found;}
-void sp_StrArray_insert(sp_StrArray*a,mrb_int i,const char*v){if(!a)return;if(a->frozen){sp_raise_frozen_array_at(a, SP_BUILTIN_STR_ARRAY);return;}mrb_int orig=i;if(i<0)i+=a->len+1;if(i<0)sp_raise_cls("IndexError",sp_sprintf("index %lld too small for array; minimum: %lld",(long long)orig,(long long)(-(a->len+1))));while(i>a->len)sp_StrArray_push(a,NULL);/* CRuby pads with nils past the end */sp_StrArray_push(a,sp_str_empty);for(mrb_int j=a->len-1;j>i;j--)a->data[j]=a->data[j-1];a->data[i]=v;}
-void sp_StrArray_shuffle_bang(sp_StrArray*a){if(!a)return;if(a->frozen){sp_raise_frozen_array_at(a, SP_BUILTIN_STR_ARRAY);return;}for(mrb_int i=a->len-1;i>0;i--){mrb_int j=sp_krand_below(i+1);const char*t=a->data[i];a->data[i]=a->data[j];a->data[j]=t;}}
+void sp_StrArray_insert(sp_StrArray*a,mrb_int i,const char*v){ sp_gc_wb((void*)a);if(!a)return;if(a->frozen){sp_raise_frozen_array_at(a, SP_BUILTIN_STR_ARRAY);return;}mrb_int orig=i;if(i<0)i+=a->len+1;if(i<0)sp_raise_cls("IndexError",sp_sprintf("index %lld too small for array; minimum: %lld",(long long)orig,(long long)(-(a->len+1))));while(i>a->len)sp_StrArray_push(a,NULL);/* CRuby pads with nils past the end */sp_StrArray_push(a,sp_str_empty);for(mrb_int j=a->len-1;j>i;j--)a->data[j]=a->data[j-1];a->data[i]=v;}
+void sp_StrArray_shuffle_bang(sp_StrArray*a){ sp_gc_wb((void*)a);if(!a)return;if(a->frozen){sp_raise_frozen_array_at(a, SP_BUILTIN_STR_ARRAY);return;}for(mrb_int i=a->len-1;i>0;i--){mrb_int j=sp_krand_below(i+1);const char*t=a->data[i];a->data[i]=a->data[j];a->data[j]=t;}}
 sp_StrArray*sp_StrArray_dup(sp_StrArray*a){SP_GC_ROOT(a);sp_StrArray*r=sp_StrArray_new();sp_StrArray_replace(r,a);return r;}
 sp_StrArray*sp_StrArray_sort(sp_StrArray*a){sp_StrArray*b=sp_StrArray_dup(a);sp_StrArray_sort_bang(b);return b;}
 sp_StrArray*sp_StrArray_shuffle(sp_StrArray*a){sp_StrArray*r=sp_StrArray_new();sp_StrArray_replace(r,a);sp_StrArray_shuffle_bang(r);return r;}
@@ -622,7 +622,7 @@ sp_FloatArray *sp_FloatArray_slice_bang(sp_FloatArray *a, mrb_int from, mrb_int 
   a->len -= n;
   return r;
 }
-sp_StrArray *sp_StrArray_slice_bang(sp_StrArray *a, mrb_int from, mrb_int n) {
+sp_StrArray *sp_StrArray_slice_bang(sp_StrArray *a, mrb_int from, mrb_int n) { sp_gc_wb((void*)a);
   if (!a) return sp_StrArray_new();
   if (a->frozen) { sp_raise_frozen_array_at(a, SP_BUILTIN_STR_ARRAY); return sp_StrArray_new(); }
   if (from < 0) from += a->len;

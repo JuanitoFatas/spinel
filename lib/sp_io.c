@@ -893,7 +893,7 @@ mrb_bool sp_File_binmode_p(sp_File *f) {
 }
 void sp_File_set_binmode(sp_File *f) { if (f) f->bin_flag = 1; }
 /* IO#reopen(io): rebind this handle's descriptor onto the other stream. */
-sp_File *sp_File_reopen_io(sp_File *f, sp_File *other) {
+sp_File *sp_File_reopen_io(sp_File *f, sp_File *other) { sp_gc_wb((void*)f);
   if (!f || !f->fp || !other || !other->fp) return f;
   fflush(f->fp);
   fflush(other->fp);
@@ -969,7 +969,7 @@ void sp_File_close_half(sp_File *f, mrb_bool reading) {
   if (f && f->fp) { fclose(f->fp); f->fp = NULL; }
 }
 /* IO#reopen(path, mode): rebind the handle to another file. */
-sp_File *sp_File_reopen(sp_File *f, const char *path, const char *mode) {
+sp_File *sp_File_reopen(sp_File *f, const char *path, const char *mode) { sp_gc_wb((void*)f);
   if (!f) return f;
   FILE *nf = freopen(path ? path : "", mode && mode[0] ? mode : "r", f->fp);
   if (!nf) sp_file_raise_errno("reopen", path ? path : "");
