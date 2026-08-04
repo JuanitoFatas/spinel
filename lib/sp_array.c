@@ -406,8 +406,8 @@ sp_FloatArray*sp_FloatArray_uniq(sp_FloatArray*a){SP_GC_ROOT(a);sp_FloatArray*b=
 /* ============================= sp_PtrArray ============================ */
 /* `Array#delete_at(i)` -- remove and return the element at index i.
    Negative indices count from the end; NULL when out of range. */
-void*sp_PtrArray_delete_at(sp_PtrArray*a,mrb_int i){if(i<0)i+=a->len;if(i<0||i>=a->len)return NULL;void*v=a->data[i];for(mrb_int j=i;j<a->len-1;j++)a->data[j]=a->data[j+1];a->len--;return v;}
-void sp_PtrArray_reverse_bang(sp_PtrArray*a){for(mrb_int i=0,j=a->len-1;i<j;i++,j--){void*t=a->data[i];a->data[i]=a->data[j];a->data[j]=t;}}
+void*sp_PtrArray_delete_at(sp_PtrArray*a,mrb_int i){ sp_gc_wb((void*)a);if(i<0)i+=a->len;if(i<0||i>=a->len)return NULL;void*v=a->data[i];for(mrb_int j=i;j<a->len-1;j++)a->data[j]=a->data[j+1];a->len--;return v;}
+void sp_PtrArray_reverse_bang(sp_PtrArray*a){ sp_gc_wb((void*)a);for(mrb_int i=0,j=a->len-1;i<j;i++,j--){void*t=a->data[i];a->data[i]=a->data[j];a->data[j]=t;}}
 void sp_PtrArray_rotate_bang(sp_PtrArray*a,mrb_int n){
   if(!a)return;
   if(a->len<=0)return;
@@ -433,7 +433,7 @@ void sp_PtrArray_rotate_bang(sp_PtrArray*a,mrb_int n){
 }
 sp_PtrArray*sp_PtrArray_dup(sp_PtrArray*a){sp_PtrArray*b=sp_PtrArray_new_scan(a->scan_elem);for(mrb_int i=0;i<a->len;i++)sp_PtrArray_push(b,a->data[i]);return b;}
 sp_PtrArray*sp_PtrArray_slice(sp_PtrArray*a,mrb_int start,mrb_int len){if(start<0)start+=a->len;if(start<0)start=0;sp_PtrArray*b=sp_PtrArray_new_scan(a->scan_elem);if(start>=a->len||len<=0)return b;if(len>a->len-start)len=a->len-start;for(mrb_int i=0;i<len;i++)sp_PtrArray_push(b,a->data[start+i]);return b;}
-void sp_PtrArray_shuffle_bang(sp_PtrArray*a){for(mrb_int i=a->len-1;i>0;i--){mrb_int j=sp_krand_below(i+1);void*t=a->data[i];a->data[i]=a->data[j];a->data[j]=t;}}
+void sp_PtrArray_shuffle_bang(sp_PtrArray*a){ sp_gc_wb((void*)a);for(mrb_int i=a->len-1;i>0;i--){mrb_int j=sp_krand_below(i+1);void*t=a->data[i];a->data[i]=a->data[j];a->data[j]=t;}}
 sp_PtrArray*sp_PtrArray_shuffle(sp_PtrArray*a){sp_PtrArray*b=sp_PtrArray_dup(a);sp_PtrArray_shuffle_bang(b);return b;}
 void *sp_PtrArray_sample(sp_PtrArray*a){if(a->len<=0)return NULL;return a->data[sp_krand_below(a->len)];}
 
@@ -636,7 +636,7 @@ sp_StrArray *sp_StrArray_slice_bang(sp_StrArray *a, mrb_int from, mrb_int n) {
   a->len -= n;
   return r;
 }
-sp_PtrArray *sp_PtrArray_slice_bang(sp_PtrArray *a, mrb_int from, mrb_int n) {
+sp_PtrArray *sp_PtrArray_slice_bang(sp_PtrArray *a, mrb_int from, mrb_int n) { sp_gc_wb((void*)a);
   if (!a) return sp_PtrArray_new_scan(NULL);
   if (a->frozen) { sp_raise_frozen_array_at(a, SP_BUILTIN_PTR_ARRAY); return sp_PtrArray_new_scan(a->scan_elem); }
   if (from < 0) from += a->len;

@@ -1786,7 +1786,7 @@ void sp_Enumerator_scan(void *p) {
   sp_mark_rbval(e->gen_result);
   sp_mark_rbval(e->source);
 }
-sp_Enumerator *sp_enum_with_src(sp_Enumerator *e, sp_RbVal src, const char *meth) {
+sp_Enumerator *sp_enum_with_src(sp_Enumerator *e, sp_RbVal src, const char *meth) { sp_gc_wb((void*)e);
   e->source = src;
   e->meth = meth;
   return e;
@@ -1834,7 +1834,7 @@ static void sp_with_index_gen(sp_Fiber *f) {
   for (;;) {
     sp_RbVal v;
     if (s->gen) {
-      if (!s->fib) { s->fib = sp_Fiber_new(s->gen); if (s->gen_cap) s->fib->user_data = s->gen_cap; }
+      if (!s->fib) { s->fib = sp_Fiber_new(s->gen); if (s->gen_cap) { sp_gc_wb((void*)s->fib); s->fib->user_data = s->gen_cap; } }
       if (!sp_Fiber_alive(s->fib)) break;
       v = sp_Fiber_resume(s->fib, sp_box_nil());
       if (!sp_Fiber_alive(s->fib)) break;
@@ -1917,10 +1917,10 @@ static void sp_int_permutation_recur(sp_IntArray*src,mrb_int k,sp_IntArray*used,
 static void sp_int_repeated_permutation_recur(sp_IntArray*src,mrb_int k,sp_IntArray*acc,sp_PtrArray*out){if(k==0){sp_IntArray*cp=sp_IntArray_new();SP_GC_ROOT(cp);for(mrb_int i=0;i<acc->len;i++)sp_IntArray_push(cp,acc->data[acc->start+i]);sp_PtrArray_push(out,cp);return;}for(mrb_int i=0;i<src->len;i++){sp_IntArray_push(acc,src->data[src->start+i]);sp_int_repeated_permutation_recur(src,k-1,acc,out);acc->len--;}}
 sp_PtrArray*sp_IntArray_repeated_permutation(sp_IntArray*a,mrb_int k){SP_GC_ROOT(a);sp_PtrArray*out=sp_PtrArray_new();SP_GC_ROOT(out);if(!a||k<0)return out;sp_IntArray*acc=sp_IntArray_new();SP_GC_ROOT(acc);sp_int_repeated_permutation_recur(a,k,acc,out);return out;}
 sp_PtrArray*sp_IntArray_permutation(sp_IntArray*a,mrb_int k){SP_GC_ROOT(a);sp_PtrArray*out=sp_PtrArray_new();SP_GC_ROOT(out);if(!a||k<0||k>a->len)return out;sp_IntArray*used=sp_IntArray_new();SP_GC_ROOT(used);for(mrb_int i=0;i<a->len;i++)sp_IntArray_push(used,0);sp_IntArray*acc=sp_IntArray_new();SP_GC_ROOT(acc);sp_int_permutation_recur(a,k,used,acc,out);return out;}
-sp_RbVal sp_enum_gen_pull(sp_Enumerator *e) {
+sp_RbVal sp_enum_gen_pull(sp_Enumerator *e) { sp_gc_wb((void*)e);
   if (!e->fib) {
     e->fib = sp_Fiber_new(e->gen);
-    if (e->gen_cap) e->fib->user_data = e->gen_cap;
+    if (e->gen_cap) { sp_gc_wb((void*)e->fib); e->fib->user_data = e->gen_cap; }
   }
   if (!sp_Fiber_alive(e->fib)) sp_raise_stop_iteration(e->gen_result);
   sp_RbVal feed = e->has_feed ? e->feed : sp_box_nil();
@@ -1937,7 +1937,7 @@ sp_RbVal sp_Enumerator_next(sp_Enumerator *e) {
   if (!e->items || e->cursor >= e->items->len) sp_raise_stop_iteration(e->source);
   return e->items->data[e->cursor++];
 }
-sp_RbVal sp_Enumerator_peek(sp_Enumerator *e) {
+sp_RbVal sp_Enumerator_peek(sp_Enumerator *e) { sp_gc_wb((void*)e);
   if (e->gen) {
     if (!e->peeked) { e->peek_val = sp_enum_gen_pull(e); e->peeked = TRUE; }
     return e->peek_val;
@@ -1953,14 +1953,14 @@ sp_PolyArray *sp_enum_values_wrap(sp_RbVal v) {
 }
 sp_PolyArray *sp_Enumerator_next_values(sp_Enumerator *e) { return sp_enum_values_wrap(sp_Enumerator_next(e)); }
 sp_PolyArray *sp_Enumerator_peek_values(sp_Enumerator *e) { return sp_enum_values_wrap(sp_Enumerator_peek(e)); }
-sp_Enumerator *sp_Enumerator_rewind(sp_Enumerator *e) {
+sp_Enumerator *sp_Enumerator_rewind(sp_Enumerator *e) { sp_gc_wb((void*)e);
   if (!e) return NULL;
   if (e->gen) { e->fib = NULL; e->peeked = FALSE; e->gen_result = sp_box_nil(); }
   else e->cursor = 0;
   e->feed = sp_box_nil(); e->has_feed = FALSE;
   return e;
 }
-sp_RbVal sp_Enumerator_feed(sp_Enumerator *e, sp_RbVal v) {
+sp_RbVal sp_Enumerator_feed(sp_Enumerator *e, sp_RbVal v) { sp_gc_wb((void*)e);
   if (!e) return sp_box_nil();
   if (e->has_feed) sp_raise_cls("TypeError", (&("\xff" "feed value already set")[1]));
   e->feed = v; e->has_feed = TRUE;
@@ -1973,7 +1973,7 @@ sp_PolyArray *sp_Enumerator_take(sp_Enumerator *e, mrb_int n) {
   if (e->gen) {
     sp_Fiber *f = sp_Fiber_new(e->gen);
     SP_GC_ROOT(f);
-    if (e->gen_cap) f->user_data = e->gen_cap;
+    if (e->gen_cap) { sp_gc_wb((void*)f); f->user_data = e->gen_cap; }
     for (mrb_int i = 0; i < n; i++) {
       if (!sp_Fiber_alive(f)) break;
       sp_RbVal v = sp_Fiber_resume(f, sp_box_nil());
@@ -1994,7 +1994,7 @@ sp_PolyArray *sp_Enumerator_to_a(sp_Enumerator *e) {
   if (e->gen) {
     sp_Fiber *f = sp_Fiber_new(e->gen);
     SP_GC_ROOT(f);
-    if (e->gen_cap) f->user_data = e->gen_cap;
+    if (e->gen_cap) { sp_gc_wb((void*)f); f->user_data = e->gen_cap; }
     while (sp_Fiber_alive(f)) {
       sp_RbVal v = sp_Fiber_resume(f, sp_box_nil());
       if (!sp_Fiber_alive(f)) break;

@@ -1723,7 +1723,7 @@ int emit_lazy_pipeline_expr(Compiler *c, int id, Buf *b) {
     emit_indent(g_pre, g_indent);
     buf_printf(g_pre, "sp_Fiber *_t%d = (_t%d && _t%d->gen) ? sp_Fiber_new(_t%d->gen) : NULL; SP_GC_ROOT(_t%d);\n", tf, te, te, te, tf);
     emit_indent(g_pre, g_indent);
-    buf_printf(g_pre, "if (_t%d && _t%d->gen_cap) _t%d->user_data = _t%d->gen_cap;\n", tf, te, tf, te);
+    buf_printf(g_pre, "if (_t%d && _t%d->gen_cap) { sp_gc_wb((void *)_t%d); _t%d->user_data = _t%d->gen_cap; }\n", tf, te, tf, tf, te);
     emit_indent(g_pre, g_indent);
     buf_printf(g_pre, "mrb_int _t%d = 0;\n", tidx);
     emit_indent(g_pre, g_indent);

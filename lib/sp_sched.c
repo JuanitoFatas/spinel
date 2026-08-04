@@ -542,7 +542,7 @@ static void sp_sched_signal_if_quiescent(void) {
   if (g_nrunning == 0 && g_runnable == 0) SCHED_WAKE_ALL();
 }
 
-static void run_thread_once(sp_thread *t) {   /* PRE/POST: sched lock held */
+static void run_thread_once(sp_thread *t) { sp_gc_wb((void*)t);   /* PRE/POST: sched lock held */
   sp_thread *saved = g_current;
   g_current = t;
   g_nrunning++;
@@ -829,7 +829,7 @@ mrb_bool sp_Thread_get_report(sp_thread *t) { return t->report_on_exception; }
 sp_thread *sp_Thread_main(void) { return &g_main_thread; }
 
 sp_RbVal sp_Thread_get_name(sp_thread *t) { return t->name; }
-sp_RbVal sp_Thread_set_name(sp_thread *t, sp_RbVal v) { t->name = v; return v; }
+sp_RbVal sp_Thread_set_name(sp_thread *t, sp_RbVal v) { sp_gc_wb((void*)t); t->name = v; return v; }
 
 /* Thread.list enumeration: the main thread followed by every live spawned
    thread (dead ones are off the registry). The generated TU builds the array
@@ -866,12 +866,12 @@ sp_RbVal sp_Thread_tls_get(sp_thread *t, sp_sym k) {
   if (m) for (mrb_int i = 0; i < m->len; i++) if (m->keys[i] == k) return m->vals[i];
   return sp_box_nil();
 }
-mrb_bool sp_Thread_tls_key(sp_thread *t, sp_sym k) {
+mrb_bool sp_Thread_tls_key(sp_thread *t, sp_sym k) { sp_gc_wb((void*)t);
   sp_tls_map *m = (sp_tls_map *)t->tls;
   if (m) for (mrb_int i = 0; i < m->len; i++) if (m->keys[i] == k) return 1;
   return 0;
 }
-sp_RbVal sp_Thread_tls_set(sp_thread *t, sp_sym k, sp_RbVal v) {
+sp_RbVal sp_Thread_tls_set(sp_thread *t, sp_sym k, sp_RbVal v) { sp_gc_wb((void*)t);
   sp_tls_map *m = (sp_tls_map *)t->tls;
   if (m) for (mrb_int i = 0; i < m->len; i++) if (m->keys[i] == k) { m->vals[i] = v; return v; }
   if (!m) {
@@ -1395,7 +1395,7 @@ sp_queue *sp_SizedQueue_new(mrb_int max) {
   return q;
 }
 
-void sp_Queue_push(sp_queue *q, sp_RbVal v) {
+void sp_Queue_push(sp_queue *q, sp_RbVal v) { sp_gc_wb((void*)q);
   /* On a full SizedQueue, block until a #pop frees a slot. Root v across the
      block: it lives in this (possibly suspended) frame, and the parking
      thread's saved roots only cover the shadow stack. */

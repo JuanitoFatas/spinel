@@ -1452,8 +1452,91 @@ static int wb_holder_class(Compiler *c, const char *p, size_t st, size_t fn_off,
   return -1;
 }
 
+/* A closure cell is a one-word GC object holding the captured variable, and a
+   block body writes it as `(*<cellptr>) = v` -- no `iv_` in sight, so the ivar
+   scan above never sees it. Whether it holds a reference is written into its
+   own allocation: `sp_cell_scan_ptr` / `sp_cell_scan_rbval` mark a GC object,
+   `sp_cell_scan_str` reaches the string heap, which the minor mark leaves to
+   the full cycle and so needs no barrier. */
+typedef struct { char **v; int n, cap; } WbCells;
+static int wb_cells_has(WbCells *cs, const char *nm, size_t n) {
+  for (int k = 0; k < cs->n; k++)
+    if (strlen(cs->v[k]) == n && !strncmp(cs->v[k], nm, n)) return 1;
+  return 0;
+}
+static void wb_cells_collect(WbCells *cs, const char *p, size_t len) {
+  for (size_t i = 0; i + 6 < len; i++) {
+    if (strncmp(p + i, "_cell_", 6)) continue;
+    size_t s = i + 6, e = s;
+    while (e < len && (isalnum((unsigned char)p[e]) || p[e] == '_')) e++;
+    i = e - 1;
+    if (e == s) continue;
+    /* only the declaration says what the cell holds; find its scan argument */
+    size_t q = e, stop = e;
+    while (stop < len && p[stop] != ';' && p[stop] != '\n') stop++;
+    int ref = 0;
+    for (; q + 13 < stop; q++)
+      if (!strncmp(p + q, "sp_cell_scan_", 13) &&
+          (!strncmp(p + q + 13, "ptr", 3) || !strncmp(p + q + 13, "rbval", 5))) { ref = 1; break; }
+    if (!ref || wb_cells_has(cs, p + s, e - s)) continue;
+    if (cs->n == cs->cap) { cs->cap = cs->cap ? cs->cap * 2 : 16;
+                            cs->v = (char **)realloc(cs->v, sizeof(char *) * cs->cap); }
+    cs->v[cs->n] = (char *)malloc(e - s + 1);
+    memcpy(cs->v[cs->n], p + s, e - s); cs->v[cs->n][e - s] = '\0'; cs->n++;
+  }
+}
+/* `(*X) = v` where X names a reference cell: wrap X so the barrier lands on the
+   cell, which is the object the collector reaches the stored value through. */
+static void gc_wb_cells(Compiler *c, Buf *b) {
+  WbCells cs; memset(&cs, 0, sizeof cs);
+  wb_cells_collect(&cs, b->p, b->len);
+  if (!cs.n) { free(cs.v); return; }
+  for (size_t i = 0; i + 3 < b->len; i++) {
+    if (b->p[i] != '(' || b->p[i+1] != '*') continue;
+    size_t j = i, d = 0;
+    while (j < b->len) {
+      if (b->p[j] == '(') d++;
+      else if (b->p[j] == ')') { d--; if (!d) break; }
+      j++;
+    }
+    if (j >= b->len) continue;
+    size_t q = j + 1;
+    while (q < b->len && b->p[q] == ' ') q++;
+    if (q >= b->len || b->p[q] != '=' || b->p[q+1] == '=') continue;
+    size_t is = i + 2, ie = j;                     /* the inner expression */
+    while (is < ie && b->p[is] == ' ') is++;
+    while (ie > is && b->p[ie-1] == ' ') ie--;
+    if (ie <= is) continue;
+    /* the cell's name is the trailing identifier, whether it is the local
+       `_cell_x` or the capture field `((_proc_cap_1 *)_cap)->x` */
+    size_t ne = ie, ns = ie;
+    while (ns > is && (isalnum((unsigned char)b->p[ns-1]) || b->p[ns-1] == '_')) ns--;
+    if (ns == ne) continue;
+    const char *nm = b->p + ns; size_t nn = ne - ns;
+    if (nn > 6 && !strncmp(nm, "_cell_", 6)) { nm += 6; nn -= 6; }
+    if (!wb_cells_has(&cs, nm, nn)) continue;
+    if (!strncmp(b->p + is, "SP_WBO(", 7)) continue;
+    Buf ins; memset(&ins, 0, sizeof ins);
+    buf_puts(&ins, "SP_WBO(");
+    buf_putn(&ins, b->p + is, ie - is);
+    buf_puts(&ins, ")");
+    size_t grew = ins.len - (ie - is);
+    size_t tail = b->len - ie;
+    for (size_t g = 0; g < grew; g++) buf_putn(b, "\0", 1);
+    memmove(b->p + is + ins.len, b->p + is + (ie - is), tail);
+    memcpy(b->p + is, ins.p, ins.len);
+    b->p[b->len] = '\0';
+    i = is + ins.len;
+    free(ins.p);
+  }
+  for (int k = 0; k < cs.n; k++) free(cs.v[k]);
+  free(cs.v);
+  (void)c;
+}
+
 static void gc_wb_insert(Compiler *c, Buf *b, size_t fn_off) {
   if (g_no_write_barrier) return;
+  gc_wb_cells(c, b);
   int cur_self_cls = -1;
   for (size_t i = fn_off; i + 4 < b->len; i++) {
     /* track the enclosing function's receiver type */
@@ -2464,7 +2547,7 @@ void emit_fiber_new(Compiler *c, int id, Buf *b, int as_gen, int size_node) {
     }
     else {
       emit_indent(g_pre, g_indent);
-      buf_printf(g_pre, "_t%d->user_data = _t%d;\n", tf, tc);
+      buf_printf(g_pre, "sp_gc_wb((void *)_t%d); _t%d->user_data = _t%d;\n", tf, tf, tc);
       buf_printf(b, "_t%d", tf);
     }
   }

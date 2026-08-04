@@ -138,7 +138,7 @@ static sp_RbVal sp_FiberStore_get(sp_FiberStore *s, sp_sym k) {
   for (mrb_int i = 0; i < s->len; i++) if (s->keys[i] == k) return s->vals[i];
   return sp_box_nil();
 }
-static void sp_FiberStore_set(sp_FiberStore *s, sp_sym k, sp_RbVal v) {
+static void sp_FiberStore_set(sp_FiberStore *s, sp_sym k, sp_RbVal v) { sp_gc_wb((void*)s);
   for (mrb_int i = 0; i < s->len; i++) if (s->keys[i] == k) { s->vals[i] = v; return; }
   if (s->len == s->cap) {
     /* Grow each array into a temp and commit only on success, so a failed
@@ -264,7 +264,7 @@ sp_Fiber*sp_Fiber_new(void(*body)(sp_Fiber*)){sp_Fiber*f=(sp_Fiber*)sp_gc_alloc(
 #endif
   return f;}
 sp_RbVal sp_Fiber_storage_get(sp_Fiber*f,sp_sym k){if(!f->storage)return sp_box_nil();return sp_FiberStore_get((sp_FiberStore*)f->storage,k);}
-void sp_Fiber_storage_set(sp_Fiber*f,sp_sym k,sp_RbVal v){if(!f->storage)f->storage=sp_FiberStore_new();sp_FiberStore_set((sp_FiberStore*)f->storage,k,v);}
+void sp_Fiber_storage_set(sp_Fiber*f,sp_sym k,sp_RbVal v){ sp_gc_wb((void*)f);if(!f->storage)f->storage=sp_FiberStore_new();sp_FiberStore_set((sp_FiberStore*)f->storage,k,v);}
 /* Internal class name of the Fiber#kill signal. It is raised to unwind the
    fiber (running ensure blocks) but is excluded from every user rescue clause by
    the codegen (emit_begin), so only ensures run; the trampoline below recognizes
