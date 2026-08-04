@@ -8431,8 +8431,45 @@ void emit_stmt_tail_inner(Compiler *c, int id, Buf *b, int indent) {
                         sp_streq(tv_name, "yield_self"));
   if (!is_tail_loop && !is_tail_valued && sp_streq(ty, "CallNode") && nt_ref(nt, id, "block") >= 0 &&
       !call_breaks(c, id) &&
-      emit_iteration_stmt(c, id, b, indent))
+      emit_iteration_stmt(c, id, b, indent)) {
+    /* CRuby's iterators answer their receiver -- `each`, `each_pair`, `times`,
+       `upto` and the rest -- and at tail position that value is the method's
+       return. Without this the method returns a zero value of the receiver's
+       type: `{}` for a Hash, nil for an Array, `0..0` for a Range (#3517).
+       Emitted AFTER the loop rather than by routing the call through the value
+       path: the loop keeps the statement form the surrounding code expects,
+       and the receiver is re-read rather than re-evaluated, so this is limited
+       to receivers that are a plain read. */
+    static const char *iter_ret_recv[] = {
+      "each", "each_pair", "each_key", "each_value", "each_with_index",
+      "each_index", "each_byte", "each_entry", "reverse_each", "each_slice",
+      "upto", "downto", "step", "times", NULL
+    };
+    int _rr = nt_ref(nt, id, "receiver");
+    const char *_rt = _rr >= 0 ? nt_type(nt, _rr) : NULL;
+    int _simple = _rt && (sp_streq(_rt, "LocalVariableReadNode") ||
+                          sp_streq(_rt, "InstanceVariableReadNode") ||
+                          sp_streq(_rt, "SelfNode"));
+    int _named = 0;
+    if (_simple && tv_name)
+      for (int _i = 0; iter_ret_recv[_i]; _i++)
+        if (sp_streq(tv_name, iter_ret_recv[_i])) { _named = 1; break; }
+    if (_named && g_in_proc_body && g_result_var && g_result_poly) {
+      /* a proc answers through the boxed slot, not through its carrier */
+      emit_indent(b, indent);
+      buf_printf(b, "{ %s = ", g_result_var);
+      emit_boxed(c, _rr, b);
+      buf_puts(b, "; return 0; }\n");
+    }
+    else if (_named && comp_ntype(c, id) == g_ret_type &&
+             g_ret_type != TY_VOID && g_ret_type != TY_UNKNOWN) {
+      emit_indent(b, indent);
+      buf_puts(b, "return ");
+      emit_expr(c, _rr, b);
+      buf_puts(b, ";\n");
+    }
     return;
+  }
 
   /* setter call at tail position (obj.x = v): side-effect only, no return value.
      A setter name ends in a bare '=' that is not part of ==, !=, <=, >=. */
