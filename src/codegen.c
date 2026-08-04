@@ -1455,9 +1455,10 @@ static int wb_holder_class(Compiler *c, const char *p, size_t st, size_t fn_off,
 /* A closure cell is a one-word GC object holding the captured variable, and a
    block body writes it as `(*<cellptr>) = v` -- no `iv_` in sight, so the ivar
    scan above never sees it. Whether it holds a reference is written into its
-   own allocation: `sp_cell_scan_ptr` / `sp_cell_scan_rbval` mark a GC object,
-   `sp_cell_scan_str` reaches the string heap, which the minor mark leaves to
-   the full cycle and so needs no barrier. */
+   own allocation: `sp_cell_scan_ptr` and `sp_cell_scan_rbval` mark a GC object,
+   `sp_cell_scan_str` reaches the string heap. All three need the barrier: the
+   string heap is swept generationally too, so a young string stored into a
+   cell an old holder reaches is exactly as invisible as a young object. */
 typedef struct { char **v; int n, cap; } WbCells;
 static int wb_cells_has(WbCells *cs, const char *nm, size_t n) {
   for (int k = 0; k < cs->n; k++)
@@ -1476,8 +1477,7 @@ static void wb_cells_collect(WbCells *cs, const char *p, size_t len) {
     while (stop < len && p[stop] != ';' && p[stop] != '\n') stop++;
     int ref = 0;
     for (; q + 13 < stop; q++)
-      if (!strncmp(p + q, "sp_cell_scan_", 13) &&
-          (!strncmp(p + q + 13, "ptr", 3) || !strncmp(p + q + 13, "rbval", 5))) { ref = 1; break; }
+      if (!strncmp(p + q, "sp_cell_scan_", 13)) { ref = 1; break; }
     if (!ref || wb_cells_has(cs, p + s, e - s)) continue;
     if (cs->n == cs->cap) { cs->cap = cs->cap ? cs->cap * 2 : 16;
                             cs->v = (char **)realloc(cs->v, sizeof(char *) * cs->cap); }

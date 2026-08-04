@@ -122,6 +122,10 @@ static inline void sp_gc_cleanup(int *p) { sp_gc_nroots = *p; }
 extern void *sp_gc_remembered[SP_GC_REMEMBERED_MAX];
 extern int sp_gc_nremembered;
 extern int sp_gc_rem_overflow;
+/* Set for the duration of the string sweep hook on a minor cycle: only the
+   young string list may be swept, because the mark that just ran did not
+   walk old objects and so did not reach the strings they hold. */
+extern int sp_gc_str_minor_only;
 static inline void sp_gc_wb(void *obj) {
   if (!obj) return;
   sp_gc_hdr *h = (sp_gc_hdr *)obj - 1;

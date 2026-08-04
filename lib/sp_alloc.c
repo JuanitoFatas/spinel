@@ -305,6 +305,61 @@ static void sp_str_sweep_young(sp_str_hdr **head, size_t *bytes,
   *promoted += moved;
 }
 
+/* ---- Generational verifier, string side (SPINEL_GC_VERIFY_GEN=1) ----
+   The object verifier snapshots young OBJECTS a minor mark did not reach and
+   re-marks whole-heap to see which of them the full mark does; each one is
+   held only through an old object whose barrier is missing. Strings need the
+   same check and cannot share that machinery: their mark is a byte on the
+   string itself (0xfe unmarked, 0xfc marked), not a generation stamp on a
+   header. Snapshot the young strings still unmarked after the minor, then read
+   the same byte back after the whole-heap mark. */
+static const char **sp_str_vcand = NULL;
+static size_t sp_str_vcand_n = 0, sp_str_vcand_cap = 0;
+static void sp_str_vcand_push(const char *body) {
+  if (sp_str_vcand_n == sp_str_vcand_cap) {
+    size_t c = sp_str_vcand_cap ? sp_str_vcand_cap * 2 : 1024;
+    const char **n = (const char **)realloc(sp_str_vcand, c * sizeof(const char *));
+    if (!n) return;
+    sp_str_vcand = n; sp_str_vcand_cap = c;
+  }
+  sp_str_vcand[sp_str_vcand_n++] = body;
+}
+static void sp_str_vscan(sp_str_hdr *h) {
+  for (; h; h = h->next) {
+    const char *body = (const char *)(h + 1);
+    if ((unsigned char)body[0] == 0xfe) sp_str_vcand_push(body);
+  }
+}
+void sp_str_verify_begin(void) {
+  sp_str_vcand_n = 0;
+#ifdef SP_THREADS
+  { int n = sp_active_workers; if (n < 1) n = 1; if (n > SP_MAX_WORKERS) n = SP_MAX_WORKERS;
+    for (int i = 0; i < n; i++) sp_str_vscan(sp_str_wslot[i].young); }
+#else
+  sp_str_vscan(sp_str_heap);
+#endif
+}
+size_t sp_str_verify_end(void) {
+  size_t leaked = 0;
+  for (size_t i = 0; i < sp_str_vcand_n; i++)
+    if ((unsigned char)sp_str_vcand[i][0] == 0xfc) sp_str_vcand[leaked++] = sp_str_vcand[i];
+  sp_str_vcand_n = leaked;   /* keep just the leaked ones, for the holder probe */
+  return leaked;
+}
+/* Holder probe: unmark the leaked strings, let one old object's scan run, and
+   see whether it re-marks any. Same shape as the object-side probe, and with
+   the same limit -- it names the DIRECT holder, since sp_gc_mark is inert
+   while the probe is armed. */
+void sp_str_verify_probe_arm(void) {
+  for (size_t i = 0; i < sp_str_vcand_n; i++) ((char *)sp_str_vcand[i])[0] = (char)0xfe;
+}
+int sp_str_verify_probe_hit(void) {
+  for (size_t i = 0; i < sp_str_vcand_n; i++)
+    if ((unsigned char)sp_str_vcand[i][0] == 0xfc) return 1;
+  return 0;
+}
+void sp_str_verify_probe_done(void) { sp_str_vcand_n = 0; }
+
 /* Sweep the OLD list in place. Survivors stay old; nothing is demoted. */
 static void sp_str_sweep_old(sp_str_hdr **head, size_t *bytes) {
   sp_str_hdr **pp = head;
@@ -443,6 +498,8 @@ static void sp_str_sweep_gated(void) {
 #endif
   int major = 0;
   if (!sp_str_sweep_begin(&major)) return;
+  /* the old list holds the strings the minor mark could not reach */
+  if (sp_gc_str_minor_only) major = 0;
   size_t promoted = sp_str_sweep_gen(major);
   sp_str_sweep_end(major, promoted);
 }

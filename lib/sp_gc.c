@@ -17,6 +17,11 @@
 #include <signal.h>
 #include <unistd.h>
 #include "sp_marshal.h"   /* sp_marshal_vt -- the instance lives here (always linked) */
+void sp_str_verify_begin(void);   /* lib/sp_alloc.c: string side of the generational check */
+size_t sp_str_verify_end(void);
+void sp_str_verify_probe_arm(void);
+int sp_str_verify_probe_hit(void);
+void sp_str_verify_probe_done(void);
 
 /* ---- Globals shared with the generated TU (declared extern in sp_gc.h) ---- */
 SP_TLS void **sp_gc_roots[SP_GC_STACK_MAX];   /* per-worker (SP_TLS); see sp_gc.h */
@@ -156,6 +161,7 @@ unsigned sp_gc_verify_probe = 0;
 void *sp_gc_remembered[SP_GC_REMEMBERED_MAX];
 int sp_gc_nremembered = 0;
 int sp_gc_rem_overflow = 0;
+int sp_gc_str_minor_only = 0;
 /* Object-threshold retune, installed by sp_alloc.c. Running it INSIDE every
    collection (not only on the object-triggered wrapper) keeps the trigger
    tracking the live size whichever heap initiated the collect; the old
@@ -256,6 +262,7 @@ void sp_gc_collect(void){
        an old object the barrier failed to record. Without the snapshot the
        full mark's own stamps make the two indistinguishable. */
     unsigned minor_gen = sp_gc_mark_gen;
+    sp_str_verify_begin();
     size_t cap = 4096, n = 0;
     sp_gc_hdr **cand = (sp_gc_hdr **)malloc(sizeof(sp_gc_hdr *) * cap);
     if (cand) {
@@ -276,6 +283,21 @@ void sp_gc_collect(void){
     sp_gc_mark_gen = (sp_gc_mark_gen + 1) & 0x1fffffffu;
     if(!sp_gc_mark_gen) sp_gc_mark_gen = 1;
     sp_gc_mark_all();
+    size_t str_leaked = sp_str_verify_end();
+    if(str_leaked){
+      fprintf(stderr,"spinel: GC generational check: %zu young STRING(s) reachable only "
+                     "through an old object the barrier did not record\n", str_leaked);
+      for(sp_gc_hdr*h=sp_gc_old_heap;h;h=h->next){
+        if(h->dirty||!h->scan) continue;
+        sp_str_verify_probe_arm();
+        sp_gc_verify_probe=sp_gc_mark_gen; sp_gc_verify_probe_on=1;
+        h->scan((char*)h+sizeof(sp_gc_hdr));
+        sp_gc_verify_probe_on=0;
+        if(sp_str_verify_probe_hit()) fprintf(stderr,"spinel:   string holder scan=%p\n",(void*)h->scan);
+      }
+      sp_str_verify_probe_done();
+      sp_gc_verify_gen_fail = 1;
+    }
     size_t leaked = 0;
     for(size_t i=0;cand&&i<n;i++) if(cand[i]->marked==sp_gc_mark_gen) leaked++;
     if(leaked){
@@ -364,7 +386,19 @@ void sp_gc_collect(void){
      objects at all. Sweeping strings on a minor cycle therefore reaped live
      ones (test/file_basename_gc). Deferring to the full cycle is the same
      delayed reclamation the trigger already allowed. */
-  if((full||!sp_gc_minor_on)&&sp_gc_str_sweep_hook)sp_gc_str_sweep_hook();
+  /* The string heap is generational in its own right, so a minor cycle can
+     sweep its young list -- the strings an old object holds live in the old
+     list, which this leaves alone, and a young string stored into an old
+     holder is what the barrier records. Deferring the whole sweep to the
+     full cycle instead made every string-heavy workload SLOWER with the
+     minor mark than without it (+17% on a string benchmark, and rubys'
+     ballast inversion on lobsters); sweeping young only turns that into
+     -52%. */
+  if(sp_gc_str_sweep_hook){
+    sp_gc_str_minor_only = (!full && sp_gc_minor_on);
+    sp_gc_str_sweep_hook();
+    sp_gc_str_minor_only = 0;
+  }
   /* malloc_trim walks the allocator arena; once per full cycle was ~10% of
      collection time on allocation-heavy runs. Every 4th full keeps the RSS
      benefit at a fraction of the cost. */
