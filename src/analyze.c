@@ -11365,6 +11365,45 @@ void analyze_program(Compiler *c) {
     }
   }
 
+  /* A method whose value is an instance variable read has to answer that
+     slot's FINAL type. The return fixpoint settles before the ivar types do,
+     so a slot seeded `@a = []` and later widened by the explicit
+     `@a = @a + [x]` form leaves its reader pinned to the seed's layout, and
+     codegen then casts the boxed slot to it -- `(sp_IntArray *)(self->iv_a).v.p`
+     reads an sp_RbVal at the wrong layout and every element comes back as its
+     raw bits (#3514). Only widening toward POLY, so a narrowing the passes
+     above established is never undone. */
+  for (int s = 0; s < c->nscopes; s++) {
+    Scope *sc = &c->scopes[s];
+    if (sc->ret == TY_POLY || sc->ret == TY_UNKNOWN || sc->ret == TY_VOID) continue;
+    if (sc->class_id < 0 || sc->class_id >= c->nclasses || sc->body < 0) continue;
+    int bn = 0; const int *bb = nt_arr(c->nt, sc->body, "body", &bn);
+    if (!bb || bn < 1) continue;
+    int tail = bb[bn - 1];
+    const char *tt = nt_type(c->nt, tail);
+    if (!tt || !sp_streq(tt, "InstanceVariableReadNode")) continue;
+    const char *ivn = nt_str(c->nt, tail, "name");
+    int iv = ivn ? comp_ivar_index(&c->classes[sc->class_id], ivn) : -1;
+    if (iv < 0 || c->classes[sc->class_id].ivar_types[iv] != TY_POLY) continue;
+    sc->ret = TY_POLY;
+    c->ntype[tail] = TY_POLY;
+    if (c->ntype[sc->body] != TY_UNKNOWN) c->ntype[sc->body] = TY_POLY;
+    /* the callers were typed from the old return, and a call still carrying
+       the container type hands the boxed value to a typed helper, which does
+       not compile */
+    NT_FOREACH_KIND(c->nt, NK_CallNode, cid) {
+      const char *cn = nt_str(c->nt, cid, "name");
+      if (!cn || !sc->name || !sp_streq(cn, sc->name)) continue;
+      int recv = nt_ref(c->nt, cid, "receiver");
+      int args = nt_ref(c->nt, cid, "arguments");
+      int ac = 0; if (args >= 0) nt_arr(c->nt, args, "arguments", &ac);
+      if (recv < 0 || ac != 0 || nt_ref(c->nt, cid, "block") >= 0) continue;
+      TyKind rt = c->ntype[recv];
+      if (!(ty_is_object(rt) && ty_object_class(rt) == sc->class_id) && rt != TY_POLY) continue;
+      if (c->ntype[cid] != TY_UNKNOWN && c->ntype[cid] != TY_VOID) c->ntype[cid] = TY_POLY;
+    }
+  }
+
   /* A proc form holds its block as a real parameter, so a nested block that
      yields and is itself lifted to a standalone proc has to capture it -- the
      same shape a lowered yield method has, and the same cell it needs. The
