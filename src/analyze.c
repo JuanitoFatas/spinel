@@ -8971,6 +8971,169 @@ static void mark_nullable_int_locals(Compiler *c) {
   }
 }
 
+/* `f(*a)` where the splatted array's length is known statically expands to
+   `f(a[0], a[1], ...)`, whatever the target. A user-defined method already
+   handles the unexpanded form -- codegen reads the array into its declared
+   params -- but a builtin's arity is its C function's, so the array arrived as
+   a single argument: `h.fetch(*k)` either failed to build or silently ran the
+   one-argument overload and answered the wrong thing (#3515, #3516).
+
+   Runs after walk_scope, because deciding whether a local's length is static
+   means asking which writes are in ITS scope, and the synthesized nodes need a
+   scope of their own for inference to read the right slot. */
+static int splat_lit_len(Compiler *c, int ex) {
+  NodeTable *nt = (NodeTable *)c->nt;
+  const char *t = nt_type(nt, ex);
+  if (!t || !sp_streq(t, "ArrayNode")) return -1;
+  int n = 0; const int *el = nt_arr(nt, ex, "elements", &n);
+  if (!el) return -1;
+  for (int i = 0; i < n; i++) {
+    const char *et = nt_type(nt, el[i]);
+    if (et && (sp_streq(et, "SplatNode") || sp_streq(et, "KeywordHashNode") ||
+               sp_streq(et, "AssocSplatNode"))) return -1;
+  }
+  return n;
+}
+/* A local qualifies when its scope assigns it an array literal exactly once
+   and never touches it again: no second write, no operator write, no use as a
+   receiver (any call on it could be a push, which changes the length). */
+static int splat_local_len(Compiler *c, int ex, int callid) {
+  NodeTable *nt = (NodeTable *)c->nt;
+  const char *nm = nt_str(nt, ex, "name");
+  if (!nm || callid >= c->node_cap) return -1;
+  int sc = c->nscope[callid];
+  int len = -1, writes = 0;
+  for (int id = 0; id < nt->count && id < c->node_cap; id++) {
+    const char *ty = nt_type(nt, id);
+    if (!ty || c->nscope[id] != sc) continue;
+    if (sp_streq(ty, "LocalVariableWriteNode")) {
+      const char *wn = nt_str(nt, id, "name");
+      if (!wn || !sp_streq(wn, nm)) continue;
+      if (++writes > 1) return -1;
+      int v = nt_ref(nt, id, "value");
+      len = v >= 0 ? splat_lit_len(c, v) : -1;
+      if (len < 0) return -1;
+      continue;
+    }
+    if (sp_streq(ty, "LocalVariableTargetNode") || sp_streq(ty, "LocalVariableOrWriteNode") ||
+        sp_streq(ty, "LocalVariableAndWriteNode") ||
+        sp_streq(ty, "LocalVariableOperatorWriteNode")) {
+      const char *wn = nt_str(nt, id, "name");
+      if (wn && sp_streq(wn, nm)) return -1;
+    }
+    if (sp_streq(ty, "CallNode")) {
+      int r = nt_ref(nt, id, "receiver");
+      if (r < 0) continue;
+      const char *rt = nt_type(nt, r);
+      if (!rt || !sp_streq(rt, "LocalVariableReadNode")) continue;
+      const char *rn = nt_str(nt, r, "name");
+      if (!rn || !sp_streq(rn, nm)) continue;
+      /* `a[i]` cannot change the length, and excluding it matters beyond
+         tidiness: expanding one call synthesizes exactly that shape, so
+         without this the first expansion disqualifies every later one in the
+         same scope. */
+      const char *cn = nt_str(nt, id, "name");
+      if (cn && sp_streq(cn, "[]")) continue;
+      return -1;
+    }
+  }
+  return writes == 1 ? len : -1;
+}
+static void expand_static_splat_args(Compiler *c) {
+  NodeTable *nt = (NodeTable *)c->nt;
+  int count = nt->count;
+  for (int id = 0; id < count; id++) {
+    if (nt_kind(nt, id) != NK_CallNode) continue;
+    int an = nt_ref(nt, id, "arguments");
+    if (an < 0) continue;
+    int argc = 0; const int *argv0 = nt_arr(nt, an, "arguments", &argc);
+    if (!argv0 || argc < 1 || argc > 24) continue;
+    /* copied out: synthesizing a node can realloc the table and leave the
+       pointer nt_arr returned dangling */
+    int argv[24];
+    for (int k = 0; k < argc; k++) argv[k] = argv0[k];
+    int sp_at = -1;
+    for (int k = 0; k < argc; k++) {
+      const char *at = nt_type(nt, argv[k]);
+      if (at && sp_streq(at, "SplatNode")) { if (sp_at >= 0) { sp_at = -1; break; } sp_at = k; }
+    }
+    if (sp_at < 0) continue;
+    /* Only the fixed-arity builtins, which is the whole population that needs
+       this: a user-defined method reads the array into its declared params
+       (and reports the arity error the expansion would hide), and the variadic
+       builtins take the array correctly as it stands -- `puts(*a)`,
+       `format(*args)`, `Struct.new(*syms)` all rely on that, and expanding
+       them types each element separately or loses the compile-time member
+       names. A user definition of the same name wins, since then the call is
+       not a builtin at all. */
+    static const char *fixed_arity_builtins[] = {
+      "fetch", "store", "insert", "slice", "fill",
+      "sub", "sub!", "gsub", "gsub!", "[]", "[]=", NULL
+    };
+    const char *cnm = nt_str(nt, id, "name");
+    if (!cnm) continue;
+    int listed = 0;
+    for (int j = 0; fixed_arity_builtins[j]; j++)
+      if (sp_streq(cnm, fixed_arity_builtins[j])) { listed = 1; break; }
+    if (!listed) continue;
+    { int user_owns = 0;
+      for (int si = 0; si < c->nscopes && !user_owns; si++)
+        if (c->scopes[si].name && sp_streq(c->scopes[si].name, cnm)) user_owns = 1;
+      if (user_owns) continue; }
+    int ex = nt_ref(nt, argv[sp_at], "expression");
+    if (ex < 0) continue;
+    const char *ext = nt_type(nt, ex);
+    if (!ext) continue;
+    int is_lit = sp_streq(ext, "ArrayNode");
+    int lit_n = 0, lit_el[24];
+    int n;
+    if (is_lit) {
+      n = splat_lit_len(c, ex);
+      if (n < 0 || n > 24) continue;
+      const int *el0 = nt_arr(nt, ex, "elements", &lit_n);
+      if (!el0 || lit_n != n) continue;
+      for (int i = 0; i < n; i++) lit_el[i] = el0[i];
+    }
+    else if (sp_streq(ext, "LocalVariableReadNode")) n = splat_local_len(c, ex, id);
+    else continue;
+    if (n < 0 || n > 8) continue;        /* keep the synthesized list small */
+    const char *lnm = is_lit ? NULL : nt_str(nt, ex, "name");
+    if (!is_lit && !lnm) continue;
+    int nargs[32];
+    int m = 0;
+    for (int k = 0; k < sp_at; k++) nargs[m++] = argv[k];
+    for (int i = 0; i < n; i++) {
+      if (is_lit) { nargs[m++] = lit_el[i]; continue; }
+      /* a fresh read per element: the original node is shared by the write
+         detection above, and each synthesized node needs its own scope entry */
+      int rd = nt_new_node(nt, "LocalVariableReadNode");
+      nt_node_set_str(nt, rd, "name", lnm);
+      int ix = nt_new_node(nt, "IntegerNode");
+      nt_node_set_int(nt, ix, "value", i);
+      int ia = nt_new_node(nt, "ArgumentsNode");
+      nt_node_set_arr(nt, ia, "arguments", &ix, 1);
+      int cl = nt_new_node(nt, "CallNode");
+      nt_node_set_str(nt, cl, "name", "[]");
+      nt_node_set_ref(nt, cl, "receiver", rd);
+      nt_node_set_ref(nt, cl, "arguments", ia);
+      comp_grow_node_arrays(c);
+      c->nscope[rd] = c->nscope[id];
+      c->nscope[ix] = c->nscope[id];
+      c->nscope[ia] = c->nscope[id];
+      c->nscope[cl] = c->nscope[id];
+      nargs[m++] = cl;
+    }
+    for (int k = sp_at + 1; k < argc; k++) nargs[m++] = argv[k];
+    /* a FRESH ArgumentsNode: the existing one's id array came from the parser
+       and is not ours to free, which nt_node_set_arr on it would try to do */
+    int na = nt_new_node(nt, "ArgumentsNode");
+    nt_node_set_arr(nt, na, "arguments", nargs, m);
+    nt_node_set_ref(nt, id, "arguments", na);
+    comp_grow_node_arrays(c);
+    c->nscope[na] = c->nscope[id];
+  }
+}
+
 void analyze_program(Compiler *c) {
   comp_scope_index_set_frozen(0);  /* scope shape changes during the passes below */
   /* scope 0 = top level */
@@ -9003,6 +9166,7 @@ void analyze_program(Compiler *c) {
   qualify_colliding_consts(c);
   qualify_colliding_classes(c);
   walk_scope(c, c->nt->root_id, 0, -1);
+  expand_static_splat_args(c);
   register_singleton_defs(c);   /* def CONST.m / def x.m -> synthesized subclass */
   register_structs(c);
   desugar_struct_index_ctor(c);
