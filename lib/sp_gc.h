@@ -128,6 +128,14 @@ extern int sp_gc_rem_overflow;
 extern int sp_gc_str_minor_only;
 static inline void sp_gc_wb(void *obj) {
   if (!obj) return;
+  /* Same tag-byte protocol sp_gc_mark uses: the byte in front says whether
+     there is a header to read at all. The root fiber is a static whose guard
+     byte is 0xfd, so reaching past it for `old` walks off the end of a global
+     (ASAN: global-buffer-overflow, and a wandering segfault without it), and a
+     literal or a frozen string is not a GC allocation either. */
+  { unsigned char pm = ((unsigned char *)obj)[-1];
+    if (pm == 0xfd || pm == 0xff || pm == 0xf1 || pm == 0xf0 ||
+        pm == 0xfe || pm == 0xfc) return; }
   sp_gc_hdr *h = (sp_gc_hdr *)obj - 1;
   if (!h->old || h->dirty) return;
   h->dirty = 1;
