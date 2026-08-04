@@ -127,8 +127,21 @@ static inline void sp_gc_wb(void *obj) {
   sp_gc_hdr *h = (sp_gc_hdr *)obj - 1;
   if (!h->old || h->dirty) return;
   h->dirty = 1;
+#ifdef SP_THREADS
+  /* Mutators run this concurrently, so the slot has to be claimed atomically:
+     a plain `n++` lets two workers take the same index and one of the two
+     holders is silently dropped from the set -- a missing barrier with all the
+     barriers in place. The dirty bit needs no such care: only a mutator writes
+     it, only ever to 1, and the collector reads and clears it under
+     stop-the-world. */
+  { int idx = __atomic_fetch_add(&sp_gc_nremembered, 1, __ATOMIC_RELAXED);
+    if (idx < SP_GC_REMEMBERED_MAX) sp_gc_remembered[idx] = obj;
+    else { __atomic_store_n(&sp_gc_rem_overflow, 1, __ATOMIC_RELAXED);
+           __atomic_store_n(&sp_gc_nremembered, SP_GC_REMEMBERED_MAX, __ATOMIC_RELAXED); } }
+#else
   if (sp_gc_nremembered < SP_GC_REMEMBERED_MAX) sp_gc_remembered[sp_gc_nremembered++] = obj;
   else sp_gc_rem_overflow = 1;
+#endif
 }
 /* Young object heap. Threaded build: per-worker lists (one pusher each, since a
    started thread is pinned to its worker), so allocation pushes without the

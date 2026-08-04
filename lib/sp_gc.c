@@ -295,15 +295,10 @@ void sp_gc_collect(void){
     free(cand);
   }
   if(full){
-    /* a full cycle re-marks everything, so the set starts over */
-    for(int ri=0;ri<sp_gc_nremembered;ri++)((sp_gc_hdr*)sp_gc_remembered[ri]-1)->dirty=0;
-    sp_gc_nremembered=0; sp_gc_rem_overflow=0;
-  }
-  if(full){
     sp_gc_hdr**pp=&sp_gc_old_heap;sp_gc_old_bytes=0;
     while(*pp){sp_gc_hdr*h=*pp;if(h->marked!=sp_gc_mark_gen){*pp=h->next;if(h->recycle){h->recycle(h);}
     else{if(h->finalize)h->finalize((char*)h+sizeof(sp_gc_hdr));free(h);}}
-    else{sp_gc_old_bytes+=h->size;pp=&h->next;}}
+    else{h->dirty=0;sp_gc_old_bytes+=h->size;pp=&h->next;}}
   }
   /* minor: the old list is not walked at all -- an old object's stale stamp
      simply reads as unmarked next generation, which is what a fresh unmark
@@ -323,6 +318,39 @@ void sp_gc_collect(void){
 #else
   sp_gc_sweep_young(&sp_gc_heap);
 #endif
+  /* The remembered set has done its job and starts over after EVERY cycle, not
+     only a full one. Every young object it led the mark to has just been
+     promoted by the sweep above, so a holder that is not written to again has
+     nothing left to record; one that is gets recorded afresh by sp_gc_wb.
+     Keeping entries until the next full cycle instead made the array grow
+     monotonically and overflow on any real workload.
+
+     The clear cannot go through the array alone. Once it has overflowed,
+     objects carry dirty=1 with no entry in it, and clearing only what the
+     array holds leaves them permanently dirty -- so sp_gc_wb's `!h->dirty`
+     test rejects them forever and every young object they later point at is
+     invisible to the minor mark. That is a silent use-after-free, and it is
+     why the overflow path has to pay for the whole-heap walk. */
+  if(full){
+    /* the old sweep above cleared every survivor; the array may name objects it
+       just freed, so it must not be walked here */
+  }
+#ifdef SP_THREADS
+  /* A worker can be preempted between sp_gc_wb's `h->dirty = 1` and its push,
+     so an object can carry the bit without an entry -- and clearing only what
+     the array holds would leave it dirty forever, which is the one state that
+     turns off its barrier for good. Single-threaded, no collection can start
+     inside sp_gc_wb, so the array is exact and the cheap clear is correct. */
+  else{ for(sp_gc_hdr*h=sp_gc_old_heap;h;h=h->next)h->dirty=0; }
+#else
+  else if(sp_gc_rem_overflow){
+    for(sp_gc_hdr*h=sp_gc_old_heap;h;h=h->next)h->dirty=0;
+  }
+  else{
+    for(int ri=0;ri<sp_gc_nremembered;ri++)((sp_gc_hdr*)sp_gc_remembered[ri]-1)->dirty=0;
+  }
+#endif
+  sp_gc_nremembered=0; sp_gc_rem_overflow=0;
   /* Sweep the string heap only when IT is over its trigger: the sweep is a
      full walk of the live string list, and running it on every OBJECT-heap
      collection made each collection O(live strings) -- the dominant cost of
