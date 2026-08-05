@@ -6924,6 +6924,15 @@ char *codegen_program(const NodeTable *nt) {
       for (int j = 0; j < ci->nsg_readers; j++)
         buf_printf(&mk, "  sp_mark_rbval(sg_%s_%s);\n", ci->name, ci->sg_readers[j]);
     }
+    /* The proc calling convention's side channel holds boxed values with
+       nothing else pointing at them: a proc writes its result to
+       _sp_proc_poly_ret and returns, and the caller reads it back after -- with
+       an allocation in between (the push it is on its way to, the next
+       element's own work) the value is unreachable and the collector takes it.
+       The arguments are the same on the way in. Both are roots. Unused slots
+       read as tag 0 (int), which sp_mark_rbval ignores. */
+    buf_puts(&mk, "  sp_mark_rbval(_sp_proc_poly_ret);\n");
+    buf_puts(&mk, "  for (int _i = 0; _i < 16; _i++) sp_mark_rbval(_sp_proc_poly_args[_i]);\n");
     g_has_user_global_marks = (mk.p && mk.len > 0);
     if (g_has_user_global_marks) {
       buf_puts(&b, "static void sp_mark_user_globals(void) {\n");
