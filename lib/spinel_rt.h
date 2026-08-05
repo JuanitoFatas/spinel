@@ -6327,7 +6327,13 @@ SP_NORETURN SP_COLD void sp_raise_cls(const char *cls, const char *msg) {
   if (sp_pending_exc_flags && msg && cls && sp_exc_top > 0)
     sp_pending_exc_obj = sp_exc_apply_staged(cls, msg, sp_pending_exc_obj);
   sp_pending_exc_flags = 0;
-  if (sp_exc_top > 0) { sp_exc_msg[sp_exc_top-1] = msg; sp_exc_cls[sp_exc_top-1] = cls; sp_exc_obj[sp_exc_top-1] = sp_pending_exc_obj; sp_pending_exc_obj = NULL; sp_pending_cause = sp_explicit_cause_set ? sp_explicit_cause : sp_cur_handled(); sp_explicit_cause = NULL; sp_explicit_cause_set = 0; sp_last_exc_cls = cls; longjmp(sp_exc_stack[sp_exc_top-1], 1); }
+  /* The message can be a plain C literal -- every raise the runtime issues
+     itself passes one -- and a literal has no marker byte in front of it, so
+     the [-1] read sp_mark_string uses to decide whether a string is a GC one
+     walks off the end of its rodata section (ASAN: global-buffer-overflow,
+     and a segfault when the literal starts a page). Copy onto the string
+     heap, where it has a marker and the mark is meaningful. */
+  if (sp_exc_top > 0) { sp_exc_msg[sp_exc_top-1] = msg ? sp_str_dup_external(msg) : NULL; sp_exc_cls[sp_exc_top-1] = cls; sp_exc_obj[sp_exc_top-1] = sp_pending_exc_obj; sp_pending_exc_obj = NULL; sp_pending_cause = sp_explicit_cause_set ? sp_explicit_cause : sp_cur_handled(); sp_explicit_cause = NULL; sp_explicit_cause_set = 0; sp_last_exc_cls = cls; longjmp(sp_exc_stack[sp_exc_top-1], 1); }
   /* Uncaught SystemExit terminates silently with its status (Kernel#exit). */
   if (strcmp(cls, "SystemExit") == 0) exit(sp_exc_exit_status(sp_pending_exc_obj));
   /* Uncaught: CRuby's tail format "<message> (<ClassName>)". The source
