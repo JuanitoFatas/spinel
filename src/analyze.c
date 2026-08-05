@@ -1,4 +1,5 @@
 #include "analyze_internal.h"
+__attribute__((noreturn)) void unsupported_feature(Compiler *c, int id, const char *msg);
 
 
 static int narrow_int_table_ivars(Compiler *c);  /* declared early: the fixpoint calls it */
@@ -9067,7 +9068,7 @@ static void expand_static_splat_args(Compiler *c) {
        names. A user definition of the same name wins, since then the call is
        not a builtin at all. */
     static const char *fixed_arity_builtins[] = {
-      "fetch", "store", "insert", "slice", "fill",
+      "fetch", "store", "insert", "slice", "fill", "delete",
       "sub", "sub!", "gsub", "gsub!", "[]", "[]=", NULL
     };
     const char *cnm = nt_str(nt, id, "name");
@@ -9096,7 +9097,17 @@ static void expand_static_splat_args(Compiler *c) {
     }
     else if (sp_streq(ext, "LocalVariableReadNode")) n = splat_local_len(c, ex, id);
     else continue;
-    if (n < 0 || n > 8) continue;        /* keep the synthesized list small */
+    if (n < 0) {
+      /* A fixed-arity builtin's parameter list is its C function's, so a splat
+         whose length is not static cannot be mapped onto it: the array reaches
+         the slot expecting one key and the C does not compile. Say so here
+         rather than letting the C compiler report it against generated code
+         the user never wrote. (Variadic builtins never get here -- they take
+         the array as it stands and were filtered out above.) */
+      unsupported_feature(c, id, "splat whose length is not known at compile time, "
+                                 "into a fixed-arity builtin");
+    }
+    if (n > 8) continue;                 /* keep the synthesized list small */
     const char *lnm = is_lit ? NULL : nt_str(nt, ex, "name");
     if (!is_lit && !lnm) continue;
     int nargs[32];
@@ -11526,6 +11537,51 @@ void analyze_program(Compiler *c) {
         c->ntype[id] = TY_POLY; ch2 = 1;
       }
       if (!ch2) break;
+    }
+  }
+
+  /* A self-returning Array mutator answers its receiver, so a local capturing
+     one has the receiver's type -- including a widening the receiver took
+     after this local was first typed. `a = [1, 2]; c = a.push(:x)` widens a to
+     a poly array and left c an int array, so the capture read the same object
+     at the wrong layout and printed raw memory. Same shape as the ivar reader
+     below, and the same fix: run last, when the receiver's type is final. */
+  {
+    /* Only the mutators that ALWAYS answer the receiver. select!/reject!/
+       uniq!/compact!/flatten! answer nil when nothing changed, so their
+       capture is nilable and does not take the receiver's type. */
+    static const char *self_ret_mut[] = {
+      "push", "unshift", "<<", "concat", "insert", "append", "prepend",
+      "clear", "replace", "fill", "sort!", "reverse!", "shuffle!", "rotate!",
+      "map!", "collect!", "keep_if", "delete_if", NULL
+    };
+    NT_FOREACH_KIND(c->nt, NK_LocalVariableWriteNode, id) {
+      int v = nt_ref(c->nt, id, "value");
+      if (v >= 0) v = unwrap_parens(c, v);      /* `c = (a << x)` */
+      if (v < 0 || nt_kind(c->nt, v) != NK_CallNode) continue;
+      const char *cn = nt_str(c->nt, v, "name");
+      if (!cn) continue;
+      int hit = 0;
+      for (int k = 0; self_ret_mut[k]; k++)
+        if (sp_streq(cn, self_ret_mut[k])) { hit = 1; break; }
+      if (!hit) continue;
+      int r = nt_ref(c->nt, v, "receiver");
+      if (r < 0 || nt_kind(c->nt, r) != NK_LocalVariableReadNode) continue;
+      Scope *sc2 = comp_scope_of(c, id);
+      const char *rn = nt_str(c->nt, r, "name");
+      const char *wn = nt_str(c->nt, id, "name");
+      if (!sc2 || !rn || !wn) continue;
+      LocalVar *rv = scope_local(sc2, rn);
+      LocalVar *wv = scope_local(sc2, wn);
+      if (!rv || !wv || rv->type == wv->type) continue;
+      if (!ty_is_array(rv->type) && rv->type != TY_POLY) continue;
+      wv->type = rv->type;
+      c->ntype[v] = rv->type;
+      NT_FOREACH_KIND(c->nt, NK_LocalVariableReadNode, rid) {
+        const char *n2 = nt_str(c->nt, rid, "name");
+        if (!n2 || !sp_streq(n2, wn) || comp_scope_of(c, rid) != sc2) continue;
+        c->ntype[rid] = rv->type;
+      }
     }
   }
 

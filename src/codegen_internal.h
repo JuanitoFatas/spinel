@@ -728,6 +728,7 @@ void emit_begin(Compiler *c, int id, Buf *b, int indent, const char *resultvar);
 void emit_with_prelude(Compiler *c, int id, Buf *b, int indent, void (*inner)(Compiler *, int, Buf *, int));
 void emit_stmt(Compiler *c, int id, Buf *b, int indent);
 void emit_stmt_tail(Compiler *c, int id, Buf *b, int indent);
+int tail_iter_receiver(Compiler *c, int id);
 void emit_stmt_inner(Compiler *c, int id, Buf *b, int indent);
 void emit_stmt_tail_inner(Compiler *c, int id, Buf *b, int indent);
 void emit_stmts(Compiler *c, int id, Buf *b, int indent);

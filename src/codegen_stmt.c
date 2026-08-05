@@ -8261,6 +8261,33 @@ static int str_append_chain_base(Compiler *c, int id) {
 }
 
 /* Tail position: the value of this statement is the method's return value. */
+/* A block-taking call whose value is its receiver -- `each`, `each_pair`,
+   `times`, `upto` and the rest -- emitted as a loop, so wherever that value is
+   wanted the receiver has to be put back afterwards. Returns the receiver's
+   node when this call is one AND the receiver is a plain read (it is re-read,
+   not re-evaluated, so anything with a side effect is out), else -1. */
+int tail_iter_receiver(Compiler *c, int id) {
+  NodeTable *nt = c->nt;
+  if (nt_kind(nt, id) != NK_CallNode || nt_ref(nt, id, "block") < 0) return -1;
+  const char *nm = nt_str(nt, id, "name");
+  if (!nm) return -1;
+  static const char *iter_ret_recv[] = {
+    "each", "each_pair", "each_key", "each_value", "each_with_index",
+    "each_index", "each_byte", "each_entry", "reverse_each", "each_slice",
+    "upto", "downto", "step", "times", NULL
+  };
+  int hit = 0;
+  for (int i = 0; iter_ret_recv[i]; i++)
+    if (sp_streq(nm, iter_ret_recv[i])) { hit = 1; break; }
+  if (!hit) return -1;
+  int r = nt_ref(nt, id, "receiver");
+  const char *rt = r >= 0 ? nt_type(nt, r) : NULL;
+  if (!rt) return -1;
+  if (!sp_streq(rt, "LocalVariableReadNode") && !sp_streq(rt, "InstanceVariableReadNode") &&
+      !sp_streq(rt, "SelfNode")) return -1;
+  return r;
+}
+
 void emit_stmt_tail_inner(Compiler *c, int id, Buf *b, int indent) {
   const NodeTable *nt = c->nt;
   const char *ty = nt_type(nt, id);
@@ -8440,20 +8467,8 @@ void emit_stmt_tail_inner(Compiler *c, int id, Buf *b, int indent) {
        path: the loop keeps the statement form the surrounding code expects,
        and the receiver is re-read rather than re-evaluated, so this is limited
        to receivers that are a plain read. */
-    static const char *iter_ret_recv[] = {
-      "each", "each_pair", "each_key", "each_value", "each_with_index",
-      "each_index", "each_byte", "each_entry", "reverse_each", "each_slice",
-      "upto", "downto", "step", "times", NULL
-    };
-    int _rr = nt_ref(nt, id, "receiver");
-    const char *_rt = _rr >= 0 ? nt_type(nt, _rr) : NULL;
-    int _simple = _rt && (sp_streq(_rt, "LocalVariableReadNode") ||
-                          sp_streq(_rt, "InstanceVariableReadNode") ||
-                          sp_streq(_rt, "SelfNode"));
-    int _named = 0;
-    if (_simple && tv_name)
-      for (int _i = 0; iter_ret_recv[_i]; _i++)
-        if (sp_streq(tv_name, iter_ret_recv[_i])) { _named = 1; break; }
+    int _rr = tail_iter_receiver(c, id);
+    int _named = _rr >= 0;
     if (_named && g_in_proc_body && g_result_var && g_result_poly) {
       /* a proc answers through the boxed slot, not through its carrier */
       emit_indent(b, indent);
@@ -8465,6 +8480,16 @@ void emit_stmt_tail_inner(Compiler *c, int id, Buf *b, int indent) {
              g_ret_type != TY_VOID && g_ret_type != TY_UNKNOWN) {
       emit_indent(b, indent);
       buf_puts(b, "return ");
+      emit_expr(c, _rr, b);
+      buf_puts(b, ";\n");
+    }
+    else if (_named) {
+      /* A block's tail is the block's value, and a spliced block is read as
+         the value of a statement expression -- so the receiver goes there as
+         an expression rather than a return. Without it the expression's value
+         is the loop's, which is void, and the slot it is assigned to rejects
+         it (or, for an Array receiver, takes the loop counter). */
+      emit_indent(b, indent);
       emit_expr(c, _rr, b);
       buf_puts(b, ";\n");
     }

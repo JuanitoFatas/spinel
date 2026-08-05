@@ -1086,8 +1086,18 @@ void emit_block_invoke(Compiler *c, int args_node, Buf *b, int indent, int as_ex
     emit_boxed(c, bd3[bn3 - 1], b);
     buf_puts(b, "; ");
   }
-  else
+  else {
     emit_stmts(c, bbody, b, as_expr ? 0 : (nx_own ? indent + 1 : indent));
+    /* The block's value is its last statement, and this splice is read as the
+       value of a statement expression. A receiver-returning iterator there
+       emits as a loop with no value, so the slot it feeds gets void (or, for
+       an Array receiver, the loop counter). Put the receiver back. */
+    if (as_expr && bbody >= 0) {
+      int bn4 = 0; const int *bd4 = nt_arr(c->nt, bbody, "body", &bn4);
+      int rr4 = (bd4 && bn4 > 0) ? tail_iter_receiver(c, bd4[bn4 - 1]) : -1;
+      if (rr4 >= 0) { emit_expr(c, rr4, b); buf_puts(b, "; "); }
+    }
+  }
   if (nx_own) {
     g_c_loop_depth--;
     g_loop_exc_base = sv_lexc2;
