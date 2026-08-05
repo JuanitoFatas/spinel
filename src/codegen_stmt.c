@@ -8267,7 +8267,7 @@ static int str_append_chain_base(Compiler *c, int id) {
    node when this call is one AND the receiver is a plain read (it is re-read,
    not re-evaluated, so anything with a side effect is out), else -1. */
 int tail_iter_receiver(Compiler *c, int id) {
-  NodeTable *nt = c->nt;
+  const NodeTable *nt = c->nt;
   if (nt_kind(nt, id) != NK_CallNode || nt_ref(nt, id, "block") < 0) return -1;
   const char *nm = nt_str(nt, id, "name");
   if (!nm) return -1;
