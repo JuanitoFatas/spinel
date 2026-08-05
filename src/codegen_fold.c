@@ -5506,6 +5506,52 @@ void emit_obj_upcast_prefix(Compiler *c, TyKind slot, TyKind val, Buf *b) {
     if (k == sc) { buf_printf(b, "(sp_%s *)", c->classes[sc].c_name); return; }
 }
 
+/* Which actual argument fills parameter `idx`, or -1 for its default.
+
+   Ruby funds the required parameters first and spends what is left on the
+   optional ones, so with a leading optional (`def f(x = 1, y)`) the single
+   argument of `f(8)` goes to `y` and `x` takes its default. Reading argv[idx]
+   positionally put it in the wrong slot and left the required parameter at its
+   zero value, and the arity check -- walking the list and raising at the first
+   undefaulted parameter past the argument count -- rejected the call outright.
+
+   Everything here is gated on opt_before_required, which is false for every
+   conventional shape: the rest of the file's reading of a parameter list,
+   including Scope's documented "requireds then optionals" order and
+   nrequired's index-past-the-last-required meaning, is left exactly as it
+   was. nrequired is what makes the test cheap -- it is the index past the
+   LAST required parameter, so an optional below it is one Ruby funds late. */
+int opt_before_required(Scope *m) {
+  for (int i = 0; i < m->nrequired && i < m->nparams; i++)
+    if (m->pdefault && m->pdefault[i] >= 0) return 1;
+  return 0;
+}
+int arg_slot_for_param(Compiler *c, Scope *m, int idx, int argc) {
+  if (idx < 0 || idx >= m->nparams) return -1;
+  if (!opt_before_required(m)) return idx < argc ? idx : -1;
+  /* a rest parameter makes the arity a range rather than a map */
+  if (m->rest_idx >= 0 || m->kwrest_idx >= 0) return idx < argc ? idx : -1;
+  /* keywords sit in pnames too but take no positional argument; map over the
+     positional prefix only */
+  int n = m->nparams;
+  while (n > 0 && callee_param_is_declared_kwarg(c, m, m->pnames[n - 1])) n--;
+  if (idx >= n) return -1;
+  int pre = 0;
+  while (pre < n && (!m->pdefault || m->pdefault[pre] < 0)) pre++;
+  int opt_end = pre;
+  while (opt_end < n && m->pdefault && m->pdefault[opt_end] >= 0) opt_end++;
+  if (opt_end == n) return idx < argc ? idx : -1;   /* optionals trail after all */
+  int post = n - opt_end;
+  if (idx < pre) return idx < argc ? idx : -1;
+  if (idx < opt_end) {
+    int avail = argc - pre - post;      /* optionals this call can fund */
+    int k = idx - pre;
+    return k < avail ? pre + k : -1;
+  }
+  int at = argc - (n - idx);            /* trailing required: count from the end */
+  return at >= pre ? at : -1;
+}
+
 void emit_arg_or_default(Compiler *c, Scope *m, int idx, int provided, Buf *out) {
   LocalVar *p = scope_local(m, m->pnames[idx]);
   TyKind pt = p ? p->type : TY_INT;
@@ -6466,7 +6512,12 @@ void emit_args_filled(Compiler *c, int callee_idx, int argsNode, const char *lea
         }
       }
       for (int i = 0; i < m->nparams && !raised; i++) {
-        if (i < eff_pos) continue;
+        /* With a leading optional the shortfall is a count, not a position:
+           this parameter may be undefaulted and still funded, because the
+           required ones are covered first. */
+        int lead_opt = opt_before_required(m);
+        if (lead_opt && arg_slot_for_param(c, m, i, eff_pos) >= 0) continue;
+        if (i < eff_pos && !lead_opt) continue;
         if (m->pdefault && m->pdefault[i] >= 0) continue;
         if (kw_matches && kwh_lookup(nt, kwh, m->pnames[i]) >= 0) continue;
         if (kwh >= 0 && kw_matches)
@@ -6581,8 +6632,9 @@ void emit_args_filled(Compiler *c, int callee_idx, int argsNode, const char *lea
       LocalVar *plv = m->pnames[i] ? scope_local(m, m->pnames[i]) : NULL;
       TyKind pt = plv ? plv->type : TY_POLY;
       int provided = -1;
-      if (i < pos_argc) provided = argv ? argv[i] : -1;
-      else if (kwh >= 0 && m->pnames[i]) provided = kwh_lookup(nt, kwh, m->pnames[i]);
+      { int slot = arg_slot_for_param(c, m, i, pos_argc);
+        if (slot >= 0 && slot < pos_argc) provided = argv ? argv[slot] : -1; }
+      if (provided < 0 && kwh >= 0 && m->pnames[i]) provided = kwh_lookup(nt, kwh, m->pnames[i]);
       Buf vb; memset(&vb, 0, sizeof vb);
       /* A provided (caller) argument is emitted with the sibling-param renames
          OFF -- only a callee default expression should resolve param references
@@ -6778,13 +6830,14 @@ else {
         else
           buf_printf(out, "_t%d", krhash);
       }
-      else if (i < pos_argc && !callee_param_is_declared_kwarg(c, m, m->pnames[i])) {
+      else if (arg_slot_for_param(c, m, i, pos_argc) >= 0 &&
+               !callee_param_is_declared_kwarg(c, m, m->pnames[i])) {
         /* a declared KEYWORD param is never bound by position: only a
            positional param takes a surplus positional arg here. An unmatched
            keyword param falls through to its default below (#3114). (A `...`
            forwarding method's synthesized positional params are not declared
            keywords, so they still bind here.) */
-        emit_arg_rooted(c, m, i, argv[i], out);
+        emit_arg_rooted(c, m, i, argv[arg_slot_for_param(c, m, i, pos_argc)], out);
       }
       else {
         /* No positional arg and no keyword match. If the param is hash-typed
@@ -6997,7 +7050,8 @@ else {
          steal the last positional (which the rest already collected) (#3204).
          Mirrors the callee_param_is_declared_kwarg guard in emit_args_filled. */
       int is_declkw_d = m && callee_param_is_declared_kwarg(c, m, m->pnames[k]);
-      int provided = kv >= 0 ? kv : ((k < pos_argc_d && !is_declkw_d) ? argv[k] : -1);
+      int _sl = arg_slot_for_param(c, m, k, pos_argc_d);
+      int provided = kv >= 0 ? kv : ((_sl >= 0 && !is_declkw_d) ? argv[_sl] : -1);
       /* Options-hash idiom: a trailing keyword hash whose keys name no
          parameter collapses into the first unfilled positional param when
          that param is hash- or poly-typed -- Ruby packs `f(key: v)` into the

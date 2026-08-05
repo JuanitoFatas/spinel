@@ -139,7 +139,10 @@ typedef struct {
   char **pnames;    /* parameter names, in order (requireds then optionals) */
   int *pdefault;    /* per-param default-value node id, or -1 if required */
   int nparams;
-  int nrequired;    /* count of leading required params */
+  int nrequired;    /* index past the LAST required param, not a count:
+                       scope_add_param sets it to nparams on every required
+                       one, so `def f(x = 1, y)` reports 2. Kept as-is because
+                       three dozen sites read it that way. */
   int rest_idx;     /* index in pnames[] of *rest param, -1 if none */
   int npost_rest;   /* number of required params AFTER the rest param (Prism "posts") */
   int kwrest_idx;   /* index in pnames[] of **kwrest param, -1 if none */

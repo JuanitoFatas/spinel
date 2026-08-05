@@ -624,6 +624,8 @@ int emit_grep_pred(Compiler *c, int pat, const char *ev, TyKind et, Buf *b);
 void emit_obj_alloc_expr(Compiler *c, int cid, Buf *b);
 int emit_grep_expr(Compiler *c, int id, Buf *b);
 void emit_arg_or_default(Compiler *c, Scope *m, int idx, int provided, Buf *out);
+int arg_slot_for_param(Compiler *c, Scope *m, int idx, int argc);
+int opt_before_required(Scope *m);
 /* `(sp_Parent *)` when an object value flows into an ancestor-typed slot; the
    layouts match by construction, but C needs the cast spelled (#3418). */
 void emit_obj_upcast_prefix(Compiler *c, TyKind slot, TyKind val, Buf *b);
