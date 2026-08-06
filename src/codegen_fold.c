@@ -6506,7 +6506,14 @@ void emit_args_filled(Compiler *c, int callee_idx, int argsNode, const char *lea
       int kw_matches = 0;
       if (kwh >= 0)
         for (int i = 0; i < m->nparams; i++)
-          if (m->pnames[i] && kwh_lookup(nt, kwh, m->pnames[i]) >= 0) { kw_matches = 1; break; }
+          /* A key binds by name only to a parameter that IS a keyword. A
+             positional parameter merely SHARING the name takes the whole hash
+             positionally, the way any other unconsumed keyword hash does --
+             `def f(attrs); f(attrs: 1)` answers `{attrs: 1}` in Ruby and
+             answered 0 here, because the name match made the call look like it
+             supplied no positional argument at all. */
+          if (m->pnames[i] && callee_has_kwarg(c, m, m->pnames[i]) &&
+              kwh_lookup(nt, kwh, m->pnames[i]) >= 0) { kw_matches = 1; break; }
       int eff_pos = pos_argc + ((kwh >= 0 && !kw_matches) ? 1 : 0);
       char expbuf2[32];
       if (nreq == nfixed) snprintf(expbuf2, sizeof expbuf2, "%d", nfixed);

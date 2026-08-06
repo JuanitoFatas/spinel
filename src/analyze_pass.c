@@ -1,4 +1,5 @@
 #include "analyze_internal.h"
+int callee_has_kwarg(Compiler *c, Scope *m, const char *name);
 #include <stdio.h>
 #include <stdlib.h>
 
@@ -2704,6 +2705,13 @@ else {
         const char *kty = nt_type(nt, key);
         const char *kname = (kty && sp_streq(kty, "SymbolNode")) ? nt_str(nt, key, "value") : NULL;
         if (!kname) continue;
+        /* A key binds by name only to a parameter that IS a keyword. Looking
+           the name up among ALL locals typed a POSITIONAL parameter from the
+           key's value -- `def f(x); f(x: 9)` typed x from the 9 and then
+           passed it nothing, answering 0 where Ruby answers `{x: 9}`. A
+           positional parameter sharing the name takes the whole hash
+           positionally, which the collapse below already handles. */
+        if (!callee_has_kwarg(c, m, kname)) continue;
         LocalVar *p = scope_local(m, kname);
         if (!p || p->rbs_seeded) continue;
         TyKind at = infer_type(c, val);
