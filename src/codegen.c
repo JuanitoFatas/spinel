@@ -1594,8 +1594,70 @@ static void gc_wb_insert(Compiler *c, Buf *b, size_t fn_off) {
     int at_stmt = 1;
     for (size_t k = bol; k < st; k++)
       if (b->p[k] != ' ' && b->p[k] != '\t') { at_stmt = 0; break; }
+    /* The barrier has to run AFTER the value is in the slot, not before it is
+       computed. The right-hand side usually allocates -- `@a = []` is the
+       whole shape -- and an allocation can collect: the collection walks the
+       object the barrier just recorded, then clears the remembered set and the
+       dirty bit, and the store that follows lands unrecorded. The next minor
+       mark does not walk the holder, the value it holds is young and
+       unreachable, and it is freed while still in the slot. Nothing between
+       the store and the barrier allocates, so putting it after closes the
+       window without opening another. Found by rubys as silent data loss on a
+       long-lived object that replaces a container (#3513).
+
+       Statement position takes the object into a temp so a non-trivial lvalue
+       is evaluated once; an assignment inside a larger expression still uses
+       the wrapper, which has the same hazard and no room for a second
+       statement. */
+    size_t stmt_end = 0;
+    /* Not when this store is the last statement of a statement expression:
+       that position IS the expression's value, and wrapping it in a block
+       makes the value void. Detected by what follows the statement -- `})`
+       closes a statement expression. */
+    if (at_stmt) {
+      size_t k = q + 1, d = 0;
+      int str = 0, ch = 0;
+      for (; k < b->len; k++) {
+        char x = b->p[k];
+        if (str) { if (x == '\\') k++; else if (x == '"') str = 0; continue; }
+        if (ch) { if (x == '\\') k++; else if (x == '\'') ch = 0; continue; }
+        if (x == '"') { str = 1; continue; }
+        if (x == '\'') { ch = 1; continue; }
+        if (x == '(' || x == '[' || x == '{') d++;
+        else if (x == ')' || x == ']' || x == '}') { if (!d) break; d--; }
+        else if (x == ';' && !d) { stmt_end = k; break; }
+      }
+    }
+    if (stmt_end) {
+      size_t k2 = stmt_end + 1;
+      while (k2 < b->len && (b->p[k2] == ' ' || b->p[k2] == '\n' || b->p[k2] == '\t')) k2++;
+      if (k2 + 1 < b->len && b->p[k2] == '}' && b->p[k2+1] == ')') stmt_end = 0;
+    }
     Buf ins; memset(&ins, 0, sizeof ins);
-    if (simple && at_stmt) {
+    if (at_stmt && stmt_end) {
+      /* rewrite the whole statement: { typeof(obj) _wb = obj; _wb->f = rhs; wb(_wb); } */
+      int wid = ++g_tmp;
+      buf_printf(&ins, "{ __typeof__(");
+      buf_putn(&ins, b->p + st, i - st);
+      buf_printf(&ins, ") _wb%d = ", wid);
+      buf_putn(&ins, b->p + st, i - st);
+      buf_printf(&ins, "; _wb%d", wid);
+      buf_putn(&ins, b->p + i, stmt_end - i + 1);
+      /* A statement expression's last statement is its value, and this store
+         can be one (`({ ...; o->f = v; })`). Keep the assigned value as the
+         block's value so a consumer still reads it. */
+      buf_printf(&ins, " sp_gc_wb((void *)_wb%d); }", wid);
+      size_t grew2 = ins.len - (stmt_end + 1 - st);
+      size_t tail2 = b->len - (stmt_end + 1);
+      for (size_t g = 0; g < grew2; g++) buf_putn(b, "\0", 1);
+      memmove(b->p + st + ins.len, b->p + st + (stmt_end + 1 - st), tail2);
+      memcpy(b->p + st, ins.p, ins.len);
+      b->p[b->len] = '\0';
+      i = st + ins.len;
+      free(ins.p);
+      continue;
+    }
+    if (0) {
       buf_puts(&ins, "sp_gc_wb((void *)");
       buf_putn(&ins, b->p + st, i - st);
       buf_puts(&ins, "); ");
