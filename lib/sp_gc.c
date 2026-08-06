@@ -316,8 +316,26 @@ void sp_gc_collect(void){
     if(leaked){
       fprintf(stderr,"spinel: GC generational check: %zu young object(s) reachable only "
                      "through an old one the barrier did not record\n", leaked);
-      /* Name the holders: an old object that reaches one of them is where the
-         missing barrier is, and its scan function names the type. */
+      /* Name the holders: an old object reaching one of the LEAKED objects is
+         where the missing barrier is, and its scan function names the type.
+
+         The probe has to test membership of the leaked set, not "young and
+         marked". Every live young object carries the full mark's stamp by the
+         time this runs, so the looser test named every old object that holds
+         any young one at all -- which, in a program whose long-lived objects
+         point at fresh ones, is all of them, on every collection. The count
+         above was always right; the names were noise. */
+      /* Leave the full mark's stamp on the leaked objects ALONE and take it
+         off every other young one, so the probe's "young and stamped" test
+         means "leaked" for the duration. A spare bit cannot do this: marked is
+         a wrapping generation counter that takes every value in its range. */
+      unsigned other = sp_gc_mark_gen ^ 1u;
+      char *leaked_flag = (char *)calloc(n ? n : 1, 1);
+      for(size_t i=0;i<n;i++) leaked_flag[i] = (cand[i]->marked==sp_gc_mark_gen);
+#ifndef SP_THREADS
+      for(sp_gc_hdr*h=sp_gc_heap;h;h=h->next) if(h->marked==sp_gc_mark_gen) h->marked=other;
+#endif
+      for(size_t i=0;i<n;i++) if(leaked_flag[i]) cand[i]->marked = sp_gc_mark_gen;
       for(sp_gc_hdr*h=sp_gc_old_heap;h;h=h->next){
         if(h->dirty||!h->scan) continue;
         sp_gc_verify_probe_hit=0; sp_gc_verify_probe=sp_gc_mark_gen; sp_gc_verify_probe_on=1;
@@ -325,6 +343,10 @@ void sp_gc_collect(void){
         sp_gc_verify_probe_on=0;
         if(sp_gc_verify_probe_hit) fprintf(stderr,"spinel:   holder scan=%p\n",(void*)h->scan);
       }
+#ifndef SP_THREADS
+      for(sp_gc_hdr*h=sp_gc_heap;h;h=h->next) if(h->marked==other) h->marked=sp_gc_mark_gen;
+#endif
+      free(leaked_flag);
       sp_gc_verify_gen_fail = 1;
     }
     free(cand);
