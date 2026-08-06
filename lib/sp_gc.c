@@ -75,6 +75,12 @@ static int sp_gc_max_bytes_init = 0;
 static int sp_gc_full_interval = SP_GC_FULL_INTERVAL;
 static int sp_gc_full_interval_fixed = 0;   /* SPINEL_GC_FULL_INTERVAL pins it */
 int sp_gc_full_runs = 0;    /* read by GC.stat (lib/sp_cold.c) */
+/* High-water mark of the remembered set, for GC.stat. A minor collection
+   walks every entry and runs its scan, so a workload that stores into most
+   of its old heap makes the minor do the full mark's work plus the
+   bookkeeping -- which is the shape to check when a minor mark is SLOWER
+   than the whole-heap one on some route. */
+int sp_gc_rem_peak = 0;
 
 /* Issue #755: bail out cleanly on OOM rather than returning NULL into a
    caller that would deref it next. */
@@ -252,6 +258,7 @@ void sp_gc_collect(void){
      are covered, the runtime's container mutators are being swept through, and
      SPINEL_GC_VERIFY_GEN is what finds what is left. Default off means the
      collector behaves exactly as it did before the barrier landed. */
+  if (sp_gc_nremembered > sp_gc_rem_peak) sp_gc_rem_peak = sp_gc_nremembered;
   sp_gc_minor = sp_gc_minor_on && !full && !sp_gc_rem_overflow;
   sp_gc_mark_all();
   if(sp_gc_minor){

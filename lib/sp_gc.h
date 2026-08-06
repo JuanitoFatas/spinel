@@ -122,11 +122,19 @@ static inline void sp_gc_cleanup(int *p) { sp_gc_nroots = *p; }
 extern void *sp_gc_remembered[SP_GC_REMEMBERED_MAX];
 extern int sp_gc_nremembered;
 extern int sp_gc_rem_overflow;
+extern int sp_gc_minor_on;   /* read by sp_gc_wb below; set once before main */
 /* Set for the duration of the string sweep hook on a minor cycle: only the
    young string list may be swept, because the mark that just ran did not
    walk old objects and so did not reach the strings they hold. */
 extern int sp_gc_str_minor_only;
 static inline void sp_gc_wb(void *obj) {
+  /* Nothing reads the remembered set unless a minor mark runs, and whether one
+     can is decided once, from the environment, before main. So with the
+     generational mark off -- the default -- the whole barrier is bookkeeping
+     for a reader that never comes. rubys observed the other half of this from
+     the source: `old` is set on every survivor regardless of the mode, so the
+     barrier was doing its full work in both. */
+  if (!sp_gc_minor_on) return;
   if (!obj) return;
   /* Same tag-byte protocol sp_gc_mark uses: the byte in front says whether
      there is a header to read at all. The root fiber is a static whose guard
