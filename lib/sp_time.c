@@ -7,6 +7,7 @@
  * trampolines for them.
  */
 
+#include <ctype.h>
 #include <math.h>
 #include <stdio.h>
 #include <string.h>
@@ -406,7 +407,16 @@ const char *sp_time_strftime(sp_Time t, const char *fmt) {
       width = -1; upcase = downcase = 0;
     }
     if (upcase) for (char *q = val; *q; q++) *q = (char)toupper((unsigned char)*q);
-    if (downcase) for (char *q = val; *q; q++) *q = (char)(isupper((unsigned char)*q) ? tolower((unsigned char)*q) : toupper((unsigned char)*q));
+    /* `%#` changes the field's case as a WHOLE: all-uppercase becomes
+       lowercase, anything else becomes uppercase. Per-character swapcase
+       instead turned "January" into "jANUARY" where CRuby answers
+       "JANUARY" -- only fields that are already uppercase (%p, %Z) agreed. */
+    if (downcase) {
+      int has_lower = 0;
+      for (char *q = val; *q; q++) if (islower((unsigned char)*q)) { has_lower = 1; break; }
+      for (char *q = val; *q; q++)
+        *q = has_lower ? (char)toupper((unsigned char)*q) : (char)tolower((unsigned char)*q);
+    }
     /* the `-` (no-pad) and `_` (space-pad) modifiers rework the default zero
        padding that C strftime already applied to a numeric field (#3090) */
     if ((nopad || padsp) && val[0]) {
