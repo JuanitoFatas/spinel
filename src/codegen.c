@@ -1522,7 +1522,54 @@ static void gc_wb_cells(Compiler *c, Buf *b) {
     if (nn > 6 && !strncmp(nm, "_cell_", 6)) { nm += 6; nn -= 6; }
     if (!wb_cells_has(&cs, nm, nn)) continue;
     if (!strncmp(b->p + is, "SP_WBO(", 7)) continue;
+    /* At statement position, run the barrier AFTER the store: the value
+       usually allocates, and an allocation between the barrier and the store
+       collects, which clears the record the barrier just made (see
+       gc_wb_insert). Anywhere else the wrapper stays, with that hazard. */
+    size_t bol2 = i;
+    while (bol2 > 0 && b->p[bol2-1] != '\n' && b->p[bol2-1] != ';' && b->p[bol2-1] != '{') bol2--;
+    int at_stmt2 = 1;
+    for (size_t k = bol2; k < i; k++)
+      if (b->p[k] != ' ' && b->p[k] != '\t') { at_stmt2 = 0; break; }
+    size_t send = 0;
+    if (at_stmt2) {
+      size_t k = q + 1, d2 = 0; int str2 = 0, ch2 = 0;
+      for (; k < b->len; k++) {
+        char x = b->p[k];
+        if (str2) { if (x == '\\') k++; else if (x == '"') str2 = 0; continue; }
+        if (ch2) { if (x == '\\') k++; else if (x == '\'') ch2 = 0; continue; }
+        if (x == '"') { str2 = 1; continue; }
+        if (x == '\'') { ch2 = 1; continue; }
+        if (x == '(' || x == '[' || x == '{') d2++;
+        else if (x == ')' || x == ']' || x == '}') { if (!d2) break; d2--; }
+        else if (x == ';' && !d2) { send = k; break; }
+      }
+      if (send) {                       /* not when it is a statement expression's value */
+        size_t k2 = send + 1;
+        while (k2 < b->len && (b->p[k2]==' '||b->p[k2]=='\n'||b->p[k2]=='\t')) k2++;
+        if (k2 + 1 < b->len && b->p[k2]=='}' && b->p[k2+1]==')') send = 0;
+      }
+    }
     Buf ins; memset(&ins, 0, sizeof ins);
+    if (send) {
+      int wid = ++g_tmp;
+      buf_printf(&ins, "{ __typeof__(");
+      buf_putn(&ins, b->p + is, ie - is);
+      buf_printf(&ins, ") _wc%d = ", wid);
+      buf_putn(&ins, b->p + is, ie - is);
+      buf_printf(&ins, "; (*_wc%d)", wid);
+      buf_putn(&ins, b->p + j + 1, send - j);
+      buf_printf(&ins, " sp_gc_wb((void *)_wc%d); }", wid);
+      size_t grew2 = ins.len - (send + 1 - i);
+      size_t tail2 = b->len - (send + 1);
+      for (size_t g = 0; g < grew2; g++) buf_putn(b, "\0", 1);
+      memmove(b->p + i + ins.len, b->p + i + (send + 1 - i), tail2);
+      memcpy(b->p + i, ins.p, ins.len);
+      b->p[b->len] = '\0';
+      i = i + ins.len;
+      free(ins.p);
+      continue;
+    }
     buf_puts(&ins, "SP_WBO(");
     buf_putn(&ins, b->p + is, ie - is);
     buf_puts(&ins, ")");
@@ -1594,6 +1641,21 @@ static void gc_wb_insert(Compiler *c, Buf *b, size_t fn_off) {
     int at_stmt = 1;
     for (size_t k = bol; k < st; k++)
       if (b->p[k] != ' ' && b->p[k] != '\t') { at_stmt = 0; break; }
+    /* `if (cond) obj->f = v;` -- the store is the whole substatement, so a
+       block around it is still a statement and the barrier can follow. */
+    if (!at_stmt) {
+      size_t k = bol;
+      while (k < st && (b->p[k] == ' ' || b->p[k] == '\t')) k++;
+      if (k + 3 < st && !strncmp(b->p + k, "if ", 3) && b->p[k+3] == '(') {
+        size_t p2 = k + 3, d3 = 0;
+        for (; p2 < st; p2++) {
+          if (b->p[p2] == '(') d3++;
+          else if (b->p[p2] == ')') { d3--; if (!d3) { p2++; break; } }
+        }
+        while (p2 < st && (b->p[p2] == ' ' || b->p[p2] == '\t')) p2++;
+        if (p2 == st) at_stmt = 1;
+      }
+    }
     /* The barrier has to run AFTER the value is in the slot, not before it is
        computed. The right-hand side usually allocates -- `@a = []` is the
        whole shape -- and an allocation can collect: the collection walks the
