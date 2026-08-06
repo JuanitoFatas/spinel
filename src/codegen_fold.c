@@ -5907,6 +5907,22 @@ int rest_kwh_tail(Compiler *c, Scope *m, int kwh) {
   return kwh;
 }
 
+/* Did a declared keyword parameter take one of this hash's keys? If so the
+   hash was keywords, not a positional argument, and handing it to a poly or
+   hash-typed positional binds it a second time (#3525). One function because
+   the options-hash collapse is written in two call paths. */
+static int kwh_consumed_by_kwparam(Compiler *c, Scope *m, int kwh) {
+  if (kwh < 0 || !m) return 0;
+  int en = 0; const int *el = nt_arr(c->nt, kwh, "elements", &en);
+  for (int e = 0; e < en; e++) {
+    int key = el ? nt_ref(c->nt, el[e], "key") : -1;
+    const char *kt = key >= 0 ? nt_type(c->nt, key) : NULL;
+    const char *kn = (kt && sp_streq(kt, "SymbolNode")) ? nt_str(c->nt, key, "value") : NULL;
+    if (kn && callee_param_is_declared_kwarg(c, m, kn)) return 1;
+  }
+  return 0;
+}
+
 void emit_rest_pack(Compiler *c, int from, int pos_argc, const int *argv, Buf *b) {
   emit_rest_pack_kwh(c, from, pos_argc, argv, -1, b);
 }
@@ -6866,7 +6882,17 @@ else {
            takes the packed keywords boxed, same as a hash-typed one (#2009).
            A declared KEYWORD param never takes the whole kwh: unmatched
            keyword params fall back to their default. */
-        int use_kwh = (kwh >= 0 && (ty_is_hash(pt) || (pt == TY_POLY && !is_kwparam)));
+        /* ...but only when nothing else consumed those keywords. A declared
+           keyword param that took a key means the hash was keywords, not a
+           positional argument, and passing it here binds it TWICE:
+           `def f(a = nil, k: :default); f(k: 1)` gave `a` the whole `{k: 1}`
+           while `k` also bound (#3525). The same call reached the right
+           binding as soon as some other call site in the program supplied `a`
+           positionally, because then `a` was not poly -- which is why it
+           looked environmental and why my own test file, holding both shapes,
+           immunised itself. */
+        int use_kwh = (kwh >= 0 && !kwh_consumed_by_kwparam(c, m, kwh) &&
+                       (ty_is_hash(pt) || (pt == TY_POLY && !is_kwparam)));
         emit_arg_rooted(c, m, i, use_kwh ? kwh : -1, out);
       }
     }
@@ -7066,7 +7092,8 @@ else {
       if (provided < 0 && kwh_d >= 0 && k == pos_argc_d && !is_kwp_d &&
           !(m && m->kwrest_idx == k)) {
         TyKind pt_d = p ? p->type : TY_INT;
-        if (ty_is_hash(pt_d) || pt_d == TY_POLY) provided = kwh_d;
+        if ((ty_is_hash(pt_d) || pt_d == TY_POLY) && !kwh_consumed_by_kwparam(c, m, kwh_d))
+          provided = kwh_d;
       }
       if (m && m->kwrest_idx >= 0 && k == m->kwrest_idx) {
         /* `**kwrest` callee param: collect the call's unbound keywords. */
