@@ -48,4 +48,5 @@ extern sp_marshal_vt sp_marshal_v;
 
 const char *sp_marshal_dump(sp_RbVal v);
 sp_RbVal sp_marshal_load(const char *s, mrb_int len);
+void sp_marshal_mark_active(void);   /* mark the in-flight load tables (lib/sp_marshal.c) */
 #endif /* SP_MARSHAL_H */

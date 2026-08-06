@@ -7248,6 +7248,11 @@ static sp_PolyArray *sp_poly_to_a_arr(sp_RbVal v) {
    fold both operands' pairs into a general PolyPoly hash, the receiver first
    then the argument overriding (#3162). */
 static sp_PolyPolyHash *sp_poly_hash_merge(sp_RbVal a, sp_RbVal b) {
+  /* Before the allocation, not after: the operands are read for the whole
+     loop below and the new hash is the first thing that can collect them.
+     Copying them into hs[] does not root them -- the collector walks the
+     registered root slots, not the stack. */
+  SP_GC_ROOT_RBVAL(a); SP_GC_ROOT_RBVAL(b);
   sp_PolyPolyHash *r = sp_PolyPolyHash_new();
   SP_GC_ROOT(r);
   sp_RbVal hs[2]; hs[0] = a; hs[1] = b;

@@ -1187,6 +1187,7 @@ int g_no_root_elision = 0;
 /* Escape hatch: `--no-write-barrier` emits the stores bare, so a suspected
    miscompile can be bisected against the same binary. */
 int g_no_write_barrier = 0;
+static int g_has_dyn_syms = 0;   /* the dynamic intern pool was emitted */
 
 /* ---- GC root elision (M1') ----
 
@@ -6284,6 +6285,12 @@ char *codegen_program(const NodeTable *nt) {
     /* dynamic intern pool: symbols minted at runtime (Symbol#upcase,
        :"interp", String#to_sym) get ids >= the static count. */
     buf_puts(&b, "static const char *sp_dyn_syms[SP_DYN_SYMS_MAX]; static int sp_ndyn = 0;\n");
+    /* Those entries are string-heap strings (sp_str_dup_external) held only by
+       this static array, which the collector does not walk: the string sweep
+       freed them and the next intern compared against a corpse. Emitted here,
+       right after the array, so the declaration is always in scope. */
+    buf_puts(&b, "static void sp_mark_dyn_syms(void){for(int _i=0;_i<sp_ndyn;_i++)sp_mark_string(sp_dyn_syms[_i]);}\n");
+    g_has_dyn_syms = 1;
     /* Every arm must hand back a MARKED string. sp_sym_names[] entries
        carry the 0xff rodata marker, but a bare "" literal does not, and
        callers root the result (`const char *t = sp_sym_to_s(x);
@@ -7056,12 +7063,14 @@ char *codegen_program(const NodeTable *nt) {
        element's own work) the value is unreachable and the collector takes it.
        The arguments are the same on the way in. Both are roots. Unused slots
        read as tag 0 (int), which sp_mark_rbval ignores. */
+    if (g_has_dyn_syms) buf_puts(&mk, "  sp_mark_dyn_syms();\n");
     buf_puts(&mk, "  sp_mark_rbval(_sp_proc_poly_ret);\n");
     buf_puts(&mk, "  for (int _i = 0; _i < 16; _i++) sp_mark_rbval(_sp_proc_poly_args[_i]);\n");
     g_has_user_global_marks = (mk.p && mk.len > 0);
     if (g_has_user_global_marks) {
       buf_puts(&b, "static void sp_mark_user_globals(void) {\n");
       buf_puts(&b, "  sp_re_mark_globals();\n");
+      buf_puts(&b, "  sp_marshal_mark_active();\n");
       buf_puts(&b, mk.p);
       buf_puts(&b, "}\n\n");
     }

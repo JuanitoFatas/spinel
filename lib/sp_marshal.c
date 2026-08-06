@@ -196,11 +196,26 @@ const char *sp_marshal_dump(sp_RbVal v) {
 }
 
 /* ---- load ---- */
-typedef struct {
+typedef struct sp_mar_rd_s {
   const char *s; size_t pos, len;
   char **syms; int nsym, csym;        /* symbol-link table (`;`) */
   sp_RbVal *objs; int nobj, cobj;     /* object-link table (`@`) */
+  struct sp_mar_rd_s *prev;           /* enclosing load, for a reentrant one */
 } sp_mar_rd;
+/* The object-link table holds every object built so far, so a `@` back-
+   reference can return it -- and it is a malloc array, which the collector
+   does not walk. Without this the parse is a long run of allocations with its
+   own results reachable from nothing: under a minor mark they are freed and
+   the next back-reference reads a corpse. Published here and marked through
+   the collector's globals hook, which is the same treatment the regex globals
+   get. Reentrant loads chain through `prev`. */
+static sp_mar_rd *sp_mar_active = NULL;
+void sp_marshal_mark_active(void) {
+  for (sp_mar_rd *r = sp_mar_active; r; r = r->prev) {
+    sp_mark_string(r->s);
+    for (int i = 0; i < r->nobj; i++) sp_mark_rbval(r->objs[i]);
+  }
+}
 static unsigned char sp_mar_rb(sp_mar_rd *r) { return r->pos < r->len ? (unsigned char)r->s[r->pos++] : 0; }
 static long sp_mar_rlong(sp_mar_rd *r) {
   int c = (signed char)sp_mar_rb(r);
@@ -338,10 +353,17 @@ static sp_RbVal sp_mar_r(sp_mar_rd *r) {
   }
 }
 sp_RbVal sp_marshal_load(const char *s, mrb_int len) {
+  /* The whole parse reads out of this buffer, and every object it builds
+     allocates -- so the source string has to stay rooted for the duration.
+     r.s is a plain field, not a root slot; the collector walks registered
+     slots, so the parameter is what has to be registered. */
+  SP_GC_ROOT_STR(s);
   sp_mar_rd r; memset(&r, 0, sizeof r);
   r.s = s ? s : ""; r.len = s ? (size_t)len : 0;
+  r.prev = sp_mar_active; sp_mar_active = &r;
   if (r.len >= 2) r.pos = 2;  /* skip the 4.8 version header */
   sp_RbVal v = sp_mar_r(&r);
+  sp_mar_active = r.prev;
   for (int i = 0; i < r.nsym; i++) free(r.syms[i]);
   free(r.syms); free(r.objs);
   return v;
