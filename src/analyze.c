@@ -8677,6 +8677,24 @@ static int aon_value(Compiler *c, int v, int depth) {
   }
 }
 
+/* Public form of the array-or-nil proof, for codegen to emit an index without
+   the poly dispatch. Deliberately narrower than aon_value: only a LOCAL the
+   fixpoint marked, not the `container[i]` case aon_value also admits.
+
+   That case is sound for what it was written for -- the root elision asks
+   whether a read can allocate or re-enter, and reading a non-array through the
+   general helper does neither -- but not for choosing the helper, where being
+   wrong about the receiver's kind is a wrong VALUE. A container whose elements
+   are "all arrays or nil" by the container proof turned out to include one
+   that was neither (test/rbs-seed/nilable_scalar_paths). */
+int expr_is_arr_or_nil(Compiler *c, int v) {
+  if (v < 0 || nt_kind(c->nt, v) != NK_LocalVariableReadNode) return 0;
+  Scope *sc = comp_scope_of(c, v);
+  const char *nm = nt_str(c->nt, v, "name");
+  LocalVar *lv = nm && sc ? scope_local(sc, nm) : NULL;
+  return lv && lv->arr_or_nil == 1 && lv->type == TY_POLY;
+}
+
 /* Prove the flags to a fixpoint: a local reads out of an ivar whose elements
    come from another ivar, so one pass is not enough. Monotone (flags only get
    set), bounded by the number of flags. */

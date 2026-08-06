@@ -558,9 +558,14 @@ static void emit_index_get(Compiler *c, int recv, int key, Buf *b) {
   }
   /* TY_POLY receiver: dispatch by key type, mirroring emit_index_op_write */
   TyKind kt = comp_ntype(c, key);
+  /* A receiver proved to hold only a poly array or nil needs none of the
+     dispatch: analyze established that for the root elision, and the read is
+     hot enough in optcarrot's per-pixel path to be worth spending it on. */
   const char *fn = kt == TY_SYMBOL ? "sp_poly_get_sym" :
                    kt == TY_STRING ? "sp_poly_get_str" :
-                   kt == TY_INT    ? "sp_poly_arr_get_hash" : "sp_poly_index_poly";
+                   kt == TY_INT    ? (expr_is_arr_or_nil(c, recv) ? "sp_poly_arr_get_aon"
+                                                                  : "sp_poly_arr_get_hash")
+                                   : "sp_poly_index_poly";
   buf_printf(b, "%s(", fn);
   if (g_iow_recv_ref) buf_puts(b, g_iow_recv_ref); else emit_expr(c, recv, b);
   buf_puts(b, ", ");

@@ -5082,6 +5082,17 @@ static sp_RbVal sp_poly_massign_get(sp_RbVal v, mrb_int i) {
    -- Struct member order, Integer bit, String character, the hash kinds. */
 static SP_NOINLINE sp_RbVal sp_poly_arr_get_hash_cold(sp_RbVal a, mrb_int i);
 
+/* The same read for a receiver analyze has proved holds only a poly array or
+   nil: no hash, string or Struct arm can be reached, so the cls_id test and the
+   cold call behind it are dead. The nil case still has to answer nil, which is
+   what the null check does. */
+static SP_INLINE sp_RbVal sp_poly_arr_get_aon(sp_RbVal a, mrb_int i) {
+  sp_PolyArray *ar = (a.tag == SP_TAG_OBJ) ? (sp_PolyArray *)a.v.p : NULL;
+  if (!ar) return sp_box_nil();
+  mrb_int k = i < 0 ? ar->len + i : i;
+  if (k < 0 || k >= ar->len) return sp_box_nil();
+  return ar->data[k];
+}
 static SP_INLINE sp_RbVal sp_poly_arr_get_hash(sp_RbVal a, mrb_int i) {
   if (a.tag == SP_TAG_OBJ && a.cls_id == SP_BUILTIN_POLY_ARRAY) {
     sp_PolyArray *ar = (sp_PolyArray *)a.v.p;

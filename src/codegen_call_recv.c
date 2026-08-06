@@ -9992,7 +9992,13 @@ int emit_poly_call(Compiler *c, int id, Buf *b) {
            analyze marked, rather than in the read itself (#3505). */
         int uns = nullable_int_elem_read(c, id);
         if (uns) buf_puts(b, "sp_unsentinel(");
-        buf_puts(b, at == TY_INT ? "sp_poly_arr_get_hash(" : "sp_poly_index_poly(");
+        /* A receiver proved to hold only a poly array or nil reaches none of
+           the hash, string or Struct arms, so the cls_id test and the cold
+           call behind it are dead code on this read. analyze established the
+           proof for the GC root elision; this is the same fact paying twice. */
+        buf_puts(b, at != TY_INT ? "sp_poly_index_poly("
+                    : expr_is_arr_or_nil(c, recv) ? "sp_poly_arr_get_aon("
+                                                  : "sp_poly_arr_get_hash(");
         emit_expr(c, recv, b);
         buf_puts(b, ", "); emit_expr(c, argv[0], b); buf_puts(b, ")");
         if (uns) buf_puts(b, ")");

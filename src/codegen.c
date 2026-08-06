@@ -1221,6 +1221,7 @@ static int gc_elide_call_ok(const char *id, size_t n, const char *lvname) {
   /* the poly index reads: safe only on the local this root protects, whose
      values are arrays or nil and so cannot reach the allocating arms */
   static const char *const RD[] = { "sp_poly_arr_get_hash", "sp_poly_arr_get",
+                                    "sp_poly_arr_get_aon",
                                     "sp_poly_massign_get", NULL };
   for (int i = 0; RD[i]; i++) {
     if (strlen(RD[i]) != n || strncmp(id, RD[i], n)) continue;
