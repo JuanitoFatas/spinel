@@ -7188,6 +7188,7 @@ static mrb_int sp_at_exit_count = 0;
 void sp_Enumerator_scan(void *p);
 sp_Enumerator *sp_Enumerator_dup(sp_Enumerator *e);
 static sp_PolyArray *sp_enum_items_from(sp_RbVal v) {
+  SP_GC_ROOT_RBVAL(v);   /* the hash arm allocates before reading v again */
   if (v.tag == SP_TAG_OBJ) {
     void *p = v.v.p;
     switch (v.cls_id) {
@@ -8154,7 +8155,15 @@ static mrb_int sp_proc_compose_fn(void *cap, mrb_int argc, mrb_int *args) {
   return sp_proc_call(c->outer, 1, outer_args);
 }
 static sp_Proc *sp_proc_compose(sp_Proc *outer, sp_Proc *inner) { SP_GC_ROOT(outer); SP_GC_ROOT(inner);
+  /* Both operands are usually freshly built at the call site -- `f >> g` emits
+     sp_proc_compose(sp_proc_new_meta(...), sp_proc_new_meta(...)) -- and C does
+     not order those two, so whichever runs first is held by nothing while the
+     second allocates. Rooting the parameters at entry is too late for that: the
+     collection happens before the call. Publish them into the capture FIRST,
+     with the capture itself rooted, so the allocation in sp_proc_new_meta below
+     has something to find them through. */
   sp_ProcCompose *c = (sp_ProcCompose *)sp_gc_alloc(sizeof(sp_ProcCompose), NULL, sp_proc_compose_scan);
+  SP_GC_ROOT(c);
   c->outer = outer;
   c->inner = inner;
   /* CRuby (4.0): the composed proc's lambda? follows the FIRST-CALLED proc

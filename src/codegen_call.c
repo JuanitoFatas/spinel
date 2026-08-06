@@ -10506,11 +10506,16 @@ void emit_call(Compiler *c, int id, Buf *b) {
   if (recv >= 0 && comp_ntype(c, recv) == TY_PROC && argc == 1 &&
       (sp_streq(name, "<<") || sp_streq(name, ">>")) && comp_ntype(c, argv[0]) == TY_PROC) {
     int fwd = sp_streq(name, ">>");
-    buf_puts(b, "sp_proc_compose(");
+    /* Both operands are usually built right here (`f >> g` on two literal
+       procs), and C does not order the two argument expressions -- whichever
+       runs first is held by nothing while the second allocates, so a
+       collection in between frees it. Evaluate them into rooted temps first. */
+    int t1 = ++g_tmp, t2 = ++g_tmp;
+    buf_printf(b, "({ sp_Proc *_t%d = ", t1);
     if (fwd) emit_expr(c, argv[0], b); else emit_expr(c, recv, b);
-    buf_puts(b, ", ");
+    buf_printf(b, "; SP_GC_ROOT(_t%d); sp_Proc *_t%d = ", t1, t2);
     if (fwd) emit_expr(c, recv, b); else emit_expr(c, argv[0], b);
-    buf_puts(b, ")");
+    buf_printf(b, "; SP_GC_ROOT(_t%d); sp_proc_compose(_t%d, _t%d); })", t2, t1, t2);
     return;
   }
   if (recv >= 0 && comp_ntype(c, recv) == TY_PROC && argc == 0 && sp_streq(name, "arity")) {
