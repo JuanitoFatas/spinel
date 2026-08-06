@@ -1021,9 +1021,19 @@ optcarrot: $(SPINEL) $(SP_RT_LIB)
 	@ruby $(OPTCARROT_DIR)/tools/pack-for-spinel.rb > build/optcarrot-single.rb
 	@$(SPINEL) build/optcarrot-single.rb -c --no-line-map -o build/optcarrot-single.c
 	@$(CC) $(CFLAGS) -DSP_INT_OVERFLOW_MODE_WRAP -Ilib build/optcarrot-single.c $(SP_RT_LIB) $(LDFLAGS) -lm $(GC_FLAGS) -o build/optcarrot-single
-	@out=$$($(TIMEOUT60) ./build/optcarrot-single 2>&1); \
-	echo "$$out"; \
-	if echo "$$out" | grep -qE "^fps: [0-9.]+$$" && echo "$$out" | grep -q "^checksum: 59662$$"; then \
+	@n=$${OPTCARROT_RUNS:-5}; fps=""; out=""; \
+	for i in $$(seq 1 $$n); do \
+	  out=$$($(TIMEOUT60) ./build/optcarrot-single 2>&1); \
+	  f=$$(echo "$$out" | sed -n 's/^fps: \([0-9.]*\)$$/\1/p'); \
+	  [ -n "$$f" ] && fps="$$fps $$f"; \
+	done; \
+	echo "$$out" | grep -v '^fps:'; \
+	echo "$$fps" | tr ' ' '\n' | grep -v '^$$' | sort -g | \
+	  awk -v n="$$n" '{v[NR]=$$1} END { \
+	    if (NR==0) exit; \
+	    m=(NR%2)?v[(NR+1)/2]:(v[NR/2]+v[NR/2+1])/2; \
+	    printf "fps: %.1f  (median of %d; %.1f-%.1f, spread %.1f%%)\n", m, NR, v[1], v[NR], (v[NR]-v[1])/m*100 }'; \
+	if echo "$$out" | grep -q "^checksum: 59662$$" && [ -n "$$fps" ]; then \
 	  echo "Optcarrot: OK"; \
 	else \
 	  echo "Optcarrot: FAIL — expected 'fps: <num>' and 'checksum: 59662'"; \
