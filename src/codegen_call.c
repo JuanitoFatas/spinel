@@ -4666,14 +4666,8 @@ static int emit_poly_method_dispatch(Compiler *c, int id, Buf *b) {
                arguments at all, silently (#3528, the #3503 shape one path
                out). Consumed means some declared keyword param took a key
                from it. */
-            if (kwh >= 0 && c->scopes[mi].kwrest_idx < 0) {
-              int consumed = 0;
-              for (int e = 0; e < kwn && !consumed; e++) {
-                int key = nt_ref(nt, kwels[e], "key");
-                const char *kn = key >= 0 ? nt_str(nt, key, "value") : NULL;
-                if (kn && callee_param_is_declared_kwarg(c, &c->scopes[mi], kn)) consumed = 1;
-              }
-              if (!consumed) {
+            if (rest_kwh_tail(c, &c->scopes[mi], kwh) >= 0) {
+              {
                 int kh3 = ++g_tmp;
                 buf_printf(&cb, " sp_PolyArray_push(_t%d, ({ sp_SymPolyHash *_t%d = sp_SymPolyHash_new();"
                                 " SP_GC_ROOT(_t%d);", rt2, kh3, kh3);

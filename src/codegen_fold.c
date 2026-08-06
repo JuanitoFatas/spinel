@@ -5889,6 +5889,24 @@ static const char *anon_kwrest_name(Compiler *c, int node) {
   return (nm && sp_streq(nm, "__anon_kwrest")) ? nm : NULL;
 }
 
+/* Ruby packs a keyword hash no parameter consumed into the *rest as one
+   positional hash. Returns the hash node to append, or -1: -1 when there is no
+   keyword hash, when a **kwrest will take it, or when some declared keyword
+   parameter binds one of its keys.
+
+   One function because the rule had to be written three times before it was
+   right in all of them -- #3503 was it missing from the dispatch path after
+   the direct one had it, and #3528 was it missing from the poly-dispatch arm
+   after both. A call path that packs a rest asks here rather than
+   reimplementing the test. */
+int rest_kwh_tail(Compiler *c, Scope *m, int kwh) {
+  if (kwh < 0 || !m || m->kwrest_idx >= 0) return -1;
+  for (int i = 0; i < m->nparams; i++)
+    if (m->pnames[i] && callee_has_kwarg(c, m, m->pnames[i]) &&
+        kwh_lookup(c->nt, kwh, m->pnames[i]) >= 0) return -1;   /* a keyword param takes it */
+  return kwh;
+}
+
 void emit_rest_pack(Compiler *c, int from, int pos_argc, const int *argv, Buf *b) {
   emit_rest_pack_kwh(c, from, pos_argc, argv, -1, b);
 }
@@ -6724,17 +6742,7 @@ else {
                                       c, splat_idx + 1, rest_end, argv, out);
       }
 else {
-        /* an unconsumed keyword hash (no kwrest and no matching keyword
-           param) degrades to one positional argument at the rest's tail */
-        int kwh_extra = -1;
-        if (kwh >= 0 && m->kwrest_idx < 0) {
-          int consumed = 0;
-          for (int pj = 0; pj < m->nparams && !consumed; pj++)
-            if (m->pnames[pj] && callee_has_kwarg(c, m, m->pnames[pj]) &&
-                kwh_lookup(nt, kwh, m->pnames[pj]) >= 0) consumed = 1;
-          if (!consumed) kwh_extra = kwh;
-        }
-        emit_rest_pack_kwh(c, i, rest_end, argv, kwh_extra, out);
+        emit_rest_pack_kwh(c, i, rest_end, argv, rest_kwh_tail(c, m, kwh), out);
       }
     }
 else if (m->rest_idx >= 0 && m->npost_rest > 0 && i > m->rest_idx) {
@@ -7010,15 +7018,7 @@ void emit_dispatch(Compiler *c, int cid, const char *name,
          tail -- the same rule the other call path follows. Dropping it here
          made `c.splat_only(id: :desc)` run with no arguments at all, silently,
          while the identical top-level call kept it (#3503). */
-      int kwh_tail = -1;
-      if (kwh_d >= 0 && m->kwrest_idx < 0) {
-        int consumed = 0;
-        for (int pj = 0; pj < m->nparams && !consumed; pj++)
-          if (m->pnames[pj] && callee_has_kwarg(c, m, m->pnames[pj]) &&
-              kwh_lookup(nt, kwh_d, m->pnames[pj]) >= 0) consumed = 1;
-        if (!consumed) kwh_tail = kwh_d;
-      }
-      emit_rest_pack_kwh(c, k, pos_argc_d, argv, kwh_tail, &ab);
+      emit_rest_pack_kwh(c, k, pos_argc_d, argv, rest_kwh_tail(c, m, kwh_d), &ab);
       emit_indent(g_pre, g_indent);
       buf_printf(g_pre, "sp_PolyArray *_t%d = %s;\n", atmp[k], ab.p ? ab.p : "sp_PolyArray_new()");
       atmp_ty[k] = TY_POLY_ARRAY;
