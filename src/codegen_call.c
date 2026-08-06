@@ -4659,6 +4659,39 @@ static int emit_poly_method_dispatch(Compiler *c, int id, Buf *b) {
               buf_printf(&cb, " sp_PolyArray_push(_t%d, %s);", rt2, eb.p ? eb.p : "sp_box_nil()");
               free(eb.p);
             }
+            /* An unconsumed keyword hash degrades to one positional hash at
+               the rest's tail -- the rule the other call paths follow, and the
+               one this arm was missing: `r.order(id: :desc)` reaching a
+               `def order(*parts)` through a poly receiver ran with no
+               arguments at all, silently (#3528, the #3503 shape one path
+               out). Consumed means some declared keyword param took a key
+               from it. */
+            if (kwh >= 0 && c->scopes[mi].kwrest_idx < 0) {
+              int consumed = 0;
+              for (int e = 0; e < kwn && !consumed; e++) {
+                int key = nt_ref(nt, kwels[e], "key");
+                const char *kn = key >= 0 ? nt_str(nt, key, "value") : NULL;
+                if (kn && callee_param_is_declared_kwarg(c, &c->scopes[mi], kn)) consumed = 1;
+              }
+              if (!consumed) {
+                int kh3 = ++g_tmp;
+                buf_printf(&cb, " sp_PolyArray_push(_t%d, ({ sp_SymPolyHash *_t%d = sp_SymPolyHash_new();"
+                                " SP_GC_ROOT(_t%d);", rt2, kh3, kh3);
+                for (int e = 0; e < kwn; e++) {
+                  int key = nt_ref(nt, kwels[e], "key");
+                  const char *kn = key >= 0 ? nt_str(nt, key, "value") : NULL;
+                  if (!kn) continue;
+                  char tn[32]; snprintf(tn, sizeof tn, "_t%d", kwtmp[e]);
+                  Buf eb; memset(&eb, 0, sizeof eb);
+                  if (kwty[e] == TY_POLY) buf_puts(&eb, tn);
+                  else emit_boxed_text(c, kwty[e], tn, &eb);
+                  buf_printf(&cb, " sp_SymPolyHash_set(_t%d, (sp_sym)%d, %s);", kh3,
+                             comp_sym_intern(c, kn), eb.p ? eb.p : "sp_box_nil()");
+                  free(eb.p);
+                }
+                buf_printf(&cb, " sp_box_obj(_t%d, SP_BUILTIN_SYM_POLY_HASH); }));", kh3);
+              }
+            }
             buf_printf(&cb, " _t%d; })", rt2);
             continue;
           }
@@ -13988,13 +14021,25 @@ else { memcpy(dir, sf, n); dir[n] = 0; } }
             emit_method_cname(c, &c->scopes[kmi], &cb9);
             buf_printf(&cb9, "(");
             Scope *ks9 = &c->scopes[kmi];
-            for (int a = 0; a < na9; a++) {
+            /* Every candidate is a separate C function with its own parameter
+               list, so the arm has to fill THAT list -- not repeat the
+               caller's. Passing the call's arguments verbatim worked only
+               while every candidate took exactly as many as the call supplied;
+               a candidate with a trailing optional got too few arguments and
+               the C did not compile, and a call site reaching candidates of
+               different arities broke on whichever one was longer. */
+            int np9 = ks9->nparams;
+            for (int a = 0; a < np9; a++) {
               if (a) buf_puts(&cb9, ", ");
-              LocalVar *pp = a < ks9->nparams ? scope_local(ks9, ks9->pnames[a]) : NULL;
+              LocalVar *pp = scope_local(ks9, ks9->pnames[a]);
               TyKind pt = pp ? pp->type : TY_POLY;
-              char at[32]; snprintf(at, sizeof at, "_t%d", atmp9[a]);
-              if (pt == TY_POLY) buf_puts(&cb9, at);
-              else emit_unbox_text(c, pt, at, &cb9);
+              int slot = arg_slot_for_param(c, ks9, a, na9);
+              if (slot >= 0 && slot < na9) {
+                char at[32]; snprintf(at, sizeof at, "_t%d", atmp9[slot]);
+                if (pt == TY_POLY) buf_puts(&cb9, at);
+                else emit_unbox_text(c, pt, at, &cb9);
+              }
+              else emit_arg_or_default(c, ks9, a, -1, &cb9);
             }
             buf_puts(&cb9, ")");
             if (slot9 == TY_POLY && kr != TY_POLY) emit_boxed_text(c, kr, cb9.p ? cb9.p : "", b);
@@ -14003,6 +14048,11 @@ else { memcpy(dir, sf, n); dir[n] = 0; } }
             free(cb9.p);
             buf_puts(b, "; break;");
           }
+          /* A class the switch has no arm for is a class that does not define
+             the method: CRuby raises NoMethodError, and falling out of the
+             switch left the result slot at its default -- a junk value the
+             caller could not tell from a real answer. */
+          buf_printf(b, " default: sp_raise_nomethod(sp_sprintf(\"undefined method '%s' for %%s\", sp_class_to_s(_t%d))); break;", name, tk9);
           buf_printf(b, " } _t%d; })", tr9);
           (void)defmi9;
           return;
