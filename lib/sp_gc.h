@@ -363,6 +363,15 @@ static inline void sp_mark_string(const char *s) {
   if (!s) return;
   if ((unsigned char)s[-1] == 0xfe) {
     ((char *)s)[-1] = (char)0xfc;
+    return;
+  }
+  /* 0xfd is a mutable String's payload, whose lifetime belongs to the handle
+     in front of it: marking the bytes alone leaves the handle unreferenced,
+     and its finalizer frees the bytes this container still points at. The
+     payload's `next` field carries that handle (sp_fd_own). */
+  if ((unsigned char)s[-1] == 0xfd) {
+    void *owner = (void *)(((const sp_str_hdr *)(s - 1)) - 1)->next;
+    if (owner) sp_gc_mark(owner);
   }
   /* No frozen (0xf1) branch here: this is inlined into optcarrot's GC mark and
      is layout-sensitive. A live frozen heap string is kept immortal by

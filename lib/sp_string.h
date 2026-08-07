@@ -26,12 +26,22 @@ static inline sp_String*sp_String_freeze(sp_String*s){if(s){sp_gc_hdr*h=(sp_gc_h
 #define SP_FD_HDR (sizeof(sp_str_hdr)+1)   /* header + marker byte */
 #define SP_FD_OVH (sizeof(sp_str_hdr)+2)   /* header + marker + NUL terminator */
 static inline char *sp_fd_base(const char *data){return (char*)data-SP_FD_HDR;}
+/* The payload's `next` field carries the owning sp_String rather than a heap
+   link: these blocks are malloc'd and never join the string heap, so nothing
+   walks that list, and a container holding the escaped `const char *` has no
+   other way back to the handle. Without it the mark reaches the bytes and
+   stops, the handle goes unreferenced, and sp_String_fin frees the bytes the
+   container still points at. sp_fd_own publishes it; every path that lays out
+   a payload has to call it. */
 static inline char *sp_fd_setup(char *raw){
   sp_str_hdr *h = (sp_str_hdr *)raw;
   h->next = NULL; h->size = 0; h->len = 0; h->hash = 0;
   char *body = (char *)(h + 1);
   body[0] = (char)0xfd;
   return body + 1;
+}
+static inline void sp_fd_own(sp_String *s){
+  ((sp_str_hdr *)sp_fd_base(s->data))->next = (sp_str_hdr *)(void *)s;
 }
 static inline void sp_fd_publish(sp_String *s){
   sp_str_hdr *h = (sp_str_hdr *)sp_fd_base(s->data);
@@ -44,7 +54,7 @@ static inline int sp_fd_grow(sp_String *s, int64_t need){
   char *raw = (char *)realloc(sp_fd_base(s->data), SP_FD_OVH + new_cap);
   if (!raw) return 0;
   sp_gc_bytes_sub(s->cap + SP_FD_OVH); h->size -= s->cap + SP_FD_OVH;
-  s->cap = new_cap; s->data = sp_fd_setup(raw);
+  s->cap = new_cap; s->data = sp_fd_setup(raw); sp_fd_own(s);
   h->size += s->cap + SP_FD_OVH; sp_gc_bytes_add(s->cap + SP_FD_OVH);
   return 1;
 }
@@ -59,7 +69,7 @@ static inline sp_String*sp_String_new(const char*s){
   char*data=sp_fd_setup(raw);
   memcpy(data,s,len);data[len]=0;
   sp_String*r=(sp_String*)sp_gc_alloc(sizeof(sp_String),sp_String_fin,NULL);
-  r->len=len;r->cap=cap;r->data=data;
+  r->len=len;r->cap=cap;r->data=data;sp_fd_own(r);
   {sp_gc_hdr*h=(sp_gc_hdr*)((char*)r-sizeof(sp_gc_hdr));h->size+=r->cap+SP_FD_OVH;sp_gc_bytes_add(r->cap+SP_FD_OVH);}
   sp_fd_publish(r);
   return r;

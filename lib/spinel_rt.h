@@ -3283,7 +3283,7 @@ static sp_PolyArray *sp_PolyArray_concat_into(sp_PolyArray *a, sp_RbVal other) {
   for (mrb_int i = 0; i < n; i++) sp_PolyArray_push(a, sp_poly_arr_get(other, i));
   return a;
 }
-static sp_PolyArray *sp_PolyArray_concat(sp_PolyArray *a, sp_PolyArray *b) { sp_PolyArray *r = sp_PolyArray_new(); SP_GC_ROOT(r); if (a) for (mrb_int i = 0; i < a->len; i++) sp_PolyArray_push(r, a->data[i]); if (b) for (mrb_int i = 0; i < b->len; i++) sp_PolyArray_push(r, b->data[i]); return r; }
+static sp_PolyArray *sp_PolyArray_concat(sp_PolyArray *a, sp_PolyArray *b) { SP_GC_ROOT(a); SP_GC_ROOT(b); sp_PolyArray *r = sp_PolyArray_new(); SP_GC_ROOT(r); if (a) for (mrb_int i = 0; i < a->len; i++) sp_PolyArray_push(r, a->data[i]); if (b) for (mrb_int i = 0; i < b->len; i++) sp_PolyArray_push(r, b->data[i]); return r; }
 /* Array#concat: append b's elements onto a IN PLACE, returning a (unlike the
    fresh-array sp_PolyArray_concat above). Snapshot b's length first so `a` and
    `b` aliasing the same array still terminates. */
