@@ -36,7 +36,7 @@ static void mar_raise(const char *cls, const char *msg) {
 }
 
 /* ---- dump ---- */
-static void sp_mar_raw(sp_mar_buf *b, const char *s, size_t n) { for (size_t i = 0; i < n; i++) sp_mar_b(b, (unsigned char)s[i]); }
+static void sp_mar_raw(sp_mar_buf *b, const char *s, size_t n) {SP_GC_ROOT_STR(s); for (size_t i = 0; i < n; i++) sp_mar_b(b, (unsigned char)s[i]); }
 void sp_mar_b(sp_mar_buf *b, unsigned char c) {
   if (b->len >= b->cap) { b->cap = b->cap ? b->cap * 2 : 64; b->p = (char *)realloc(b->p, b->cap); if (!b->p) sp_oom_die(); }
   b->p[b->len++] = (char)c;
@@ -56,8 +56,8 @@ void sp_mar_long(sp_mar_buf *b, long n) {
   }
   sp_mar_raw(b, (char *)buf, (size_t)i + 1);
 }
-static void sp_mar_bytes(sp_mar_buf *b, const char *s, size_t n) { sp_mar_long(b, (long)n); sp_mar_raw(b, s, n); }
-void sp_mar_sym(sp_mar_buf *b, const char *name) {
+static void sp_mar_bytes(sp_mar_buf *b, const char *s, size_t n) {SP_GC_ROOT_STR(s); sp_mar_long(b, (long)n); sp_mar_raw(b, s, n); }
+void sp_mar_sym(sp_mar_buf *b, const char *name) {SP_GC_ROOT_STR(name);
   for (int i = 0; i < b->nws; i++)
     if (!strcmp(b->wsyms[i], name)) { sp_mar_b(b, ';'); sp_mar_long(b, i); return; }
   if (b->nws >= b->cws) { b->cws = b->cws ? b->cws * 2 : 8; b->wsyms = (char **)realloc(b->wsyms, sizeof(char *) * (size_t)b->cws); if (!b->wsyms) sp_oom_die(); }
@@ -66,7 +66,7 @@ void sp_mar_sym(sp_mar_buf *b, const char *name) {
 }
 /* CRuby's Marshal float text: the shortest %.g that round-trips, exponent
    normalized ("1e+02" -> "1e2"); 0.0 is "0", 100.0 is "1e2", 0.1 is "0.1". */
-static const char *sp_mar_float_str(double f, char *buf, size_t bufsz) {
+static const char *sp_mar_float_str(double f, char *buf, size_t bufsz) {SP_GC_ROOT_STR(buf);
   for (int prec = 1; prec <= 17; prec++) {
     sp_format_float(f, buf, bufsz, 'g', prec, '\0');   /* locale-independent */
     double rt = 0.0; sp_read_float(buf, NULL, &rt);

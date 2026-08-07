@@ -99,7 +99,7 @@ void sp_re_set_captures(const char *str, int *caps, int ncaps) {SP_GC_ROOT_STR(s
     sp_re_match_post = post;
   }
 }
-mrb_int sp_re_match(mrb_regexp_pattern *pat, const char *str) {
+mrb_int sp_re_match(mrb_regexp_pattern *pat, const char *str) {SP_GC_ROOT_STR(str);
   int64_t slen = (int64_t)strlen(str);
   int ncaps = 32;
   int n = re_exec(pat, str, slen, 0, sp_re_caps, ncaps, 0);
@@ -119,7 +119,7 @@ mrb_int sp_re_match(mrb_regexp_pattern *pat, const char *str) {
    gsub/sub-with-block scan loop bug, #2910). Returns the match start relative
    to `pos` (so the caller's `str + pos` arithmetic and the `< 0` no-match check
    are unchanged); sp_re_caps stay full-string-relative for capture extraction. */
-mrb_int sp_re_match_at(mrb_regexp_pattern *pat, const char *str, mrb_int pos) {
+mrb_int sp_re_match_at(mrb_regexp_pattern *pat, const char *str, mrb_int pos) {SP_GC_ROOT_STR(str);
   int64_t slen = (int64_t)strlen(str);
   int ncaps = 32;
   int n = re_exec(pat, str, slen, pos, sp_re_caps, ncaps, 0);
@@ -186,7 +186,7 @@ const char *sp_str_slice_re(mrb_regexp_pattern *pat, const char *s, const char *
   if (rest_out) *rest_out = sp_sprintf("%.*s%s", mb, s, s + me);
   return m;
 }
-mrb_int sp_re_rindex(mrb_regexp_pattern *pat, const char *str) {
+mrb_int sp_re_rindex(mrb_regexp_pattern *pat, const char *str) {SP_GC_ROOT_STR(str);
   int64_t slen = (int64_t)strlen(str);
   int caps[2];
   int64_t pos = 0;
@@ -358,7 +358,7 @@ else if (d == '\\') {
   }
   *out_io = out; *olen_io = olen; *cap_io = cap;
 }
-const char *sp_re_gsub(mrb_regexp_pattern *pat, const char *str, const char *rep) {
+const char *sp_re_gsub(mrb_regexp_pattern *pat, const char *str, const char *rep) {SP_GC_ROOT_STR(str);SP_GC_ROOT_STR(rep);
   int64_t slen = (int64_t)strlen(str); size_t rlen = strlen(rep);
   size_t cap = (slen * 2) + (rlen * 4) + 64;
  /* Build into a plain malloc scratch: the buffer is grown with realloc
@@ -403,7 +403,7 @@ else {
   free(out);
   return res;
 }
-const char *sp_re_sub(mrb_regexp_pattern *pat, const char *str, const char *rep) {
+const char *sp_re_sub(mrb_regexp_pattern *pat, const char *str, const char *rep) {SP_GC_ROOT_STR(str);SP_GC_ROOT_STR(rep);
   int64_t slen = (int64_t)strlen(str); size_t rlen = strlen(rep);
   int caps[64];
   int n = re_exec(pat, str, slen, 0, caps, 64, 0);
@@ -516,12 +516,12 @@ sp_StrArray *sp_re_split_limit(mrb_regexp_pattern *pat, const char *str, mrb_int
   return arr;
 }
 
-sp_StrArray *sp_re_split(mrb_regexp_pattern *pat, const char *str) {
+sp_StrArray *sp_re_split(mrb_regexp_pattern *pat, const char *str) {SP_GC_ROOT_STR(str);
   return sp_re_split_limit(pat, str, 0);
 }
-mrb_int sp_re_rindex_opt(mrb_regexp_pattern *pat, const char *str)  { mrb_int n = sp_re_rindex(pat, str); return n < 0 ? SP_INT_NIL : n; }
-sp_RbVal sp_re_rindex_poly(mrb_regexp_pattern *pat, const char *str) { mrb_int n = sp_re_rindex(pat, str); return n < 0 ? sp_box_nil() : sp_box_int(n); }
-sp_RbVal sp_re_index_poly(mrb_regexp_pattern *pat, const char *str) { mrb_int n = sp_re_match(pat, str); return n < 0 ? sp_box_nil() : sp_box_int(sp_str_byte_to_char(str, n)); }  /* char offset (#3056) */
+mrb_int sp_re_rindex_opt(mrb_regexp_pattern *pat, const char *str)  {SP_GC_ROOT_STR(str); mrb_int n = sp_re_rindex(pat, str); return n < 0 ? SP_INT_NIL : n; }
+sp_RbVal sp_re_rindex_poly(mrb_regexp_pattern *pat, const char *str) {SP_GC_ROOT_STR(str); mrb_int n = sp_re_rindex(pat, str); return n < 0 ? sp_box_nil() : sp_box_int(n); }
+sp_RbVal sp_re_index_poly(mrb_regexp_pattern *pat, const char *str) {SP_GC_ROOT_STR(str); mrb_int n = sp_re_match(pat, str); return n < 0 ? sp_box_nil() : sp_box_int(sp_str_byte_to_char(str, n)); }  /* char offset (#3056) */
 /* String#index(regexp, start): first match at or after char position `start`,
    as a char index -- SP_INT_NIL on miss / out-of-range (a nullable int, matching
    sp_str_index_from_opt's ABI). */
@@ -554,7 +554,7 @@ mrb_int sp_re_byterindex_opt(mrb_regexp_pattern *pat, const char *str, mrb_int s
   }
   return SP_INT_NIL;
 }
-mrb_int sp_re_index_from_opt(mrb_regexp_pattern *pat, const char *str, mrb_int start) {
+mrb_int sp_re_index_from_opt(mrb_regexp_pattern *pat, const char *str, mrb_int start) {SP_GC_ROOT_STR(str);
   if (!str) return SP_INT_NIL;
   mrb_int cl = sp_str_length(str);
   if (start < 0) start += cl;
@@ -567,7 +567,7 @@ mrb_int sp_re_index_from_opt(mrb_regexp_pattern *pat, const char *str, mrb_int s
 }
 /* String#rindex(regexp, start): last match whose start is at or before char
    position `start`, as a char index (SP_INT_NIL on miss). */
-mrb_int sp_re_rindex_from_opt(mrb_regexp_pattern *pat, const char *str, mrb_int start) {
+mrb_int sp_re_rindex_from_opt(mrb_regexp_pattern *pat, const char *str, mrb_int start) {SP_GC_ROOT_STR(str);
   if (!str) return SP_INT_NIL;
   mrb_int cl = sp_str_length(str);
   if (start < 0) start += cl;
@@ -586,7 +586,7 @@ mrb_int sp_re_rindex_from_opt(mrb_regexp_pattern *pat, const char *str, mrb_int 
   }
   return last < 0 ? SP_INT_NIL : sp_str_count_chars(str, (size_t)last);
 }
-sp_RbVal sp_re_match_poly(mrb_regexp_pattern *pat, const char *str) { mrb_int n = sp_re_match(pat, str); return n < 0 ? sp_box_nil() : sp_box_int(sp_str_byte_to_char(str, n)); }  /* char offset (#3056) */
+sp_RbVal sp_re_match_poly(mrb_regexp_pattern *pat, const char *str) {SP_GC_ROOT_STR(str); mrb_int n = sp_re_match(pat, str); return n < 0 ? sp_box_nil() : sp_box_int(sp_str_byte_to_char(str, n)); }  /* char offset (#3056) */
 /* Value of the named group `name` from the most recent match registers (set by
    sp_re_match / sp_re_match_poly). NULL (nil) when the last match failed, the
    name is unknown, or the group did not participate. Used by `/(?<n>..)/ =~ s`
@@ -880,15 +880,15 @@ sp_PolyArray *sp_MatchData_aref_len(sp_MatchData *m, mrb_int start, mrb_int len)
   return a;
 }
 /* char offset of a byte position within source */
-mrb_int sp_md_char_off(sp_MatchData *m, int byteoff) {
+mrb_int sp_md_char_off(sp_MatchData *m, int byteoff) {SP_GC_ROOT(m);
   if (byteoff < 0) return SP_INT_NIL;
   return sp_str_count_chars(m->source, (size_t)byteoff);
 }
-mrb_int sp_MatchData_begin(sp_MatchData *m, mrb_int i) {
+mrb_int sp_MatchData_begin(sp_MatchData *m, mrb_int i) {SP_GC_ROOT(m);
   if (!m || i < 0 || i >= m->ncap) return SP_INT_NIL;
   return sp_md_char_off(m, m->caps[i * 2]);
 }
-mrb_int sp_MatchData_end(sp_MatchData *m, mrb_int i) {
+mrb_int sp_MatchData_end(sp_MatchData *m, mrb_int i) {SP_GC_ROOT(m);
   if (!m || i < 0 || i >= m->ncap) return SP_INT_NIL;
   return sp_md_char_off(m, m->caps[(i * 2) + 1]);
 }
@@ -923,14 +923,14 @@ static int sp_md_group_by_name(sp_MatchData *m, const char *name) {SP_GC_ROOT_ST
   if (g < 0) sp_raise_cls("IndexError", sp_sprintf("undefined group name reference: %s", name));
   return g;
 }
-mrb_int sp_MatchData_begin_name(sp_MatchData *m, const char *name) { return sp_MatchData_begin(m, sp_md_group_by_name(m, name)); }
-mrb_int sp_MatchData_end_name(sp_MatchData *m, const char *name) { return sp_MatchData_end(m, sp_md_group_by_name(m, name)); }
-sp_IntArray *sp_MatchData_offset_name(sp_MatchData *m, const char *name) { return sp_MatchData_offset(m, sp_md_group_by_name(m, name)); }
-mrb_int sp_MatchData_bytebegin_name(sp_MatchData *m, const char *name) { return sp_MatchData_bytebegin(m, sp_md_group_by_name(m, name)); }
-mrb_int sp_MatchData_byteend_name(sp_MatchData *m, const char *name) { return sp_MatchData_byteend(m, sp_md_group_by_name(m, name)); }
-sp_IntArray *sp_MatchData_byteoffset_name(sp_MatchData *m, const char *name) { return sp_MatchData_byteoffset(m, sp_md_group_by_name(m, name)); }
+mrb_int sp_MatchData_begin_name(sp_MatchData *m, const char *name) {SP_GC_ROOT(m);SP_GC_ROOT_STR(name); return sp_MatchData_begin(m, sp_md_group_by_name(m, name)); }
+mrb_int sp_MatchData_end_name(sp_MatchData *m, const char *name) {SP_GC_ROOT(m);SP_GC_ROOT_STR(name); return sp_MatchData_end(m, sp_md_group_by_name(m, name)); }
+sp_IntArray *sp_MatchData_offset_name(sp_MatchData *m, const char *name) {SP_GC_ROOT(m);SP_GC_ROOT_STR(name); return sp_MatchData_offset(m, sp_md_group_by_name(m, name)); }
+mrb_int sp_MatchData_bytebegin_name(sp_MatchData *m, const char *name) {SP_GC_ROOT(m);SP_GC_ROOT_STR(name); return sp_MatchData_bytebegin(m, sp_md_group_by_name(m, name)); }
+mrb_int sp_MatchData_byteend_name(sp_MatchData *m, const char *name) {SP_GC_ROOT(m);SP_GC_ROOT_STR(name); return sp_MatchData_byteend(m, sp_md_group_by_name(m, name)); }
+sp_IntArray *sp_MatchData_byteoffset_name(sp_MatchData *m, const char *name) {SP_GC_ROOT(m);SP_GC_ROOT_STR(name); return sp_MatchData_byteoffset(m, sp_md_group_by_name(m, name)); }
 /* whole-match string (group 0) — also MatchData#to_s */
-const char *sp_MatchData_to_s(sp_MatchData *m) { const char *r = sp_MatchData_aref(m, 0); return r ? r : sp_str_empty; }
+const char *sp_MatchData_to_s(sp_MatchData *m) {SP_GC_ROOT(m); const char *r = sp_MatchData_aref(m, 0); return r ? r : sp_str_empty; }
 /* captures: groups 1..n-1 as a poly array (nil for non-participating) */
 sp_PolyArray *sp_MatchData_captures(sp_MatchData *m) {SP_GC_ROOT(m);
   sp_PolyArray *r = sp_PolyArray_new();

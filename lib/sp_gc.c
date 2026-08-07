@@ -104,6 +104,10 @@ const char *sp_gc_dbg_phase = "?";
 void *sp_gc_dbg_ctx = NULL;
 static void sp_gc_verify_fail(void *obj, sp_gc_hdr *h){
   fprintf(stderr, "  [phase=%s ctx=%p]\n", sp_gc_dbg_phase, sp_gc_dbg_ctx);
+  if (sp_gc_dbg_ctx && sp_gc_dbg_phase && sp_gc_dbg_phase[0] == 's') {
+    sp_gc_hdr *hc = (sp_gc_hdr *)((char *)sp_gc_dbg_ctx - sizeof(sp_gc_hdr));
+    fprintf(stderr, "  holder scan=%p size=%u old=%d\n", (void *)hc->scan, (unsigned)hc->size, (int)hc->old);
+  }
   fprintf(stderr,
     "\n*** SPINEL_GC_VERIFY: collector reached a non-heap/corrupt object ***\n"
     "  obj    = %p\n  header = %p\n"
@@ -161,7 +165,12 @@ else{h->scan(obj);}}}
 
 void sp_gc_mark_drain(void){
   while(sp_gc_mark_top>0){void*obj=sp_gc_mark_stack[--sp_gc_mark_top];
-    sp_gc_hdr*h=(sp_gc_hdr*)((char*)obj-sizeof(sp_gc_hdr));if(h->scan)h->scan(obj);}
+    sp_gc_hdr*h=(sp_gc_hdr*)((char*)obj-sizeof(sp_gc_hdr));
+    /* Name the object being scanned, not the root group it came from: a bad
+       reference found here is a field of THIS object, and the group label on
+       its own says nothing about which. */
+    if(sp_gc_verify){sp_gc_dbg_phase="scan";sp_gc_dbg_ctx=obj;}
+    if(h->scan)h->scan(obj);}
 }
 void sp_gc_mark_all(void){if(!sp_gc_mark_stack)sp_gc_mark_stack=(void**)malloc(sizeof(void*)*SP_GC_MARK_STACK_MAX);sp_gc_mark_top=0;if(sp_gc_verify)sp_gc_verify_snapshot();int vd=sp_gc_verify;for(int i=0;i<sp_gc_nroots;i++){void**e=sp_gc_roots[i];if(vd){sp_gc_dbg_phase="root";sp_gc_dbg_ctx=(void*)e;}if((uintptr_t)e&(uintptr_t)3){sp_gc_mark_root_entry(e);}
 else{void*obj=*e;if(obj)sp_gc_mark(obj);}}if(vd)sp_gc_dbg_phase="fibers";if(sp_gc_mark_suspended_fibers_hook)sp_gc_mark_suspended_fibers_hook();if(vd)sp_gc_dbg_phase="globals";if(sp_gc_mark_globals_hook)sp_gc_mark_globals_hook();sp_gc_mark_drain();if(vd){sp_gc_dbg_phase="?";sp_gc_dbg_ctx=NULL;}}

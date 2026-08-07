@@ -276,7 +276,7 @@ static struct addrinfo *sp_net_udp_resolve(int fd, const char *host, int port,
     if (getaddrinfo((host && *host) ? host : NULL, portbuf, &hints, head) != 0) return NULL;
     return *head;
 }
-int sp_net_udp_bind(int fd, const char *host, int port) {
+int sp_net_udp_bind(int fd, const char *host, int port) {SP_GC_ROOT_STR(host);
     if (fd < 0 || port < 0 || port > 65535) return -1;
     struct addrinfo *head = NULL;
     struct addrinfo *ai = sp_net_udp_resolve(fd, host, port, (host && *host) ? 0 : 1, &head);
@@ -286,7 +286,7 @@ int sp_net_udp_bind(int fd, const char *host, int port) {
     return rc;
 }
 /* #connect fixes the peer so #send / #write need no address. */
-int sp_net_udp_connect(int fd, const char *host, int port) {
+int sp_net_udp_connect(int fd, const char *host, int port) {SP_GC_ROOT_STR(host);
     if (fd < 0 || port < 0 || port > 65535) return -1;
     struct addrinfo *head = NULL;
     struct addrinfo *ai = sp_net_udp_resolve(fd, host, port, 0, &head);
@@ -295,7 +295,7 @@ int sp_net_udp_connect(int fd, const char *host, int port) {
     freeaddrinfo(head);
     return rc;
 }
-int sp_net_udp_send_to(int fd, const char *data, int len, const char *host, int port) {
+int sp_net_udp_send_to(int fd, const char *data, int len, const char *host, int port) {SP_GC_ROOT_STR(data);SP_GC_ROOT_STR(host);
     if (fd < 0) return -1;
     if (!host || !*host) return (int)send(fd, data, (size_t)len, 0);
     struct addrinfo *head = NULL;
@@ -344,7 +344,7 @@ static int sp_net_unix_addr(const char *path, struct sockaddr_un *sa) {
     memcpy(sa->sun_path, path, n + 1);
     return 0;
 }
-int sp_net_unix_listen(const char *path, int backlog) {
+int sp_net_unix_listen(const char *path, int backlog) {SP_GC_ROOT_STR(path);
     struct sockaddr_un sa;
     if (sp_net_unix_addr(path, &sa) != 0) return -1;
     signal(SIGPIPE, SIG_IGN);
@@ -354,7 +354,7 @@ int sp_net_unix_listen(const char *path, int backlog) {
     if (listen(fd, backlog > 0 ? backlog : 128) != 0) { close(fd); return -1; }
     return fd;
 }
-int sp_net_unix_connect(const char *path) {
+int sp_net_unix_connect(const char *path) {SP_GC_ROOT_STR(path);
     struct sockaddr_un sa;
     if (sp_net_unix_addr(path, &sa) != 0) return -1;
     signal(SIGPIPE, SIG_IGN);

@@ -30,7 +30,7 @@ const char *const *sp_exc_modules_of_name(const char *cls) {
 }
 
 /* Does `cls` itself, through any module it includes, answer to `target`? */
-static int sp_exc_level_matches(const char *cls, const char *target) {
+static int sp_exc_level_matches(const char *cls, const char *target) {SP_GC_ROOT_STR(cls);SP_GC_ROOT_STR(target);
   if (!strcmp(cls, target)) return 1;
   const char *const *mods = sp_exc_modules_of_name(cls);
   if (!mods && sp_user_exc_modules_fn) mods = sp_user_exc_modules_fn(cls);
@@ -39,7 +39,7 @@ static int sp_exc_level_matches(const char *cls, const char *target) {
   return 0;
 }
 
-int sp_exc_cls_matches(const char *raised, const char *target) {
+int sp_exc_cls_matches(const char *raised, const char *target) {SP_GC_ROOT_STR(raised);SP_GC_ROOT_STR(target);
   if (!raised || !target) return 0;
   raised = sp_exc_canonical_name(raised);
   target = sp_exc_canonical_name(target);
@@ -65,7 +65,7 @@ int sp_exc_cls_matches(const char *raised, const char *target) {
 /* Class-gated introspection accessors (#2753-#2756, #2770): each answers only
    on its CRuby-defining class (walking the name-carried hierarchy) and raises
    NoMethodError elsewhere, matching per-class method definitions. */
-SP_COLD void sp_exc_acc_gate(sp_Exception *e, const char *cls, const char *acc) {SP_GC_ROOT(e);SP_GC_ROOT_STR(acc);
+SP_COLD void sp_exc_acc_gate(sp_Exception *e, const char *cls, const char *acc) {SP_GC_ROOT_STR(cls);SP_GC_ROOT(e);SP_GC_ROOT_STR(acc);
   if (e && sp_exc_cls_matches(e->cls_name, cls)) return;
   sp_raise_cls("NoMethodError",
                sp_sprintf("undefined method '%s' for %s", acc,
@@ -211,7 +211,7 @@ int sp_exc_exit_status(void *obj) {
   return (e && e->result.tag == SP_TAG_INT) ? (int)e->result.v.i : 0;
 }
 /* Exception#exception(msg): a copy of the receiver carrying the new message. */
-sp_Exception *sp_exc_exception(sp_Exception *e, const char *msg) {SP_GC_ROOT_STR(msg);
+sp_Exception *sp_exc_exception(sp_Exception *e, const char *msg) {SP_GC_ROOT(e);SP_GC_ROOT_STR(msg);
   sp_Exception *n = sp_exc_dup(e);
   SP_GC_ROOT(n);
   n->msg = sp_sprintf("%s", (msg && msg[0]) ? msg : (n->cls_name ? n->cls_name : "RuntimeError"));
@@ -321,14 +321,14 @@ sp_RbVal sp_exc_name_acc(sp_Exception *e) {SP_GC_ROOT(e);
 /* Exception accessors on a POLY receiver (an exception rescued into a
    union-typed local): unbox and delegate; a non-exception value is CRuby's
    NoMethodError (#3120, #3122). */
-sp_RbVal sp_exc_key_acc(sp_Exception *e) {
+sp_RbVal sp_exc_key_acc(sp_Exception *e) {SP_GC_ROOT(e);
   sp_exc_acc_gate(e, "KeyError", "key");
   /* KeyError.new("m") records no key, and CRuby raises rather than
      answering nil -- nil is a legal key (#3030) */
   if (e && !e->has_key) sp_raise_cls("ArgumentError", "no key is available");
   return e->xkey;
 }
-sp_RbVal sp_exc_receiver_acc(sp_Exception *e) {
+sp_RbVal sp_exc_receiver_acc(sp_Exception *e) {SP_GC_ROOT(e);
   if (!(e && (sp_exc_cls_matches(e->cls_name, "NameError") ||
               sp_exc_cls_matches(e->cls_name, "KeyError") ||
               sp_exc_cls_matches(e->cls_name, "FrozenError"))))
@@ -338,35 +338,35 @@ sp_RbVal sp_exc_receiver_acc(sp_Exception *e) {
   if (e && !e->has_recv) sp_raise_cls("ArgumentError", "no receiver is available");
   return e->xrecv;
 }
-sp_RbVal sp_exc_args_acc(sp_Exception *e) {
+sp_RbVal sp_exc_args_acc(sp_Exception *e) {SP_GC_ROOT(e);
   sp_exc_acc_gate(e, "NoMethodError", "args");
   return e->xkey;
 }
-mrb_bool sp_exc_private_call_acc(sp_Exception *e) {
+mrb_bool sp_exc_private_call_acc(sp_Exception *e) {SP_GC_ROOT(e);
   sp_exc_acc_gate(e, "NoMethodError", "private_call?");
   return e ? e->priv_call : 0;   /* set only by the explicit .new (#3042) */
 }
-sp_RbVal sp_exc_exit_value_acc(sp_Exception *e) {
+sp_RbVal sp_exc_exit_value_acc(sp_Exception *e) {SP_GC_ROOT(e);
   sp_exc_acc_gate(e, "LocalJumpError", "exit_value");
   return e->result;
 }
-sp_RbVal sp_exc_throw_value_acc(sp_Exception *e) {
+sp_RbVal sp_exc_throw_value_acc(sp_Exception *e) {SP_GC_ROOT(e);
   sp_exc_acc_gate(e, "UncaughtThrowError", "value");
   return e->result;
 }
-mrb_int sp_exc_status_acc(sp_Exception *e) {
+mrb_int sp_exc_status_acc(sp_Exception *e) {SP_GC_ROOT(e);
   sp_exc_acc_gate(e, "SystemExit", "status");
   return (mrb_int)sp_exc_exit_status(e);
 }
-mrb_bool sp_exc_success_acc(sp_Exception *e) {
+mrb_bool sp_exc_success_acc(sp_Exception *e) {SP_GC_ROOT(e);
   sp_exc_acc_gate(e, "SystemExit", "success?");
   return sp_exc_exit_status(e) == 0;
 }
-mrb_int sp_exc_signo_acc(sp_Exception *e) {
+mrb_int sp_exc_signo_acc(sp_Exception *e) {SP_GC_ROOT(e);
   sp_exc_acc_gate(e, "SignalException", "signo");
   return (e->xkey.tag == SP_TAG_INT) ? e->xkey.v.i : 0;
 }
-const char *sp_exc_signm_acc(sp_Exception *e) {
+const char *sp_exc_signm_acc(sp_Exception *e) {SP_GC_ROOT(e);
   sp_exc_acc_gate(e, "SignalException", "signm");
   return sp_exc_message(e);
 }

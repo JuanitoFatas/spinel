@@ -330,7 +330,7 @@ void sp_dir_glob_rec(const char *fsdir, const char *outprefix,
 
 sp_StrArray *sp_dir_glob(const char *pattern);
 /* Dir.glob(pat, File::FNM_DOTMATCH) (#2828) */
-sp_StrArray *sp_dir_glob_dot(const char *pattern) {
+sp_StrArray *sp_dir_glob_dot(const char *pattern) {SP_GC_ROOT_STR(pattern);
   sp_glob_dotmatch = 1;
   sp_StrArray *a = sp_dir_glob(pattern);
   sp_glob_dotmatch = 0;
@@ -931,7 +931,7 @@ const char *sp_file_basename(const char *path) {SP_GC_ROOT_STR(path);
 }
 /* File.basename(path, suffix): ".*" strips the (non-leading) last extension,
    any other suffix strips a literal tail match (#2774). */
-const char *sp_file_basename2(const char *path, const char *suffix) {
+const char *sp_file_basename2(const char *path, const char *suffix) {SP_GC_ROOT_STR(path);SP_GC_ROOT_STR(suffix);
   const char *base = sp_file_basename(path);
   size_t n = strlen(base);
   if (suffix && strcmp(suffix, ".*") == 0) {
@@ -1334,14 +1334,14 @@ sp_StrArray *sp_File_readlines_sep(sp_File *f, const char *sep, mrb_bool chomp) 
   while ((l = sp_File_gets_sep(f, sep, 0, chomp)) != NULL) sp_StrArray_push(a, l);
   return a;
 }
-sp_StrArray *sp_file_readlines_sep(const char *path, const char *sep, mrb_bool chomp) {
+sp_StrArray *sp_file_readlines_sep(const char *path, const char *sep, mrb_bool chomp) {SP_GC_ROOT_STR(path);SP_GC_ROOT_STR(sep);
   sp_File *f = sp_File_open(path, "r");
   SP_GC_ROOT(f);
   sp_StrArray *a = sp_File_readlines_sep(f, sep, chomp);
   sp_File_close(f);
   return a;
 }
-const char *sp_File_readline_sep(sp_File *f, const char *sep, mrb_int limit, mrb_bool chomp) {
+const char *sp_File_readline_sep(sp_File *f, const char *sep, mrb_int limit, mrb_bool chomp) {SP_GC_ROOT(f);SP_GC_ROOT_STR(sep);
   const char *r = sp_File_gets_sep(f, sep, limit, chomp);
   if (!r) sp_raise_cls("EOFError", "end of file reached");
   return r;
@@ -1363,7 +1363,7 @@ const char *sp_File_getc(sp_File *f) {SP_GC_ROOT(f);
   sp_str_set_len(r, n);
   return r;
 }
-const char *sp_File_readchar(sp_File *f) {
+const char *sp_File_readchar(sp_File *f) {SP_GC_ROOT(f);
   const char *r = sp_File_getc(f);
   if (!r) sp_raise_cls("EOFError", "end of file reached");
   return r;
@@ -1428,9 +1428,9 @@ const char *sp_file_ftype(const char *path) {SP_GC_ROOT_STR(path);
 static mrb_bool sp_file_access_eff(const char *path, int mode) {
   return faccessat(AT_FDCWD, path ? path : "", mode, AT_EACCESS) == 0;
 }
-mrb_bool sp_file_readable(const char *path)   { return sp_file_access_eff(path, R_OK); }
-mrb_bool sp_file_writable(const char *path)   { return sp_file_access_eff(path, W_OK); }
-mrb_bool sp_file_executable(const char *path) { return sp_file_access_eff(path, X_OK); }
+mrb_bool sp_file_readable(const char *path)   {SP_GC_ROOT_STR(path); return sp_file_access_eff(path, R_OK); }
+mrb_bool sp_file_writable(const char *path)   {SP_GC_ROOT_STR(path); return sp_file_access_eff(path, W_OK); }
+mrb_bool sp_file_executable(const char *path) {SP_GC_ROOT_STR(path); return sp_file_access_eff(path, X_OK); }
 mrb_bool sp_file_readable_real(const char *path)   { return access(path ? path : "", R_OK) == 0; }
 mrb_bool sp_file_writable_real(const char *path)   { return access(path ? path : "", W_OK) == 0; }
 mrb_bool sp_file_executable_real(const char *path) { return access(path ? path : "", X_OK) == 0; }
@@ -1510,7 +1510,7 @@ mrb_int sp_file_write_at(const char *path, const char *data, mrb_int off) {SP_GC
   if (fd < 0)
     sp_raise_cls("Errno::ENOENT",
                  sp_sprintf("No such file or directory @ rb_sysopen - %s", path ? path : ""));
-  size_t n = sp_str_byte_len(data ? data : "");
+  size_t n = sp_str_byte_len(data ? data : sp_str_empty);
   ssize_t w = pwrite(fd, data ? data : "", n, (off_t)off);
   close(fd);
   return w < 0 ? 0 : (mrb_int)w;
@@ -1520,7 +1520,7 @@ mrb_int sp_file_write_mode(const char *path, const char *data, const char *mode)
   if (!fp)
     sp_raise_cls("Errno::ENOENT",
                  sp_sprintf("No such file or directory @ rb_sysopen - %s", path ? path : ""));
-  size_t n = sp_str_byte_len(data ? data : "");
+  size_t n = sp_str_byte_len(data ? data : sp_str_empty);
   fwrite(data ? data : "", 1, n, fp);
   fclose(fp);
   return (mrb_int)n;
@@ -1572,19 +1572,19 @@ sp_File *sp_file_lstat_handle(const char *path) {SP_GC_ROOT_STR(path);
 mrb_bool sp_stat_nofollow(sp_File *f) {
   return f && f->mode && strcmp(f->mode, "lstat") == 0;
 }
-mrb_int sp_stat_size(sp_File *f) {
+mrb_int sp_stat_size(sp_File *f) {SP_GC_ROOT(f);
   struct stat st;
   const char *p = (f && f->path) ? f->path : "";
   int r = sp_stat_nofollow(f) ? lstat(p, &st) : stat(p, &st);
   return r == 0 ? (mrb_int)st.st_size : SP_INT_NIL;
 }
-mrb_int sp_stat_mode(sp_File *f) {
+mrb_int sp_stat_mode(sp_File *f) {SP_GC_ROOT(f);
   struct stat st;
   const char *p = (f && f->path) ? f->path : "";
   int r = sp_stat_nofollow(f) ? lstat(p, &st) : stat(p, &st);
   return r == 0 ? (mrb_int)st.st_mode : 0;
 }
-const char *sp_stat_ftype(sp_File *f) {
+const char *sp_stat_ftype(sp_File *f) {SP_GC_ROOT(f);
   /* sp_file_ftype already lstat()s, so it is exactly the lstat answer; a
      following handle resolves the link first. */
   const char *p = (f && f->path) ? f->path : "";
@@ -1702,7 +1702,7 @@ sp_Dir *sp_Dir_rewind(sp_Dir *d) { if (d && d->dp) rewinddir(d->dp); return d; }
 mrb_int sp_Dir_tell(sp_Dir *d) { return d && d->dp ? (mrb_int)telldir(d->dp) : 0; }
 sp_Dir *sp_Dir_seek(sp_Dir *d, mrb_int pos) { if (d && d->dp) seekdir(d->dp, (long)pos); return d; }
 mrb_int sp_Dir_fileno(sp_Dir *d) { return d && d->dp ? (mrb_int)dirfd(d->dp) : -1; }
-sp_StrArray *sp_dir_entries(const char *path) { return sp_dir_entries_impl(path, 0); }
+sp_StrArray *sp_dir_entries(const char *path) {SP_GC_ROOT_STR(path); return sp_dir_entries_impl(path, 0); }
 mrb_bool sp_dir_empty(const char *path) {SP_GC_ROOT_STR(path);
   struct stat st;
   if (!path || stat(path, &st) != 0)
@@ -1726,7 +1726,7 @@ const char *sp_dir_home_user(const char *user) {SP_GC_ROOT_STR(user);
     sp_raise_cls("ArgumentError", sp_sprintf("user %s doesn't exist", user));
   return sp_str_dup_external(pw->pw_dir);
 }
-sp_StrArray *sp_dir_children(const char *path) { return sp_dir_entries_impl(path, 1); }
+sp_StrArray *sp_dir_children(const char *path) {SP_GC_ROOT_STR(path); return sp_dir_entries_impl(path, 1); }
 
 /* ---- Signal trap machinery + Enumerator cursor/generator ops moved from
    spinel_rt.h ----
@@ -1922,7 +1922,7 @@ static void sp_int_permutation_recur(sp_IntArray*src,mrb_int k,sp_IntArray*used,
 static void sp_int_repeated_permutation_recur(sp_IntArray*src,mrb_int k,sp_IntArray*acc,sp_PtrArray*out){SP_GC_ROOT(src);SP_GC_ROOT(acc);SP_GC_ROOT(out);if(k==0){sp_IntArray*cp=sp_IntArray_new();SP_GC_ROOT(cp);for(mrb_int i=0;i<acc->len;i++)sp_IntArray_push(cp,acc->data[acc->start+i]);sp_PtrArray_push(out,cp);return;}for(mrb_int i=0;i<src->len;i++){sp_IntArray_push(acc,src->data[src->start+i]);sp_int_repeated_permutation_recur(src,k-1,acc,out);acc->len--;}}
 sp_PtrArray*sp_IntArray_repeated_permutation(sp_IntArray*a,mrb_int k){SP_GC_ROOT(a);sp_PtrArray*out=sp_PtrArray_new();SP_GC_ROOT(out);if(!a||k<0)return out;sp_IntArray*acc=sp_IntArray_new();SP_GC_ROOT(acc);sp_int_repeated_permutation_recur(a,k,acc,out);return out;}
 sp_PtrArray*sp_IntArray_permutation(sp_IntArray*a,mrb_int k){SP_GC_ROOT(a);sp_PtrArray*out=sp_PtrArray_new();SP_GC_ROOT(out);if(!a||k<0||k>a->len)return out;sp_IntArray*used=sp_IntArray_new();SP_GC_ROOT(used);for(mrb_int i=0;i<a->len;i++)sp_IntArray_push(used,0);sp_IntArray*acc=sp_IntArray_new();SP_GC_ROOT(acc);sp_int_permutation_recur(a,k,used,acc,out);return out;}
-sp_RbVal sp_enum_gen_pull(sp_Enumerator *e) { sp_gc_wb((void*)e);
+sp_RbVal sp_enum_gen_pull(sp_Enumerator *e) {SP_GC_ROOT(e); sp_gc_wb((void*)e);
   if (!e->fib) {
     e->fib = sp_Fiber_new(e->gen);
     if (e->gen_cap) { sp_gc_wb((void*)e->fib); e->fib->user_data = e->gen_cap; }
@@ -1934,7 +1934,7 @@ sp_RbVal sp_enum_gen_pull(sp_Enumerator *e) { sp_gc_wb((void*)e);
   if (!sp_Fiber_alive(e->fib)) { e->gen_result = v; sp_raise_stop_iteration(v); }
   return v;
 }
-sp_RbVal sp_Enumerator_next(sp_Enumerator *e) {
+sp_RbVal sp_Enumerator_next(sp_Enumerator *e) {SP_GC_ROOT(e);
   if (e->gen) {
     if (e->peeked) { e->peeked = FALSE; return e->peek_val; }
     return sp_enum_gen_pull(e);
@@ -1942,7 +1942,7 @@ sp_RbVal sp_Enumerator_next(sp_Enumerator *e) {
   if (!e->items || e->cursor >= e->items->len) sp_raise_stop_iteration(e->source);
   return e->items->data[e->cursor++];
 }
-sp_RbVal sp_Enumerator_peek(sp_Enumerator *e) { sp_gc_wb((void*)e);
+sp_RbVal sp_Enumerator_peek(sp_Enumerator *e) {SP_GC_ROOT(e); sp_gc_wb((void*)e);
   if (e->gen) {
     if (!e->peeked) { e->peek_val = sp_enum_gen_pull(e); e->peeked = TRUE; }
     return e->peek_val;
@@ -1956,8 +1956,8 @@ sp_PolyArray *sp_enum_values_wrap(sp_RbVal v) {
   sp_PolyArray_push(a, v);
   return a;
 }
-sp_PolyArray *sp_Enumerator_next_values(sp_Enumerator *e) { return sp_enum_values_wrap(sp_Enumerator_next(e)); }
-sp_PolyArray *sp_Enumerator_peek_values(sp_Enumerator *e) { return sp_enum_values_wrap(sp_Enumerator_peek(e)); }
+sp_PolyArray *sp_Enumerator_next_values(sp_Enumerator *e) {SP_GC_ROOT(e); return sp_enum_values_wrap(sp_Enumerator_next(e)); }
+sp_PolyArray *sp_Enumerator_peek_values(sp_Enumerator *e) {SP_GC_ROOT(e); return sp_enum_values_wrap(sp_Enumerator_peek(e)); }
 sp_Enumerator *sp_Enumerator_rewind(sp_Enumerator *e) { sp_gc_wb((void*)e);
   if (!e) return NULL;
   if (e->gen) { e->fib = NULL; e->peeked = FALSE; e->gen_result = sp_box_nil(); }
@@ -1965,7 +1965,7 @@ sp_Enumerator *sp_Enumerator_rewind(sp_Enumerator *e) { sp_gc_wb((void*)e);
   e->feed = sp_box_nil(); e->has_feed = FALSE;
   return e;
 }
-sp_RbVal sp_Enumerator_feed(sp_Enumerator *e, sp_RbVal v) { sp_gc_wb((void*)e);
+sp_RbVal sp_Enumerator_feed(sp_Enumerator *e, sp_RbVal v) {SP_GC_ROOT(e); sp_gc_wb((void*)e);
   if (!e) return sp_box_nil();
   if (e->has_feed) sp_raise_cls("TypeError", (&("\xff" "feed value already set")[1]));
   e->feed = v; e->has_feed = TRUE;
@@ -2064,7 +2064,7 @@ mrb_int sp_process_kill1(sp_RbVal sig, mrb_int pid) {
   }
   return 1;
 }
-sp_RbVal sp_Enumerator_size(sp_Enumerator *e) {
+sp_RbVal sp_Enumerator_size(sp_Enumerator *e) {SP_GC_ROOT(e);
   if (!e) return sp_box_nil();
   if (e->items) return sp_box_int(e->items->len);
   if (e->size.tag == SP_TAG_OBJ && e->size.cls_id == SP_BUILTIN_PROC) {
@@ -2232,7 +2232,7 @@ const char *sp_str_setbyte_cow(const char *s, mrb_int i, mrb_int v) {SP_GC_ROOT_
    emit_poly_builtin_dispatch can land on a single C expression. An
    exclusive range stops one short of `last`, so the upper bound is
    `last - excl` (excl is 0 or 1). */
-mrb_bool sp_range_include(sp_Range *r, mrb_int x){
+mrb_bool sp_range_include(sp_Range *r, mrb_int x){SP_GC_ROOT(r);
   /* beginless/endless sentinels (INTPTR_MIN/MAX) clamp one side open */
   if (r->first == INTPTR_MIN || r->last == INTPTR_MAX) {
     if (r->first != INTPTR_MIN && x < r->first) return 0;
@@ -2576,10 +2576,10 @@ mrb_bool sp_str_in_list(const char *m, const char *const *list) {
    from the underlying sp_str_*_index helpers; we widen here at the
    boxing layer so existing call sites that want the raw int still
    work via `sp_str_index` directly. */
-sp_RbVal sp_str_index_poly(const char *s, const char *sub) { mrb_int n = sp_str_index(s, sub); return n < 0 ? sp_box_nil() : sp_box_int(n); }
-sp_RbVal sp_str_index_from_poly(const char *s, const char *sub, mrb_int start) { mrb_int n = sp_str_index_from(s, sub, start); return n < 0 ? sp_box_nil() : sp_box_int(n); }
-sp_RbVal sp_str_rindex_poly(const char *s, const char *sub) { mrb_int n = sp_str_rindex(s, sub); return n < 0 ? sp_box_nil() : sp_box_int(n); }
-sp_PolyArray *sp_str_lines_poly(const char *s) {
+sp_RbVal sp_str_index_poly(const char *s, const char *sub) {SP_GC_ROOT_STR(s);SP_GC_ROOT_STR(sub); mrb_int n = sp_str_index(s, sub); return n < 0 ? sp_box_nil() : sp_box_int(n); }
+sp_RbVal sp_str_index_from_poly(const char *s, const char *sub, mrb_int start) {SP_GC_ROOT_STR(s);SP_GC_ROOT_STR(sub); mrb_int n = sp_str_index_from(s, sub, start); return n < 0 ? sp_box_nil() : sp_box_int(n); }
+sp_RbVal sp_str_rindex_poly(const char *s, const char *sub) {SP_GC_ROOT_STR(s);SP_GC_ROOT_STR(sub); mrb_int n = sp_str_rindex(s, sub); return n < 0 ? sp_box_nil() : sp_box_int(n); }
+sp_PolyArray *sp_str_lines_poly(const char *s) {SP_GC_ROOT_STR(s);
   sp_StrArray *ls = sp_str_lines(s); SP_GC_ROOT(ls);
   sp_PolyArray *a = sp_PolyArray_new(); SP_GC_ROOT(a);
   if (ls) {
@@ -2593,7 +2593,7 @@ sp_PolyArray *sp_str_lines_poly(const char *s) {
 /* String#match?(/re/, pos) — pos is a codepoint index (CRuby semantics),
    unlike Regexp#match?(str, pos) which uses byte offset. Convert the
    codepoint index to a byte offset before dispatching to re_exec. */
-mrb_bool sp_str_re_match_p_at(mrb_regexp_pattern *pat, const char *str, mrb_int cpos) {
+mrb_bool sp_str_re_match_p_at(mrb_regexp_pattern *pat, const char *str, mrb_int cpos) {SP_GC_ROOT_STR(str);
   mrb_int cl = sp_str_length(str);
   if (cpos < 0) cpos += cl;
   if (cpos < 0 || cpos > cl) return FALSE;
@@ -2604,7 +2604,7 @@ mrb_bool sp_str_re_match_p_at(mrb_regexp_pattern *pat, const char *str, mrb_int 
 }
 /* Issue #910: sub(string, hash) — literal-substring pattern
    with a hash replacement. Replaces only the first match. */
-const char *sp_str_sub_str_str_hash(const char *str, const char *pat, sp_StrStrHash *h) {SP_GC_ROOT_STR(str);
+const char *sp_str_sub_str_str_hash(const char *str, const char *pat, sp_StrStrHash *h) {SP_GC_ROOT_STR(pat);SP_GC_ROOT(h);SP_GC_ROOT_STR(str);
   if (!str || !pat) return str;
   const char *found = strstr(str, pat);
   if (!found) return str;
@@ -2631,7 +2631,7 @@ const char *sp_StrArray_sum_str(sp_StrArray *a, const char *init) {SP_GC_ROOT(a)
   if (a) for (mrb_int i = 0; i < a->len; i++) if (a->data[i]) { size_t l = strlen(a->data[i]); memcpy(r + o, a->data[i], l); o += l; }
   r[o] = 0; sp_str_set_len(r, o); return r;
 }
-sp_RbVal sp_StrArray_uniq_bangq(sp_StrArray *a) {
+sp_RbVal sp_StrArray_uniq_bangq(sp_StrArray *a) {SP_GC_ROOT(a);
   if (!a) return sp_box_nil();
   mrb_int n = a->len;
   sp_StrArray_uniq_bang(a);
@@ -2642,7 +2642,7 @@ sp_RbVal sp_StrArray_uniq_bangq(sp_StrArray *a) {
    malloc buffer, return an sp_str_alloc'd copy. (Not sp_String#data, whose owner
    isn't GC-rooted across the return.) sp_float_to_s's result is copied
    immediately, before the next call can reuse its buffer. */
-mrb_bool sp_StrArray_eq(sp_StrArray*a,sp_StrArray*b){if(!a||!b)return a==b;if(a->len!=b->len)return FALSE;for(mrb_int i=0;i<a->len;i++)if(!sp_str_eq(a->data[i],b->data[i]))return FALSE;return TRUE;}
+mrb_bool sp_StrArray_eq(sp_StrArray*a,sp_StrArray*b){SP_GC_ROOT(a);SP_GC_ROOT(b);if(!a||!b)return a==b;if(a->len!=b->len)return FALSE;for(mrb_int i=0;i<a->len;i++)if(!sp_str_eq(a->data[i],b->data[i]))return FALSE;return TRUE;}
 
 /* ---- Complex ops / class-frozen bitmap -- relocated from spinel_rt.h. ---- */
 
@@ -2710,7 +2710,7 @@ sp_PolyArray *sp_io_pipe(void) {
 /* IO.for_fd(fd, mode): wrap a descriptor the program already owns. autoclose
    false leaves the fd open when the handle is collected, which is the point of
    the call -- the fd usually belongs to something else. */
-sp_File *sp_io_for_fd(mrb_int fd, const char *mode, mrb_bool autoclose) {
+sp_File *sp_io_for_fd(mrb_int fd, const char *mode, mrb_bool autoclose) {SP_GC_ROOT_STR(mode);
   if (fd < 0 || fcntl((int)fd, F_GETFD) < 0)
     sp_raise_cls("Errno::EBADF", "Bad file descriptor");
   sp_File *f = sp_io_fdopen((int)fd, mode && *mode ? mode : "r");
@@ -2731,7 +2731,7 @@ static void sp_io_sel_timeout(double timeout, struct timeval *tv, struct timeval
   tv->tv_usec = (suseconds_t)((timeout - (double)tv->tv_sec) * 1000000.0);
   *tvp = tv;
 }
-sp_File *sp_io_wait_events(sp_File *f, double timeout, mrb_int kind) {
+sp_File *sp_io_wait_events(sp_File *f, double timeout, mrb_int kind) {SP_GC_ROOT(f);
   if (!f || !f->fp) sp_raise_cls("IOError", "closed stream");
   int fd = fileno(f->fp);
   if (fd < 0 || fd >= FD_SETSIZE) sp_raise_cls("IOError", "file descriptor out of range");
@@ -2889,14 +2889,14 @@ const char *sp_addrinfo_inspect(sp_Addrinfo *a) {SP_GC_ROOT(a);
     return sp_sprintf("#<Addrinfo: [%s]:%lld%s>", a->ip, (long long)a->port, st);
   return sp_sprintf("#<Addrinfo: %s:%lld%s>", a->ip, (long long)a->port, st);
 }
-const char *sp_brat_to_s(sp_BigRational *r) {
+const char *sp_brat_to_s(sp_BigRational *r) {SP_GC_ROOT(r);
   const char *ns = sp_bigint_to_s(r->num), *ds = sp_bigint_to_s(r->den);
-  return sp_str_concat(sp_str_concat(ns, "/"), ds);
+  return sp_str_concat(sp_str_concat(ns, SPL("/")), ds);
 }
 const char *sp_brat_inspect(sp_BigRational *r) {SP_GC_ROOT(r);
-  return sp_str_concat(sp_str_concat(sp_str_concat("(", sp_brat_to_s(r)), ")"), "");
+  return sp_str_concat(sp_str_concat(SPL("("), sp_brat_to_s(r)), SPL(")"));
 }
-mrb_float sp_brat_to_f(sp_BigRational *r) {
+mrb_float sp_brat_to_f(sp_BigRational *r) {SP_GC_ROOT(r);
   return sp_bigint_to_double(r->num) / sp_bigint_to_double(r->den);
 }
 
@@ -2911,7 +2911,7 @@ sp_RbVal sp_marv_arr_new(void) { return sp_box_poly_array(sp_PolyArray_new()); }
 void sp_marv_arr_push(sp_RbVal a, sp_RbVal v) { sp_PolyArray_push((sp_PolyArray *)a.v.p, v); }
 sp_RbVal sp_marv_box_complex(mrb_float re, mrb_float im) { sp_Complex c; c.re = re; c.im = im; return sp_box_complex(c); }
 sp_RbVal sp_marv_box_rational(mrb_int n, mrb_int d) { return sp_box_rational(sp_rational_new(n, d)); }
-void sp_marv_raise(const char *cls, const char *msg) { sp_raise_cls(cls, msg); }
+void sp_marv_raise(const char *cls, const char *msg) {SP_GC_ROOT_STR(cls);SP_GC_ROOT_STR(msg); sp_raise_cls(cls, msg); }
 
 /* ---- Regexp gsub/sub-with-Hash + Signal/Interrupt exception ctors --
    relocated from spinel_rt.h. 0 optcarrot uses. ---- */
@@ -2922,7 +2922,7 @@ void sp_marv_raise(const char *cls, const char *msg) { sp_raise_cls(cls, msg); }
  * hash; the value (if present) is the replacement, otherwise the
  * matched substring is dropped (CRuby returns "", not the match).
  * Used by html_escape / json_escape idioms (gsub(/[&<>]/, ESCAPES)). */
-const char *sp_re_gsub_str_str_hash(mrb_regexp_pattern *pat, const char *str, sp_StrStrHash *h) {
+const char *sp_re_gsub_str_str_hash(mrb_regexp_pattern *pat, const char *str, sp_StrStrHash *h) {SP_GC_ROOT_STR(str);SP_GC_ROOT(h);
   int64_t slen = (int64_t)strlen(str);
  /* malloc scratch (realloc-safe); exact-sized string emitted below. */
   size_t cap = (slen * 2) + 64; char *out = (char *)malloc(cap); size_t olen = 0;
@@ -2972,7 +2972,7 @@ else {
 }
 /* Issue #910: sub(regex, hash) — same lookup semantics as
    sp_re_gsub_str_str_hash but only the first match. */
-const char *sp_re_sub_str_str_hash(mrb_regexp_pattern *pat, const char *str, sp_StrStrHash *h) {SP_GC_ROOT_STR(str);
+const char *sp_re_sub_str_str_hash(mrb_regexp_pattern *pat, const char *str, sp_StrStrHash *h) {SP_GC_ROOT(h);SP_GC_ROOT_STR(str);
   int64_t slen = (int64_t)strlen(str);
   int caps[64];
   int n = re_exec(pat, str, slen, 0, caps, 64, 0);
@@ -3053,13 +3053,13 @@ const double *sp_ffi_float_array_data(sp_RbVal v) {
    be punned -- its ->data is sp_RbVal[] (boxed) -- so unbox element-wise into
    a fresh GC-tracked buffer (sp_gc_alloc_nogc: no collection mid-build, so a
    sibling array arg's buffer can't be swept; freed at a later GC). */
-const int64_t *sp_PolyArray_ffi_int_data(sp_PolyArray *a) {
+const int64_t *sp_PolyArray_ffi_int_data(sp_PolyArray *a) {SP_GC_ROOT(a);
   if (!a || a->len <= 0) return (const int64_t *)0;
   int64_t *buf = (int64_t *)sp_gc_alloc_nogc((size_t)a->len * sizeof(int64_t), NULL, NULL);
   for (mrb_int i = 0; i < a->len; i++) buf[i] = (int64_t)a->data[i].v.i;
   return buf;
 }
-const double *sp_PolyArray_ffi_float_data(sp_PolyArray *a) {
+const double *sp_PolyArray_ffi_float_data(sp_PolyArray *a) {SP_GC_ROOT(a);
   if (!a || a->len <= 0) return (const double *)0;
   double *buf = (double *)sp_gc_alloc_nogc((size_t)a->len * sizeof(double), NULL, NULL);
   for (mrb_int i = 0; i < a->len; i++) buf[i] = (double)a->data[i].v.f;

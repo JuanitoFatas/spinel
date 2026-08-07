@@ -91,7 +91,7 @@ SP_NORETURN static void sp_file_raise_errno(const char *op, const char *path);
    blocking fgets/fread does not pin its worker while a peer is idle. A no-op
    when stdio already buffered data (waiting then would stall on the WIRE
    while the answer sits in the buffer), and in the single-threaded build. */
-void sp_sock_wait_readable(sp_File *f) {
+void sp_sock_wait_readable(sp_File *f) {SP_GC_ROOT(f);
   if (!f || !f->is_sock || !f->fp) return;
 #if defined(__GLIBC__)
   if (f->fp->_IO_read_end > f->fp->_IO_read_ptr) return;
@@ -143,12 +143,12 @@ static mrb_int sp_sock_write(sp_File *f, const char *s, size_t n) {
 
 /* Shared write core: `n` is the operand byte length (strlen for the
    bare-literal-safe entry, sp_str_byte_len for the binary one). */
-static mrb_int sp_File_write_len(sp_File *f, const char *s, size_t n) {
+static mrb_int sp_File_write_len(sp_File *f, const char *s, size_t n) {SP_GC_ROOT(f);SP_GC_ROOT_STR(s);
   if (f->is_sock) return sp_sock_write(f, s, n);
   return (mrb_int)fwrite(s, 1, n, f->fp);
 }
 
-mrb_int sp_File_write(sp_File *f, const char *s) {
+mrb_int sp_File_write(sp_File *f, const char *s) {SP_GC_ROOT(f);SP_GC_ROOT_STR(s);
   if (!f || !f->fp || !s) return 0;
   return sp_File_write_len(f, s, strlen(s));
 }
@@ -160,7 +160,7 @@ mrb_int sp_File_write(sp_File *f, const char *s) {
    value class String#<< / #replace already size this way. Runtime-internal
    callers and codegen's synthesized "" / "\n" literals are bare C literals
    with no marker byte and must use the plain entry above. */
-mrb_int sp_File_write_bin(sp_File *f, const char *s) {
+mrb_int sp_File_write_bin(sp_File *f, const char *s) {SP_GC_ROOT(f);SP_GC_ROOT_STR(s);
   if (!f || !f->fp || !s) return 0;
   return sp_File_write_len(f, s, sp_str_byte_len(s));
 }
@@ -272,14 +272,14 @@ static const char *sp_io_super_of(const char *k) {
   if (strcmp(k, "Object") == 0)      return SPL("BasicObject");
   return NULL;
 }
-mrb_bool sp_io_is_a(sp_File *f, const char *cls) {
+mrb_bool sp_io_is_a(sp_File *f, const char *cls) {SP_GC_ROOT(f);SP_GC_ROOT_STR(cls);
   if (!cls) return 0;
   if (strcmp(cls, "Kernel") == 0) return 1;   /* Object includes Kernel */
   for (const char *k = sp_io_kind_name(f); k; k = sp_io_super_of(k))
     if (strcmp(k, cls) == 0) return 1;
   return 0;
 }
-mrb_bool sp_io_instance_of(sp_File *f, const char *cls) {
+mrb_bool sp_io_instance_of(sp_File *f, const char *cls) {SP_GC_ROOT(f);SP_GC_ROOT_STR(cls);
   return cls && strcmp(sp_io_kind_name(f), cls) == 0;
 }
 
@@ -323,14 +323,14 @@ sp_File *sp_sock_udp_new(mrb_int family) {
   f->path = NULL; f->mode = "udp"; f->lineno = 0; f->is_sock = 1;
   return f;
 }
-sp_File *sp_sock_unix_server(const char *path) {
+sp_File *sp_sock_unix_server(const char *path) {SP_GC_ROOT_STR(path);
   extern int sp_net_unix_listen(const char *path, int backlog);
   int fd = sp_net_unix_listen(path, 128);
   if (fd < 0) sp_file_raise_errno("bind", path ? path : "");
   sp_File *f = sp_io_fdopen_sock(fd, "unixserver");
   return f;
 }
-sp_File *sp_sock_unix_connect(const char *path) {
+sp_File *sp_sock_unix_connect(const char *path) {SP_GC_ROOT_STR(path);
   extern int sp_net_unix_connect(const char *path);
   int fd = sp_net_unix_connect(path);
   if (fd < 0) sp_file_raise_errno("connect", path ? path : "");
@@ -430,21 +430,21 @@ static void sp_sock_require(sp_File *f, const char *m) {SP_GC_ROOT(f);SP_GC_ROOT
                  sp_sprintf("undefined method '%s' for an instance of %s", m, sp_io_kind_name(f)));
   if (!f->fp) sp_raise_cls("IOError", "closed stream");
 }
-mrb_int sp_sock_bind(sp_File *f, const char *host, mrb_int port) {
+mrb_int sp_sock_bind(sp_File *f, const char *host, mrb_int port) {SP_GC_ROOT(f);SP_GC_ROOT_STR(host);
   extern int sp_net_udp_bind(int fd, const char *host, int port);
   sp_sock_require(f, "bind");
   if (sp_net_udp_bind(fileno(f->fp), host, (int)port) != 0)
     sp_file_raise_errno("bind", host ? host : "");
   return 0;
 }
-mrb_int sp_sock_connect(sp_File *f, const char *host, mrb_int port) {
+mrb_int sp_sock_connect(sp_File *f, const char *host, mrb_int port) {SP_GC_ROOT(f);SP_GC_ROOT_STR(host);
   extern int sp_net_udp_connect(int fd, const char *host, int port);
   sp_sock_require(f, "connect");
   if (sp_net_udp_connect(fileno(f->fp), host, (int)port) != 0)
     sp_file_raise_errno("connect", host ? host : "");
   return 0;
 }
-mrb_int sp_sock_send(sp_File *f, const char *data, mrb_int len, const char *host, mrb_int port) {
+mrb_int sp_sock_send(sp_File *f, const char *data, mrb_int len, const char *host, mrb_int port) {SP_GC_ROOT(f);SP_GC_ROOT_STR(data);SP_GC_ROOT_STR(host);
   extern int sp_net_udp_send_to(int fd, const char *data, int len, const char *host, int port);
   sp_sock_require(f, "send");
   int n = sp_net_udp_send_to(fileno(f->fp), data, (int)len, host, (int)port);
@@ -482,20 +482,20 @@ const char *sp_sock_recvfrom(sp_File *f, mrb_int len, const char **ip_out, mrb_i
   *port_out = (mrb_int)port;
   return s;
 }
-mrb_int sp_sock_shutdown(sp_File *f, mrb_int how) {
+mrb_int sp_sock_shutdown(sp_File *f, mrb_int how) {SP_GC_ROOT(f);
   extern int sp_net_shutdown(int fd, int how);
   sp_sock_require(f, "shutdown");
   if (sp_net_shutdown(fileno(f->fp), (int)how) != 0) sp_file_raise_errno("shutdown", "");
   return 0;
 }
-mrb_int sp_sock_setsockopt(sp_File *f, mrb_int level, mrb_int opt, mrb_int value) {
+mrb_int sp_sock_setsockopt(sp_File *f, mrb_int level, mrb_int opt, mrb_int value) {SP_GC_ROOT(f);
   extern int sp_net_setsockopt_int(int fd, int level, int optname, int value);
   sp_sock_require(f, "setsockopt");
   if (sp_net_setsockopt_int(fileno(f->fp), (int)level, (int)opt, (int)value) != 0)
     sp_file_raise_errno("setsockopt", "");
   return 0;
 }
-sp_SockOpt *sp_sock_getsockopt(sp_File *f, mrb_int level, mrb_int opt) {
+sp_SockOpt *sp_sock_getsockopt(sp_File *f, mrb_int level, mrb_int opt) {SP_GC_ROOT(f);
   extern int sp_net_getsockopt_int(int fd, int level, int optname);
   extern sp_SockOpt *sp_sockopt_new(mrb_int family, mrb_int level, mrb_int optname, mrb_int value);
   extern int sp_net_fd_family(int fd);
@@ -503,7 +503,7 @@ sp_SockOpt *sp_sock_getsockopt(sp_File *f, mrb_int level, mrb_int opt) {
   int v = sp_net_getsockopt_int(fileno(f->fp), (int)level, (int)opt);
   return sp_sockopt_new((mrb_int)sp_net_fd_family(fileno(f->fp)), level, opt, (mrb_int)v);
 }
-mrb_int sp_sock_listen(sp_File *f, mrb_int backlog) {
+mrb_int sp_sock_listen(sp_File *f, mrb_int backlog) {SP_GC_ROOT(f);
   sp_sock_require(f, "listen");
   if (listen(fileno(f->fp), (int)backlog) != 0) sp_file_raise_errno("listen", "");
   return 0;
@@ -552,7 +552,7 @@ static int sp_sock_would_block(void) {
   return errno == EAGAIN || errno == EWOULDBLOCK;
 }
 /* accept_nonblock -> the new handle, or nil / the :wait_readable marker. */
-sp_File *sp_sock_accept_nb(sp_File *f, mrb_bool exc) {
+sp_File *sp_sock_accept_nb(sp_File *f, mrb_bool exc) {SP_GC_ROOT(f);
   extern int sp_net_accept_nb(int sfd);
   sp_sock_nb_prepare(f, "accept_nonblock");
   int saved = sp_io_nb_begin(f);
@@ -640,7 +640,7 @@ const char *sp_sock_read_nb(sp_File *f, mrb_int len, mrb_bool exc, mrb_bool is_r
    is emitted only for a String value; this one stays strlen for bare
    literals (a poly operand reaches it through sp_poly_to_s, which answers
    static class/symbol names with no marker byte). */
-static mrb_int sp_sock_write_nb_len(sp_File *f, const char *data, size_t len, mrb_bool exc) {
+static mrb_int sp_sock_write_nb_len(sp_File *f, const char *data, size_t len, mrb_bool exc) {SP_GC_ROOT(f);SP_GC_ROOT_STR(data);
   ssize_t n;
   int saved = sp_io_nb_begin(f);
   do { n = write(fileno(f->fp), data ? data : "", len); } while (n < 0 && errno == EINTR);
@@ -654,16 +654,16 @@ static mrb_int sp_sock_write_nb_len(sp_File *f, const char *data, size_t len, mr
   }
   sp_file_raise_errno("write", "");
 }
-mrb_int sp_sock_write_nb(sp_File *f, const char *data, mrb_bool exc) {
+mrb_int sp_sock_write_nb(sp_File *f, const char *data, mrb_bool exc) {SP_GC_ROOT(f);SP_GC_ROOT_STR(data);
   if (!f || !f->fp) sp_raise_cls("IOError", "closed stream");
   return sp_sock_write_nb_len(f, data, data ? strlen(data) : 0, exc);
 }
-mrb_int sp_sock_write_nb_bin(sp_File *f, const char *data, mrb_bool exc) {
+mrb_int sp_sock_write_nb_bin(sp_File *f, const char *data, mrb_bool exc) {SP_GC_ROOT(f);SP_GC_ROOT_STR(data);
   if (!f || !f->fp) sp_raise_cls("IOError", "closed stream");
   return sp_sock_write_nb_len(f, data, data ? sp_str_byte_len(data) : 0, exc);
 }
 /* connect_nonblock: an in-flight connect is IO::EINPROGRESSWaitWritable. */
-mrb_int sp_sock_connect_nb(sp_File *f, const char *host, mrb_int port, mrb_bool exc) {
+mrb_int sp_sock_connect_nb(sp_File *f, const char *host, mrb_int port, mrb_bool exc) {SP_GC_ROOT(f);SP_GC_ROOT_STR(host);
   extern int sp_net_udp_connect(int fd, const char *host, int port);
   sp_sock_nb_prepare(f, "connect_nonblock");
   int saved = sp_io_nb_begin(f);
@@ -706,7 +706,7 @@ const char *sp_File_inspect(sp_File *f) {SP_GC_ROOT(f);
   return sp_sprintf("#<%s:%s>", cls, p);
 }
 
-void sp_File_puts(sp_File *f, const char *s) {
+void sp_File_puts(sp_File *f, const char *s) {SP_GC_ROOT(f);SP_GC_ROOT_STR(s);
   if (!f || !f->fp || !s) return;
   size_t n = strlen(s);
   if (f->is_sock) {
@@ -718,7 +718,7 @@ void sp_File_puts(sp_File *f, const char *s) {
   if (n == 0 || s[n - 1] != '\n') fputc('\n', f->fp);
 }
 
-void sp_File_print(sp_File *f, const char *s) {
+void sp_File_print(sp_File *f, const char *s) {SP_GC_ROOT(f);SP_GC_ROOT_STR(s);
   if (!f || !f->fp || !s) return;
   if (f->is_sock) { sp_sock_write(f, s, strlen(s)); return; }
   fputs(s, f->fp);
@@ -841,11 +841,11 @@ mrb_int sp_file_world_writable(const char *path) {
   if (!(path && stat(path, &st) == 0 && (st.st_mode & S_IWOTH))) return SP_INT_NIL;
   return (mrb_int)(st.st_mode & 0777);
 }
-mrb_int sp_file_do_symlink(const char *oldp, const char *newp) {
+mrb_int sp_file_do_symlink(const char *oldp, const char *newp) {SP_GC_ROOT_STR(newp);
   if (symlink(oldp, newp) != 0) sp_file_raise_errno("symlink", newp);
   return 0;
 }
-mrb_int sp_file_do_link(const char *oldp, const char *newp) {
+mrb_int sp_file_do_link(const char *oldp, const char *newp) {SP_GC_ROOT_STR(newp);
   if (link(oldp, newp) != 0) sp_file_raise_errno("link", newp);
   return 0;
 }
@@ -855,11 +855,11 @@ mrb_int sp_file_umask(mrb_int mask, int have_arg) {
   umask(cur);
   return (mrb_int)cur;
 }
-mrb_int sp_file_mkfifo(const char *path, mrb_int mode) {
+mrb_int sp_file_mkfifo(const char *path, mrb_int mode) {SP_GC_ROOT_STR(path);
   if (mkfifo(path, (mode_t)mode) != 0) sp_file_raise_errno("mkfifo", path);
   return 0;
 }
-mrb_int sp_file_utime(double atime, double mtime, const char *path) {
+mrb_int sp_file_utime(double atime, double mtime, const char *path) {SP_GC_ROOT_STR(path);
   struct timeval tv[2];
   tv[0].tv_sec = (time_t)atime; tv[0].tv_usec = (long)((atime - (double)(time_t)atime) * 1e6);
   tv[1].tv_sec = (time_t)mtime; tv[1].tv_usec = (long)((mtime - (double)(time_t)mtime) * 1e6);
@@ -893,7 +893,7 @@ mrb_bool sp_File_binmode_p(sp_File *f) {
 }
 void sp_File_set_binmode(sp_File *f) { if (f) f->bin_flag = 1; }
 /* IO#reopen(io): rebind this handle's descriptor onto the other stream. */
-sp_File *sp_File_reopen_io(sp_File *f, sp_File *other) { sp_gc_wb((void*)f);
+sp_File *sp_File_reopen_io(sp_File *f, sp_File *other) {SP_GC_ROOT(f);SP_GC_ROOT(other); sp_gc_wb((void*)f);
   if (!f || !f->fp || !other || !other->fp) return f;
   fflush(f->fp);
   fflush(other->fp);
@@ -919,7 +919,7 @@ void sp_File_set_close_on_exec(sp_File *f, mrb_bool on) {
   fcntl(fd, F_SETFD, on ? (fl | FD_CLOEXEC) : (fl & ~FD_CLOEXEC));
 }
 /* IO#fcntl(cmd, arg=0): the raw descriptor command. */
-mrb_int sp_File_fcntl(sp_File *f, mrb_int cmd, mrb_int arg) {
+mrb_int sp_File_fcntl(sp_File *f, mrb_int cmd, mrb_int arg) {SP_GC_ROOT(f);
   int fd = (f && f->fp) ? fileno(f->fp) : -1;
   if (fd < 0) sp_raise_cls("IOError", "closed stream");
   int r = fcntl(fd, (int)cmd, (long)arg);
@@ -927,7 +927,7 @@ mrb_int sp_File_fcntl(sp_File *f, mrb_int cmd, mrb_int arg) {
   return (mrb_int)r;
 }
 /* IO#pwrite(str, offset): write without moving the file position. */
-mrb_int sp_File_pwrite(sp_File *f, const char *s, mrb_int off) {
+mrb_int sp_File_pwrite(sp_File *f, const char *s, mrb_int off) {SP_GC_ROOT(f);SP_GC_ROOT_STR(s);
   int fd = (f && f->fp) ? fileno(f->fp) : -1;
   if (fd < 0) sp_raise_cls("IOError", "closed stream");
   size_t n = s ? strlen(s) : 0;
@@ -956,7 +956,7 @@ void sp_File_advise(sp_File *f, const char *kind, mrb_int off, mrb_int len) {
 /* IO#close_read / #close_write. A plain file is not duplex, so half-closing
    the side it does not have raises; half-closing the side it IS just closes
    the handle, which is what CRuby does. */
-void sp_File_close_half(sp_File *f, mrb_bool reading) {
+void sp_File_close_half(sp_File *f, mrb_bool reading) {SP_GC_ROOT(f);
   const char *m = (f && f->mode) ? f->mode : "r";
   mrb_bool writable = strchr(m, 'w') || strchr(m, 'a') || strchr(m, '+');
   mrb_bool readable = strchr(m, 'r') || strchr(m, '+');
@@ -969,7 +969,7 @@ void sp_File_close_half(sp_File *f, mrb_bool reading) {
   if (f && f->fp) { fclose(f->fp); f->fp = NULL; }
 }
 /* IO#reopen(path, mode): rebind the handle to another file. */
-sp_File *sp_File_reopen(sp_File *f, const char *path, const char *mode) { sp_gc_wb((void*)f);
+sp_File *sp_File_reopen(sp_File *f, const char *path, const char *mode) {SP_GC_ROOT(f);SP_GC_ROOT_STR(path);SP_GC_ROOT_STR(mode); sp_gc_wb((void*)f);
   if (!f) return f;
   FILE *nf = freopen(path ? path : "", mode && mode[0] ? mode : "r", f->fp);
   if (!nf) sp_file_raise_errno("reopen", path ? path : "");

@@ -378,7 +378,7 @@ static void pk_str_bytes_directive(char spec, int64_t count, const char *s, size
 
 /* ---------- Pack entry points ---------- */
 
-const char *sp_IntArray_pack(sp_IntArray *arr, const char *fmt) {
+const char *sp_IntArray_pack(sp_IntArray *arr, const char *fmt) {SP_GC_ROOT(arr);
   if (!arr || !fmt) return sp_str_empty;
   size_t cap = 64;
   char *buf = (char *)malloc(cap);
@@ -570,7 +570,7 @@ const char *sp_FloatArray_pack(sp_FloatArray *arr, const char *fmt) {
   return r;
 }
 
-const char *sp_PolyArray_pack(sp_PolyArray *arr, const char *fmt) {
+const char *sp_PolyArray_pack(sp_PolyArray *arr, const char *fmt) {SP_GC_ROOT(arr);
   if (!arr || !fmt) return sp_str_empty;
   size_t cap = 64;
   char *buf = (char *)malloc(cap);
@@ -809,7 +809,7 @@ static char *uk_qp_decode(const char *src, size_t n) {
 }
 
 sp_PolyArray *sp_str_unpack_off(const char *str, const char *fmt, mrb_int byteoff);
-sp_PolyArray *sp_str_unpack(const char *str, const char *fmt) { return sp_str_unpack_off(str, fmt, 0); }
+sp_PolyArray *sp_str_unpack(const char *str, const char *fmt) {SP_GC_ROOT_STR(str);SP_GC_ROOT_STR(fmt); return sp_str_unpack_off(str, fmt, 0); }
 
 /* String#unpack(fmt, offset: n): decode starting at byte offset n. A negative
    offset or one past the end raises ArgumentError, matching MRI. */

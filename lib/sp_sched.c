@@ -721,7 +721,7 @@ static void sp_thread_scan(void *p) {
   if (t->tls) sp_gc_mark(t->tls);
 }
 
-sp_thread *sp_Thread_spawn_fiber_at(sp_Fiber *f, sp_RbVal arg, const char *file, mrb_int line) {
+sp_thread *sp_Thread_spawn_fiber_at(sp_Fiber *f, sp_RbVal arg, const char *file, mrb_int line) {SP_GC_ROOT(f);SP_GC_ROOT_STR(file);
   sp_thread *t = sp_Thread_spawn_fiber(f, arg);
   t->birth_file = file;
   t->birth_line = line;
@@ -1361,7 +1361,7 @@ sp_thread *sp_Thread_kill(sp_thread *t) {
   sp_thread_deliver(t, 1, NULL, NULL, NULL);
   return t;
 }
-sp_thread *sp_Thread_raise(sp_thread *t, const char *cls, const char *msg, void *obj) {
+sp_thread *sp_Thread_raise(sp_thread *t, const char *cls, const char *msg, void *obj) {SP_GC_ROOT_STR(cls);SP_GC_ROOT_STR(msg);
   sp_thread_deliver(t, 0, cls, msg, obj);
   return t;
 }

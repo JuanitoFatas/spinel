@@ -73,7 +73,7 @@ mrb_float sp_krand_float(void) {
 /* ---- Random instance methods ---- */
 
 SP_TLS sp_Random sp_random_default;
-uint64_t sp_random_next(sp_Random *r) {
+uint64_t sp_random_next(sp_Random *r) {SP_GC_ROOT(r);
   if (r == &sp_random_default) return sp_krand_next();
   uint64_t hi = sp_pcg32_adv(&r->state);
   return (hi << 32) | sp_pcg32_adv(&r->state);
@@ -136,7 +136,7 @@ mrb_int sp_Random_rand_int(sp_Random *r, mrb_int n) {SP_GC_ROOT(r);
   if (!r) return 0;
   return (mrb_int)(sp_random_next(r) % (uint64_t)n);
 }
-mrb_float sp_Random_rand_float(sp_Random *r) {
+mrb_float sp_Random_rand_float(sp_Random *r) {SP_GC_ROOT(r);
   if (!r) return 0.0;
   return (mrb_float)(sp_random_next(r) >> 11) / (mrb_float)(1ULL << 53);
 }
@@ -169,7 +169,7 @@ const char *sp_Random_bytes(sp_Random *r, mrb_int n) {SP_GC_ROOT(r);
 }
 /* Random#rand(Float range): a Float in [lo, hi) (or [lo, hi] for an inclusive
    range, though the float boundary is effectively open). */
-mrb_float sp_Random_rand_float_range(sp_Random *r, mrb_float lo, mrb_float hi) {
+mrb_float sp_Random_rand_float_range(sp_Random *r, mrb_float lo, mrb_float hi) {SP_GC_ROOT(r);
   if (isnan(lo) || isinf(lo) || isnan(hi) || isinf(hi))
     sp_raise_cls("Errno::EDOM", "Numerical argument out of domain");
   return lo + sp_Random_rand_float(r) * (hi - lo);

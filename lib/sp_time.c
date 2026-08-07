@@ -329,7 +329,7 @@ static long sp_time_offset_sec(sp_Time t) {
    mktime), %P (lowercase am/pm), the %:z/%::z colon offsets, and width/flag
    modifiers (%3S, %6N, %10Y). Walk the format, compute those directly, and
    pad; delegate a bare standard directive to strftime. (#2635, #2636) */
-const char *sp_time_strftime(sp_Time t, const char *fmt) {
+const char *sp_time_strftime(sp_Time t, const char *fmt) {SP_GC_ROOT_STR(fmt);
   /* is_utc is a 3-state kind, not a flag: kind 2 is a fixed offset whose
      civil fields are the UTC ones shifted by utc_off. Reading it as a
      boolean sent kind 2 down the gmtime branch, so every field directive

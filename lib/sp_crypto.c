@@ -181,7 +181,7 @@ static char sp_crypto_sha256_hex_buf[65];
 /* SHA-256(msg) -> 64-char lowercase hex. The `digest` spin package binds
    Digest::SHA256.hexdigest to this. Same static-buffer contract as the
    sibling helpers. */
-const char *sp_crypto_sha256_hex(const char *msg) {
+const char *sp_crypto_sha256_hex(const char *msg) {SP_GC_ROOT_STR(msg);
     uint8_t out[32];
     sp_crypto_sha256((const uint8_t *)msg, sp_str_byte_len(msg), out);
     static const char H[] = "0123456789abcdef";
@@ -201,7 +201,7 @@ const char *sp_crypto_sha256_hex(const char *msg) {
    the hex siblings. */
 static char sp_crypto_sha256_bin_buf[32];
 
-const char *sp_crypto_sha256_bin(const char *msg) {
+const char *sp_crypto_sha256_bin(const char *msg) {SP_GC_ROOT_STR(msg);
     sp_crypto_sha256((const uint8_t *)msg, sp_str_byte_len(msg),
                      (uint8_t *)sp_crypto_sha256_bin_buf);
     sp_ffi_bin_len = 32;
@@ -210,7 +210,7 @@ const char *sp_crypto_sha256_bin(const char *msg) {
 
 static char sp_crypto_sha1_hex_buf[41];
 
-const char *sp_crypto_sha1_hex(const char *msg) {
+const char *sp_crypto_sha1_hex(const char *msg) {SP_GC_ROOT_STR(msg);
     uint8_t out[20];
     sp_crypto_sha1((const uint8_t *)msg, sp_str_byte_len(msg), out);
     static const char H[] = "0123456789abcdef";
@@ -226,7 +226,7 @@ const char *sp_crypto_sha1_hex(const char *msg) {
 /* SHA-1(msg) -> the raw 20 digest bytes; see sp_crypto_sha256_bin. */
 static char sp_crypto_sha1_bin_buf[20];
 
-const char *sp_crypto_sha1_bin(const char *msg) {
+const char *sp_crypto_sha1_bin(const char *msg) {SP_GC_ROOT_STR(msg);
     sp_crypto_sha1((const uint8_t *)msg, sp_str_byte_len(msg),
                    (uint8_t *)sp_crypto_sha1_bin_buf);
     sp_ffi_bin_len = 20;
@@ -354,7 +354,7 @@ else {
 
 static char sp_crypto_hmac_hex_buf[65];
 
-const char *sp_crypto_hmac_sha256_hex(const char *key, const char *msg) {
+const char *sp_crypto_hmac_sha256_hex(const char *key, const char *msg) {SP_GC_ROOT_STR(key);SP_GC_ROOT_STR(msg);
     uint8_t out[32];
     sp_crypto_hmac_sha256((const uint8_t *)key, sp_str_byte_len(key),
                           (const uint8_t *)msg, sp_str_byte_len(msg),
@@ -376,7 +376,7 @@ static const char SPC_B64U[64] =
 
 static char sp_crypto_hmac_b64url_buf[44];
 
-const char *sp_crypto_hmac_sha256_b64url(const char *key, const char *msg) {
+const char *sp_crypto_hmac_sha256_b64url(const char *key, const char *msg) {SP_GC_ROOT_STR(key);SP_GC_ROOT_STR(msg);
     uint8_t out[32];
     sp_crypto_hmac_sha256((const uint8_t *)key, sp_str_byte_len(key),
                           (const uint8_t *)msg, sp_str_byte_len(msg),
@@ -452,7 +452,7 @@ static int sp_crypto_b64u_val(char c) {
     return -1;
 }
 
-const char *sp_crypto_b64url_decode(const char *src) {
+const char *sp_crypto_b64url_decode(const char *src) {SP_GC_ROOT_STR(src);
     size_t n = strlen(src);
     while (n > 0 && src[n - 1] == '=') n--;  /* tolerate padded input */
     size_t i = 0, j = 0;
@@ -501,7 +501,7 @@ else if (rem == 3) {
 
 static char sp_crypto_pbkdf2_b64url_buf[44];
 
-const char *sp_crypto_pbkdf2_sha256_b64url(const char *password, const char *salt, int iters) {
+const char *sp_crypto_pbkdf2_sha256_b64url(const char *password, const char *salt, int iters) {SP_GC_ROOT_STR(password);
     if (iters < 1) iters = 1;
     size_t plen = sp_str_byte_len(password);
     size_t slen = sp_str_byte_len(salt);

@@ -12,7 +12,7 @@
    and NaN values become the Ruby names Infinity/NaN (not C's inf/nan), a
    Float-classed component (is_f) renders Ruby-float style ("2.0"), a whole
    Integer-classed value stays integer-looking, else %g. Returns the length. */
-static int sp_complex_mag(char *out, size_t sz, mrb_float v, int is_f) {
+static int sp_complex_mag(char *out, size_t sz, mrb_float v, int is_f) {SP_GC_ROOT_STR(out);
   if (isinf(v)) return snprintf(out, sz, "Infinity");
   if (isnan(v)) return snprintf(out, sz, "NaN");
   if (is_f) return snprintf(out, sz, "%s", sp_float_to_s(v));
@@ -25,7 +25,7 @@ static int sp_complex_mag(char *out, size_t sz, mrb_float v, int is_f) {
 /* Append the imaginary part ("+<mag>i" / "-<mag>i") to buf. MRI inserts a `*`
    before a non-numeric magnitude (Infinity/NaN) so `Infinity*i` stays readable,
    while a plain number is written as `10i`. */
-static int sp_complex_imag(char *buf, int n, size_t sz, mrb_float im, int is_f) {
+static int sp_complex_imag(char *buf, int n, size_t sz, mrb_float im, int is_f) {SP_GC_ROOT_STR(buf);
   if (n < 0 || (size_t)n >= sz) return 0;
   char mag[64];
   sp_complex_mag(mag, sizeof mag, im < 0 ? -im : im, is_f);
@@ -107,8 +107,8 @@ static const char *sp_Time_fmt(sp_Time *t, int frac) {SP_GC_ROOT(t);
   return buf;
 }
 /* Time#inspect renders fractional seconds; Time#to_s does not. */
-const char *sp_Time_inspect(sp_Time *t) { return sp_Time_fmt(t, 1); }
-const char *sp_Time_to_s(sp_Time *t)    { return sp_Time_fmt(t, 0); }
+const char *sp_Time_inspect(sp_Time *t) {SP_GC_ROOT(t); return sp_Time_fmt(t, 1); }
+const char *sp_Time_to_s(sp_Time *t)    {SP_GC_ROOT(t); return sp_Time_fmt(t, 0); }
 
 /* ---- Complex arithmetic ---- */
 /* Component-class (fl) propagation mirrors CRuby's numeric tower: add/sub act
@@ -207,7 +207,7 @@ sp_Rational sp_rational_new(mrb_int n, mrb_int d) {
 }
 /* String#to_r: parse a leading numeric of the form [ws][sign]digits[.digits][/digits],
    stopping at the first non-numeric byte; an unparseable string is 0/1 (MRI). */
-sp_Rational sp_str_to_r(const char *s) {
+sp_Rational sp_str_to_r(const char *s) {SP_GC_ROOT_STR(s);
   if (!s) return sp_rational_new(0, 1);
   const char *p = s;
   while (*p == ' ' || *p == '\t' || *p == '\n' || *p == '\r' || *p == '\f' || *p == '\v') p++;
