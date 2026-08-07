@@ -17,7 +17,7 @@
 
 /* Off-GC-heap growable buffer; finalized into a GC string at the end. */
 typedef struct { char *p; size_t len, cap; } jbuf;
-static void jb_add(jbuf *b, const char *s, size_t n) {
+static void jb_add(jbuf *b, const char *s, size_t n) {SP_GC_ROOT_STR(s);
   if (b->len + n + 1 > b->cap) {
     b->cap = (b->len + n + 1) * 2;
     b->p = (char *)realloc(b->p, b->cap);
@@ -340,6 +340,13 @@ static sp_RbVal jp_value(jrd *j, int depth) {
 }
 
 sp_RbVal sp_json_parse(const char *s) {
+  /* The reader walks `s` in place while the parse allocates every container
+     and string it builds, so the input has to stay rooted for the whole walk:
+     a caller passing it straight in (`JSON.parse File.read path`) holds it in
+     nothing but the C argument slot, and the first collection under it leaves
+     the cursor reading freed memory -- a parse error whose message varies by
+     run on a small document, a segfault on a large one. */
+  SP_GC_ROOT_STR(s);
   jrd j;
   j.p = s ? s : "";
   j.end = j.p + (s ? sp_str_byte_len(s) : 0);

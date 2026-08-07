@@ -24,6 +24,17 @@
  *
  *   Errors:
  *     sp_raise_cls   (raise a named exception class)
+ *
+ *   GC roots (sp_gc.h):
+ *     SP_GC_ROOT, SP_GC_ROOT_STR, SP_GC_ROOT_RBVAL
+ *     A package function that allocates has to root whatever it was handed
+ *     first. The collector finds a value only through a root, and a caller
+ *     passing an expression straight in (`JSON.parse File.read path`) holds it
+ *     in nothing but the C argument slot -- so the package's own first
+ *     allocation collects it. Rooting inside the callee is early enough
+ *     BECAUSE the argument was still live on entry; a package that instead
+ *     keeps a borrowed pointer past its return (a scanner over its source)
+ *     also needs a scan hook that marks it.
  */
 #ifndef SPINEL_RUNTIME_H
 #define SPINEL_RUNTIME_H

@@ -16,7 +16,7 @@ static const char B64_URL[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvw
 
 /* encode `n` bytes of `src` with `alpha`; a positive `wrap` inserts a newline
    every `wrap` output chars and after the tail (CRuby encode64 wraps at 60). */
-static const char *b64_enc(const char *src, size_t n, const char *alpha, int wrap) {
+static const char *b64_enc(const char *src, size_t n, const char *alpha, int wrap) {SP_GC_ROOT_STR(src);SP_GC_ROOT_STR(alpha);
   size_t groups = (n + 2) / 3;
   size_t outlen = groups * 4;
   size_t nl = wrap > 0 ? (outlen + (size_t)wrap - 1) / (size_t)wrap : 0;
@@ -54,7 +54,7 @@ static int b64_val(char c, const char *alpha) {
   return -1;
 }
 
-static const char *b64_dec(const char *src, size_t n, const char *alpha) {
+static const char *b64_dec(const char *src, size_t n, const char *alpha) {SP_GC_ROOT_STR(src);SP_GC_ROOT_STR(alpha);
   char *r = sp_str_alloc_raw(n / 4 * 3 + 4);
   size_t o = 0;
   unsigned acc = 0;
@@ -78,7 +78,7 @@ static const char *b64_dec(const char *src, size_t n, const char *alpha) {
    of 4, every byte must be an alphabet char or valid trailing `=` padding, and
    any stray byte (whitespace, newline, out-of-alphabet) raises ArgumentError --
    unlike b64_dec, which silently skips them. */
-static const char *b64_dec_strict(const char *src, size_t n, const char *alpha) {
+static const char *b64_dec_strict(const char *src, size_t n, const char *alpha) {SP_GC_ROOT_STR(src);SP_GC_ROOT_STR(alpha);
   if (n % 4 != 0) sp_raise_cls("ArgumentError", "invalid base64");
   char *r = sp_str_alloc_raw(n / 4 * 3 + 4);
   size_t o = 0;

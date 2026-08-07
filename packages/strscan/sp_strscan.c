@@ -58,7 +58,7 @@ static void sp_StringScanner_scan_gc(void *p) {
   if (sc->matched) sp_mark_string(sc->matched);
 }
 
-sp_StringScanner *sp_StringScanner_new(mrb_int cls_id, const char *str) {
+sp_StringScanner *sp_StringScanner_new(mrb_int cls_id, const char *str) {SP_GC_ROOT_STR(str);
   sp_StringScanner *sc = (sp_StringScanner *)sp_gc_alloc(sizeof(sp_StringScanner), NULL, sp_StringScanner_scan_gc);
   sc->cls_id = cls_id;
   sc->source = str ? str : sp_str_empty;
@@ -73,7 +73,7 @@ sp_StringScanner *sp_StringScanner_new(mrb_int cls_id, const char *str) {
 
 /* StringScanner#dup / #clone: an independent scanner sharing the source
    string (CRuby shares the string too; scan state is copied). */
-sp_StringScanner *sp_StringScanner_dup(sp_StringScanner *sc) {
+sp_StringScanner *sp_StringScanner_dup(sp_StringScanner *sc) {SP_GC_ROOT(sc);
   sp_StringScanner *d = (sp_StringScanner *)sp_gc_alloc(sizeof(sp_StringScanner), NULL, sp_StringScanner_scan_gc);
   *d = *sc;
   return d;
@@ -116,7 +116,7 @@ static int64_t sc_match_forward(const mrb_regexp_pattern *pat, const char *str, 
   return caps[0];
 }
 
-static char *sc_substr(const char *src, int64_t start, int64_t len) {
+static char *sc_substr(const char *src, int64_t start, int64_t len) {SP_GC_ROOT_STR(src);
   char *out = sp_str_alloc((size_t)len);
   memcpy(out, src + start, (size_t)len);
   out[len] = 0;
@@ -330,7 +330,7 @@ mrb_int sp_StringScanner_pos(sp_StringScanner *sc) {
   return (mrb_int)sc->pos;
 }
 
-mrb_int sp_StringScanner_pos_set(sp_StringScanner *sc, mrb_int p) {
+mrb_int sp_StringScanner_pos_set(sp_StringScanner *sc, mrb_int p) {SP_GC_ROOT(sc);
   if (!sc) return 0;
   /* CRuby: a negative position counts from the end; anything out of the
      [0, bytesize] range raises RangeError (never index out of the buffer). */
@@ -375,7 +375,7 @@ const char *sp_StringScanner_peek(sp_StringScanner *sc, mrb_int n) {
   return sc_substr(sc->source, sc->pos, take);
 }
 
-sp_StringScanner *sp_StringScanner_unscan(sp_StringScanner *sc) {
+sp_StringScanner *sp_StringScanner_unscan(sp_StringScanner *sc) {SP_GC_ROOT(sc);
   if (!sc) return sc;
   /* CRuby raises StringScanner::Error when there is no match record to
      rewind to: a double unscan, or unscan before any successful scan.
