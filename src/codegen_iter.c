@@ -1515,7 +1515,7 @@ int emit_tap_then_expr(Compiler *c, int id, Buf *b) {
   else if (et_nil) emit_boxed(c, recv, &rb); else emit_expr(c, recv, &rb);
   emit_indent(g_pre, g_indent); emit_ctype(c, et, g_pre);
   buf_printf(g_pre, " _t%d = %s;\n", tr, rb.p ? rb.p : ""); free(rb.p);
-  if (needs_root(et)) { emit_indent(g_pre, g_indent); buf_printf(g_pre, "SP_GC_ROOT(_t%d);\n", tr); }
+  if (needs_root(et)) { emit_indent(g_pre, g_indent); emit_gc_root_tmp(c, et, tr, g_pre); buf_puts(g_pre, "\n"); }
 
   /* a then result temp is declared outside the (optional) shadow block so the
      block value escapes it. */
@@ -1525,7 +1525,7 @@ int emit_tap_then_expr(Compiler *c, int id, Buf *b) {
     tres = ++g_tmp;
     emit_indent(g_pre, g_indent); emit_ctype(c, rett, g_pre);
     buf_printf(g_pre, " _t%d = %s;\n", tres, default_value(rett));
-    if (needs_root(rett)) { emit_indent(g_pre, g_indent); buf_printf(g_pre, "SP_GC_ROOT(_t%d);\n", tres); }
+    if (needs_root(rett)) { emit_indent(g_pre, g_indent); emit_gc_root_tmp(c, rett, tres, g_pre); buf_puts(g_pre, "\n"); }
   }
 
   /* pin the block param to the receiver type if inference widened it */

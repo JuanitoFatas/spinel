@@ -7655,7 +7655,7 @@ void emit_brk_wrapped_call(Compiler *c, int id, Buf *b) {
     emit_ctype(c, normal_ty, g_pre);
     buf_printf(g_pre, " _t%d = %s;", spill, rb.p ? rb.p : "0");
     free(rb.p);
-    if (needs_root(normal_ty)) buf_printf(g_pre, " SP_GC_ROOT(_t%d);", spill);
+    if (needs_root(normal_ty)) { buf_puts(g_pre, " "); emit_gc_root_tmp(c, normal_ty, spill, g_pre); }
     buf_puts(g_pre, "\n");
     g_argov_node[g_n_argov] = wrecv;
     snprintf(g_argov_text[g_n_argov], sizeof g_argov_text[0], "_t%d", spill);

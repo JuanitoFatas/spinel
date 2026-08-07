@@ -692,7 +692,7 @@ void emit_expr(Compiler *c, int id, Buf *b) {
     emit_indent(g_pre, g_indent);
     emit_ctype(c, rt, g_pre);
     buf_printf(g_pre, " _t%d = %s;\n", cr, rt == TY_RANGE ? "(sp_Range){0}" : default_value(rt));
-    if (needs_root(rt)) { emit_indent(g_pre, g_indent); buf_printf(g_pre, "SP_GC_ROOT(_t%d);\n", cr); }
+    if (needs_root(rt)) { emit_indent(g_pre, g_indent); emit_gc_root_tmp(c, rt, cr, g_pre); buf_puts(g_pre, "\n"); }
     emit_case_match(c, id, g_pre, g_indent, 0, cr);
     buf_printf(b, "_t%d", cr);
     return;
@@ -711,7 +711,7 @@ void emit_expr(Compiler *c, int id, Buf *b) {
     emit_indent(g_pre, g_indent); emit_ctype(c, vt, g_pre);
     buf_printf(g_pre, " _t%d = %s;\n", tv, vb.p ? vb.p : default_value(vt));
     free(vb.p);
-    if (needs_root(vt)) { emit_indent(g_pre, g_indent); buf_printf(g_pre, "SP_GC_ROOT(_t%d);\n", tv); }
+    if (needs_root(vt)) { emit_indent(g_pre, g_indent); emit_gc_root_tmp(c, vt, tv, g_pre); buf_puts(g_pre, "\n"); }
     Buf cb; memset(&cb, 0, sizeof cb);
     if (!emit_pm_cond(c, pattern, tv, vt, &cb)) {
       free(cb.p);

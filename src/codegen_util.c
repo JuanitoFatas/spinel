@@ -1632,3 +1632,17 @@ void emit_frozen_obj_guard(Compiler *c, int cid, const char *selfexpr, Buf *b) {
       "sp_raise_frozen_obj(sp_box_obj((void *)%s, %d), (&(\"\\xff\" \"can't modify frozen %s\")[1])); ",
       selfexpr, selfexpr, cid, rn);
 }
+
+/* Root a temp whose C type came from a TyKind. A boxed-poly temp is an
+   sp_RbVal, whose first word is a tag rather than a pointer, so it has to be
+   rooted through the rbval macro -- rooting it as a raw pointer hands the mark
+   walker a small integer and segfaults under GC pressure. Sites that emit a
+   temp from a type the inference chose keep getting this wrong one at a time,
+   so they go through here. */
+void emit_gc_root_tmp(Compiler *c, TyKind t, int tmp, Buf *b) {
+  if (!needs_root(t)) return;
+  /* A value-type object lives in the temp itself, not behind it: rooting one
+     hands the mark walker the struct's first field. */
+  if (comp_ty_value_obj(c, t)) return;
+  buf_printf(b, t == TY_POLY ? "SP_GC_ROOT_RBVAL(_t%d);" : "SP_GC_ROOT(_t%d);", tmp);
+}

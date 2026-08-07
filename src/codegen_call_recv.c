@@ -2466,7 +2466,10 @@ else {
         buf_printf(b, " sp_PtrArray *_t%d = %s(_t%d, ", tc, combfn, ta);
         if (argc == 1) emit_expr(c, argv[0], b);
         else buf_printf(b, "_t%d ? _t%d->len : 0", ta, ta);   /* argless permutation: full length */
-        buf_printf(b, "); sp_PolyArray *_t%d = sp_PolyArray_new(); SP_GC_ROOT(_t%d);", tout, tout);
+        /* the combinations are only in this temp until the loop below boxes
+           them, and the array it boxes them into allocates first */
+        buf_printf(b, "); SP_GC_ROOT(_t%d);", tc);
+        buf_printf(b, " sp_PolyArray *_t%d = sp_PolyArray_new(); SP_GC_ROOT(_t%d);", tout, tout);
         buf_printf(b, " for (mrb_int _t%d = 0; _t%d < _t%d->len; _t%d++)", ti, ti, tc, ti);
         buf_printf(b, " sp_PolyArray_push(_t%d, sp_box_int_array(_t%d->data[_t%d]));", tout, tc, ti);
         buf_printf(b, " _t%d; })", tout);

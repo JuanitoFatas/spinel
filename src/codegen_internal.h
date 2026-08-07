@@ -736,6 +736,8 @@ void emit_stmt_tail_inner(Compiler *c, int id, Buf *b, int indent);
 void emit_stmts(Compiler *c, int id, Buf *b, int indent);
 void emit_stmts_tail(Compiler *c, int id, Buf *b, int indent);
 int needs_root(TyKind t);
+/* Root a temp of an inferred type, picking the rbval macro for boxed poly. */
+void emit_gc_root_tmp(Compiler *c, TyKind t, int tmp, Buf *b);
 const char *hash_box_cls(TyKind t);
 void emit_boxed_text(Compiler *c, TyKind t, const char *expr, Buf *b);
 void emit_unbox_text(Compiler *c, TyKind t, const char *expr, Buf *b);

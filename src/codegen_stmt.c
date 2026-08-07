@@ -2606,11 +2606,9 @@ void emit_case_match(Compiler *c, int id, Buf *b, int indent, int tail, int valu
   free(sb.p);
   buf_puts(b, ";\n");
   if (needs_root(pt)) {
-    /* A boxed-poly (sp_RbVal) scrutinee must be rooted as an rbval so the GC
-       marks its tagged value, not its bits as a raw pointer (SEGV under GC
-       pressure). Mirrors the lv rooting in codegen_call.c. */
     emit_indent(b, indent);
-    buf_printf(b, pt == TY_POLY ? "SP_GC_ROOT_RBVAL(_t%d);\n" : "SP_GC_ROOT(_t%d);\n", t);
+    emit_gc_root_tmp(c, pt, t, b);
+    buf_puts(b, "\n");
   }
 
   for (int w = 0; w < cn; w++) {
@@ -2672,7 +2670,7 @@ void emit_case_match(Compiler *c, int id, Buf *b, int indent, int tail, int valu
         emit_indent(b, indent + 1); emit_ctype(c, drt, b);
         if (isv) buf_printf(b, " _t%d = sp_%s_deconstruct(_t%d);\n", arm_t, dcn, t);
         else     buf_printf(b, " _t%d = sp_%s_deconstruct((sp_%s *)_t%d);\n", arm_t, dcn, dcn, t);
-        if (needs_root(drt)) { emit_indent(b, indent + 1); buf_printf(b, "SP_GC_ROOT(_t%d);\n", arm_t); }
+        if (needs_root(drt)) { emit_indent(b, indent + 1); emit_gc_root_tmp(c, drt, arm_t, b); buf_puts(b, "\n"); }
         arm_pt = drt;
       }
       else if (c->classes[ty_object_class(pt)].is_struct) {
@@ -2707,7 +2705,7 @@ void emit_case_match(Compiler *c, int id, Buf *b, int indent, int tail, int valu
         emit_indent(b, indent + 1); emit_ctype(c, drt, b);
         if (isv) buf_printf(b, " _t%d = sp_%s_deconstruct_keys(_t%d, sp_box_nil());\n", arm_t, dcn, t);
         else     buf_printf(b, " _t%d = sp_%s_deconstruct_keys((sp_%s *)_t%d, sp_box_nil());\n", arm_t, dcn, dcn, t);
-        if (needs_root(drt)) { emit_indent(b, indent + 1); buf_printf(b, "SP_GC_ROOT(_t%d);\n", arm_t); }
+        if (needs_root(drt)) { emit_indent(b, indent + 1); emit_gc_root_tmp(c, drt, arm_t, b); buf_puts(b, "\n"); }
         arm_pt = drt;
       }
       else if (c->classes[ty_object_class(pt)].is_struct) {
