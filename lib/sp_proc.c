@@ -21,7 +21,7 @@ mrb_bool sp_proc_lambda_p(sp_Proc *p) { return p ? p->lambda_p : FALSE; }
 /* Proc#inspect: CRuby prints "#<Proc:0xADDR file:line (lambda)>"; the
    source location is not tracked, so the address form (+ lambda marker) is
    the best-effort rendering. */
-const char *sp_proc_inspect(sp_Proc *p) {
+const char *sp_proc_inspect(sp_Proc *p) {SP_GC_ROOT(p);
   if (!p) return SPL("nil");
   return sp_sprintf(p->lambda_p ? "#<Proc:0x%016llx (lambda)>" : "#<Proc:0x%016llx>",
                     (unsigned long long)(uintptr_t)p);

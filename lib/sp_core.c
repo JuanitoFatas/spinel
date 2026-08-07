@@ -38,7 +38,7 @@ const char *sp_sprintf(const char *fmt, ...);
    (returning what it has so far rather than raising). `"1_2_3asdf"`
    -> 123. spinel previously emitted `(mrb_int)atoll(s)` which stops
    at the first `_`, returning 1 instead. Issue #619. */
-mrb_int sp_str_to_i_cruby(const char *s) {
+mrb_int sp_str_to_i_cruby(const char *s) {SP_GC_ROOT_STR(s);
   if (!s) return 0;
   const char *p = s;
   while (isspace((unsigned char)*p)) p++;
@@ -109,7 +109,7 @@ double sp_str_to_f_cruby(const char *s) {
    like MRI; `_` is allowed between digits the same way as base 10.
    Stops at the first invalid digit and returns what's parsed so
    far. Issue #883. */
-mrb_int sp_str_to_i_base(const char *s, mrb_int base) {
+mrb_int sp_str_to_i_base(const char *s, mrb_int base) {SP_GC_ROOT_STR(s);
   if (!s) return 0;
   /* base 0 = auto-detect from prefix (0x -> 16, 0b -> 2, 0/0o -> 8,
      otherwise 10). Per CRuby, only base 0 enables prefix-based
@@ -177,7 +177,7 @@ else if (*p == '0' && p[1] != 0) {
    the main branch. This helper matches CRuby semantics: skips
    leading/trailing whitespace, requires at least one valid digit,
    rejects trailing junk. Accepts an optional leading `+` / `-`. */
-mrb_int sp_str_to_i_strict(const char *s) {
+mrb_int sp_str_to_i_strict(const char *s) {SP_GC_ROOT_STR(s);
   if (!s) sp_raise_cls("ArgumentError", "invalid value for Integer(): nil");
   /* an embedded NUL makes the Ruby string longer than its C prefix: CRuby
      rejects it, a C-string scan would silently parse the prefix. */
@@ -192,7 +192,7 @@ mrb_int sp_str_to_i_strict(const char *s) {
 /* `Integer(s, base)` with explicit base. Bases 2..36, MRI-compatible
    prefix recognition (0x / 0b / 0o when the base matches). Raises
    ArgumentError on invalid input or unsupported base. Issue #887. */
-mrb_int sp_str_to_i_strict_base(const char *s, mrb_int base) {
+mrb_int sp_str_to_i_strict_base(const char *s, mrb_int base) {SP_GC_ROOT_STR(s);
   if (!s) sp_raise_cls("ArgumentError", "invalid value for Integer(): nil");
   /* an embedded NUL makes the Ruby string longer than its C prefix: CRuby
      rejects it, a C-string scan would silently parse the prefix. */
@@ -263,7 +263,7 @@ mrb_int sp_str_to_i_strict_base(const char *s, mrb_int base) {
    on its own would silently return 0.0 for "abc" or empty input;
    match MRI semantics by validating at-least-one-digit + no-trailing-
    junk. Whitespace flanking is fine. Issue #888. */
-mrb_float sp_str_to_f_strict(const char *s) {
+mrb_float sp_str_to_f_strict(const char *s) {SP_GC_ROOT_STR(s);
   if (!s) sp_raise_cls("ArgumentError", "invalid value for Float(): nil");
   /* embedded NUL: the Ruby string extends past its C prefix -- reject rather
      than silently parsing the prefix ("1\\0" is not a float in CRuby). */
@@ -420,7 +420,7 @@ mrb_int sp_int_truncate(mrb_int v,mrb_int nd){if(nd>=0)return v;mrb_int p=-nd;if
    character not valid in the selected base (a leading/doubled underscore ends
    parsing too); an unparseable string is 0. A value past mrb_int raises
    RangeError, like the sibling Integer() parsers. */
-mrb_int sp_str_oct(const char*s){
+mrb_int sp_str_oct(const char*s){SP_GC_ROOT_STR(s);
   if(!s)return 0;
   const char*p=s;
   while(isspace((unsigned char)*p))p++;

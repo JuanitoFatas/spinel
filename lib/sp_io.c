@@ -34,7 +34,7 @@ extern const char *sp_sprintf(const char *fmt, ...);
 static void sp_File_fin(void *p) { sp_File *f = (sp_File *)p; if (f->fp) { fclose(f->fp); f->fp = NULL; } }
 static void sp_File_scan(void *p) { sp_File *f = (sp_File *)p; if (f->path) sp_mark_string(f->path); if (f->mode) sp_mark_string(f->mode); }
 
-sp_File *sp_File_open(const char *path, const char *mode) {
+sp_File *sp_File_open(const char *path, const char *mode) {SP_GC_ROOT_STR(path);SP_GC_ROOT_STR(mode);
   sp_File *f = (sp_File *)sp_gc_alloc(sizeof(sp_File), sp_File_fin, sp_File_scan);
   f->fp = fopen(path ? path : "", mode ? mode : "r");
   if (!f->fp) { sp_raise_cls("Errno::ENOENT", "No such file or directory"); return NULL; }
@@ -55,7 +55,7 @@ int sp_io_make_pipe(int fds[2]) {
 
 /* IO.pipe end: wrap a raw pipe fd in a GC-managed sp_File so the
    sp_File_* I/O ops work on it. Same finalizer/scan as sp_File_open. */
-sp_File *sp_io_fdopen(int fd, const char *mode) {
+sp_File *sp_io_fdopen(int fd, const char *mode) {SP_GC_ROOT_STR(mode);
   sp_File *f = (sp_File *)sp_gc_alloc(sizeof(sp_File), sp_File_fin, sp_File_scan);
   f->fp = fdopen(fd, mode ? mode : "r");
   if (!f->fp) { sp_raise_cls("IOError", "fdopen failed"); return NULL; }
@@ -69,7 +69,7 @@ sp_File *sp_io_fdopen(int fd, const char *mode) {
    friends need lookahead); every write bypasses stdio straight to write(2) --
    see sp_sock_write below -- so a response is on the wire immediately, like
    CRuby sockets' sync = true default. `kind` lands in ->mode for #class. */
-sp_File *sp_io_fdopen_sock(int fd, const char *kind) {
+sp_File *sp_io_fdopen_sock(int fd, const char *kind) {SP_GC_ROOT_STR(kind);
   if (fd < 0) sp_raise_cls("Errno::ECONNREFUSED", "Connection refused");
   /* The scheduler-aware accept/connect helpers may hand us a non-blocking
      fd; the stdio read side must BLOCK (fgets treats EAGAIN as EOF), so
@@ -372,7 +372,7 @@ sp_File *sp_sock_pair_end(mrb_int domain, mrb_int type, mrb_int proto, mrb_int w
 }
 
 /* Socket.getaddrinfo: one row per resolution, in CRuby's 7-element shape. */
-sp_PolyArray *sp_sock_getaddrinfo(const char *host, mrb_int port) {
+sp_PolyArray *sp_sock_getaddrinfo(const char *host, mrb_int port) {SP_GC_ROOT_STR(host);
   extern int sp_net_getaddrinfo_at(const char *host, int port, int socktype, int idx,
                                    int *family, int *stype, int *proto,
                                    char *ipbuf, int ipcap, int *port_out);
@@ -398,7 +398,7 @@ sp_PolyArray *sp_sock_getaddrinfo(const char *host, mrb_int port) {
 }
 
 /* #local_address / #remote_address -> Addrinfo for this end / the peer. */
-sp_Addrinfo *sp_sock_address(sp_File *f, mrb_int peer) {
+sp_Addrinfo *sp_sock_address(sp_File *f, mrb_int peer) {SP_GC_ROOT(f);
   extern sp_Addrinfo *sp_addrinfo_new(const char *ip, mrb_int port, mrb_int stype, mrb_int is_unix);
   extern int sp_net_sock_ip(int fd, int peer, char *ipbuf, int cap);
   extern int sp_net_unix_path(int fd, int peer, char *buf, int cap);
@@ -424,7 +424,7 @@ sp_Addrinfo *sp_sock_address(sp_File *f, mrb_int peer) {
 
 /* Only a socket answers the socket-specific methods; say which class the
    receiver actually is when it does not. */
-static void sp_sock_require(sp_File *f, const char *m) {
+static void sp_sock_require(sp_File *f, const char *m) {SP_GC_ROOT(f);SP_GC_ROOT_STR(m);
   if (!f || !f->is_sock)
     sp_raise_cls("NoMethodError",
                  sp_sprintf("undefined method '%s' for an instance of %s", m, sp_io_kind_name(f)));
@@ -453,7 +453,7 @@ mrb_int sp_sock_send(sp_File *f, const char *data, mrb_int len, const char *host
 }
 /* #recv reads one datagram (or up to `len` stream bytes) as a String;
    #recvfrom pairs it with the sender's address, CRuby's 4-element form. */
-const char *sp_sock_recv(sp_File *f, mrb_int len) {
+const char *sp_sock_recv(sp_File *f, mrb_int len) {SP_GC_ROOT(f);
   extern int sp_net_udp_recv_from(int fd, char *buf, int cap, char *ipbuf, int ipcap, int *port_out);
   sp_sock_require(f, "recv");
   if (len <= 0) return sp_str_from_bytes("", 0);
@@ -466,7 +466,7 @@ const char *sp_sock_recv(sp_File *f, mrb_int len) {
   return s;
 }
 /* Fills the caller's address slots; returns the payload. */
-const char *sp_sock_recvfrom(sp_File *f, mrb_int len, const char **ip_out, mrb_int *port_out) {
+const char *sp_sock_recvfrom(sp_File *f, mrb_int len, const char **ip_out, mrb_int *port_out) {SP_GC_ROOT(f);
   extern int sp_net_udp_recv_from(int fd, char *buf, int cap, char *ipbuf, int ipcap, int *port_out);
   sp_sock_require(f, "recvfrom");
   char ipbuf[64];
@@ -538,13 +538,13 @@ static int sp_io_nb_begin(sp_File *f) {
 static void sp_io_nb_end(sp_File *f, int saved) {
   if (saved >= 0 && !(saved & O_NONBLOCK)) fcntl(fileno(f->fp), F_SETFL, saved);
 }
-static void sp_sock_nb_prepare(sp_File *f, const char *m) {
+static void sp_sock_nb_prepare(sp_File *f, const char *m) {SP_GC_ROOT(f);SP_GC_ROOT_STR(m);
   if (!f || !f->is_sock)
     sp_raise_cls("NoMethodError",
                  sp_sprintf("undefined method '%s' for an instance of %s", m, sp_io_kind_name(f)));
   if (!f->fp) sp_raise_cls("IOError", "closed stream");
 }
-SP_NORETURN static void sp_sock_raise_wait(int writable, const char *op) {
+SP_NORETURN static void sp_sock_raise_wait(int writable, const char *op) {SP_GC_ROOT_STR(op);
   sp_raise_cls(writable ? "IO::EAGAINWaitWritable" : "IO::EAGAINWaitReadable",
                sp_sprintf("Resource temporarily unavailable - %s would block", op));
 }
@@ -583,7 +583,7 @@ sp_File *sp_sock_accept_nb(sp_File *f, mrb_bool exc) {
    is data the peer has sent, and a raw read(2) would step over it, so a #gets
    before a #readpartial would lose bytes. Then a single BLOCKING read -- that
    is the only difference from the nonblocking sibling below. */
-const char *sp_File_readpartial(sp_File *f, mrb_int n) {
+const char *sp_File_readpartial(sp_File *f, mrb_int n) {SP_GC_ROOT(f);
   if (!f || !f->fp || n < 0) sp_raise_cls("EOFError", "end of file reached");
   if (n == 0) return sp_str_from_bytes("", 0);
   char *r = sp_str_alloc((size_t)n);
@@ -603,7 +603,7 @@ const char *sp_File_readpartial(sp_File *f, mrb_int n) {
   return r;
 }
 
-const char *sp_sock_read_nb(sp_File *f, mrb_int len, mrb_bool exc, mrb_bool is_recv) {
+const char *sp_sock_read_nb(sp_File *f, mrb_int len, mrb_bool exc, mrb_bool is_recv) {SP_GC_ROOT(f);
   if (is_recv) sp_sock_nb_prepare(f, "recv_nonblock");
   else if (!f || !f->fp) sp_raise_cls("IOError", "closed stream");
   if (len <= 0) return sp_str_from_bytes("", 0);
@@ -683,7 +683,7 @@ mrb_int sp_sock_connect_nb(sp_File *f, const char *host, mrb_int port, mrb_bool 
 /* TCPServer#accept: park cooperatively for a pending connection first -- a
    blocking accept would stall the whole green-thread scheduler -- then wrap the
    new descriptor. Only a socket handle answers it. */
-sp_File *sp_sock_accept(sp_File *f) {
+sp_File *sp_sock_accept(sp_File *f) {SP_GC_ROOT(f);
   extern int sp_net_accept(int sfd);
   if (!f || !f->is_sock)
     sp_raise_cls("NoMethodError",
@@ -696,7 +696,7 @@ sp_File *sp_sock_accept(sp_File *f) {
 /* `#<File:/etc/passwd>` for a path-backed handle, `#<IO:<STDOUT>>` for a
    standard stream. The path is what tells the two apart, the same way #class
    renders them (a stream's path is bracketed). */
-const char *sp_File_inspect(sp_File *f) {
+const char *sp_File_inspect(sp_File *f) {SP_GC_ROOT(f);
   const char *p = f && f->path ? f->path : "";
   const char *cls = (p[0] && p[0] != '<') ? "File" : "IO";
   if (!f || !f->fp) return p[0] ? sp_sprintf("#<%s:%s (closed)>", cls, p)
@@ -777,7 +777,7 @@ mrb_bool sp_file_symlink(const char *path) {
 }
 
 /* map errno to the matching Errno:: class the way sp_cold.c's File ops do */
-SP_NORETURN static void sp_file_raise_errno(const char *op, const char *path) {
+SP_NORETURN static void sp_file_raise_errno(const char *op, const char *path) {SP_GC_ROOT_STR(op);SP_GC_ROOT_STR(path);
   sp_raise_cls(errno == ENOENT ? "Errno::ENOENT" :
                errno == EACCES ? "Errno::EACCES" :
                errno == EEXIST ? "Errno::EEXIST" :

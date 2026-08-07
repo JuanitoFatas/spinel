@@ -65,7 +65,7 @@ int sp_exc_cls_matches(const char *raised, const char *target) {
 /* Class-gated introspection accessors (#2753-#2756, #2770): each answers only
    on its CRuby-defining class (walking the name-carried hierarchy) and raises
    NoMethodError elsewhere, matching per-class method definitions. */
-SP_COLD void sp_exc_acc_gate(sp_Exception *e, const char *cls, const char *acc) {
+SP_COLD void sp_exc_acc_gate(sp_Exception *e, const char *cls, const char *acc) {SP_GC_ROOT(e);SP_GC_ROOT_STR(acc);
   if (e && sp_exc_cls_matches(e->cls_name, cls)) return;
   sp_raise_cls("NoMethodError",
                sp_sprintf("undefined method '%s' for %s", acc,
@@ -100,7 +100,7 @@ int sp_exc_is_standard_error(const char *raised) {
 }
 /* Create an exception for a `rescue => e` binding: like sp_exc_new but
    also looks up the parent class via the user hierarchy callback. */
-sp_Exception *sp_exc_new_for_catch(const char *cls, const char *msg) {
+sp_Exception *sp_exc_new_for_catch(const char *cls, const char *msg) {SP_GC_ROOT_STR(cls);SP_GC_ROOT_STR(msg);
   sp_Exception *e = sp_exc_new(cls, msg);
   if (sp_user_exc_parent_fn) {
     const char *par = sp_user_exc_parent_fn(cls);
@@ -113,7 +113,7 @@ sp_Exception *sp_exc_new_for_catch(const char *cls, const char *msg) {
    where a user subclass with ivars was raised without a carried object
    (#1415). Its ivar fields stay zero (nil/0). msg is the only heap field, so
    the base scan suffices. */
-void *sp_exc_new_sub_sized(size_t sz, const char *cls_name, const char *msg) {
+void *sp_exc_new_sub_sized(size_t sz, const char *cls_name, const char *msg) {SP_GC_ROOT_STR(cls_name);SP_GC_ROOT_STR(msg);
   sp_Exception *e = (sp_Exception *)sp_gc_alloc(sz, NULL, sp_exc_gc_scan);
   memset(e, 0, sz);
   e->cls_name = cls_name ? cls_name : "RuntimeError";
@@ -138,7 +138,7 @@ void sp_exc_gc_scan(void *p) {
   sp_mark_rbval(e->xrecv);
   /* cls_name/parent_cls_name point into rodata -- not GC-managed strings */
 }
-sp_Exception *sp_exc_new(const char *cls_name, const char *msg) {
+sp_Exception *sp_exc_new(const char *cls_name, const char *msg) {SP_GC_ROOT_STR(cls_name);SP_GC_ROOT_STR(msg);
   sp_Exception *e = (sp_Exception *)sp_gc_alloc(sizeof(sp_Exception), NULL, sp_exc_gc_scan);
   e->cls_name = cls_name ? cls_name : "RuntimeError";
   e->parent_cls_name = NULL;
@@ -174,7 +174,7 @@ mrb_bool sp_exc_eq(sp_Exception *a, sp_Exception *b) {
   if (a->cls_name && strcmp(a->cls_name, "UncaughtThrowError") == 0) return 1;
   return strcmp(a->msg ? a->msg : "", b->msg ? b->msg : "") == 0;
 }
-sp_Exception *sp_exc_new_sub(const char *cls_name, const char *parent_cls, const char *msg) {
+sp_Exception *sp_exc_new_sub(const char *cls_name, const char *parent_cls, const char *msg) {SP_GC_ROOT_STR(cls_name);SP_GC_ROOT_STR(parent_cls);SP_GC_ROOT_STR(msg);
   sp_Exception *e = sp_exc_new(cls_name, msg);   /* empty msg already fell back to cls_name */
   e->parent_cls_name = parent_cls;
   return e;
@@ -193,7 +193,7 @@ sp_Exception *sp_exc_dup(sp_Exception *e) {
 }
 /* Write the staged introspection values (receiver/key/value) into the carried
    exception, creating one when the raise had none (see sp_raise_cls). */
-void *sp_exc_apply_staged(const char *cls, const char *msg, void *obj) {
+void *sp_exc_apply_staged(const char *cls, const char *msg, void *obj) {SP_GC_ROOT_STR(cls);SP_GC_ROOT_STR(msg);
   sp_Exception *e = (sp_Exception *)obj;
   if (!e) e = sp_exc_new(cls, msg);
   /* `obj` is a caller-supplied exception that may have been promoted long ago
@@ -211,7 +211,7 @@ int sp_exc_exit_status(void *obj) {
   return (e && e->result.tag == SP_TAG_INT) ? (int)e->result.v.i : 0;
 }
 /* Exception#exception(msg): a copy of the receiver carrying the new message. */
-sp_Exception *sp_exc_exception(sp_Exception *e, const char *msg) {
+sp_Exception *sp_exc_exception(sp_Exception *e, const char *msg) {SP_GC_ROOT_STR(msg);
   sp_Exception *n = sp_exc_dup(e);
   SP_GC_ROOT(n);
   n->msg = sp_sprintf("%s", (msg && msg[0]) ? msg : (n->cls_name ? n->cls_name : "RuntimeError"));
@@ -312,7 +312,7 @@ const char *sp_exc_parent_of_name(const char *cls) {
 /* NameError#name (NoMethodError inherits it): the carried missing name.
    Any other exception class raises CRuby's NoMethodError -- the receiver
    type is class-erased at compile time, so the check is a runtime one. */
-sp_RbVal sp_exc_name_acc(sp_Exception *e) {
+sp_RbVal sp_exc_name_acc(sp_Exception *e) {SP_GC_ROOT(e);
   if (!e) return sp_box_nil();
   if (sp_exc_cls_matches(e->cls_name, "NameError")) return e->xname;
   sp_raise_cls("NoMethodError",

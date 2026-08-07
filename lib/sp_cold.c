@@ -219,7 +219,7 @@ const char *sp_file_expand_path(const char *path, const char *base) {
 }
 
 /* File.readlink(path): the symlink target as a fresh spinel string (#3005) */
-const char *sp_file_readlink(const char *path) {
+const char *sp_file_readlink(const char *path) {SP_GC_ROOT_STR(path);
   char buf[4096];
   ssize_t n = readlink(path ? path : "", buf, sizeof(buf) - 1);
   if (n < 0) {
@@ -434,7 +434,7 @@ const char *sp_file_join(const char **parts, int n) {
   return r;
 }
 
-sp_StrArray *sp_file_readlines(const char *path) {
+sp_StrArray *sp_file_readlines(const char *path) {SP_GC_ROOT_STR(path);
   sp_StrArray *a = sp_StrArray_new();
   SP_GC_ROOT(a);
   FILE *_fp = fopen(path ? path : "", "r");
@@ -450,7 +450,7 @@ sp_StrArray *sp_file_readlines(const char *path) {
   return a;
 }
 
-sp_StrArray *sp_file_readlines_chomp(const char *path) {
+sp_StrArray *sp_file_readlines_chomp(const char *path) {SP_GC_ROOT_STR(path);
   sp_StrArray *a = sp_StrArray_new();
   SP_GC_ROOT(a);
   FILE *_fp = fopen(path ? path : "", "r");
@@ -542,7 +542,7 @@ const char *sp_slurp_stream(FILE *fp) {
   return r;
 }
 
-const char *sp_file_read(const char *path) {
+const char *sp_file_read(const char *path) {SP_GC_ROOT_STR(path);
   if (sp_file_directory(path)) {
     sp_raise_cls("Errno::EISDIR", sp_sprintf("Is a directory @ io_fread - %s", path));
   }
@@ -557,7 +557,7 @@ const char *sp_file_read(const char *path) {
   return r;
 }
 
-sp_Time sp_file_atime(const char *path) {
+sp_Time sp_file_atime(const char *path) {SP_GC_ROOT_STR(path);
   if (!path) { sp_raise_cls("TypeError", "no implicit conversion of nil into String"); return (sp_Time){0, 0, 0}; }
   struct stat st;
   if (stat(path, &st) == -1) {
@@ -570,7 +570,7 @@ sp_Time sp_file_atime(const char *path) {
   return (sp_Time){(int64_t)st.st_atim.tv_sec, (int32_t)st.st_atim.tv_nsec, 0};
 #endif
 }
-sp_Time sp_file_ctime(const char *path) {
+sp_Time sp_file_ctime(const char *path) {SP_GC_ROOT_STR(path);
   if (!path) { sp_raise_cls("TypeError", "no implicit conversion of nil into String"); return (sp_Time){0, 0, 0}; }
   struct stat st;
   if (stat(path, &st) == -1) {
@@ -583,7 +583,7 @@ sp_Time sp_file_ctime(const char *path) {
   return (sp_Time){(int64_t)st.st_ctim.tv_sec, (int32_t)st.st_ctim.tv_nsec, 0};
 #endif
 }
-sp_Time sp_file_mtime(const char *path) {
+sp_Time sp_file_mtime(const char *path) {SP_GC_ROOT_STR(path);
   if (!path) {
     sp_raise_cls("TypeError", "no implicit conversion of nil into String");
     return (sp_Time){0, 0, 0};
@@ -602,7 +602,7 @@ sp_Time sp_file_mtime(const char *path) {
   return (sp_Time){(int64_t)st.st_mtim.tv_sec, (int32_t)st.st_mtim.tv_nsec, 0};
 #endif
 }
-sp_Time sp_file_birthtime(const char *path) {  /* (#2985) */
+sp_Time sp_file_birthtime(const char *path) {SP_GC_ROOT_STR(path);  /* (#2985) */
   if (!path) { sp_raise_cls("TypeError", "no implicit conversion of nil into String"); return (sp_Time){0, 0, 0}; }
 #if defined(__APPLE__) || defined(__FreeBSD__) || defined(__OpenBSD__) || defined(__NetBSD__) || defined(__DragonFly__)
   struct stat st;
@@ -639,7 +639,7 @@ sp_IntArray *sp_process_groups(void) {  /* (#3046) */
   return a;
 }
 
-mrb_int sp_file_size(const char *path) {
+mrb_int sp_file_size(const char *path) {SP_GC_ROOT_STR(path);
   if (!path) {
     sp_raise_cls("TypeError", "no implicit conversion of nil into String");
     return 0;
@@ -659,7 +659,7 @@ mrb_int sp_file_size(const char *path) {
   return (mrb_int)st.st_size;
 }
 
-sp_IntArray *sp_file_binread_bytes(const char *path) {
+sp_IntArray *sp_file_binread_bytes(const char *path) {SP_GC_ROOT_STR(path);
   if (sp_file_directory(path)) {
     sp_raise_cls("Errno::EISDIR", sp_sprintf("Is a directory @ io_fread - %s", path));
   }
@@ -696,7 +696,7 @@ mrb_int sp_str_sum_bits(const char *s, mrb_int bits) {
   return (bits <= 0 || bits >= 64) ? acc : (acc & ((((mrb_int)1) << bits) - 1));
 }
 
-const char *sp_str_splice_at(const char *s, mrb_int from, mrb_int n, const char *val, int range_form) {
+const char *sp_str_splice_at(const char *s, mrb_int from, mrb_int n, const char *val, int range_form) {SP_GC_ROOT_STR(s);SP_GC_ROOT_STR(val);
   if (!s) s = "";
   if (!val) val = "";
   mrb_int len = (mrb_int)sp_str_length(s);
@@ -793,7 +793,7 @@ sp_RbVal sp_poly_replace(sp_RbVal recv, sp_RbVal src) {
   return recv;
 }
 
-void sp_poly_combination_recur(sp_PolyArray *src, mrb_int start, mrb_int k, sp_PolyArray *acc, sp_PolyArray *out) {
+void sp_poly_combination_recur(sp_PolyArray *src, mrb_int start, mrb_int k, sp_PolyArray *acc, sp_PolyArray *out) {SP_GC_ROOT(src);SP_GC_ROOT(acc);SP_GC_ROOT(out);
   if (k == 0) {
     sp_PolyArray *cp = sp_PolyArray_new(); SP_GC_ROOT(cp);
     for (mrb_int i = 0; i < acc->len; i++) sp_PolyArray_push(cp, acc->data[i]);
@@ -807,7 +807,7 @@ void sp_poly_combination_recur(sp_PolyArray *src, mrb_int start, mrb_int k, sp_P
   }
 }
 
-void sp_poly_repeated_combination_recur(sp_PolyArray *src, mrb_int start, mrb_int k, sp_PolyArray *acc, sp_PolyArray *out) {
+void sp_poly_repeated_combination_recur(sp_PolyArray *src, mrb_int start, mrb_int k, sp_PolyArray *acc, sp_PolyArray *out) {SP_GC_ROOT(src);SP_GC_ROOT(acc);SP_GC_ROOT(out);
   if (k == 0) {
     sp_PolyArray *cp = sp_PolyArray_new(); SP_GC_ROOT(cp);
     for (mrb_int i = 0; i < acc->len; i++) sp_PolyArray_push(cp, acc->data[i]);
@@ -821,7 +821,7 @@ void sp_poly_repeated_combination_recur(sp_PolyArray *src, mrb_int start, mrb_in
   }
 }
 
-void sp_poly_permutation_recur(sp_PolyArray *src, mrb_int k, sp_IntArray *used, sp_PolyArray *acc, sp_PolyArray *out) {
+void sp_poly_permutation_recur(sp_PolyArray *src, mrb_int k, sp_IntArray *used, sp_PolyArray *acc, sp_PolyArray *out) {SP_GC_ROOT(src);SP_GC_ROOT(used);SP_GC_ROOT(acc);SP_GC_ROOT(out);
   if (k == 0) {
     sp_PolyArray *cp = sp_PolyArray_new(); SP_GC_ROOT(cp);
     for (mrb_int i = 0; i < acc->len; i++) sp_PolyArray_push(cp, acc->data[i]);
@@ -838,7 +838,7 @@ void sp_poly_permutation_recur(sp_PolyArray *src, mrb_int k, sp_IntArray *used, 
   }
 }
 
-void sp_poly_repeated_permutation_recur(sp_PolyArray *src, mrb_int k, sp_PolyArray *acc, sp_PolyArray *out) {
+void sp_poly_repeated_permutation_recur(sp_PolyArray *src, mrb_int k, sp_PolyArray *acc, sp_PolyArray *out) {SP_GC_ROOT(src);SP_GC_ROOT(acc);SP_GC_ROOT(out);
   if (k == 0) {
     sp_PolyArray *cp = sp_PolyArray_new(); SP_GC_ROOT(cp);
     for (mrb_int i = 0; i < acc->len; i++) sp_PolyArray_push(cp, acc->data[i]);
@@ -882,7 +882,7 @@ mrb_bool sp_poly_cbi_p(sp_RbVal v) {
   return FALSE;
 }
 
-void sp_file_write(const char *path, const char *data) {
+void sp_file_write(const char *path, const char *data) {SP_GC_ROOT_STR(path);SP_GC_ROOT_STR(data);
   if (sp_file_directory(path)) {
     sp_raise_cls("Errno::EISDIR", sp_sprintf("Is a directory @ rb_sysopen - %s", path));
   }
@@ -909,7 +909,7 @@ const char *sp_backtick(const char *cmd) {
   return buf;
 }
 
-const char *sp_file_basename(const char *path) {
+const char *sp_file_basename(const char *path) {SP_GC_ROOT_STR(path);
   /* CRuby: trailing separators are ignored ("/a/b/" -> "b"); an all-separator
      path is "/" (#2784). */
   size_t end = strlen(path);
@@ -1071,7 +1071,7 @@ else if (kind == SP_BUILTIN_STR_ARRAY) {
   return result;
 }
 
-sp_PolyArray *sp_str_chars_poly(const char *s) {
+sp_PolyArray *sp_str_chars_poly(const char *s) {SP_GC_ROOT_STR(s);
   sp_PolyArray *a = sp_PolyArray_new();
   SP_GC_ROOT(a);
   if (!s) sp_nil_recv("chars");
@@ -1288,7 +1288,7 @@ mrb_bool sp_dir_empty(const char *path);
 const char *sp_dir_home_user(const char *user);
 sp_StrArray *sp_dir_children(const char *path);
 
-const char *sp_File_gets_sep(sp_File *f, const char *sep, mrb_int limit, mrb_bool chomp) {
+const char *sp_File_gets_sep(sp_File *f, const char *sep, mrb_int limit, mrb_bool chomp) {SP_GC_ROOT(f);SP_GC_ROOT_STR(sep);
   if (f && f->is_sock) sp_sock_wait_readable(f);
   if (!f || !f->fp) return NULL;
   size_t sl = sep ? strlen(sep) : 0;
@@ -1327,7 +1327,7 @@ const char *sp_File_gets_sep(sp_File *f, const char *sep, mrb_int limit, mrb_boo
   f->lineno++;
   return r;
 }
-sp_StrArray *sp_File_readlines_sep(sp_File *f, const char *sep, mrb_bool chomp) {
+sp_StrArray *sp_File_readlines_sep(sp_File *f, const char *sep, mrb_bool chomp) {SP_GC_ROOT(f);SP_GC_ROOT_STR(sep);
   sp_StrArray *a = sp_StrArray_new();
   SP_GC_ROOT(a);
   const char *l;
@@ -1346,7 +1346,7 @@ const char *sp_File_readline_sep(sp_File *f, const char *sep, mrb_int limit, mrb
   if (!r) sp_raise_cls("EOFError", "end of file reached");
   return r;
 }
-const char *sp_File_getc(sp_File *f) {
+const char *sp_File_getc(sp_File *f) {SP_GC_ROOT(f);
   if (!f || !f->fp) return NULL;
   int ch = fgetc(f->fp);
   if (ch == EOF) return NULL;
@@ -1405,7 +1405,7 @@ sp_RbVal sp_File_putc(sp_File *f, sp_RbVal v) {
   }
   return v;
 }
-const char *sp_file_ftype(const char *path) {
+const char *sp_file_ftype(const char *path) {SP_GC_ROOT_STR(path);
   struct stat st;
   if (lstat(path ? path : "", &st) != 0)
     sp_raise_cls("Errno::ENOENT",
@@ -1448,7 +1448,7 @@ mrb_bool sp_file_identical(const char *a, const char *b) {
   if (stat(a ? a : "", &sa) != 0 || stat(b ? b : "", &sb) != 0) return 0;
   return sa.st_dev == sb.st_dev && sa.st_ino == sb.st_ino;
 }
-const char *sp_file_realpath(const char *path) {
+const char *sp_file_realpath(const char *path) {SP_GC_ROOT_STR(path);
   char buf[4096];
   if (!realpath(path ? path : "", buf))
     sp_raise_cls("Errno::ENOENT",
@@ -1475,12 +1475,12 @@ const char *sp_file_realdirpath(const char *path) {
   return sp_sprintf("%s/%s", buf, base);
 }
 mrb_bool sp_file_absolute_path_p(const char *path) { return path && path[0] == '/'; }  /* (#2988) */
-mrb_int sp_file_chown(const char *path, mrb_int uid, mrb_int gid) {  /* -1 leaves that id unchanged; returns the path count (#2987) */
+mrb_int sp_file_chown(const char *path, mrb_int uid, mrb_int gid) {SP_GC_ROOT_STR(path);  /* -1 leaves that id unchanged; returns the path count (#2987) */
   if (chown(path ? path : "", (uid_t)uid, (gid_t)gid) != 0)
     sp_raise_cls("Errno::ENOENT", sp_sprintf("No such file or directory - %s", path ? path : ""));
   return 1;
 }
-const char *sp_file_read_len(const char *path, mrb_int n) {
+const char *sp_file_read_len(const char *path, mrb_int n) {SP_GC_ROOT_STR(path);
   FILE *fp = fopen(path ? path : "", "rb");
   if (!fp)
     sp_raise_cls("Errno::ENOENT",
@@ -1493,19 +1493,19 @@ const char *sp_file_read_len(const char *path, mrb_int n) {
   sp_str_set_len(r, got);
   return r;
 }
-mrb_int sp_file_chmod(mrb_int mode, const char *path) {
+mrb_int sp_file_chmod(mrb_int mode, const char *path) {SP_GC_ROOT_STR(path);
   if (chmod(path ? path : "", (mode_t)mode) != 0)
     sp_raise_cls("Errno::ENOENT",
                  sp_sprintf("No such file or directory @ apply2files - %s", path ? path : ""));
   return 1;
 }
-mrb_int sp_file_truncate(const char *path, mrb_int n) {
+mrb_int sp_file_truncate(const char *path, mrb_int n) {SP_GC_ROOT_STR(path);
   if (truncate(path ? path : "", (off_t)n) != 0)
     sp_raise_cls("Errno::ENOENT",
                  sp_sprintf("No such file or directory @ rb_file_s_truncate - %s", path ? path : ""));
   return 0;
 }
-mrb_int sp_file_write_at(const char *path, const char *data, mrb_int off) {
+mrb_int sp_file_write_at(const char *path, const char *data, mrb_int off) {SP_GC_ROOT_STR(path);SP_GC_ROOT_STR(data);
   int fd = open(path ? path : "", O_WRONLY | O_CREAT, 0666);
   if (fd < 0)
     sp_raise_cls("Errno::ENOENT",
@@ -1515,7 +1515,7 @@ mrb_int sp_file_write_at(const char *path, const char *data, mrb_int off) {
   close(fd);
   return w < 0 ? 0 : (mrb_int)w;
 }
-mrb_int sp_file_write_mode(const char *path, const char *data, const char *mode) {
+mrb_int sp_file_write_mode(const char *path, const char *data, const char *mode) {SP_GC_ROOT_STR(path);SP_GC_ROOT_STR(data);
   FILE *fp = fopen(path ? path : "", mode && mode[0] ? mode : "w");
   if (!fp)
     sp_raise_cls("Errno::ENOENT",
@@ -1525,7 +1525,7 @@ mrb_int sp_file_write_mode(const char *path, const char *data, const char *mode)
   fclose(fp);
   return (mrb_int)n;
 }
-sp_File *sp_File_open_flags(const char *path, mrb_int fl) {
+sp_File *sp_File_open_flags(const char *path, mrb_int fl) {SP_GC_ROOT_STR(path);
   int fd = open(path ? path : "", (int)fl, 0666);
   if (fd < 0)
     sp_raise_cls("Errno::ENOENT",
@@ -1541,7 +1541,7 @@ void sp_file_stat_scan(void *p) {
   if (f->path) sp_mark_string(f->path);
   if (f->mode) sp_mark_string(f->mode);
 }
-sp_File *sp_file_stat_handle(const char *path) {
+sp_File *sp_file_stat_handle(const char *path) {SP_GC_ROOT_STR(path);
   struct stat st;
   if (stat(path ? path : "", &st) != 0)
     sp_raise_cls("Errno::ENOENT",
@@ -1556,7 +1556,7 @@ sp_File *sp_file_stat_handle(const char *path) {
 /* File.lstat / File#lstat: like stat, but describing the link itself when the
    final component is a symlink. The handle records mode "lstat" so the
    accessors below read it with lstat(2). (#2986) */
-sp_File *sp_file_lstat_handle(const char *path) {
+sp_File *sp_file_lstat_handle(const char *path) {SP_GC_ROOT_STR(path);
   struct stat st;
   if (lstat(path ? path : "", &st) != 0)
     sp_raise_cls("Errno::ENOENT",
@@ -1599,7 +1599,7 @@ mrb_int sp_file_stat_mode(const char *path) {
 mrb_bool sp_file_fnmatch(const char *pat, const char *path) {
   return fnmatch(pat ? pat : "", path ? path : "", FNM_PATHNAME | FNM_PERIOD) == 0;
 }
-sp_StrArray *sp_file_split(const char *path) {
+sp_StrArray *sp_file_split(const char *path) {SP_GC_ROOT_STR(path);
   sp_StrArray *a = sp_StrArray_new();
   SP_GC_ROOT(a);
   sp_StrArray_push(a, sp_file_dirname(path));
@@ -1612,7 +1612,7 @@ mrb_bool sp_file_zero(const char *path) {
   if (S_ISDIR(st.st_mode)) return 0;
   return st.st_size == 0;
 }
-const char *sp_file_dirname(const char *path) {
+const char *sp_file_dirname(const char *path) {SP_GC_ROOT_STR(path);
   const char *s = strrchr(path, '/');
   if (!s) { char *r = sp_str_alloc(1); r[0] = '.'; r[1] = 0; return r; }
   if (s == path) { char *r = sp_str_alloc(1); r[0] = '/'; r[1] = 0; return r; }
@@ -1645,7 +1645,7 @@ const char *sp_dir_home(void) {
 }
 void sp_Dir_fin(void *p) { sp_Dir *d = (sp_Dir *)p; if (d->dp) { closedir(d->dp); d->dp = NULL; } }
 void sp_Dir_scan(void *p) { sp_Dir *d = (sp_Dir *)p; if (d->path) sp_mark_string(d->path); }
-sp_Dir *sp_Dir_new(const char *path) {
+sp_Dir *sp_Dir_new(const char *path) {SP_GC_ROOT_STR(path);
   DIR *dp = opendir(path ? path : "");
   if (!dp)
     sp_raise_cls("Errno::ENOENT",
@@ -1671,7 +1671,7 @@ sp_Dir *sp_Dir_for_fd(mrb_int fd) {
 /* #entries / #children read the OPEN handle: a Dir from Dir.for_fd has no path
    to re-open, and re-opening by path would miss a directory that has since been
    renamed. Rewinds first so the listing is complete however far #read got. */
-sp_StrArray *sp_Dir_entries_h(sp_Dir *d, mrb_int children) {
+sp_StrArray *sp_Dir_entries_h(sp_Dir *d, mrb_int children) {SP_GC_ROOT(d);
   if (!d || !d->dp) sp_raise_cls("IOError", "closed directory");
   rewinddir(d->dp);
   sp_StrArray *a = sp_StrArray_new();
@@ -1703,7 +1703,7 @@ mrb_int sp_Dir_tell(sp_Dir *d) { return d && d->dp ? (mrb_int)telldir(d->dp) : 0
 sp_Dir *sp_Dir_seek(sp_Dir *d, mrb_int pos) { if (d && d->dp) seekdir(d->dp, (long)pos); return d; }
 mrb_int sp_Dir_fileno(sp_Dir *d) { return d && d->dp ? (mrb_int)dirfd(d->dp) : -1; }
 sp_StrArray *sp_dir_entries(const char *path) { return sp_dir_entries_impl(path, 0); }
-mrb_bool sp_dir_empty(const char *path) {
+mrb_bool sp_dir_empty(const char *path) {SP_GC_ROOT_STR(path);
   struct stat st;
   if (!path || stat(path, &st) != 0)
     sp_raise_cls("Errno::ENOENT",
@@ -1719,7 +1719,7 @@ mrb_bool sp_dir_empty(const char *path) {
   closedir(d);
   return empty;
 }
-const char *sp_dir_home_user(const char *user) {
+const char *sp_dir_home_user(const char *user) {SP_GC_ROOT_STR(user);
   if (!user || !*user) return sp_dir_home();
   struct passwd *pw = getpwnam(user);
   if (!pw || !pw->pw_dir)
@@ -1774,7 +1774,7 @@ sp_RbVal sp_signal_trap(sp_RbVal sig, sp_RbVal handler);
 mrb_int sp_process_kill1(sp_RbVal sig, mrb_int pid);
 sp_RbVal sp_Enumerator_size(sp_Enumerator *e);
 
-sp_Enumerator *sp_Enumerator_dup(sp_Enumerator *e) {
+sp_Enumerator *sp_Enumerator_dup(sp_Enumerator *e) {SP_GC_ROOT(e);
   if (!e) return e;
   sp_Enumerator *d = (sp_Enumerator *)sp_gc_alloc(sizeof(sp_Enumerator), NULL, sp_Enumerator_scan);
   *d = *e;
@@ -1800,7 +1800,7 @@ sp_Enumerator *sp_enum_as_gen(sp_Enumerator *e) {
   e->gen_label = TRUE;
   return e;
 }
-sp_RbVal sp_enum_with_index_value(sp_Enumerator *e) {
+sp_RbVal sp_enum_with_index_value(sp_Enumerator *e) {SP_GC_ROOT(e);
   if (e->meth && (strcmp(e->meth, "each") == 0 || strcmp(e->meth, "each_with_index") == 0))
     return e->source;
   sp_raise_cls("NotImplementedError",
@@ -1808,7 +1808,7 @@ sp_RbVal sp_enum_with_index_value(sp_Enumerator *e) {
                           e->meth ? e->meth : "generator"));
   return sp_box_nil();
 }
-sp_RbVal sp_enum_with_index_result(sp_Enumerator *e, sp_PolyArray *mapped) {
+sp_RbVal sp_enum_with_index_result(sp_Enumerator *e, sp_PolyArray *mapped) {SP_GC_ROOT(e);
   if (e->meth && (strcmp(e->meth, "map") == 0 || strcmp(e->meth, "collect") == 0))
     return sp_box_poly_array(mapped);
   if (e->meth && (strcmp(e->meth, "each") == 0 || strcmp(e->meth, "each_with_index") == 0))
@@ -1898,7 +1898,7 @@ sp_Enumerator *sp_loop_enum(void) {
 }
 
 /* IO.copy_stream(src_path, dst_path): stream one file to another, byte count. */
-mrb_int sp_io_copy_stream(const char *src, const char *dst) {
+mrb_int sp_io_copy_stream(const char *src, const char *dst) {SP_GC_ROOT_STR(src);SP_GC_ROOT_STR(dst);
   FILE *in = fopen(src ? src : "", "rb");
   if (!in)
     sp_raise_cls("Errno::ENOENT",
@@ -1914,12 +1914,12 @@ mrb_int sp_io_copy_stream(const char *src, const char *dst) {
 
 /* Array#combination / permutation over an int array (lib-only; the recursion
    helpers stay file-static, the four entry points are declared in spinel_rt.h). */
-static void sp_int_combination_recur(sp_IntArray*src,mrb_int start,mrb_int k,sp_IntArray*acc,sp_PtrArray*out){if(k==0){sp_IntArray*cp=sp_IntArray_new();for(mrb_int i=0;i<acc->len;i++)sp_IntArray_push(cp,acc->data[acc->start+i]);sp_PtrArray_push(out,cp);return;}for(mrb_int i=start;i<=src->len-k;i++){sp_IntArray_push(acc,src->data[src->start+i]);sp_int_combination_recur(src,i+1,k-1,acc,out);acc->len--;}}
+static void sp_int_combination_recur(sp_IntArray*src,mrb_int start,mrb_int k,sp_IntArray*acc,sp_PtrArray*out){SP_GC_ROOT(src);SP_GC_ROOT(acc);SP_GC_ROOT(out);if(k==0){sp_IntArray*cp=sp_IntArray_new();for(mrb_int i=0;i<acc->len;i++)sp_IntArray_push(cp,acc->data[acc->start+i]);sp_PtrArray_push(out,cp);return;}for(mrb_int i=start;i<=src->len-k;i++){sp_IntArray_push(acc,src->data[src->start+i]);sp_int_combination_recur(src,i+1,k-1,acc,out);acc->len--;}}
 sp_PtrArray*sp_IntArray_combination(sp_IntArray*a,mrb_int k){SP_GC_ROOT(a);sp_PtrArray*out=sp_PtrArray_new();SP_GC_ROOT(out);if(!a||k<0||k>a->len)return out;sp_IntArray*acc=sp_IntArray_new();SP_GC_ROOT(acc);sp_int_combination_recur(a,0,k,acc,out);return out;}
-static void sp_int_repeated_combination_recur(sp_IntArray*src,mrb_int start,mrb_int k,sp_IntArray*acc,sp_PtrArray*out){if(k==0){sp_IntArray*cp=sp_IntArray_new();for(mrb_int i=0;i<acc->len;i++)sp_IntArray_push(cp,acc->data[acc->start+i]);sp_PtrArray_push(out,cp);return;}for(mrb_int i=start;i<src->len;i++){sp_IntArray_push(acc,src->data[src->start+i]);sp_int_repeated_combination_recur(src,i,k-1,acc,out);acc->len--;}}
+static void sp_int_repeated_combination_recur(sp_IntArray*src,mrb_int start,mrb_int k,sp_IntArray*acc,sp_PtrArray*out){SP_GC_ROOT(src);SP_GC_ROOT(acc);SP_GC_ROOT(out);if(k==0){sp_IntArray*cp=sp_IntArray_new();for(mrb_int i=0;i<acc->len;i++)sp_IntArray_push(cp,acc->data[acc->start+i]);sp_PtrArray_push(out,cp);return;}for(mrb_int i=start;i<src->len;i++){sp_IntArray_push(acc,src->data[src->start+i]);sp_int_repeated_combination_recur(src,i,k-1,acc,out);acc->len--;}}
 sp_PtrArray*sp_IntArray_repeated_combination(sp_IntArray*a,mrb_int k){SP_GC_ROOT(a);sp_PtrArray*out=sp_PtrArray_new();SP_GC_ROOT(out);if(!a||k<0)return out;sp_IntArray*acc=sp_IntArray_new();SP_GC_ROOT(acc);sp_int_repeated_combination_recur(a,0,k,acc,out);return out;}
-static void sp_int_permutation_recur(sp_IntArray*src,mrb_int k,sp_IntArray*used,sp_IntArray*acc,sp_PtrArray*out){if(k==0){sp_IntArray*cp=sp_IntArray_new();for(mrb_int i=0;i<acc->len;i++)sp_IntArray_push(cp,acc->data[acc->start+i]);sp_PtrArray_push(out,cp);return;}for(mrb_int i=0;i<src->len;i++){if(used->data[used->start+i])continue;used->data[used->start+i]=1;sp_IntArray_push(acc,src->data[src->start+i]);sp_int_permutation_recur(src,k-1,used,acc,out);acc->len--;used->data[used->start+i]=0;}}
-static void sp_int_repeated_permutation_recur(sp_IntArray*src,mrb_int k,sp_IntArray*acc,sp_PtrArray*out){if(k==0){sp_IntArray*cp=sp_IntArray_new();SP_GC_ROOT(cp);for(mrb_int i=0;i<acc->len;i++)sp_IntArray_push(cp,acc->data[acc->start+i]);sp_PtrArray_push(out,cp);return;}for(mrb_int i=0;i<src->len;i++){sp_IntArray_push(acc,src->data[src->start+i]);sp_int_repeated_permutation_recur(src,k-1,acc,out);acc->len--;}}
+static void sp_int_permutation_recur(sp_IntArray*src,mrb_int k,sp_IntArray*used,sp_IntArray*acc,sp_PtrArray*out){SP_GC_ROOT(src);SP_GC_ROOT(used);SP_GC_ROOT(acc);SP_GC_ROOT(out);if(k==0){sp_IntArray*cp=sp_IntArray_new();for(mrb_int i=0;i<acc->len;i++)sp_IntArray_push(cp,acc->data[acc->start+i]);sp_PtrArray_push(out,cp);return;}for(mrb_int i=0;i<src->len;i++){if(used->data[used->start+i])continue;used->data[used->start+i]=1;sp_IntArray_push(acc,src->data[src->start+i]);sp_int_permutation_recur(src,k-1,used,acc,out);acc->len--;used->data[used->start+i]=0;}}
+static void sp_int_repeated_permutation_recur(sp_IntArray*src,mrb_int k,sp_IntArray*acc,sp_PtrArray*out){SP_GC_ROOT(src);SP_GC_ROOT(acc);SP_GC_ROOT(out);if(k==0){sp_IntArray*cp=sp_IntArray_new();SP_GC_ROOT(cp);for(mrb_int i=0;i<acc->len;i++)sp_IntArray_push(cp,acc->data[acc->start+i]);sp_PtrArray_push(out,cp);return;}for(mrb_int i=0;i<src->len;i++){sp_IntArray_push(acc,src->data[src->start+i]);sp_int_repeated_permutation_recur(src,k-1,acc,out);acc->len--;}}
 sp_PtrArray*sp_IntArray_repeated_permutation(sp_IntArray*a,mrb_int k){SP_GC_ROOT(a);sp_PtrArray*out=sp_PtrArray_new();SP_GC_ROOT(out);if(!a||k<0)return out;sp_IntArray*acc=sp_IntArray_new();SP_GC_ROOT(acc);sp_int_repeated_permutation_recur(a,k,acc,out);return out;}
 sp_PtrArray*sp_IntArray_permutation(sp_IntArray*a,mrb_int k){SP_GC_ROOT(a);sp_PtrArray*out=sp_PtrArray_new();SP_GC_ROOT(out);if(!a||k<0||k>a->len)return out;sp_IntArray*used=sp_IntArray_new();SP_GC_ROOT(used);for(mrb_int i=0;i<a->len;i++)sp_IntArray_push(used,0);sp_IntArray*acc=sp_IntArray_new();SP_GC_ROOT(acc);sp_int_permutation_recur(a,k,used,acc,out);return out;}
 sp_RbVal sp_enum_gen_pull(sp_Enumerator *e) { sp_gc_wb((void*)e);
@@ -1971,7 +1971,7 @@ sp_RbVal sp_Enumerator_feed(sp_Enumerator *e, sp_RbVal v) { sp_gc_wb((void*)e);
   e->feed = v; e->has_feed = TRUE;
   return sp_box_nil();
 }
-sp_PolyArray *sp_Enumerator_take(sp_Enumerator *e, mrb_int n) {
+sp_PolyArray *sp_Enumerator_take(sp_Enumerator *e, mrb_int n) {SP_GC_ROOT(e);
   sp_PolyArray *r = sp_PolyArray_new();
   SP_GC_ROOT(r);
   if (n <= 0) return r;
@@ -2188,7 +2188,7 @@ sp_StrIntHash*sp_gc_stat(void){
   sp_StrIntHash*h=sp_StrIntHash_new();sp_StrIntHash_set(h,SPL("bytes"),(mrb_int)SP_GC_CTR_GET(sp_gc_bytes));sp_StrIntHash_set(h,SPL("old_bytes"),(mrb_int)sp_gc_old_bytes);sp_StrIntHash_set(h,SPL("threshold"),(mrb_int)sp_gc_threshold);sp_StrIntHash_set(h,SPL("cycle"),(mrb_int)sp_gc_cycle);sp_StrIntHash_set(h,SPL("full_runs"),(mrb_int)sp_gc_full_runs);sp_StrIntHash_set(h,SPL("remembered"),(mrb_int)sp_gc_nremembered);sp_StrIntHash_set(h,SPL("remembered_peak"),(mrb_int)sp_gc_rem_peak);sp_StrIntHash_set(h,SPL("str_bytes"),(mrb_int)str_bytes);sp_StrIntHash_set(h,SPL("str_count"),str_count);return h;}
 /* String#setbyte over value-semantics strings: copy-on-write (a literal's
    bytes are static storage). The caller re-binds an lvalue receiver. */
-const char *sp_str_setbyte_cow(const char *s, mrb_int i, mrb_int v) {
+const char *sp_str_setbyte_cow(const char *s, mrb_int i, mrb_int v) {SP_GC_ROOT_STR(s);
   if (!s) s = "";
   /* an explicitly frozen string (or a frozen-string-literal file's literal,
      both carry the 0xf1 marker) still raises; a HEAP string mutates in
@@ -2604,7 +2604,7 @@ mrb_bool sp_str_re_match_p_at(mrb_regexp_pattern *pat, const char *str, mrb_int 
 }
 /* Issue #910: sub(string, hash) — literal-substring pattern
    with a hash replacement. Replaces only the first match. */
-const char *sp_str_sub_str_str_hash(const char *str, const char *pat, sp_StrStrHash *h) {
+const char *sp_str_sub_str_str_hash(const char *str, const char *pat, sp_StrStrHash *h) {SP_GC_ROOT_STR(str);
   if (!str || !pat) return str;
   const char *found = strstr(str, pat);
   if (!found) return str;
@@ -2623,7 +2623,7 @@ const char *sp_str_sub_str_str_hash(const char *str, const char *pat, sp_StrStrH
 }
 /* Array#sum with a String initial value: concatenation fold ("abc" from
    ["a","b","c"].sum("")), CRuby's + on each element. */
-const char *sp_StrArray_sum_str(sp_StrArray *a, const char *init) {
+const char *sp_StrArray_sum_str(sp_StrArray *a, const char *init) {SP_GC_ROOT(a);SP_GC_ROOT_STR(init);
   size_t n = init ? strlen(init) : 0;
   if (a) for (mrb_int i = 0; i < a->len; i++) if (a->data[i]) n += strlen(a->data[i]);
   char *r = sp_str_alloc(n); size_t o = 0;
@@ -2792,7 +2792,7 @@ sp_RbVal sp_io_select(sp_PolyArray *rd, sp_PolyArray *wr, sp_PolyArray *er, doub
   return sp_box_poly_array(out);
 }
 
-mrb_int sp_io_sysopen(const char *path) {
+mrb_int sp_io_sysopen(const char *path) {SP_GC_ROOT_STR(path);
   int fd = open(path ? path : "", O_RDONLY);
   if (fd < 0)
     sp_raise_cls("Errno::ENOENT",
@@ -2860,14 +2860,14 @@ sp_SockOpt *sp_sockopt_new(mrb_int family, mrb_int level, mrb_int optname, mrb_i
   o->family = family; o->level = level; o->optname = optname; o->value = value;
   return o;
 }
-const char *sp_sockopt_inspect(sp_SockOpt *o) {
+const char *sp_sockopt_inspect(sp_SockOpt *o) {SP_GC_ROOT(o);
   if (!o) return sp_sprintf("nil");
   return sp_sprintf("#<Socket::Option: INET %lld %lld %lld>",
                     (long long)o->level, (long long)o->optname, (long long)o->value);
 }
 /* Addrinfo.tcp / .udp / .ip / .unix, and the endpoint behind #local_address /
    #remote_address. `stype` is SOCK_STREAM / SOCK_DGRAM, 0 for a bare address. */
-sp_Addrinfo *sp_addrinfo_new(const char *ip, mrb_int port, mrb_int stype, mrb_int is_unix) {
+sp_Addrinfo *sp_addrinfo_new(const char *ip, mrb_int port, mrb_int stype, mrb_int is_unix) {SP_GC_ROOT_STR(ip);
   sp_Addrinfo *a = (sp_Addrinfo *)sp_gc_alloc(sizeof(sp_Addrinfo), NULL, sp_addrinfo_scan);
   a->ip = NULL; a->afname = NULL;
   SP_GC_ROOT(a);
@@ -2880,7 +2880,7 @@ sp_Addrinfo *sp_addrinfo_new(const char *ip, mrb_int port, mrb_int stype, mrb_in
   a->protocol = 0;
   return a;
 }
-const char *sp_addrinfo_inspect(sp_Addrinfo *a) {
+const char *sp_addrinfo_inspect(sp_Addrinfo *a) {SP_GC_ROOT(a);
   if (!a) return sp_sprintf("nil");
   if (strcmp(a->afname, "AF_UNIX") == 0) return sp_sprintf("#<Addrinfo: %s SOCK_STREAM>", a->ip);
   const char *st = a->socktype == SOCK_DGRAM ? " UDP"
@@ -2893,7 +2893,7 @@ const char *sp_brat_to_s(sp_BigRational *r) {
   const char *ns = sp_bigint_to_s(r->num), *ds = sp_bigint_to_s(r->den);
   return sp_str_concat(sp_str_concat(ns, "/"), ds);
 }
-const char *sp_brat_inspect(sp_BigRational *r) {
+const char *sp_brat_inspect(sp_BigRational *r) {SP_GC_ROOT(r);
   return sp_str_concat(sp_str_concat(sp_str_concat("(", sp_brat_to_s(r)), ")"), "");
 }
 mrb_float sp_brat_to_f(sp_BigRational *r) {
@@ -2972,7 +2972,7 @@ else {
 }
 /* Issue #910: sub(regex, hash) — same lookup semantics as
    sp_re_gsub_str_str_hash but only the first match. */
-const char *sp_re_sub_str_str_hash(mrb_regexp_pattern *pat, const char *str, sp_StrStrHash *h) {
+const char *sp_re_sub_str_str_hash(mrb_regexp_pattern *pat, const char *str, sp_StrStrHash *h) {SP_GC_ROOT_STR(str);
   int64_t slen = (int64_t)strlen(str);
   int caps[64];
   int n = re_exec(pat, str, slen, 0, caps, 64, 0);
@@ -3000,7 +3000,7 @@ const char *sp_re_sub_str_str_hash(mrb_regexp_pattern *pat, const char *str, sp_
 }
 /* msg: an explicit second argument overrides the SIG<name> message (only the
    Integer-signal form accepts one, matching CRuby); NULL keeps the default. */
-sp_Exception *sp_signal_exc_new_m(sp_RbVal sig, const char *msg) {
+sp_Exception *sp_signal_exc_new_m(sp_RbVal sig, const char *msg) {SP_GC_ROOT_STR(msg);
   if (msg && sig.tag != SP_TAG_INT)
     sp_raise_cls("ArgumentError", "wrong number of arguments");
   int no = sp_signal_resolve(sig);
@@ -3014,7 +3014,7 @@ sp_Exception *sp_signal_exc_new_m(sp_RbVal sig, const char *msg) {
 sp_Exception *sp_signal_exc_new(sp_RbVal sig) {
   return sp_signal_exc_new_m(sig, NULL);
 }
-sp_Exception *sp_interrupt_new(const char *msg) {
+sp_Exception *sp_interrupt_new(const char *msg) {SP_GC_ROOT_STR(msg);
   sp_Exception *e = sp_exc_new("Interrupt", (msg && msg[0]) ? msg : "Interrupt");
   SP_GC_ROOT(e);
   e->xkey = sp_box_int((mrb_int)SIGINT);
@@ -3089,7 +3089,7 @@ sp_Class sp_unbox_class(sp_RbVal v) {
 /* Arithmetic reached an int slot still holding the nil sentinel -- a container
    read that missed. That value is nil, so CRuby's NoMethodError is the answer,
    not a computation on INTPTR_MIN. */
-SP_NORETURN void sp_raise_nil_int_op(mrb_int a, mrb_int b, const char *op) {
+SP_NORETURN void sp_raise_nil_int_op(mrb_int a, mrb_int b, const char *op) {SP_GC_ROOT_STR(op);
   (void)b;
   if (a == SP_INT_NIL)
     sp_raise_cls("NoMethodError", sp_sprintf("undefined method '%s' for nil", op));
@@ -3100,7 +3100,7 @@ SP_NORETURN void sp_raise_nil_int_op(mrb_int a, mrb_int b, const char *op) {
 /* `Queue#freeze` raises rather than freezing: a frozen queue could never be
    pushed to again, so Ruby refuses it outright. Names the receiver the way
    CRuby's message does, so a SizedQueue reports as one. */
-SP_NORETURN void sp_raise_cannot_freeze(const char *cls, void *p) {
+SP_NORETURN void sp_raise_cannot_freeze(const char *cls, void *p) {SP_GC_ROOT_STR(cls);
   sp_raise_cls("TypeError",
                sp_sprintf("cannot freeze #<%s:0x%016llx>", cls ? cls : "Object",
                           (unsigned long long)(uintptr_t)p));

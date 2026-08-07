@@ -125,13 +125,13 @@ sp_Random *sp_Random_new_auto(void) {
   return r;
 }
 /* Random#rand(Range): an integer in the (int-endpoint) range, empty raises. */
-mrb_int sp_Random_rand_range(sp_Random *r, sp_Range rg) {
+mrb_int sp_Random_rand_range(sp_Random *r, sp_Range rg) {SP_GC_ROOT(r);
   mrb_int lo = rg.first, hi = rg.excl ? rg.last - 1 : rg.last;
   if (hi < lo) sp_raise_cls("ArgumentError", sp_sprintf("invalid argument - %s", sp_Range_inspect(&rg)));
   if (!r) return lo;
   return lo + (mrb_int)(sp_random_next(r) % ((uint64_t)(hi - lo) + 1));
 }
-mrb_int sp_Random_rand_int(sp_Random *r, mrb_int n) {
+mrb_int sp_Random_rand_int(sp_Random *r, mrb_int n) {SP_GC_ROOT(r);
   if (n <= 0) sp_raise_cls("ArgumentError", sp_sprintf("invalid argument - %lld", (long long)n));
   if (!r) return 0;
   return (mrb_int)(sp_random_next(r) % (uint64_t)n);
@@ -142,7 +142,7 @@ mrb_float sp_Random_rand_float(sp_Random *r) {
 }
 /* Random#rand(Float bound): a random Float in [0, bound). A non-positive bound
    raises ArgumentError like the Integer form (MRI validates both). */
-mrb_float sp_Random_rand_float_bound(sp_Random *r, mrb_float bound) {
+mrb_float sp_Random_rand_float_bound(sp_Random *r, mrb_float bound) {SP_GC_ROOT(r);
   /* CRuby 4: a non-finite bound is Errno::EDOM; a 0.0 bound draws in [0,1) (#3049) */
   if (isnan(bound) || isinf(bound))
     sp_raise_cls("Errno::EDOM", "Numerical argument out of domain");
@@ -159,7 +159,7 @@ sp_Random *sp_random_default_get(void) {
 }
 /* Random#bytes(n) — n random bytes as a String. Uses sp_str_set_len
    so embedded NULs are preserved and #length reports n. */
-const char *sp_Random_bytes(sp_Random *r, mrb_int n) {
+const char *sp_Random_bytes(sp_Random *r, mrb_int n) {SP_GC_ROOT(r);
   if (n < 0) sp_raise_cls("ArgumentError", "negative string size (or size too big)");
   char *b = sp_str_alloc((size_t)n);
   for (mrb_int i = 0; i < n; i++) b[i] = (char)(sp_random_next(r) & 0xff);
@@ -208,7 +208,7 @@ const char *sp_Random_urandom(mrb_int n) {
 }
 /* Random#inspect / #to_s: CRuby's default object rendering (the seed is not
    part of it; the address matches CRuby's zero-padded 16-digit form). */
-const char *sp_Random_inspect(sp_Random *r) {
+const char *sp_Random_inspect(sp_Random *r) {SP_GC_ROOT(r);
   return sp_sprintf("#<Random:0x%016llx>", (unsigned long long)(uintptr_t)r);
 }
 /* Kernel#srand: seed the shared Kernel stream and remember the previous
@@ -234,7 +234,7 @@ extern sp_Bigint *sp_bigint_add(sp_Bigint *a, sp_Bigint *b);
 extern sp_Bigint *sp_bigint_mod(sp_Bigint *a, sp_Bigint *b);
 extern int sp_bigint_cmp(sp_Bigint *a, sp_Bigint *b);
 extern const char *sp_bigint_to_s(sp_Bigint *b);
-sp_Bigint *sp_bigint_rand(sp_Random *r, sp_Bigint *bound) {
+sp_Bigint *sp_bigint_rand(sp_Random *r, sp_Bigint *bound) {SP_GC_ROOT(r);
   SP_GC_ROOT(bound);
   sp_Bigint *zero = sp_bigint_new_int(0);
   SP_GC_ROOT(zero);

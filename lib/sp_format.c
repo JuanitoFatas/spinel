@@ -79,7 +79,7 @@ const char *sp_rational_to_s(sp_Rational r) {
   return o;
 }
 
-const char *sp_Range_inspect(sp_Range *r) {
+const char *sp_Range_inspect(sp_Range *r) {SP_GC_ROOT(r);
   /* "first..last" / "first...last" form. Buffer sized for two int64s + dots. */
   char *buf = sp_str_alloc_raw(48);
   snprintf(buf, 48, r->excl ? "%lld...%lld" : "%lld..%lld", (long long)r->first, (long long)r->last);
@@ -88,7 +88,7 @@ const char *sp_Range_inspect(sp_Range *r) {
 
 /* "YYYY-MM-DD HH:MM:SS UTC" via gmtime: the spinel runtime keeps Time
    timezone-naive, so UTC is the unambiguous choice that needs no tzdata. */
-static const char *sp_Time_fmt(sp_Time *t, int frac) {
+static const char *sp_Time_fmt(sp_Time *t, int frac) {SP_GC_ROOT(t);
   char *buf = sp_str_alloc_raw(48);
   time_t sec = (time_t)t->tv_sec;
   struct tm *tm_ = gmtime(&sec);

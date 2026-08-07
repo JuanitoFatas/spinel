@@ -79,7 +79,7 @@ sp_RbVal sp_raise_nomethod(const char *msg) {
 }
 /* NoMethodError for a String method reaching a nil (NULL) receiver,
    matching CRuby's "undefined method 'upcase' for nil" message shape. */
-void sp_nil_recv(const char*meth){
+void sp_nil_recv(const char*meth){SP_GC_ROOT_STR(meth);
   size_t cap=strlen(meth)+32;
   char*msg=sp_str_alloc_raw(cap);
   snprintf(msg,cap,"undefined method '%s' for nil",meth);
@@ -89,7 +89,7 @@ void sp_nil_recv(const char*meth){
 mrb_int sp_str_length_m(const char*s){if(!s)sp_nil_recv("length");return sp_str_length(s);}
 mrb_int sp_str_bytesize_m(const char*s){if(!s)sp_nil_recv("bytesize");return (mrb_int)sp_str_byte_len(s);}
 mrb_bool sp_str_empty_p(const char*s){if(!s)sp_nil_recv("empty?");return *s==0;}
-const char*sp_str_plus(const char*a,const char*b){
+const char*sp_str_plus(const char*a,const char*b){SP_GC_ROOT_STR(a);SP_GC_ROOT_STR(b);
   if(!a)sp_nil_recv("+");
   if(!b)sp_raise_cls("TypeError","no implicit conversion of nil into String");
   return sp_str_concat(a,b);
@@ -97,7 +97,7 @@ const char*sp_str_plus(const char*a,const char*b){
 /* FrozenError naming the receiver, matching CRuby's
    "can't modify frozen String: \"abc\"" message shape. */
 void sp_exc_stage_recv(sp_RbVal v);   /* generated TU: stages FrozenError#receiver */
-void sp_raise_frozen_str(const char*s){const char*ins=sp_str_inspect(s);SP_GC_ROOT_STR(ins);const char*msg=sp_str_concat(&("\xff" "can't modify frozen String: ")[1],ins);SP_GC_ROOT_STR(msg);sp_exc_stage_recv(sp_box_str(s));sp_raise_cls("FrozenError",msg);}
+void sp_raise_frozen_str(const char*s){SP_GC_ROOT_STR(s);const char*ins=sp_str_inspect(s);SP_GC_ROOT_STR(ins);const char*msg=sp_str_concat(&("\xff" "can't modify frozen String: ")[1],ins);SP_GC_ROOT_STR(msg);sp_exc_stage_recv(sp_box_str(s));sp_raise_cls("FrozenError",msg);}
 /* String#inspect: wrap in double quotes and escape \, ", \n, \t, \r,
    plus any non-printable byte as \xNN. Output is always ASCII-safe. */
 const char*sp_str_inspect(const char*s){SP_GC_ROOT_STR(s);if(!s){char*r=sp_str_alloc_raw(4);r[0]='n';r[1]='i';r[2]='l';r[3]=0;return r;}size_t sl=sp_str_byte_len(s);size_t cap=(sl*6)+3;char*r=sp_str_alloc_raw(cap);size_t o=0;r[o++]='"';for(size_t i=0;i<sl;i++){unsigned char c=(unsigned char)s[i];if(c=='\\'||c=='"'){r[o++]='\\';r[o++]=c;}
@@ -139,7 +139,7 @@ mrb_bool sp_sym_simple_p(const char *n) {
   for (int i = 0; ops[i]; i++) if (!strcmp(n, ops[i])) return TRUE;
   return FALSE;
 }
-const char *sp_sym_inspect_name(const char *name) {
+const char *sp_sym_inspect_name(const char *name) {SP_GC_ROOT_STR(name);
   /* Build ":" + body directly rather than sp_str_concat(":", body): a bare
      literal like ":" has no length-marker byte, so sp_str_byte_len would read
      one byte before it (out of bounds of the .rodata constant). `body` is a
@@ -183,7 +183,7 @@ uint32_t sp_uc_tolower(uint32_t cp){
 }
 /* Map every codepoint of s through fn; ß (U+00DF) upcases to "SS" when
    up is set, so allocate room for a 3x expansion. */
-static const char*sp_str_case_map(const char*s,uint32_t(*fn)(uint32_t),int up){
+static const char*sp_str_case_map(const char*s,uint32_t(*fn)(uint32_t),int up){SP_GC_ROOT_STR(s);
   size_t l=strlen(s);char*r=sp_str_alloc_raw(l*3+1);size_t oi=0;
   for(size_t i=0;i<l;){uint32_t cp;int n=sp_utf8_decode(s+i,&cp);i+=(size_t)n;
     if(up&&cp==0xDF){r[oi++]='S';r[oi++]='S';continue;}
