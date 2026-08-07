@@ -5960,9 +5960,19 @@ void emit_rest_pack_kwh(Compiler *c, int from, int pos_argc, const int *argv, in
     buf_puts(b, "sp_PolyArray_new()");
     return;
   }
-  /* General case: build PolyArray as statement expression */
+  /* General case: build PolyArray as statement expression. The temp is
+     DECLARED and rooted in the enclosing frame rather than inside the
+     expression: a cleanup root inside a statement expression pops when that
+     expression ends, which is before the call it is an argument to runs, and
+     the callee allocates (sp_X_new's SP_POOL_NEW) before it stores the array
+     anywhere the collector can see. Only the declaration moves, so the pushes
+     still run in their original place in the enclosing expression. */
   int t = ++g_tmp;
-  buf_printf(b, "({ sp_PolyArray *_t%d = sp_PolyArray_new(); SP_GC_ROOT(_t%d);", t, t);
+  emit_indent(g_pre, g_indent);
+  buf_printf(g_pre, "sp_PolyArray *_t%d = NULL;\n", t);
+  emit_indent(g_pre, g_indent);
+  buf_printf(g_pre, "SP_GC_ROOT(_t%d);\n", t);
+  buf_printf(b, "({ _t%d = sp_PolyArray_new();", t);
   for (int i = from; i < pos_argc; i++) {
     const char *aty = nt_type(nt, argv[i]);
     if (aty && sp_streq(aty, "SplatNode")) {

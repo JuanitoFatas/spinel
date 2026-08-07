@@ -10874,9 +10874,14 @@ void emit_call(Compiler *c, int id, Buf *b) {
     /* Enumerator#+ chains two enumerators (#2481): the concatenation of their
        element sequences, materialized. */
     if (sp_streq(name, "+") && argc == 1 && comp_ntype(c, argv[0]) == TY_ENUMERATOR) {
-      buf_puts(b, "sp_Enumerator_new_from(sp_box_poly_array(sp_PolyArray_concat(sp_Enumerator_to_a(");
-      emit_expr(c, recv, b); buf_puts(b, "), sp_Enumerator_to_a(");
-      emit_expr(c, argv[0], b); buf_puts(b, "))))");
+      /* Both sides materialize before the concat, and materializing the second
+         allocates: the first array has to be rooted across it. */
+      { int t = ++g_tmp;
+        buf_printf(b, "({ sp_PolyArray *_t%d = sp_Enumerator_to_a(", t);
+        emit_expr(c, recv, b);
+        buf_printf(b, "); SP_GC_ROOT(_t%d);", t);
+        buf_printf(b, " sp_Enumerator_new_from(sp_box_poly_array(sp_PolyArray_concat(_t%d, sp_Enumerator_to_a(", t);
+        emit_expr(c, argv[0], b); buf_puts(b, ")))); })"); }
       return;
     }
     if (sp_streq(name, "rewind") && argc == 0) {

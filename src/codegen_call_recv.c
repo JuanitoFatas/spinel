@@ -3242,7 +3242,12 @@ else {
         return 1;
       }
       if (sp_streq(name, "+") && argc == 1 && a0 == TY_POLY_ARRAY) {
-        buf_puts(b, "sp_PolyArray_concat("); emit_expr(c, recv, b); buf_puts(b, ", "); emit_expr(c, argv[0], b); buf_puts(b, ")");
+        /* Spill the receiver: evaluating the operand can allocate, and until
+           the concat runs the receiver is in nothing but this temp. */
+        int t = ++g_tmp;
+        buf_printf(b, "({ sp_PolyArray *_t%d = ", t); emit_expr(c, recv, b);
+        buf_printf(b, "; SP_GC_ROOT(_t%d); sp_PolyArray_concat(_t%d, ", t, t);
+        emit_expr(c, argv[0], b); buf_puts(b, "); })");
         return 1;
       }
       /* poly_array + typed array: box the typed operand to poly, then concat. */
@@ -3251,8 +3256,10 @@ else {
                            a0 == TY_FLOAT_ARRAY ? "sp_FloatArray_to_poly" :
                            a0 == TY_STR_ARRAY ? "sp_StrArray_to_poly_fmt" : NULL;
         if (conv) {
-          buf_puts(b, "sp_PolyArray_concat("); emit_expr(c, recv, b);
-          buf_printf(b, ", %s(", conv); emit_expr(c, argv[0], b); buf_puts(b, "))");
+          int t = ++g_tmp;
+          buf_printf(b, "({ sp_PolyArray *_t%d = ", t); emit_expr(c, recv, b);
+          buf_printf(b, "; SP_GC_ROOT(_t%d); sp_PolyArray_concat(_t%d, %s(", t, t, conv);
+          emit_expr(c, argv[0], b); buf_puts(b, ")); })");
           return 1;
         }
       }

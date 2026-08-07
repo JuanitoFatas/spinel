@@ -3902,7 +3902,22 @@ void emit_class_new(Compiler *c, ClassInfo *ci, Buf *b) {
         }
       }
       else buf_puts(b, "void");
-      buf_printf(b, ") {\n  sp_%s *self = SP_POOL_NEW(%s, %s%s%s);\n",
+      buf_puts(b, ") {\n");
+      /* Root the reference arguments before the object allocation, for the
+         reason the Struct constructor below does: SP_POOL_NEW can collect, and
+         an argument the call site built as a fresh temporary is reachable from
+         nothing else until initialize stores it. A caller's own root does not
+         cover this when it lives in a statement expression, whose cleanup pops
+         when that expression ends rather than when the call it feeds runs. */
+      for (int i = 0; i < si->nparams; i++) {
+        LocalVar *p = scope_local(si, si->pnames[i]);
+        TyKind pt = (p && p->type != TY_UNKNOWN) ? p->type : TY_POLY;
+        if (comp_ty_value_obj(c, pt)) continue;
+        if (pt == TY_STRING)     buf_printf(b, "  SP_GC_ROOT_STR(lv_%s);\n", si->pnames[i]);
+        else if (pt == TY_POLY)  buf_printf(b, "  SP_GC_ROOT_RBVAL(lv_%s);\n", si->pnames[i]);
+        else if (needs_root(pt)) buf_printf(b, "  SP_GC_ROOT(lv_%s);\n", si->pnames[i]);
+      }
+      buf_printf(b, "  sp_%s *self = SP_POOL_NEW(%s, %s%s%s);\n",
                 ci->c_name, ci->c_name,
                 class_needs_scan(ci) ? "sp_" : "", class_needs_scan(ci) ? ci->c_name : "NULL",
                 class_needs_scan(ci) ? "_scan" : "");
