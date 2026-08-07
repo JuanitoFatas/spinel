@@ -55,15 +55,22 @@ void sp_curry_publish_args(sp_Curry *c);
    sp_bound_method_new hands to sp_gc_alloc), so moving its body to
    lib/sp_proc.c costs nothing -- taking its address from an inline
    context is just an embedded constant, not a call site. ---- */
+/* What `self` holds, so the scan knows whether to follow it: a Method can be
+   bound to an Integer or a Float as easily as to an object, and marking the
+   raw value as a pointer reads whatever address it names. */
+#define SP_BM_SELF_NONE 0   /* not a reference: a number, a class value, unbound */
+#define SP_BM_SELF_OBJ  1
+#define SP_BM_SELF_STR  2
 typedef struct sp_BoundMethod { void *self; mrb_int fn; const char *name; mrb_int arity;
   const char *desc;   /* compile-time #inspect rendering ("#<Method: Owner#name(params)>"), or NULL */
+  mrb_int self_kind;  /* SP_BM_SELF_* */
 } sp_BoundMethod;
 void sp_bm_cap_scan(void *p);
 mrb_int sp_method_proc_tramp(void *cap, mrb_int argc, mrb_int *args);
 sp_Proc *sp_method_to_proc(sp_BoundMethod *m);
 void sp_BoundMethod_scan(void *p);
 
-static inline sp_BoundMethod *sp_bound_method_new(void *self, mrb_int fn, const char *name, mrb_int arity) { sp_BoundMethod *m = (sp_BoundMethod *)sp_gc_alloc(sizeof(sp_BoundMethod), NULL, sp_BoundMethod_scan); m->self = self; m->fn = fn; m->name = name; m->arity = arity; m->desc = NULL; return m; }
-static inline sp_BoundMethod *sp_bound_method_new_d(void *self, mrb_int fn, const char *name, mrb_int arity, const char *desc) { sp_BoundMethod *m = sp_bound_method_new(self, fn, name, arity); m->desc = desc; return m; }
+static inline sp_BoundMethod *sp_bound_method_new(void *self, mrb_int self_kind, mrb_int fn, const char *name, mrb_int arity) { sp_BoundMethod *m = (sp_BoundMethod *)sp_gc_alloc(sizeof(sp_BoundMethod), NULL, sp_BoundMethod_scan); m->self = self; m->self_kind = self_kind; m->fn = fn; m->name = name; m->arity = arity; m->desc = NULL; return m; }
+static inline sp_BoundMethod *sp_bound_method_new_d(void *self, mrb_int self_kind, mrb_int fn, const char *name, mrb_int arity, const char *desc) { sp_BoundMethod *m = sp_bound_method_new(self, self_kind, fn, name, arity); m->desc = desc; return m; }
 
 #endif

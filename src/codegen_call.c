@@ -9540,7 +9540,7 @@ void emit_call(Compiler *c, int id, Buf *b) {
   if (sp_streq(name, "instance_method") && method_sym_arg(c, id) != NULL) {
     int umi = method_obj_target_mi(c, id);
     if (umi >= 0) {
-      buf_puts(b, "sp_bound_method_new_d(NULL, (mrb_int)(uintptr_t)&");
+      buf_puts(b, "sp_bound_method_new_d(NULL, SP_BM_SELF_NONE, (mrb_int)(uintptr_t)&");
       emit_method_cname(c, &c->scopes[umi], b);
       buf_puts(b, ", ");
       emit_str_literal(b, method_sym_arg(c, id));
@@ -9578,7 +9578,7 @@ void emit_call(Compiler *c, int id, Buf *b) {
     int tvu = ++g_tmp;
     buf_printf(b, "({ sp_BoundMethod *_t%d = ", tvu);
     emit_expr(c, recv, b);
-    buf_printf(b, "; sp_bound_method_new_d(NULL, _t%d->fn, _t%d->name, _t%d->arity, ", tvu, tvu, tvu);
+    buf_printf(b, "; sp_bound_method_new_d(NULL, SP_BM_SELF_NONE, _t%d->fn, _t%d->name, _t%d->arity, ", tvu, tvu, tvu);
     if (tmu >= 0) {
       char _db[512]; BUILD_METHOD_DESC(tmu, method_sym_arg(c, mnu), 1, _db);
       emit_str_literal(b, _db);
@@ -9605,7 +9605,7 @@ void emit_call(Compiler *c, int id, Buf *b) {
       int tvp = ++g_tmp;
       buf_printf(b, "({ sp_BoundMethod *_t%d = ", tvp);
       emit_expr(c, recv, b);
-      buf_printf(b, "; sp_bound_method_new_d(_t%d->self, (mrb_int)(uintptr_t)&", tvp);
+      buf_printf(b, "; sp_bound_method_new_d(_t%d->self, _t%d->self_kind, (mrb_int)(uintptr_t)&", tvp, tvp);
       emit_method_cname(c, &c->scopes[pmip], b);
       buf_puts(b, ", ");
       emit_str_literal(b, c->scopes[pmip].name ? c->scopes[pmip].name : "?");
@@ -9668,7 +9668,7 @@ void emit_call(Compiler *c, int id, Buf *b) {
     if (t2 >= 0 && ty_is_object(comp_ntype(c, argv[0]))) {
       buf_puts(b, "sp_bound_method_new_d((void *)(");
       emit_expr(c, argv[0], b);
-      buf_puts(b, "), (mrb_int)(uintptr_t)&");
+      buf_puts(b, "), SP_BM_SELF_OBJ, (mrb_int)(uintptr_t)&");
       emit_method_cname(c, &c->scopes[t2], b);
       buf_puts(b, ", ");
       emit_str_literal(b, method_sym_arg(c, mn2));
@@ -9689,11 +9689,19 @@ void emit_call(Compiler *c, int id, Buf *b) {
     buf_puts(b, mi >= 0 ? "sp_bound_method_new_d(" : "sp_bound_method_new(");
     /* A Method bound to a class/module (Klass.method(:cmeth)) has no instance
        self -- the class value is not a heap pointer, so pass NULL. */
+    const char *self_kind = "SP_BM_SELF_NONE";
     if (recv >= 0 && comp_ntype(c, recv) == TY_CLASS) buf_puts(b, "NULL");
-    else if (recv >= 0) { buf_puts(b, "(void *)("); emit_expr(c, recv, b); buf_puts(b, ")"); }
-    else if (self_bound) buf_printf(b, "(void *)%s", g_self);
+    else if (recv >= 0) {
+      TyKind rt2 = comp_ntype(c, recv);
+      /* A Method binds to whatever the receiver is, and a number is not a
+         reference the collector can follow. */
+      if (rt2 == TY_STRING || rt2 == TY_STRBUF) self_kind = "SP_BM_SELF_STR";
+      else if (needs_root(rt2) && rt2 != TY_POLY && !comp_ty_value_obj(c, rt2)) self_kind = "SP_BM_SELF_OBJ";
+      buf_puts(b, "(void *)("); emit_expr(c, recv, b); buf_puts(b, ")");
+    }
+    else if (self_bound) { buf_printf(b, "(void *)%s", g_self); self_kind = "SP_BM_SELF_OBJ"; }
     else buf_puts(b, "NULL");
-    buf_puts(b, ", ");
+    buf_printf(b, ", %s, ", self_kind);
     if (mi >= 0) { buf_puts(b, "(mrb_int)(uintptr_t)&"); emit_method_cname(c, &c->scopes[mi], b); }
     else {
       /* `<typed_array>.method(:op)`: lower through a per-(type, op) adapter
@@ -9897,9 +9905,15 @@ void emit_call(Compiler *c, int id, Buf *b) {
          optionals/rest into nparams > nrequired). */
       int m_arity = (np != tm->nrequired) ? -(tm->nrequired - shift + 1)
                                           : tm->nrequired - shift;
-      buf_printf(b, "sp_proc_new_meta((void *)_mtp_%d, (void *)(", tid);
-      emit_expr(c, recv, b);
-      buf_printf(b, "), sp_bm_cap_scan, %d, TRUE, 0, NULL, NULL)", m_arity);
+      /* The capture is built before sp_proc_new_meta allocates the proc it
+         goes into, and until the proc holds it the C argument slot is the only
+         thing that does, so the proc's own allocation could collect it. */
+      { int tcap = ++g_tmp;
+        buf_printf(b, "({ void *_t%d = (void *)(", tcap);
+        emit_expr(c, recv, b);
+        buf_printf(b, "); SP_GC_ROOT(_t%d);", tcap);
+        buf_printf(b, " sp_proc_new_meta((void *)_mtp_%d, _t%d, sp_bm_cap_scan, %d, TRUE, 0, NULL, NULL); })",
+                   tid, tcap, m_arity); }
       return;
     }
     buf_puts(b, "sp_method_to_proc(");

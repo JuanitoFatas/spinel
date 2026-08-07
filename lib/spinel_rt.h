@@ -8124,7 +8124,13 @@ sp_RbVal sp_Enumerator_size(sp_Enumerator *e);
    then outer: `(f << g).call(x)` == f(g(x)). For `>>` the codegen
    swaps the operands so `(f >> g).call(x)` == g(f(x)). */
 typedef struct { sp_Proc *outer; sp_Proc *inner; } sp_ProcCompose;
-static void sp_proc_compose_scan(void *p) { sp_ProcCompose *c = (sp_ProcCompose *)p; if (c->outer) sp_gc_mark(c->outer); if (c->inner) sp_gc_mark(c->inner); }
+/* Also marks the capture itself: sp_Proc_scan calls a proc's cap_scan on the
+   capture WITHOUT marking it first, so a cap_scan that only walks the fields
+   leaves the capture to be swept out from under the proc that holds it. Every
+   other cap_scan (generated closures, bound methods, hash procs) opens with
+   the same mark; when this one runs as the capture's OWN scan hook the mark
+   is already set and the call returns at once. */
+static void sp_proc_compose_scan(void *p) { sp_gc_mark(p); sp_ProcCompose *c = (sp_ProcCompose *)p; if (c->outer) sp_gc_mark(c->outer); if (c->inner) sp_gc_mark(c->inner); }
 static mrb_int sp_proc_compose_fn(void *cap, mrb_int argc, mrb_int *args) {
   sp_ProcCompose *c = (sp_ProcCompose *)cap;
   /* CRuby enforces the FIRST-CALLED function's arity on the composed call
@@ -8167,6 +8173,8 @@ static sp_Proc *sp_proc_compose(sp_Proc *outer, sp_Proc *inner) { SP_GC_ROOT(out
      collection happens before the call. Publish them into the capture FIRST,
      with the capture itself rooted, so the allocation in sp_proc_new_meta below
      has something to find them through. */
+  SP_GC_ROOT(outer);
+  SP_GC_ROOT(inner);
   sp_ProcCompose *c = (sp_ProcCompose *)sp_gc_alloc(sizeof(sp_ProcCompose), NULL, sp_proc_compose_scan);
   SP_GC_ROOT(c);
   c->outer = outer;

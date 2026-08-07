@@ -101,5 +101,11 @@ sp_Proc *sp_method_to_proc(sp_BoundMethod *m) {
 /* Bound Method object: `obj.method(:foo)` / `method(:foo)`. `self` is the
    bound receiver (NULL for a top-level method), `fn` the function address
    (cast to the right signature at the call site), `name` the method name
-   (a string literal). Only `self` is GC-managed. */
-void sp_BoundMethod_scan(void *p) { sp_BoundMethod *m = (sp_BoundMethod *)p; if (m->self) sp_gc_mark(m->self); }
+   (a string literal). `self_kind` says whether `self` is a reference
+   the collector should follow, and of which kind. */
+void sp_BoundMethod_scan(void *p) {
+  sp_BoundMethod *m = (sp_BoundMethod *)p;
+  if (!m->self) return;
+  if (m->self_kind == SP_BM_SELF_OBJ) sp_gc_mark(m->self);
+  else if (m->self_kind == SP_BM_SELF_STR) sp_mark_string((const char *)m->self);
+}
