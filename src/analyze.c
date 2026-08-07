@@ -9058,6 +9058,51 @@ static int splat_local_len(Compiler *c, int ex, int callid) {
   }
   return writes == 1 ? len : -1;
 }
+/* How many arguments the builtin requires, for a splat whose length only the
+   run time knows. Only the required count: an optional trailing parameter
+   (`fetch`'s default, `split`'s limit) cannot be chosen without knowing the
+   length, and reading one that the array may not carry would pass nil where
+   Ruby passes nothing. -1 for a name with no single answer. */
+static int splat_builtin_arity(const char *name) {
+  static const struct { const char *name; int arity; } tab[] = {
+    { "fetch", 1 }, { "store", 2 }, { "insert", 2 }, { "slice", 1 },
+    { "delete", 1 }, { "sub", 2 }, { "sub!", 2 }, { "gsub", 2 },
+    { "gsub!", 2 }, { "[]", 1 }, { "[]=", 2 },
+    { "key?", 1 }, { "has_key?", 1 }, { "include?", 1 }, { "member?", 1 },
+    { "value?", 1 }, { "has_value?", 1 }, { "index", 1 }, { "rindex", 1 },
+    { "count", 1 }, { "split", 1 }, { "join", 1 },
+    { "start_with?", 1 }, { "end_with?", 1 }, { "tr", 2 }, { "tr_s", 2 },
+    { NULL, 0 }
+  };
+  for (int i = 0; tab[i].name; i++)
+    if (sp_streq(name, tab[i].name)) return tab[i].arity;
+  return -1;
+}
+/* Whether some user method of this name could not take `n` positional
+   arguments, which is what makes expanding unsafe: the call might be that
+   method's, and then the elements would not fill its parameters. A negative
+   `n` means the count is unknown, so any definition of the name rejects. */
+static int splat_user_method_rejects(Compiler *c, const char *name, int n) {
+  for (int si = 0; si < c->nscopes; si++) {
+    Scope *s = &c->scopes[si];
+    if (!s->name || !sp_streq(s->name, name)) continue;
+    if (n < 0) return 1;
+    if (s->rest_idx >= 0) continue;                    /* takes any count */
+    if (n < s->nrequired || n > s->nparams) return 1;
+  }
+  return 0;
+}
+/* A literal receiver is the builtin's own, whatever user classes share the
+   method name. */
+static int splat_recv_is_builtin_literal(NodeTable *nt, int id) {
+  int r = nt_ref(nt, id, "receiver");
+  const char *t = r >= 0 ? nt_type(nt, r) : NULL;
+  if (!t) return 0;
+  return sp_streq(t, "StringNode") || sp_streq(t, "InterpolatedStringNode") ||
+         sp_streq(t, "ArrayNode") || sp_streq(t, "HashNode") ||
+         sp_streq(t, "IntegerNode") || sp_streq(t, "FloatNode") ||
+         sp_streq(t, "SymbolNode") || sp_streq(t, "RangeNode");
+}
 static void expand_static_splat_args(Compiler *c) {
   NodeTable *nt = (NodeTable *)c->nt;
   int count = nt->count;
@@ -9083,11 +9128,16 @@ static void expand_static_splat_args(Compiler *c) {
        builtins take the array correctly as it stands -- `puts(*a)`,
        `format(*args)`, `Struct.new(*syms)` all rely on that, and expanding
        them types each element separately or loses the compile-time member
-       names. A user definition of the same name wins, since then the call is
-       not a builtin at all. */
+       names. */
     static const char *fixed_arity_builtins[] = {
       "fetch", "store", "insert", "slice", "fill", "delete",
-      "sub", "sub!", "gsub", "gsub!", "[]", "[]=", NULL
+      "sub", "sub!", "gsub", "gsub!", "[]", "[]=",
+      /* the predicate and search families: each takes its argument as a scalar
+         in C, so an unexpanded array reached the slot as a pointer and the
+         call answered from a comparison against garbage */
+      "key?", "has_key?", "include?", "member?", "value?", "has_value?",
+      "index", "rindex", "count", "split", "join",
+      "start_with?", "end_with?", "tr", "tr_s", NULL
     };
     const char *cnm = nt_str(nt, id, "name");
     if (!cnm) continue;
@@ -9095,10 +9145,6 @@ static void expand_static_splat_args(Compiler *c) {
     for (int j = 0; fixed_arity_builtins[j]; j++)
       if (sp_streq(cnm, fixed_arity_builtins[j])) { listed = 1; break; }
     if (!listed) continue;
-    { int user_owns = 0;
-      for (int si = 0; si < c->nscopes && !user_owns; si++)
-        if (c->scopes[si].name && sp_streq(c->scopes[si].name, cnm)) user_owns = 1;
-      if (user_owns) continue; }
     int ex = nt_ref(nt, argv[sp_at], "expression");
     if (ex < 0) continue;
     const char *ext = nt_type(nt, ex);
@@ -9116,16 +9162,36 @@ static void expand_static_splat_args(Compiler *c) {
     else if (sp_streq(ext, "LocalVariableReadNode")) n = splat_local_len(c, ex, id);
     else continue;
     if (n < 0) {
-      /* A fixed-arity builtin's parameter list is its C function's, so a splat
-         whose length is not static cannot be mapped onto it: the array reaches
-         the slot expecting one key and the C does not compile. Say so here
-         rather than letting the C compiler report it against generated code
-         the user never wrote. (Variadic builtins never get here -- they take
-         the array as it stands and were filtered out above.) */
-      unsupported_feature(c, id, "splat whose length is not known at compile time, "
-                                 "into a fixed-arity builtin");
+      /* The length is not static -- the usual case being a splat forwarded
+         from a parameter, `def f(keys); h.fetch(*keys); end`. The builtin's
+         own arity still says how many elements to read, so expand to that
+         many `a[i]`: the array reaching a scalar slot is what breaks, not the
+         count. Reading past the end yields nil rather than Ruby's
+         ArgumentError, and an element beyond the required arity is not
+         passed on. */
+      /* A block moves the required count (`sub(pat) { .. }` takes one
+         argument, not two), so leave those alone. */
+      n = nt_ref(nt, id, "block") >= 0 ? -1 : splat_builtin_arity(cnm);
+      if (n < 0 && splat_user_method_rejects(c, cnm, n)) continue;
+      if (n < 0) {
+        /* No arity to expand to (a name we list for its literal-splat form
+           only). Say so here rather than letting the C compiler report it
+           against generated code the user never wrote. (Variadic builtins
+           never get here -- they take the array as it stands and were
+           filtered out above.) */
+        unsupported_feature(c, id, "splat whose length is not known at compile time, "
+                                   "into a fixed-arity builtin");
+      }
     }
     if (n > 8) continue;                 /* keep the synthesized list small */
+    /* A user method of the same name can own the call, and these names are
+       ordinary ones to define (`index`, `count`, `include?`). Expanding is
+       still right when that method takes exactly this many positional
+       arguments, since the elements land on the same parameters either way;
+       when it cannot, leave the call alone -- codegen reads the array into
+       the declared params -- unless the receiver is a builtin literal, which
+       no user method is reachable from. */
+    if (splat_user_method_rejects(c, cnm, n) && !splat_recv_is_builtin_literal(nt, id)) continue;
     const char *lnm = is_lit ? NULL : nt_str(nt, ex, "name");
     if (!is_lit && !lnm) continue;
     int nargs[32];
