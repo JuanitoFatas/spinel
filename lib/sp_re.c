@@ -254,7 +254,7 @@ mrb_bool sp_re_match_p_at(mrb_regexp_pattern *pat, const char *str, mrb_int pos)
    String (plain or shared-mutable handle) or a Symbol can match; a match
    updates the $~ registers like =~. Any other operand answers false and
    clears the registers (CRuby sets the backref to nil there). */
-mrb_bool sp_re_case_eq(mrb_regexp_pattern *pat, sp_RbVal v) {
+mrb_bool sp_re_case_eq(mrb_regexp_pattern *pat, sp_RbVal v) {SP_GC_ROOT_RBVAL(v);
   const char *s = NULL;
   if (v.tag == SP_TAG_STR) s = v.v.s ? v.v.s : "";
   else if (v.tag == SP_TAG_OBJ && v.cls_id == SP_BUILTIN_STRBUF && v.v.p)

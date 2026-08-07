@@ -721,7 +721,7 @@ static void sp_thread_scan(void *p) {
   if (t->tls) sp_gc_mark(t->tls);
 }
 
-sp_thread *sp_Thread_spawn_fiber_at(sp_Fiber *f, sp_RbVal arg, const char *file, mrb_int line) {SP_GC_ROOT(f);SP_GC_ROOT_STR(file);
+sp_thread *sp_Thread_spawn_fiber_at(sp_Fiber *f, sp_RbVal arg, const char *file, mrb_int line) {SP_GC_ROOT_RBVAL(arg);SP_GC_ROOT(f);SP_GC_ROOT_STR(file);
   sp_thread *t = sp_Thread_spawn_fiber(f, arg);
   t->birth_file = file;
   t->birth_line = line;

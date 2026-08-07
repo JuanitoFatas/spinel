@@ -7604,6 +7604,7 @@ static sp_PolyArray *sp_poly_slice_groups(sp_RbVal arr, sp_RbVal pat, int after)
   return out;
 }
 static sp_Enumerator *sp_Enumerator_new_slices(sp_RbVal arr, mrb_int n) {
+  SP_GC_ROOT_RBVAL(arr);   /* published into the enumerator below, after several allocations */
   if (n < 1) sp_raise_cls("ArgumentError", "invalid slice size");
   sp_PolyArray *items = sp_enum_items_from(arr); SP_GC_ROOT(items);
   sp_PolyArray *out = sp_PolyArray_new(); SP_GC_ROOT(out);
@@ -7623,6 +7624,7 @@ static sp_Enumerator *sp_Enumerator_new_slices(sp_RbVal arr, mrb_int n) {
 /* Array#each_cons(n) with no block: a materialized Enumerator whose items are
    the sliding windows of length n (none when len < n). */
 static sp_Enumerator *sp_Enumerator_new_cons(sp_RbVal arr, mrb_int n) {
+  SP_GC_ROOT_RBVAL(arr);   /* published into the enumerator below, after several allocations */
   if (n < 1) sp_raise_cls("ArgumentError", "invalid size");
   sp_PolyArray *items = sp_enum_items_from(arr); SP_GC_ROOT(items);
   sp_PolyArray *out = sp_PolyArray_new(); SP_GC_ROOT(out);

@@ -759,7 +759,7 @@ mrb_int sp_int_round_half(mrb_int v, mrb_int nd, int mode) {
   return q * f;
 }
 
-sp_RbVal sp_poly_replace(sp_RbVal recv, sp_RbVal src) {
+sp_RbVal sp_poly_replace(sp_RbVal recv, sp_RbVal src) {SP_GC_ROOT_RBVAL(recv);SP_GC_ROOT_RBVAL(src);
   if (recv.tag != SP_TAG_OBJ) return recv;
   /* String#replace on a shared-mutable handle: swap the buffer contents in
      place, from a plain string box or another handle (#3227). */
@@ -1880,7 +1880,7 @@ sp_Enumerator *sp_Enumerator_with_index(sp_Enumerator *e, mrb_int off) {
   { sp_RbVal src_recv = e ? e->source : sp_box_nil();
     sp_Enumerator *r = sp_Enumerator_new_from_items(out); r->source = src_recv; return r; }
 }
-sp_Enumerator *sp_Enumerator_new_gen(void (*gen)(sp_Fiber *), void *cap, sp_RbVal size) {
+sp_Enumerator *sp_Enumerator_new_gen(void (*gen)(sp_Fiber *), void *cap, sp_RbVal size) {SP_GC_ROOT_RBVAL(size);
   sp_Enumerator *e = (sp_Enumerator *)sp_gc_alloc(sizeof(sp_Enumerator), NULL, sp_Enumerator_scan);
   e->items = NULL; e->cursor = 0; e->gen = gen; e->gen_cap = cap; e->fib = NULL; e->peeked = FALSE; e->size = size; e->feed = sp_box_nil(); e->has_feed = FALSE; e->gen_result = sp_box_nil(); e->source = sp_box_nil(); e->meth = "each";
   return e;
@@ -1950,7 +1950,7 @@ sp_RbVal sp_Enumerator_peek(sp_Enumerator *e) {SP_GC_ROOT(e); sp_gc_wb((void*)e)
   if (!e->items || e->cursor >= e->items->len) sp_raise_stop_iteration(e->source);
   return e->items->data[e->cursor];
 }
-sp_PolyArray *sp_enum_values_wrap(sp_RbVal v) {
+sp_PolyArray *sp_enum_values_wrap(sp_RbVal v) {SP_GC_ROOT_RBVAL(v);
   if (v.tag == SP_TAG_OBJ && v.cls_id == SP_BUILTIN_POLY_ARRAY) return (sp_PolyArray *)v.v.p;
   sp_PolyArray *a = sp_PolyArray_new(); SP_GC_ROOT(a);
   sp_PolyArray_push(a, v);
@@ -1965,7 +1965,7 @@ sp_Enumerator *sp_Enumerator_rewind(sp_Enumerator *e) { sp_gc_wb((void*)e);
   e->feed = sp_box_nil(); e->has_feed = FALSE;
   return e;
 }
-sp_RbVal sp_Enumerator_feed(sp_Enumerator *e, sp_RbVal v) {SP_GC_ROOT(e); sp_gc_wb((void*)e);
+sp_RbVal sp_Enumerator_feed(sp_Enumerator *e, sp_RbVal v) {SP_GC_ROOT_RBVAL(v);SP_GC_ROOT(e); sp_gc_wb((void*)e);
   if (!e) return sp_box_nil();
   if (e->has_feed) sp_raise_cls("TypeError", (&("\xff" "feed value already set")[1]));
   e->feed = v; e->has_feed = TRUE;
@@ -2024,7 +2024,7 @@ void sp_sig_exit_dispatch(void) {
   sp_trap_proc[0] = NULL;   /* run once */
   if (p) { mrb_int slot = 0; _sp_proc_poly_args[0] = sp_box_int(0); sp_proc_call(p, 1, &slot); }
 }
-sp_RbVal sp_signal_trap(sp_RbVal sig, sp_RbVal handler) {
+sp_RbVal sp_signal_trap(sp_RbVal sig, sp_RbVal handler) {SP_GC_ROOT_RBVAL(sig);SP_GC_ROOT_RBVAL(handler);
   int no = sp_signal_resolve(sig);
   if (no == SIGKILL || no == SIGSTOP)
     sp_raise_cls("Errno::EINVAL",
@@ -2055,7 +2055,7 @@ sp_RbVal sp_signal_trap(sp_RbVal sig, sp_RbVal handler) {
   }
   return prev;
 }
-mrb_int sp_process_kill1(sp_RbVal sig, mrb_int pid) {
+mrb_int sp_process_kill1(sp_RbVal sig, mrb_int pid) {SP_GC_ROOT_RBVAL(sig);
   int no = sp_signal_resolve(sig);
   if (kill((pid_t)pid, no) != 0) {
     if (errno == ESRCH) sp_raise_cls("Errno::ESRCH", sp_sprintf("No such process - %lld", (long long)pid));
@@ -2507,7 +2507,7 @@ sp_RbVal sp_box_float_or_nil(mrb_float v) { return sp_float_is_nil(v) ? sp_box_n
    has no room for the sentinel check the hot path cannot afford. Where analyze
    knows a particular receiver's elements can hold one, it wraps that read in
    this: the correction is paid at the marked site only (#3505). */
-sp_RbVal sp_unsentinel(sp_RbVal v) {
+sp_RbVal sp_unsentinel(sp_RbVal v) {SP_GC_ROOT_RBVAL(v);
   if (v.tag == SP_TAG_INT && v.v.i == SP_INT_NIL) return sp_box_nil();
   if (v.tag == SP_TAG_FLT && sp_float_is_nil(v.v.f)) return sp_box_nil();
   return v;
@@ -2908,7 +2908,7 @@ mrb_float sp_brat_to_f(sp_BigRational *r) {SP_GC_ROOT(r);
    types; sp_re_init (codegen) installs them into sp_marshal_v along with the
    generated sym_intern / obj_dump / obj_load. */
 sp_RbVal sp_marv_arr_new(void) { return sp_box_poly_array(sp_PolyArray_new()); }
-void sp_marv_arr_push(sp_RbVal a, sp_RbVal v) { sp_PolyArray_push((sp_PolyArray *)a.v.p, v); }
+void sp_marv_arr_push(sp_RbVal a, sp_RbVal v) {SP_GC_ROOT_RBVAL(a);SP_GC_ROOT_RBVAL(v); sp_PolyArray_push((sp_PolyArray *)a.v.p, v); }
 sp_RbVal sp_marv_box_complex(mrb_float re, mrb_float im) { sp_Complex c; c.re = re; c.im = im; return sp_box_complex(c); }
 sp_RbVal sp_marv_box_rational(mrb_int n, mrb_int d) { return sp_box_rational(sp_rational_new(n, d)); }
 void sp_marv_raise(const char *cls, const char *msg) {SP_GC_ROOT_STR(cls);SP_GC_ROOT_STR(msg); sp_raise_cls(cls, msg); }
@@ -3000,7 +3000,7 @@ const char *sp_re_sub_str_str_hash(mrb_regexp_pattern *pat, const char *str, sp_
 }
 /* msg: an explicit second argument overrides the SIG<name> message (only the
    Integer-signal form accepts one, matching CRuby); NULL keeps the default. */
-sp_Exception *sp_signal_exc_new_m(sp_RbVal sig, const char *msg) {SP_GC_ROOT_STR(msg);
+sp_Exception *sp_signal_exc_new_m(sp_RbVal sig, const char *msg) {SP_GC_ROOT_RBVAL(sig);SP_GC_ROOT_STR(msg);
   if (msg && sig.tag != SP_TAG_INT)
     sp_raise_cls("ArgumentError", "wrong number of arguments");
   int no = sp_signal_resolve(sig);
@@ -3011,7 +3011,7 @@ sp_Exception *sp_signal_exc_new_m(sp_RbVal sig, const char *msg) {SP_GC_ROOT_STR
   e->xkey = sp_box_int((mrb_int)no);
   return e;
 }
-sp_Exception *sp_signal_exc_new(sp_RbVal sig) {
+sp_Exception *sp_signal_exc_new(sp_RbVal sig) {SP_GC_ROOT_RBVAL(sig);
   return sp_signal_exc_new_m(sig, NULL);
 }
 sp_Exception *sp_interrupt_new(const char *msg) {SP_GC_ROOT_STR(msg);
@@ -3030,7 +3030,7 @@ sp_Exception *sp_interrupt_new(const char *msg) {SP_GC_ROOT_STR(msg);
    as sp_PolyArray* read garbage lengths and marshalled NULL (the toy LoRA
    flatline). nil passes as NULL (the C idiom for an absent array); any other
    runtime kind raises loudly rather than silently handing the callee NULL. */
-const int64_t *sp_ffi_int_array_data(sp_RbVal v) {
+const int64_t *sp_ffi_int_array_data(sp_RbVal v) {SP_GC_ROOT_RBVAL(v);
   if (v.tag == SP_TAG_OBJ && v.cls_id == SP_BUILTIN_INT_ARRAY)
     return sp_IntArray_ffi_data((sp_IntArray *)v.v.p);
   if (v.tag == SP_TAG_OBJ && v.cls_id == SP_BUILTIN_POLY_ARRAY)
@@ -3039,7 +3039,7 @@ const int64_t *sp_ffi_int_array_data(sp_RbVal v) {
   sp_raise_cls("TypeError", "no implicit conversion into an FFI :int_array");
   return (const int64_t *)0;  /* unreached */
 }
-const double *sp_ffi_float_array_data(sp_RbVal v) {
+const double *sp_ffi_float_array_data(sp_RbVal v) {SP_GC_ROOT_RBVAL(v);
   if (v.tag == SP_TAG_OBJ && v.cls_id == SP_BUILTIN_FLT_ARRAY)
     return sp_FloatArray_ffi_data((sp_FloatArray *)v.v.p);
   if (v.tag == SP_TAG_OBJ && v.cls_id == SP_BUILTIN_POLY_ARRAY)

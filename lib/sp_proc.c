@@ -65,7 +65,7 @@ sp_Curry *sp_curry_new(sp_Proc *p) {
 }
 /* Each accumulated argument is stored boxed so a non-int arg (a String, an
    object, ...) keeps its type through the deferred call (#3183). */
-sp_Curry *sp_curry_apply(sp_Curry *c, sp_RbVal arg) {
+sp_Curry *sp_curry_apply(sp_Curry *c, sp_RbVal arg) {SP_GC_ROOT_RBVAL(arg);
   /* root the source accumulator: in a chained apply it is only referenced
      from a C argument slot, and this allocation can collect */
   SP_GC_ROOT(c);
