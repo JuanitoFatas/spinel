@@ -958,6 +958,19 @@ void emit_assign(Compiler *c, int id, Buf *b, int indent) {
   const char *vty = nt_type(c->nt, v);
   int vn = 0;
   int is_empty_array = vty && sp_streq(vty, "ArrayNode") && (nt_arr(c->nt, v, "elements", &vn), vn == 0);
+  /* `[].dup` / `[].clone`: a copy of nothing is a new empty array, and it must
+     be built at the target's type. Emitted as a call it took the literal's own
+     default kind and wrote an sp_IntArray into a poly-array slot (#3608). */
+  if (!is_empty_array && vty && sp_streq(vty, "CallNode") &&
+      nt_str(c->nt, v, "name") &&
+      (sp_streq(nt_str(c->nt, v, "name"), "dup") || sp_streq(nt_str(c->nt, v, "name"), "clone")) &&
+      nt_ref(c->nt, v, "block") < 0) {
+    int dr = nt_ref(c->nt, v, "receiver");
+    const char *drt = dr >= 0 ? nt_type(c->nt, dr) : NULL;
+    int den = 0;
+    if (drt && sp_streq(drt, "ArrayNode") && (nt_arr(c->nt, dr, "elements", &den), den == 0))
+      is_empty_array = 1;
+  }
   /* a bare `Array.new` (no size/block) is an empty array of the target's type */
   if (!is_empty_array && vty && sp_streq(vty, "CallNode") &&
       sp_streq(nt_str(c->nt, v, "name") ? nt_str(c->nt, v, "name") : "", "new") &&

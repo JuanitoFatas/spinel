@@ -252,9 +252,14 @@ int emit_array_call(Compiler *c, int id, Buf *b) {
      TY_POLY_ARRAY for dispatch, and the poly-array arms below build/consume it
      as a PolyArray. Pin the node's cached type so the receiver emits as a
      PolyArray too, keeping the generated C well-typed (#3223). */
-  if (recv >= 0 && rt == TY_POLY_ARRAY && comp_ntype(c, recv) == TY_UNKNOWN &&
+  if (recv >= 0 && rt == TY_POLY_ARRAY &&
+      (comp_ntype(c, recv) == TY_UNKNOWN || ty_is_array(comp_ntype(c, recv))) &&
       nt_type(nt, recv) && sp_streq(nt_type(nt, recv), "ArrayNode")) {
     int en = 0; nt_arr(nt, recv, "elements", &en);
+    /* A cached typed-array kind is no better than UNKNOWN here: the literal is
+       empty, so the kind is a default rather than an element type, and emitting
+       (say) sp_IntArray_new() into a poly-array slot reads back the wrong
+       struct (#3608). */
     if (en == 0) c->ntype[recv] = TY_POLY_ARRAY;
   }
   TyKind a0 = argc >= 1 ? comp_ntype(c, argv[0]) : TY_UNKNOWN;
