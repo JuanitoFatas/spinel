@@ -85,6 +85,15 @@ int emit_array_call(Compiler *c, int id, Buf *b) {
       emit_expr(c, recvZ, b);
       return 1;
     }
+    /* zip with nothing to zip against: each element alone in a one-element
+       array. Every zip arm below is written for argc >= 1 (#3612). */
+    if (nmZ && recvZ >= 0 && acZ == 0 && nt_ref(ntZ, id, "block") < 0 &&
+        sp_streq(nmZ, "zip") && ty_is_array(comp_ntype(c, recvZ))) {
+      buf_puts(b, "sp_poly_zip_none(");
+      emit_boxed(c, recvZ, b);
+      buf_puts(b, ")");
+      return 1;
+    }
   }
 
   /* Shared-mutable shim, value position (#3227): same shadow-copy re-entry

@@ -5031,6 +5031,21 @@ static sp_RbVal sp_poly_each_elem(sp_RbVal a, mrb_int i) {
     default: return sp_box_nil();
   }
 }
+/* Array#zip with no arguments: each element alone in a one-element array
+   ([1, 2].zip -> [[1], [2]]), the degenerate case of zipping nothing (#3612). */
+static sp_PolyArray *sp_poly_zip_none(sp_RbVal a) {
+  SP_GC_ROOT_RBVAL(a);
+  sp_PolyArray *r = sp_PolyArray_new();
+  SP_GC_ROOT(r);
+  mrb_int n = sp_poly_arr_len(a);
+  for (mrb_int i = 0; i < n; i++) {
+    sp_PolyArray *e = sp_PolyArray_new();
+    SP_GC_ROOT(e);
+    sp_PolyArray_push(e, sp_poly_each_elem(a, i));
+    sp_PolyArray_push(r, sp_box_poly_array(e));
+  }
+  return r;
+}
 /* Kernel#warn's per-message rendering: an Array contributes one line per
    element (recursively, so a nested array flattens and an empty one
    contributes nothing); anything else is its to_s on a line of its own. A
