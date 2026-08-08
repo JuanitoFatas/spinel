@@ -6795,6 +6795,91 @@ int desugar_block_implicit_rest(Compiler *c) {
   return changed;
 }
 
+/* `xs.sort_by.with_index { |v, i| key }`: a blockless sort_by answers an
+   Enumerator whose with_index feeds the index to the key block. There is no
+   Enumerator arm for the *_by family, so rewrite the chain into the equivalent
+   spelling over pairs and take the values back out:
+
+     xs.each_with_index.sort_by { |v, i| key }.map { |p| p[0] }
+
+   Only the no-offset form: `with_index(1)` would need the index to start
+   somewhere each_with_index cannot. */
+int desugar_sort_by_with_index(Compiler *c) {
+  NodeTable *nt = (NodeTable *)c->nt;
+  int changed = 0;
+  int n0 = nt->count;
+  for (int id = 0; id < n0; id++) {
+    if (nt_kind(nt, id) != NK_CallNode) continue;
+    const char *nm = nt_str(nt, id, "name");
+    if (!nm || !sp_streq(nm, "with_index")) continue;
+    if (nt_ref(nt, id, "arguments") >= 0) continue;         /* with_index(offset) */
+    int blk = nt_ref(nt, id, "block");
+    if (blk < 0 || !nt_type(nt, blk) || !sp_streq(nt_type(nt, blk), "BlockNode")) continue;
+    int recv = nt_ref(nt, id, "receiver");
+    if (recv < 0 || nt_kind(nt, recv) != NK_CallNode) continue;
+    const char *rnm = nt_str(nt, recv, "name");
+    if (!rnm || !sp_streq(rnm, "sort_by")) continue;
+    if (nt_ref(nt, recv, "block") >= 0 || nt_ref(nt, recv, "arguments") >= 0) continue;
+    int src = nt_ref(nt, recv, "receiver");
+    if (src < 0) continue;
+
+    int base = nt->count;
+    /* src.each_with_index */
+    int ewi = nt_new_node(nt, "CallNode");
+    nt_node_set_ref(nt, ewi, "receiver", src);
+    nt_node_set_str(nt, ewi, "name", "each_with_index");
+    nt_node_set_ref(nt, ewi, "arguments", -1);
+    nt_node_set_ref(nt, ewi, "block", -1);
+    /* .sort_by { |v, i| key } -- the with_index block, moved across */
+    int sb = nt_new_node(nt, "CallNode");
+    nt_node_set_ref(nt, sb, "receiver", ewi);
+    nt_node_set_str(nt, sb, "name", "sort_by");
+    nt_node_set_ref(nt, sb, "arguments", -1);
+    nt_node_set_ref(nt, sb, "block", blk);
+    /* .map { |p| p[0] } */
+    char pn[48]; snprintf(pn, sizeof pn, "__wi_pair_%d", id);
+    int preq = nt_new_node(nt, "RequiredParameterNode");
+    nt_node_set_str(nt, preq, "name", pn);
+    int params = nt_new_node(nt, "ParametersNode");
+    nt_node_set_arr(nt, params, "requireds", &preq, 1);
+    int bparams = nt_new_node(nt, "BlockParametersNode");
+    nt_node_set_ref(nt, bparams, "parameters", params);
+    int pread = nt_new_node(nt, "LocalVariableReadNode");
+    nt_node_set_str(nt, pread, "name", pn);
+    int zero = nt_new_node(nt, "IntegerNode");
+    nt_node_set_int(nt, zero, "value", 0);
+    int idxargs = nt_new_node(nt, "ArgumentsNode");
+    nt_node_set_arr(nt, idxargs, "arguments", &zero, 1);
+    int idx = nt_new_node(nt, "CallNode");
+    nt_node_set_ref(nt, idx, "receiver", pread);
+    nt_node_set_str(nt, idx, "name", "[]");
+    nt_node_set_ref(nt, idx, "arguments", idxargs);
+    nt_node_set_ref(nt, idx, "block", -1);
+    int mbody = nt_new_node(nt, "StatementsNode");
+    nt_node_set_arr(nt, mbody, "body", &idx, 1);
+    int mblk = nt_new_node(nt, "BlockNode");
+    if (ewi < 0 || sb < 0 || preq < 0 || params < 0 || bparams < 0 || pread < 0 ||
+        zero < 0 || idxargs < 0 || idx < 0 || mbody < 0 || mblk < 0) continue;
+    nt_node_set_ref(nt, mblk, "parameters", bparams);
+    nt_node_set_ref(nt, mblk, "body", mbody);
+
+    /* the with_index call BECOMES the map, so the parent link stays put */
+    int line = (int)nt_int(nt, id, "node_line", 0);
+    int file = (int)nt_int(nt, id, "node_file", 0);
+    nt_node_reset(nt, id, "CallNode");
+    nt_node_set_ref(nt, id, "receiver", sb);
+    nt_node_set_str(nt, id, "name", "map");
+    nt_node_set_ref(nt, id, "arguments", -1);
+    nt_node_set_ref(nt, id, "block", mblk);
+    if (line) nt_node_set_int(nt, id, "node_line", line);
+    if (file) nt_node_set_int(nt, id, "node_file", file);
+    comp_grow_node_arrays(c);
+    for (int j = base; j < nt->count; j++) c->nscope[j] = c->nscope[id];
+    changed = 1;
+  }
+  return changed;
+}
+
 int desugar_block_destructure_params(Compiler *c) {
   NodeTable *nt = (NodeTable *)c->nt;
   int changed = 0;

@@ -9256,6 +9256,7 @@ void analyze_program(Compiler *c) {
   desugar_enum_chain_shapes(c);          /* 2nd pass: shapes the 1st created (e.g.
                                             map(&:sym.to_proc): to_proc->lambda first,
                                             then the lambda block attaches) */
+  desugar_sort_by_with_index(c);         /* sort_by.with_index -> each_with_index.sort_by */
   desugar_block_implicit_rest(c);        /* |x,| -> |x, __implicit_rest| (destructures) */
   desugar_block_destructure_params(c);   /* |a,(b,c),d| -> flat param + `b,c = __destr` */
   desugar_enumerator_produce(c);         /* Enumerator.produce -> fiber generator */
