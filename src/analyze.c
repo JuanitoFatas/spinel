@@ -2431,21 +2431,55 @@ static void synth_enum_to_a(Compiler *c) {
     cls[ncls] = m->class_id; eachdef[ncls] = m->def_node; ncls++;
   }
   for (int k = 0; k < ncls; k++) {
+    /* `each` may yield more than one value per element (`yield k, v`), and
+       Enumerable packs those into one array element. The collector block takes
+       as many parameters as the widest yield and pushes them as an array; with
+       a single parameter it saw only the first value (#3754). */
+    int yarity = 1;
+    { int esi = comp_method_in_class(c, cls[k], "each");
+      if (esi >= 0)
+        for (int nid = 0; nid < nt->count; nid++) {
+          if (c->nscope[nid] != esi) continue;
+          const char *ynt = nt_type(nt, nid);
+          if (!ynt || !sp_streq(ynt, "YieldNode")) continue;
+          int ya = nt_ref(nt, nid, "arguments");
+          int yn2 = 0;
+          if (ya >= 0) nt_arr(nt, ya, "arguments", &yn2);
+          if (yn2 > yarity) yarity = yn2;
+        }
+      if (yarity > 8) yarity = 8;
+      c->classes[cls[k]].enum_yield_arity = yarity;
+    }
     int arr = nt_new_node(nt, "ArrayNode");
     nt_node_set_arr(nt, arr, "elements", NULL, 0);
     int accw = nt_new_node(nt, "LocalVariableWriteNode");
     nt_node_set_str(nt, accw, "name", "__enum_acc");
     nt_node_set_ref(nt, accw, "value", arr);
-    int ep = nt_new_node(nt, "RequiredParameterNode");
-    nt_node_set_str(nt, ep, "name", "__enum_e");
+    char enames[8][16];
+    int eps[8];
+    for (int q = 0; q < yarity; q++) {
+      if (q == 0) snprintf(enames[q], sizeof enames[q], "__enum_e");
+      else snprintf(enames[q], sizeof enames[q], "__enum_e%d", q);
+      eps[q] = nt_new_node(nt, "RequiredParameterNode");
+      nt_node_set_str(nt, eps[q], "name", enames[q]);
+    }
     int params = nt_new_node(nt, "ParametersNode");
-    nt_node_set_arr(nt, params, "requireds", &ep, 1);
+    nt_node_set_arr(nt, params, "requireds", eps, yarity);
     int bparams = nt_new_node(nt, "BlockParametersNode");
     nt_node_set_ref(nt, bparams, "parameters", params);
     int accr1 = nt_new_node(nt, "LocalVariableReadNode");
     nt_node_set_str(nt, accr1, "name", "__enum_acc");
-    int eread = nt_new_node(nt, "LocalVariableReadNode");
-    nt_node_set_str(nt, eread, "name", "__enum_e");
+    int ereads[8];
+    for (int q = 0; q < yarity; q++) {
+      ereads[q] = nt_new_node(nt, "LocalVariableReadNode");
+      nt_node_set_str(nt, ereads[q], "name", enames[q]);
+    }
+    int eread;
+    if (yarity == 1) eread = ereads[0];
+    else {
+      eread = nt_new_node(nt, "ArrayNode");
+      nt_node_set_arr(nt, eread, "elements", ereads, yarity);
+    }
     int pushargs = nt_new_node(nt, "ArgumentsNode");
     nt_node_set_arr(nt, pushargs, "arguments", &eread, 1);
     int push = nt_new_node(nt, "CallNode");
@@ -2473,8 +2507,10 @@ static void synth_enum_to_a(Compiler *c) {
     /* register_locals already ran (before synthesis), so intern this scope's
        locals here; types are filled in by the inference fixpoint that follows. */
     scope_local_intern(ms, "__enum_acc");
-    LocalVar *ev = scope_local_intern(ms, "__enum_e");
-    if (ev) ev->is_block_param = 1;
+    for (int q = 0; q < yarity; q++) {
+      LocalVar *ev = scope_local_intern(ms, enames[q]);
+      if (ev) ev->is_block_param = 1;
+    }
     comp_grow_node_arrays(c);
     walk_scope(c, body, ms_idx, cls[k]);
   }
@@ -4892,6 +4928,19 @@ static int desugar_for_enumerable(Compiler *c) {
     nt_node_set_str(nt, wrap, "name", "__enum_to_a");
     nt_node_set_ref(nt, wrap, "receiver", coll);
     nt_node_set_ref(nt, id, "collection", wrap);
+    /* `for` binds only as many values as it has index variables, while the
+       collector packs a multi-value yield into one array element. One index
+       variable therefore destructures that element and keeps its first value,
+       which is what a single-left MultiTarget already means. */
+    int idxn = nt_ref(nt, id, "index");
+    const char *ixt = idxn >= 0 ? nt_type(nt, idxn) : NULL;
+    if (c->classes[cid].enum_yield_arity > 1 && ixt && !sp_streq(ixt, "MultiTargetNode")) {
+      int mt = nt_new_node(nt, "MultiTargetNode");
+      nt_node_set_arr(nt, mt, "lefts", &idxn, 1);
+      nt_node_set_ref(nt, id, "index", mt);
+      comp_grow_node_arrays(c);
+      c->nscope[mt] = c->nscope[id];
+    }
     comp_grow_node_arrays(c);
     c->nscope[wrap] = c->nscope[id];
     changed = 1;
