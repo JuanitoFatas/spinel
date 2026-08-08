@@ -4563,6 +4563,13 @@ static mrb_int sp_rbval_hash_key(sp_RbVal v) {
         sp_Time *t = (sp_Time *)v.v.p;
         return t ? (mrb_int)sp_time_hash(*t) : 0;
       }
+      if (v.cls_id == SP_BUILTIN_RANGE) {
+        /* value-based: two Ranges with the same bounds are one Hash key, and a
+           fresh box per lookup hashed by pointer and never found it (#3669) */
+        sp_Range *rg = (sp_Range *)v.v.p;
+        return rg ? (mrb_int)((((uintptr_t)rg->first * 31u) + (uintptr_t)rg->last) * 2u
+                              + (uintptr_t)(rg->excl ? 1 : 0)) : 0;
+      }
       if (v.cls_id == SP_BUILTIN_COMPLEX) {
         /* value-based: a fresh box per .hash call would hash by pointer and
            break a.hash == a.hash (unsigned mixing avoids signed overflow) */
@@ -4635,6 +4642,12 @@ static mrb_bool sp_rbval_eql_key(sp_RbVal a, sp_RbVal b) {
         /* instant equality, paired with the value-based hash above */
         sp_Time *ta = (sp_Time *)a.v.p, *tb = (sp_Time *)b.v.p;
         return (ta && tb) ? (ta->tv_sec == tb->tv_sec && ta->tv_nsec == tb->tv_nsec) : (ta == tb);
+      }
+      if (a.cls_id == SP_BUILTIN_RANGE) {
+        /* same bounds, same exclusivity -- paired with the hash above (#3669) */
+        sp_Range *ra = (sp_Range *)a.v.p, *rb = (sp_Range *)b.v.p;
+        return (ra && rb) ? (ra->first == rb->first && ra->last == rb->last &&
+                             (!ra->excl) == (!rb->excl)) : (ra == rb);
       }
       if (a.cls_id == SP_BUILTIN_COMPLEX) {
         /* value-based so an equal Complex serves as one Hash key (#2615),
