@@ -1687,7 +1687,10 @@ int emit_iter_value_expr(Compiler *c, int id, Buf *b) {
   if (!(sp_streq(name, "each") || sp_streq(name, "each_value") ||
         sp_streq(name, "each_key") || sp_streq(name, "each_pair") ||
         sp_streq(name, "each_with_index") || sp_streq(name, "reverse_each") ||
-        sp_streq(name, "each_entry")))
+        sp_streq(name, "each_entry") ||
+        /* `str.split(sep) { |piece| }` answers the receiver too; in value
+           position the block was dropped and the split array returned */
+        sp_streq(name, "split")))
     return 0;
   int block = nt_ref(nt, id, "block");
   int recv = nt_ref(nt, id, "receiver");

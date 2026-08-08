@@ -9192,9 +9192,15 @@ int emit_array_mutate_stmt(Compiler *c, int id, Buf *b, int indent) {
       emit_indent(b, indent);
       buf_printf(b, "{ sp_Range _t%d = ", ti); emit_expr(c, argv[0], b);
       buf_printf(b, "; mrb_int _len%d = (mrb_int)sp_str_length(", ti); emit_expr(c, recv, b); buf_puts(b, ");");
-      buf_printf(b, " mrb_int _a%d = _t%d.first < 0 ? _t%d.first + _len%d : _t%d.first;", ti, ti, ti, ti, ti);
-      buf_printf(b, " mrb_int _e%d = _t%d.last < 0 ? _t%d.last + _len%d : _t%d.last;", ti, ti, ti, ti, ti);
-      buf_printf(b, " mrb_int _n%d = _e%d - _a%d + (_t%d.excl ? 0 : 1);", ti, ti, ti, ti);
+      /* a beginless bound is 0 and an endless one is the last index, rather
+         than the SP_INT_NIL sentinel a negative-index fixup would fold into a
+         wild offset (`s[..1] = x` raised RangeError) */
+      buf_printf(b, " mrb_int _a%d = _t%d.first == SP_INT_NIL ? 0 :"
+                    " (_t%d.first < 0 ? _t%d.first + _len%d : _t%d.first);", ti, ti, ti, ti, ti, ti);
+      buf_printf(b, " int _oe%d = _t%d.last == SP_INT_NIL;", ti, ti);
+      buf_printf(b, " mrb_int _e%d = _oe%d ? _len%d - 1 :"
+                    " (_t%d.last < 0 ? _t%d.last + _len%d : _t%d.last);", ti, ti, ti, ti, ti, ti, ti);
+      buf_printf(b, " mrb_int _n%d = _e%d - _a%d + ((_t%d.excl && !_oe%d) ? 0 : 1);", ti, ti, ti, ti, ti);
       buf_puts(b, " "); emit_expr(c, recv, b); buf_puts(b, " = sp_str_splice_at(");
       emit_expr(c, recv, b);
       buf_printf(b, ", _a%d, _n%d < 0 ? 0 : _n%d, ", ti, ti, ti); emit_str_expr(c, argv[1], b);

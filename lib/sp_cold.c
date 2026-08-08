@@ -2974,7 +2974,11 @@ const char *sp_re_gsub_str_str_hash(mrb_regexp_pattern *pat, const char *str, sp
     char *key = kbuf + 1;
     memcpy(key, str + caps[0], mlen);
     key[mlen] = 0;
-    const char *rep = sp_StrStrHash_has_key(h, key) ? sp_StrStrHash_get(h, key) : "";
+    /* A miss takes the hash's DEFAULT, not the empty string: CRuby looks the
+       match up with #[], so `Hash.new("?")` substitutes "?" (#3555). The
+       default is nil for a plain hash, which renders empty as before. */
+    const char *rep = sp_StrStrHash_get(h, key);
+    if (!rep) rep = "";
     size_t rlen = strlen(rep);
     if (olen + before + rlen >= cap) { cap = ((olen + before + rlen) * 2) + 64; out = (char *)realloc(out, cap); }
     memcpy(out + olen, str + pos, before); olen += before;

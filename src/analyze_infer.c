@@ -5611,7 +5611,9 @@ else {
     if (sp_streq(name, "each_char") || sp_streq(name, "each_line") || sp_streq(name, "each_byte")) return TY_STRING;
     { int blk = nt_ref(nt, id, "block");
       if (blk >= 0 && (sp_streq(name, "chars") || sp_streq(name, "lines"))) return TY_STRING;
-      if (blk >= 0 && (sp_streq(name, "bytes") || sp_streq(name, "codepoints"))) return TY_STRING; }
+      if (blk >= 0 && (sp_streq(name, "bytes") || sp_streq(name, "codepoints"))) return TY_STRING;
+      /* the block form of split iterates and answers the receiver too */
+      if (blk >= 0 && sp_streq(name, "split")) return TY_STRING; }
     if (sp_streq(name, "split") || sp_streq(name, "lines")) return TY_STR_ARRAY;
     if (sp_streq(name, "scan") && argc == 1) {
       /* the block form iterates and returns self (the receiver string) */
