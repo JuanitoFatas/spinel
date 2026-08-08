@@ -12363,6 +12363,14 @@ else { memcpy(dir, sf, n); dir[n] = 0; } }
         int _en = 0; nt_arr(nt, av[0], "elements", &_en);
         empty_arr_lit = (_en == 0);
       }
+      /* `{}` types as no hash variant at all, so the hash test below missed it
+         and an empty Hash literal was rejected as unconvertible (#3746) */
+      if (nt_type(nt, av[0]) &&
+          (sp_streq(nt_type(nt, av[0]), "HashNode") ||
+           sp_streq(nt_type(nt, av[0]), "KeywordHashNode"))) {
+        int _hn = 0; nt_arr(nt, av[0], "elements", &_hn);
+        if (_hn == 0) empty_arr_lit = 1;
+      }
       if (ty_is_hash(at)) { emit_expr(c, av[0], b); }
       else if (at == TY_NIL || empty_arr_lit) {
         /* result type is TY_POLY_POLY_HASH: emit the raw hash pointer */

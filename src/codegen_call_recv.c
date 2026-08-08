@@ -4064,10 +4064,18 @@ int emit_hash_call(Compiler *c, int id, Buf *b) {
       emit_boxed(c, argv[0], b);
       buf_printf(b, "; SP_GC_ROOT_RBVAL(_t%d); mrb_int _t%d = sp_poly_length(_t%d); mrb_int _t%d = 0;",
                  tv, tn, th, tc2);
-      buf_printf(b, " for (mrb_int _t%d = 0; _t%d < _t%d; _t%d++) {"
-                    " sp_RbVal _t%d = sp_poly_each_elem(_t%d, _t%d);"
-                    " if (sp_poly_eq(_t%d, _t%d)) _t%d++; }",
-                 ti, ti, tn, ti, tp, th, ti, tp, tv, tc2);
+      /* a CLASS pattern is a kind-of test, not equality: `h.any?(Array)`
+         compared each pair to the class value and answered false (#3565) */
+      if (comp_ntype(c, argv[0]) == TY_CLASS)
+        buf_printf(b, " for (mrb_int _t%d = 0; _t%d < _t%d; _t%d++) {"
+                      " sp_RbVal _t%d = sp_poly_each_elem(_t%d, _t%d);"
+                      " if (sp_poly_is_a(_t%d, (sp_Class){(mrb_int)_t%d.v.i, NULL})) _t%d++; }",
+                   ti, ti, tn, ti, tp, th, ti, tp, tv, tc2);
+      else
+        buf_printf(b, " for (mrb_int _t%d = 0; _t%d < _t%d; _t%d++) {"
+                      " sp_RbVal _t%d = sp_poly_each_elem(_t%d, _t%d);"
+                      " if (sp_poly_eq(_t%d, _t%d)) _t%d++; }",
+                   ti, ti, tn, ti, tp, th, ti, tp, tv, tc2);
       if (sp_streq(name, "any?"))       buf_printf(b, " _t%d > 0; })", tc2);
       else if (sp_streq(name, "none?")) buf_printf(b, " _t%d == 0; })", tc2);
       else if (sp_streq(name, "one?"))  buf_printf(b, " _t%d == 1; })", tc2);
@@ -4459,7 +4467,11 @@ int emit_hash_call(Compiler *c, int id, Buf *b) {
         buf_printf(b, " _t%d; })", tr);
         return 1;
       }
-      if (sp_streq(name, "fetch") && argc == 1) {
+      /* A block supersedes a positional default: CRuby warns and calls the
+           block, where the default was being returned (#3566). Treating the
+           two-argument-with-block form as the one-argument-with-block form is
+           exactly that rule. */
+      if (sp_streq(name, "fetch") && (argc == 1 || (argc == 2 && nt_ref(nt, id, "block") >= 0))) {
         int blk = nt_ref(nt, id, "block");
         if (blk >= 0) {
           /* fetch(key) { default } -> has_key? ? get : block-default */
@@ -5124,7 +5136,9 @@ else {
       }
       /* Hash#all?/any?/none?/one? with a pattern argument (no block): test each
          [key, value] pair with `pattern === pair`. An Array pattern (the common
-         destructured-pair form) compares by ==, served by sp_poly_eq. */
+         destructured-pair form) compares by ==, served by sp_poly_eq; a CLASS
+         pattern is a kind-of test, and comparing the pair to the class value
+         by equality answered false for every pair (#3565). */
       if ((sp_streq(name, "all?") || sp_streq(name, "any?") ||
            sp_streq(name, "none?") || sp_streq(name, "one?")) &&
           argc == 1 && nt_ref(nt, id, "block") < 0) {
@@ -5134,7 +5148,10 @@ else {
         buf_printf(b, "; sp_RbVal _t%d = ", tpat); emit_boxed(c, argv[0], b);
         buf_printf(b, "; mrb_int _t%d = 0;", tc);
         buf_printf(b, " for (mrb_int _t%d = 0; _t%d < _t%d->len; _t%d++)", ti, ti, tp, ti);
-        buf_printf(b, " if (sp_poly_eq(_t%d->data[_t%d], _t%d)) _t%d++;", tp, ti, tpat, tc);
+        if (comp_ntype(c, argv[0]) == TY_CLASS)
+          buf_printf(b, " if (sp_poly_is_a(_t%d->data[_t%d], (sp_Class){(mrb_int)_t%d.v.i, NULL})) _t%d++;", tp, ti, tpat, tc);
+        else
+          buf_printf(b, " if (sp_poly_eq(_t%d->data[_t%d], _t%d)) _t%d++;", tp, ti, tpat, tc);
         if (sp_streq(name, "all?"))       buf_printf(b, " _t%d == _t%d->len; })", tc, tp);
         else if (sp_streq(name, "any?"))  buf_printf(b, " _t%d > 0; })", tc);
         else if (sp_streq(name, "none?")) buf_printf(b, " _t%d == 0; })", tc);

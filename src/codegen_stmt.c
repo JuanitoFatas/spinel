@@ -619,20 +619,12 @@ else {
     /* A conversion C's printf does not have (%b/%B binary: glibc 2.35+ only,
        a literal 'b' elsewhere) routes through the Ruby formatter (the same
        engine String#% / format use), which renders it portably. */
-    if (nt_type(nt, argv[0]) && sp_streq(nt_type(nt, argv[0]), "StringNode")) {
-      const char *blit = nt_str(nt, argv[0], "unescaped");
-      if (!blit) blit = nt_str(nt, argv[0], "content");
-      int has_bin = 0;
-      for (const char *p = blit ? blit : ""; *p; p++) {
-        if (*p != '%') continue;
-        p++;
-        if (*p == '%') continue;
-        while (*p == '-' || *p == '+' || *p == ' ' || *p == '#' || *p == '0' ||
-               (*p >= '1' && *p <= '9') || *p == '.' || *p == '*') p++;
-        if (*p == 'b' || *p == 'B') { has_bin = 1; break; }
-        if (!*p) break;
-      }
-      if (has_bin) {
+    {
+      /* Every conversion goes through the Ruby formatter -- the same engine
+         String#% and format use. Handing the arguments to C's printf meant a
+         Symbol or nil reached %s as a raw slot and printed `(null)` or an
+         address, and %p / %<name> / %{name} have no C meaning at all. */
+      {
         int tpa = ++g_tmp;
         emit_indent(b, indent);
         buf_printf(b, "{ sp_PolyArray *_t%d = sp_PolyArray_new(); SP_GC_ROOT(_t%d);\n", tpa, tpa);
@@ -6251,6 +6243,11 @@ else {
     else
       snprintf(ref, sizeof ref, "%s%siv_%s", g_self, g_self_deref, iv_c(nm + 1));
     emit_indent(b, indent);
+    /* An op-assign is a write, so a frozen receiver refuses it the way a plain
+       `@x = v` does: `c.freeze; c.bump` was changing the ivar (#3736). */
+    if (cs && cs->class_id >= 0 && !cs->is_cmethod &&
+        strncmp(ref, "civ_", 4) != 0)
+      emit_frozen_obj_guard(c, cs->class_id, g_self ? g_self : "self", b);
     /* A bigint ivar has no C operator: `@n += 1` emitted pointer arithmetic on
        an incomplete struct. Route it through the bigint helpers, promoting an
        int operand at the boundary like every other bigint slot. */
