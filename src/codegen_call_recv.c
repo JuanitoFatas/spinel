@@ -1514,9 +1514,11 @@ int emit_array_call(Compiler *c, int id, Buf *b) {
       else {
         /* each later step goes through the dig-specific helper so a scalar
            intermediate raises TypeError instead of bit/char-indexing (#2983) */
-        for (int di = argc - 1; di >= 1; di--) buf_printf(b, "sp_poly_dig_step(");
+        /* the key goes boxed: a Struct member can be named, and a String or
+           Symbol reached the integer offset slot as a pointer (#3575) */
+        for (int di = argc - 1; di >= 1; di--) buf_printf(b, "sp_poly_dig_step_key(");
         buf_puts(b, "sp_PolyArray_get("); emit_expr(c, recv, b); buf_puts(b, ", "); emit_expr(c, argv[0], b); buf_puts(b, ")");
-        for (int di = 1; di < argc; di++) { buf_puts(b, ", "); emit_expr(c, argv[di], b); buf_puts(b, ")"); }
+        for (int di = 1; di < argc; di++) { buf_puts(b, ", "); emit_boxed(c, argv[di], b); buf_puts(b, ")"); }
       }
       return 1;
     }
@@ -7679,7 +7681,17 @@ int emit_object_call(Compiler *c, int id, Buf *b) {
           emit_expr(c, argv[1], b); buf_puts(b, ")");
         }
         else if (ty_is_array(mt) && argc == 2) {
-          buf_printf(b, "sp_%sArray_get(%s, ", array_kind(mt), fld); emit_expr(c, argv[1], b); buf_puts(b, ")");
+          /* array_kind has no name for a poly array (nor for the pointer-array
+             kinds), and the NULL went straight into the C symbol (#3574) */
+          const char *ak = (mt == TY_POLY_ARRAY) ? "Poly" : array_kind(mt);
+          if (ak) {
+            buf_printf(b, "sp_%sArray_get(%s, ", ak, fld); emit_expr(c, argv[1], b); buf_puts(b, ")");
+          }
+          else {
+            buf_puts(b, "sp_poly_dig_step_key(");
+            emit_boxed_text(c, mt, fld, b);
+            buf_puts(b, ", "); emit_boxed(c, argv[1], b); buf_puts(b, ")");
+          }
         }
         else buf_puts(b, fld);
         buf_puts(b, "; })");

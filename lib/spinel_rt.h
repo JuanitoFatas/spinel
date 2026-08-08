@@ -5206,6 +5206,21 @@ static sp_RbVal sp_poly_dig_step(sp_RbVal a, mrb_int i) {
                sp_sprintf("%s does not have #dig method", sp_poly_class_name(a)));
   return sp_box_nil();
 }
+/* The same step with a boxed key, so a Struct member can be named as well as
+   offset: a Struct read out of a container is diggable in CRuby and was being
+   refused, and a String/Symbol key reached the offset slot as a pointer
+   (#3574/#3575). */
+static sp_RbVal sp_poly_index_poly(sp_RbVal recv, sp_RbVal idx);
+static sp_RbVal sp_poly_dig_step_key(sp_RbVal a, sp_RbVal k) {
+  if (a.tag == SP_TAG_NIL) return sp_box_nil();
+  if (a.tag == SP_TAG_OBJ && a.v.p &&
+      (sp_poly_is_array_kind(a.cls_id) || sp_poly_is_hash_kind(a.cls_id) ||
+       (a.cls_id >= 0 && sp_obj_to_h_fn)))
+    return sp_poly_index_poly(a, k);
+  sp_raise_cls("TypeError",
+               sp_sprintf("%s does not have #dig method", sp_poly_class_name(a)));
+  return sp_box_nil();
+}
 /* dig(*keys): the key list is a runtime array, so walk it one step at a time.
    A nil at any step stops, as CRuby's #dig does. */
 static sp_RbVal sp_poly_index_poly(sp_RbVal recv, sp_RbVal idx);
