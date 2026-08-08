@@ -27,8 +27,18 @@ int g_infer_optimistic = 0;
    `rescue <UserExc> => e` binding to the exception subclass's object type. */
 int class_is_exc_subclass(Compiler *c, int ci);
 
+/* True when the class body defines an instance method of its own (an exception
+   subclass with behaviour, not just a name). */
+static int class_defines_own_method(Compiler *c, int ci) {
+  for (int s = 1; s < c->nscopes; s++)
+    if (c->scopes[s].class_id == ci && !c->scopes[s].is_cmethod && c->scopes[s].name)
+      return 1;
+  return 0;
+}
+
 /* The class index a rescue arm specializes its bound variable to: exactly one
-   named user exception subclass that carries ivars, else -1 (#1415). */
+   named user exception subclass that carries state or behaviour of its own --
+   ivars (#1415) or methods (#3707) -- else -1. */
 static int rescue_arm_spec_cid(Compiler *c, int rescue_id) {
   int nexc = 0;
   const int *exc = nt_arr(c->nt, rescue_id, "exceptions", &nexc);
@@ -37,7 +47,8 @@ static int rescue_arm_spec_cid(Compiler *c, int rescue_id) {
   if (!en || (!sp_streq(en, "ConstantReadNode") && !sp_streq(en, "ConstantPathNode"))) return -1;
   const char *enm = nt_str(c->nt, exc[0], "name");
   int xc = enm ? comp_class_index(c, enm) : -1;
-  if (xc >= 0 && class_is_exc_subclass(c, xc) && c->classes[xc].nivars > 0) return xc;
+  if (xc >= 0 && class_is_exc_subclass(c, xc) &&
+      (c->classes[xc].nivars > 0 || class_defines_own_method(c, xc))) return xc;
   return -1;
 }
 

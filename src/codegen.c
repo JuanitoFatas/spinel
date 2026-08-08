@@ -3677,14 +3677,22 @@ int is_exc_name(const char *n) {
 
 /* Returns 1 if user class ci (or any ancestor) directly inherits a builtin exception. */
 int class_is_exc_subclass(Compiler *c, int ci) {
-  for (int k = ci; k >= 0; k = c->classes[k].parent) {
+  for (int k = ci, guard = 0; k >= 0 && guard < 256; guard++) {
     int sc = nt_ref(c->nt, c->classes[k].def_node, "superclass");
-    if (sc < 0) continue;
-    const char *sty = nt_type(c->nt, sc);
-    const char *sn = nt_str(c->nt, sc, "name");
-    if (sty && (sp_streq(sty, "ConstantReadNode") || sp_streq(sty, "ConstantPathNode")) &&
-        is_exc_name(sn))
-      return 1;
+    const char *sn = sc >= 0 ? nt_str(c->nt, sc, "name") : NULL;
+    if (sc >= 0) {
+      const char *sty = nt_type(c->nt, sc);
+      if (sty && (sp_streq(sty, "ConstantReadNode") || sp_streq(sty, "ConstantPathNode")) &&
+          is_exc_name(sn))
+        return 1;
+    }
+    int next = c->classes[k].parent;
+    /* The parent links are not resolved yet when the rescue-arm specialization
+       asks, so a two-level chain (`class B < A; class A < StandardError`) ended
+       the walk at B. Follow the superclass by name instead (#3707). */
+    if (next < 0 && sn) next = comp_class_index(c, sn);
+    if (next == k) break;
+    k = next;
   }
   return 0;
 }
