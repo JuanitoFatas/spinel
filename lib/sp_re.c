@@ -100,6 +100,7 @@ void sp_re_set_captures(const char *str, int *caps, int ncaps) {SP_GC_ROOT_STR(s
   }
 }
 mrb_int sp_re_match(mrb_regexp_pattern *pat, const char *str) {SP_GC_ROOT_STR(str);
+  if (!str) return -1;
   int64_t slen = (int64_t)strlen(str);
   int ncaps = 32;
   int n = re_exec(pat, str, slen, 0, sp_re_caps, ncaps, 0);
@@ -120,6 +121,7 @@ mrb_int sp_re_match(mrb_regexp_pattern *pat, const char *str) {SP_GC_ROOT_STR(st
    to `pos` (so the caller's `str + pos` arithmetic and the `< 0` no-match check
    are unchanged); sp_re_caps stay full-string-relative for capture extraction. */
 mrb_int sp_re_match_at(mrb_regexp_pattern *pat, const char *str, mrb_int pos) {SP_GC_ROOT_STR(str);
+  if (!str) return -1;
   int64_t slen = (int64_t)strlen(str);
   int ncaps = 32;
   int n = re_exec(pat, str, slen, pos, sp_re_caps, ncaps, 0);
@@ -239,11 +241,13 @@ sp_StrArray *sp_re_rpartition(mrb_regexp_pattern *pat, const char *str) {
   return r;
 }
 mrb_bool sp_re_match_p(mrb_regexp_pattern *pat, const char *str) {
+  if (!str) return FALSE;
   int64_t slen = (int64_t)strlen(str);
   int caps[2];
   return re_exec(pat, str, slen, 0, caps, 2, 0) > 0;
 }
 mrb_bool sp_re_match_p_at(mrb_regexp_pattern *pat, const char *str, mrb_int pos) {
+  if (!str) return FALSE;
   int64_t slen = (int64_t)strlen(str);
   if (pos < 0) pos += slen;
   if (pos < 0 || pos > slen) return FALSE;
@@ -735,6 +739,7 @@ else {
 }
 void sp_MatchData_scan(void *p) { sp_MatchData *m = (sp_MatchData *)p; if (m->source) sp_mark_string(m->source); }
 sp_MatchData *sp_re_matchdata(mrb_regexp_pattern *pat, const char *str) {SP_GC_ROOT_STR(str);
+  if (!str) return NULL;   /* Regexp#match(nil) is nil, not a walk off NULL (#3633) */
   int64_t slen = (int64_t)strlen(str);
   int caps[64];
   int n = re_exec(pat, str, slen, 0, caps, 64, 0);
@@ -755,6 +760,7 @@ sp_MatchData *sp_re_matchdata(mrb_regexp_pattern *pat, const char *str) {SP_GC_R
 }
 /* String#match(/re/, pos) — pos is a codepoint index (CRuby semantics). */
 sp_MatchData *sp_re_matchdata_at(mrb_regexp_pattern *pat, const char *str, mrb_int cpos) {SP_GC_ROOT_STR(str);
+  if (!str) return NULL;
   mrb_int cl = sp_str_length(str);
   if (cpos < 0) cpos += cl;
   if (cpos < 0 || cpos > cl) return NULL;

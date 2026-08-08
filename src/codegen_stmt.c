@@ -301,6 +301,15 @@ void emit_print_one(Compiler *c, int arg, Buf *b, int indent) {
     buf_printf(b, "; const char *_ps%d = sp_poly_to_s(_t%d); if (_ps%d) fputs(_ps%d, stdout); }\n", tv, tv, tv, tv);
   }
   else {
+    /* an empty Array or Hash literal settles at no container variant, so none
+       of the arms above claim it; both render as their two-character to_s */
+    const char *aty = nt_type(c->nt, arg);
+    int en = 0;
+    if (aty && (sp_streq(aty, "ArrayNode") || sp_streq(aty, "HashNode")) &&
+        (nt_arr(c->nt, arg, "elements", &en), en == 0)) {
+      buf_printf(b, "fputs(\"%s\", stdout);\n", sp_streq(aty, "ArrayNode") ? "[]" : "{}");
+      return;
+    }
     if (!diagnose_eval_call(c, arg) && !diagnose_unsupported_call(c, arg))
       unsupported(c, arg, "print argument");
   }

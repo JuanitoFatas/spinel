@@ -57,6 +57,16 @@ static void emit_filter_bang_result(const char *name, int trecv, int torig,
     buf_printf(b, "_t%d", trecv);  /* keep_if / delete_if: always self */
 }
 
+/* String#<< and String#concat take an Integer as a CODEPOINT, not a string:
+   `s << 100` appends "d". Sent through the string slot, the integer reached
+   sp_str_concat as a char pointer and the program died (#3544). */
+static void emit_str_append_arg(Compiler *c, int arg, Buf *b) {
+  if (comp_ntype(c, arg) == TY_INT) {
+    buf_puts(b, "sp_int_codepoint_to_str("); emit_expr(c, arg, b); buf_puts(b, ")");
+    return;
+  }
+  emit_str_expr(c, arg, b);
+}
 int emit_array_call(Compiler *c, int id, Buf *b) {
   /* The variadic Array mutators accept zero elements and return the receiver
      unchanged; every arm below is written for argc >= 1, so a no-argument call
@@ -398,7 +408,7 @@ int emit_array_call(Compiler *c, int id, Buf *b) {
           else {
             for (int j = 0; j < argc; j++) {
               buf_printf(b, " sp_String_append(_t%d, ", tb2);
-              emit_str_expr(c, argv[j], b);
+              emit_str_append_arg(c, argv[j], b);
               buf_puts(b, ");");
             }
           }
@@ -445,7 +455,7 @@ int emit_array_call(Compiler *c, int id, Buf *b) {
         for (int j = nchain; j >= 0; j--) {  /* innermost link first */
           int arg = j > 0 ? chain[j - 1] : argv[0];
           buf_printf(b, " sp_String_append(_t%d, ", tb9);
-          emit_str_expr(c, arg, b);
+          emit_str_append_arg(c, arg, b);
           buf_puts(b, ");");
         }
         buf_printf(b, " sp_String_cstr(_t%d); })", tb9);
@@ -459,7 +469,7 @@ int emit_array_call(Compiler *c, int id, Buf *b) {
           buf_puts(b, "sp_str_check_mutable("); emit_expr(c, cur, b); buf_puts(b, "); ");
           emit_expr(c, cur, b); buf_puts(b, " = sp_str_concat(");
           emit_expr(c, cur, b); buf_puts(b, ", ");
-          emit_str_expr(c, arg, b);
+          emit_str_append_arg(c, arg, b);
           buf_puts(b, "); ");
         }
         emit_expr(c, cur, b);
@@ -488,7 +498,7 @@ int emit_array_call(Compiler *c, int id, Buf *b) {
       else {
         for (int j = 0; j < argc; j++) buf_puts(b, "sp_str_concat(");
         buf_printf(b, "_t%d", trc);
-        for (int j = 0; j < argc; j++) { buf_puts(b, ", "); emit_str_expr(c, argv[j], b); buf_puts(b, ")"); }
+        for (int j = 0; j < argc; j++) { buf_puts(b, ", "); emit_str_append_arg(c, argv[j], b); buf_puts(b, ")"); }
       }
       buf_puts(b, "; ");
       /* Ruby evaluates the argument(s) before invoking the mutator, so the
@@ -4954,6 +4964,15 @@ else {
            rt == TY_STR_STR_HASH || rt == TY_POLY_POLY_HASH || rt == TY_INT_INT_HASH ||
            rt == TY_INT_STR_HASH)) {
         TyKind at = comp_ntype(c, argv[0]);
+        /* an empty Hash literal settles at its own default variant, which is
+           rarely the receiver's; merging it passed one hash struct as another
+           (#3597). It contributes nothing, so the merge is a copy. */
+        { const char *aty0 = nt_type(nt, argv[0]); int aen = 0;
+          if (aty0 && sp_streq(aty0, "HashNode") &&
+              (nt_arr(nt, argv[0], "elements", &aen), aen == 0)) {
+            buf_printf(b, "sp_%sHash_dup(", hn); emit_expr(c, recv, b); buf_puts(b, ")");
+            return 1;
+          } }
         /* cross-variant str merge: promote both sides to str_poly_hash */
         if ((rt == TY_STR_INT_HASH || rt == TY_STR_STR_HASH) &&
             ty_is_hash(at) && ty_hash_key(at) == TY_STRING && at != rt) {

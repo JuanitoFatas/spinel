@@ -17367,13 +17367,19 @@ else { memcpy(dir, sf, n); dir[n] = 0; } }
               emit_indent(g_pre, g_indent);
               buf_printf(g_pre, "sp_RbVal _t%d = ", tv); emit_expr(c, argv[0], g_pre); buf_puts(g_pre, ";\n");
               emit_indent(g_pre, g_indent);
-              buf_printf(g_pre, "if (_t%d.tag != SP_TAG_STR) sp_raise_no_str_conversion(_t%d);\n", tv, tv);
+              buf_printf(g_pre, "if (_t%d.tag != SP_TAG_STR && _t%d.tag != SP_TAG_NIL) sp_raise_no_str_conversion(_t%d);\n", tv, tv, tv);
               buf_printf(b, "sp_re_match_poly(%s, _t%d.v.s)", rp.p, tv);
+            }
+            else if (a0 == TY_NIL) {
+              /* nil is the one non-String `re =~ x` accepts: it answers nil
+                 rather than raising (#3633) */
+              buf_puts(b, "((void)("); emit_expr(c, argv[0], b); buf_puts(b, "), sp_box_nil())");
+              free(rp.p); return;
             }
             else {
               /* statically known non-string: always raises TypeError */
               const char *tn = (a0 == TY_INT) ? "Integer" : (a0 == TY_FLOAT) ? "Float"
-                             : (a0 == TY_BOOL) ? "true/false" : (a0 == TY_NIL) ? "NilClass" : "Object";
+                             : (a0 == TY_BOOL) ? "true/false" : "Object";
               buf_printf(b, "((void)(");
               emit_expr(c, argv[0], b);
               buf_printf(b, "), sp_raise_cls(\"TypeError\", \"no implicit conversion of %s into String\"), sp_box_nil())", tn);
@@ -18571,6 +18577,19 @@ else { memcpy(dir, sf, n); dir[n] = 0; } }
       return;
     }
     if (rt == TY_STRING) {
+      TyKind sat = comp_ntype(c, argv[0]);
+      /* Comparable's relational operators are built on <=>, which answers nil
+         against a non-String: that is an ArgumentError, not a comparison
+         against the operand reinterpreted as a char pointer (#3592) */
+      if (sat == TY_INT || sat == TY_FLOAT || sat == TY_NIL || sat == TY_BOOL ||
+          sat == TY_SYMBOL) {
+        buf_puts(b, "((void)("); emit_expr(c, recv, b);
+        buf_puts(b, "), sp_raise_cls(\"ArgumentError\", sp_sprintf("
+                    "\"comparison of String with %s failed\", sp_poly_inspect(");
+        emit_boxed(c, argv[0], b);
+        buf_puts(b, "))), FALSE)");
+        return;
+      }
       buf_puts(b, "(sp_str_cmp_bytes(");
       emit_expr(c, recv, b); buf_puts(b, ", "); emit_expr(c, argv[0], b);
       buf_printf(b, ") %s 0)", name);
