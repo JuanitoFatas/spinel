@@ -6385,7 +6385,16 @@ int emit_scalar_call(Compiler *c, int id, Buf *b) {
       }
       else if (sp_streq(name, "div") && argc == 1) { buf_printf(b, "sp_idiv(%s, ", r); emit_int_divisor(c, argv[0], b); buf_puts(b, ")"); }
       else if ((sp_streq(name, "gcd") || sp_streq(name, "lcm")) && argc == 1 &&
-               comp_ntype(c, argv[0]) == TY_FLOAT) {
+               (comp_ntype(c, argv[0]) == TY_FLOAT ||
+                comp_ntype(c, argv[0]) == TY_STRING ||
+                comp_ntype(c, argv[0]) == TY_NIL ||
+                comp_ntype(c, argv[0]) == TY_BOOL ||
+                comp_ntype(c, argv[0]) == TY_SYMBOL ||
+                ty_is_array(comp_ntype(c, argv[0])) ||
+                ty_is_hash(comp_ntype(c, argv[0])))) {
+        /* every non-Integer argument is CRuby's "not an integer" TypeError;
+           only a Float was caught, so a String went into sp_gcd's mrb_int slot
+           as a pointer (#3644) */
         buf_puts(b, "({ (void)(");
         emit_expr(c, argv[0], b);
         buf_printf(b, "); sp_raise_cls(\"TypeError\", \"not an integer\"); (mrb_int)(%s); })", r);
