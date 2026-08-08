@@ -10621,15 +10621,19 @@ void emit_call(Compiler *c, int id, Buf *b) {
     buf_puts(b, "(sp_proc_root("); emit_expr(c, recv, b); buf_puts(b, ") == sp_proc_root(");
     emit_expr(c, argv[0], b); buf_puts(b, "))"); return;
   }
-  /* the concurrency handles: never nil (a live C pointer) (#3124). They DO
-     freeze, though -- see the freeze/frozen? arm in emit_call_recv, which
-     carries the GC-header bit the way every other heap instance does; this
-     used to answer a flat false here and swallow the state (#3483). */
+  /* the concurrency handles: NULL encodes nil, as it does for an exception or
+     an enumerator. This used to answer a flat false on the reasoning that a
+     handle is a live C pointer, but the slot holding one need not be: `@t =
+     nil` then `if @t.nil?` folded to false, so the guarded `Thread.new` never
+     ran and every later call went through the NULL the ivar still held. They
+     DO freeze -- see the freeze/frozen? arm in emit_call_recv, which carries
+     the GC-header bit the way every other heap instance does; that one used to
+     answer a flat false here too and swallow the state (#3483). */
   {
     TyKind hrt = recv >= 0 ? comp_ntype(c, recv) : TY_UNKNOWN;
     if ((hrt == TY_THREAD || hrt == TY_QUEUE || hrt == TY_MUTEX || hrt == TY_CONDVAR) &&
         argc == 0 && sp_streq(name, "nil?")) {
-      buf_puts(b, "((void)("); emit_expr(c, recv, b); buf_puts(b, "), (mrb_bool)0)");
+      buf_puts(b, "(("); emit_expr(c, recv, b); buf_puts(b, ") == NULL)");
       return;
     }
     if ((hrt == TY_THREAD || hrt == TY_QUEUE || hrt == TY_MUTEX || hrt == TY_CONDVAR) &&
