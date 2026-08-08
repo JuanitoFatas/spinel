@@ -890,15 +890,23 @@ mrb_int sp_md_char_off(sp_MatchData *m, int byteoff) {SP_GC_ROOT(m);
   if (byteoff < 0) return SP_INT_NIL;
   return sp_str_count_chars(m->source, (size_t)byteoff);
 }
+/* An index outside the match's groups is CRuby's IndexError, not nil (#3626). */
+static void sp_md_check_index(sp_MatchData *m, mrb_int i) {
+  if (!m || i < 0 || i >= m->ncap)
+    sp_raise_cls("IndexError", sp_sprintf("index %lld out of matches", (long long)i));
+}
 mrb_int sp_MatchData_begin(sp_MatchData *m, mrb_int i) {SP_GC_ROOT(m);
+  sp_md_check_index(m, i);
   if (!m || i < 0 || i >= m->ncap) return SP_INT_NIL;
   return sp_md_char_off(m, m->caps[i * 2]);
 }
 mrb_int sp_MatchData_end(sp_MatchData *m, mrb_int i) {SP_GC_ROOT(m);
+  sp_md_check_index(m, i);
   if (!m || i < 0 || i >= m->ncap) return SP_INT_NIL;
   return sp_md_char_off(m, m->caps[(i * 2) + 1]);
 }
 sp_IntArray *sp_MatchData_offset(sp_MatchData *m, mrb_int i) {SP_GC_ROOT(m);
+  sp_md_check_index(m, i);
   sp_IntArray *a = sp_IntArray_new();
   if (!m || i < 0 || i >= m->ncap) { sp_IntArray_push(a, SP_INT_NIL); sp_IntArray_push(a, SP_INT_NIL); return a; }
   sp_IntArray_push(a, sp_md_char_off(m, m->caps[i * 2]));
@@ -907,10 +915,12 @@ sp_IntArray *sp_MatchData_offset(sp_MatchData *m, mrb_int i) {SP_GC_ROOT(m);
 }
 /* byte-offset accessors: the raw byte positions in source (no char conversion). */
 mrb_int sp_MatchData_bytebegin(sp_MatchData *m, mrb_int i) {
+  sp_md_check_index(m, i);
   if (!m || i < 0 || i >= m->ncap || m->caps[i * 2] < 0) return SP_INT_NIL;
   return m->caps[i * 2];
 }
 mrb_int sp_MatchData_byteend(sp_MatchData *m, mrb_int i) {
+  sp_md_check_index(m, i);
   if (!m || i < 0 || i >= m->ncap || m->caps[i * 2] < 0) return SP_INT_NIL;
   return m->caps[(i * 2) + 1];
 }
