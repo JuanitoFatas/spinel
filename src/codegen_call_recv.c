@@ -5636,6 +5636,10 @@ int emit_scalar_call(Compiler *c, int id, Buf *b) {
       else if (sp_streq(name, "include?") && argc == 1) {
         buf_printf(b, "sp_str_include(%s, ", r); emit_str_expr(c, argv[0], b); buf_puts(b, ")");
       }
+      else if ((sp_streq(name, "start_with?") || sp_streq(name, "end_with?")) && argc == 0) {
+        /* both take any number of candidates, so none is false */
+        buf_printf(b, "((void)(%s), (mrb_bool)0)", r);
+      }
       else if ((sp_streq(name, "start_with?") || sp_streq(name, "end_with?")) && argc >= 2) {
         /* several candidates: true when any matches (receiver bound once) */
         int tv = ++g_tmp;
@@ -5861,6 +5865,17 @@ int emit_scalar_call(Compiler *c, int id, Buf *b) {
         buf_printf(b, "(sp_str_check_mutable(%s), (%s))", r, r);
       else if ((sp_streq(name, "force_encoding") || sp_streq(name, "encode!")) && argc <= 2)
         buf_printf(b, "(sp_str_check_mutable(%s), (%s))", r, r);
+      else if ((sp_streq(name, "=~") || sp_streq(name, "!~")) && argc == 1 &&
+               comp_ntype(c, argv[0]) == TY_STRING) {
+        /* `str =~ str` is a TypeError in CRuby, not a missing method: only a
+           Regexp (or an object answering =~) is a valid right operand */
+        buf_printf(b, "((void)(%s), sp_raise_cls(\"TypeError\", \"type mismatch: String given\"), (mrb_bool)0)", r);
+      }
+      else if (sp_streq(name, "b") && argc == 0) {
+        /* a fresh copy, not the receiver: CRuby's #b is never frozen, and
+           handing back a frozen literal made `s.b << x` raise FrozenError */
+        buf_printf(b, "sp_str_dup(%s)", r);
+      }
       else if ((sp_streq(name, "b") || sp_streq(name, "encode")) && argc <= 2) buf_printf(b, "(%s)", r);
       else if (sp_streq(name, "encoding") && argc == 0) buf_printf(b, "((void)(%s), sp_box_encoding(sp_encoding_utf8()))", r);
       else if (sp_streq(name, "dump") && argc == 0) buf_printf(b, "sp_str_dump(%s)", r);

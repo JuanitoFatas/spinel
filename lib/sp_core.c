@@ -114,7 +114,9 @@ mrb_int sp_str_to_i_base(const char *s, mrb_int base) {SP_GC_ROOT_STR(s);
   /* base 0 = auto-detect from prefix (0x -> 16, 0b -> 2, 0/0o -> 8,
      otherwise 10). Per CRuby, only base 0 enables prefix-based
      dispatch -- explicit bases just *accept* the matching prefix. */
-  if (base != 0 && (base < 2 || base > 36)) base = 10;
+  /* CRuby rejects a radix outside 2..36 rather than falling back to 10 */
+  if (base != 0 && (base < 2 || base > 36))
+    sp_raise_cls("ArgumentError", sp_sprintf("invalid radix %lld", (long long)base));
   const char *p = s;
   while (isspace((unsigned char)*p)) p++;
   int neg = 0;
