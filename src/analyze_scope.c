@@ -2940,7 +2940,10 @@ void process_include_body(Compiler *c, int ci, int body_node) {
              Otherwise the module method is simply shadowed -- nothing to emit. */
           if (!scope_body_has_super(c, own)) continue;
           const char *existing = comp_prep_chain_target(c, ci, src->name);
-          snprintf(inc_shadow, sizeof inc_shadow, "__inc_%d_%s",
+          /* spaces keep the shadow unwritable in Ruby source, so an explicit
+             `obj.__inc_0_tag` finds nothing and raises; mc() folds them back
+             to underscores, so the C symbol is unchanged (#3738) */
+          snprintf(inc_shadow, sizeof inc_shadow, "__inc %d %s",
                    c->classes[ci].prep_shadow_count++, src->name);
           if (existing) {
             /* Another included module already supplies the super target for this

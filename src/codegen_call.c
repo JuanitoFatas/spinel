@@ -551,7 +551,12 @@ static void emit_poly_dispatch_key(Compiler *c, int tv, int cls0_cand, Buf *b) {
    with no CRuby counterpart. Matched by exact name so a user-defined `__foo`
    stays visible. */
 static int name_is_synth_method(const char *m) {
-  return m && sp_streq(m, "__enum_to_a");
+  if (!m) return 0;
+  if (sp_streq(m, "__enum_to_a")) return 1;
+  /* `__inc <n> <name>`: the shadow copy of an included module's method, kept
+     so an override can reach it through super (#3738) */
+  if (strncmp(m, "__inc ", 6) == 0) return 1;
+  return 0;
 }
 
 /* Enumerable's public instance methods, for respond_to? on a user class
@@ -7009,6 +7014,18 @@ static int emit_case_eq_call(Compiler *c, int id, Buf *b) {
        equality would say true where CRuby says false) we refuse and ask for an
        explicit ==. */
     if (recv >= 0 && ty_is_object(rt) && ty_is_object(a0)) {
+      /* a user exception subclass keeps Exception#==, which is class plus
+         message, not Object#== identity; its struct's leading members mirror
+         sp_Exception so the base helper reads it (#3743) */
+      if (class_is_exc_subclass(c, ty_object_class(rt)) &&
+          class_is_exc_subclass(c, ty_object_class(a0))) {
+        buf_printf(b, "(%ssp_exc_eq((sp_Exception *)(", eq ? "" : "!");
+        emit_expr(c, recv, b);
+        buf_puts(b, "), (sp_Exception *)(");
+        emit_expr(c, argv[0], b);
+        buf_puts(b, ")))");
+        return 1;
+      }
       if (comp_ty_value_obj(c, rt) || comp_ty_value_obj(c, a0))
         unsupported(c, id, "equality on a value-type object without a user-defined == (define == for comparison)");
       buf_puts(b, "((void *)(");
@@ -17746,6 +17763,7 @@ else { memcpy(dir, sf, n); dir[n] = 0; } }
       char base[256];
       base[0] = '\0';
       if (is_setter && ln - 1 < sizeof base) { memcpy(base, qm, ln - 1); base[ln - 1] = '\0'; }
+      if (name_is_synth_method(qm)) { buf_puts(b, "FALSE"); return 1; }
       int parent = c->classes[ci].parent;
       int mc = -1;
       int mi = comp_method_in_chain(c, ci, qm, &mc);

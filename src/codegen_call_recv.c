@@ -4266,6 +4266,16 @@ int emit_hash_call(Compiler *c, int id, Buf *b) {
         return 1;
       }
       if ((sp_streq(name, "dup") || sp_streq(name, "clone")) && argc == 0) {
+        if (sp_streq(name, "clone")) {
+          /* clone carries the frozen flag over, dup does not (#3751) */
+          int ts = ++g_tmp, td = ++g_tmp;
+          buf_printf(b, "({ sp_%sHash *_t%d = ", hn, ts); emit_expr(c, recv, b);
+          buf_printf(b, "; sp_%sHash *_t%d = sp_%sHash_dup(_t%d);"
+                        " if (_t%d && sp_gc_is_frozen(_t%d)) sp_gc_freeze(_t%d);"
+                        " _t%d; })",
+                     hn, td, hn, ts, ts, ts, td, td);
+          return 1;
+        }
         buf_printf(b, "sp_%sHash_dup(", hn); emit_expr(c, recv, b); buf_puts(b, ")");
         return 1;
       }
