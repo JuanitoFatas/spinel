@@ -26,6 +26,7 @@ packages/*/build/
 .claude/
 CLAUDE.local.md
 /local.mk
+/config.mk
 
 # Analyze-only emit artifacts (--emit-types / --emit-symbol-map, and the
 # symbol map --profile writes beside the binary).
