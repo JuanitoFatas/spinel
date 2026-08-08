@@ -5119,8 +5119,18 @@ static SP_NOINLINE sp_RbVal sp_poly_arr_get_hash_cold(sp_RbVal a, mrb_int i);
    cold call behind it are dead. The nil case still has to answer nil, which is
    what the null check does. */
 static SP_INLINE sp_RbVal sp_poly_arr_get_aon(sp_RbVal a, mrb_int i) {
-  sp_PolyArray *ar = (a.tag == SP_TAG_OBJ) ? (sp_PolyArray *)a.v.p : NULL;
-  if (!ar) return sp_box_nil();
+  if (a.tag != SP_TAG_OBJ || !a.v.p) return sp_box_nil();
+  /* A typed array boxed into a poly slot -- `h["k"] = [7, 8, 9]` stores an
+     sp_IntArray -- has a different layout, and reading it as an sp_PolyArray
+     answered nil for every index (#3542). */
+  if (a.cls_id != SP_BUILTIN_POLY_ARRAY) {
+    if (!sp_poly_is_array_kind(a.cls_id)) return sp_box_nil();
+    mrb_int n = sp_poly_arr_len(a);
+    mrb_int k2 = i < 0 ? n + i : i;
+    if (k2 < 0 || k2 >= n) return sp_box_nil();
+    return sp_poly_each_elem(a, k2);
+  }
+  sp_PolyArray *ar = (sp_PolyArray *)a.v.p;
   mrb_int k = i < 0 ? ar->len + i : i;
   if (k < 0 || k >= ar->len) return sp_box_nil();
   return ar->data[k];
