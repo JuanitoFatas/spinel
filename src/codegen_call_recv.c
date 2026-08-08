@@ -7710,22 +7710,35 @@ int emit_object_call(Compiler *c, int id, Buf *b) {
         buf_printf(b, "_t%d->iv_%s; })", t, iv_c(sc->ivars[mi] + 1));
         return 1;
       }
-      /* general: generate chain of comparisons */
+      /* general: generate chain of comparisons. Each arm has to ASSIGN into a
+         result temp -- written as bare statements the chain is a void
+         expression, which is not a value the caller can read (#3572). */
       if (sc->nivars > 0) {
-        int t = ++g_tmp, tk = ++g_tmp;
+        int t = ++g_tmp, tk = ++g_tmp, tr = ++g_tmp, tk0 = ++g_tmp;
         Buf rb = expr_buf(c, recv);
         buf_printf(b, "({ sp_%s *_t%d = %s; sp_RbVal _t%d = ", sc->c_name, t, rb.p ? rb.p : "", tk);
         free(rb.p);
         emit_boxed(c, argv[0], b);
-        buf_puts(b, ";");
+        /* a negative offset counts from the end; keep the original for the
+           error message */
+        buf_printf(b, "; sp_RbVal _t%d = _t%d;", tk0, tk);
+        buf_printf(b, " if (_t%d.tag == SP_TAG_INT && _t%d.v.i < 0) _t%d = sp_box_int(_t%d.v.i + %d);",
+                   tk, tk, tk, tk, sc->nivars);
+        buf_printf(b, " sp_RbVal _t%d = sp_box_nil();", tr);
         for (int i = 0; i < sc->nivars; i++) {
-          buf_printf(b, " if(sp_rbval_eql_key(_t%d,sp_box_sym((sp_sym)%d))||sp_rbval_eql_key(_t%d,sp_box_int(%dLL))){",
-                     tk, comp_sym_intern(c, sc->ivars[i]+1), tk, (long long)i);
+          buf_printf(b, " if(sp_rbval_eql_key(_t%d,sp_box_sym((sp_sym)%d))||sp_rbval_eql_key(_t%d,sp_box_int(%dLL))){ _t%d = ",
+                     tk, comp_sym_intern(c, sc->ivars[i]+1), tk, (long long)i, tr);
           char fld2[300]; snprintf(fld2, sizeof fld2, "_t%d->iv_%s", t, iv_c(sc->ivars[i] + 1));
           emit_boxed_text(c, sc->ivar_types[i], fld2, b);
           buf_printf(b, ";}\nelse");
         }
-        buf_puts(b, " sp_box_nil(); })");
+        /* a miss is an error: IndexError for an offset, NameError for a name */
+        buf_printf(b, " { if (_t%d.tag == SP_TAG_INT)"
+                      " sp_raise_cls(\"IndexError\", sp_sprintf(\"offset %%lld too %%s for struct(size:%d)\","
+                      " (long long)_t%d.v.i, _t%d.v.i < 0 ? \"small\" : \"large\"));"
+                      " sp_raise_cls(\"NameError\", sp_sprintf(\"no member '%%s' in struct\", sp_poly_to_s(_t%d)));"
+                      " } _t%d; })",
+                   tk0, sc->nivars, tk0, tk0, tk0, tr);
         return 1;
       }
     }
