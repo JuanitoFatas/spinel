@@ -17278,6 +17278,31 @@ else { memcpy(dir, sf, n); dir[n] = 0; } }
   /* /re/.match(str) and /re/.match(str, pos) */
   {
     int rre = re_lit_index(c, recv);
+    if (rre >= 0 && sp_streq(name, "match") && argc == 1 && nt_ref(nt, id, "block") >= 0) {
+      /* /re/.match(str) { |m| body }: the same block form String#match already
+         had -- yield the MatchData on a hit and evaluate to the block's value,
+         nil on a miss. Without the arm the MatchData itself was the value and
+         the block never ran (#3642). */
+      int mblk = nt_ref(nt, id, "block");
+      const char *mp0 = block_param_name(c, mblk, 0);
+      const char *mp0r = mp0 ? rename_local(mp0) : NULL;
+      int mbody = nt_ref(nt, mblk, "body");
+      int mbn = 0; const int *mbb = mbody >= 0 ? nt_arr(nt, mbody, "body", &mbn) : NULL;
+      int tm = ++g_tmp, tr2 = ++g_tmp;
+      buf_printf(b, "({ sp_MatchData *_t%d = sp_re_matchdata(sp_re_pat_%d, ", tm, rre);
+      emit_str_expr(c, argv[0], b);
+      buf_printf(b, "); sp_RbVal _t%d = sp_box_nil(); SP_GC_ROOT_RBVAL(_t%d); if (_t%d) { ",
+                 tr2, tr2, tm);
+      if (mp0r) buf_printf(b, "lv_%s = _t%d; ", mp0r, tm);
+      for (int j = 0; j + 1 < mbn; j++) { emit_stmt(c, mbb[j], b, 0); }
+      if (mbn > 0) {
+        buf_printf(b, "_t%d = ", tr2);
+        emit_boxed(c, mbb[mbn - 1], b);
+        buf_puts(b, "; ");
+      }
+      buf_printf(b, "} _t%d; })", tr2);
+      return;
+    }
     if (rre >= 0 && sp_streq(name, "match") && (argc == 1 || argc == 2)) {
       /* the subject is a string; emit_str_expr coerces a poly/nullable-string
          value (e.g. a `string?` attr read) to const char*, which emit_expr would
@@ -17450,6 +17475,25 @@ else { memcpy(dir, sf, n); dir[n] = 0; } }
               emit_expr(c, argv[0], b);
               buf_printf(b, "), sp_raise_cls(\"TypeError\", \"no implicit conversion of %s into String\"), sp_box_nil())", tn);
             }
+            free(rp.p); return;
+          }
+          if (sp_streq(name, "match") && argc == 1 && nt_ref(nt, id, "block") >= 0) {
+            /* the block form: yield the MatchData on a hit, evaluate to the
+               block's value, nil on a miss (#3642) */
+            int mblk = nt_ref(nt, id, "block");
+            const char *mp0 = block_param_name(c, mblk, 0);
+            const char *mp0r = mp0 ? rename_local(mp0) : NULL;
+            int mbody = nt_ref(nt, mblk, "body");
+            int mbn = 0; const int *mbb = mbody >= 0 ? nt_arr(nt, mbody, "body", &mbn) : NULL;
+            int tm = ++g_tmp, tr2 = ++g_tmp;
+            buf_printf(b, "({ sp_MatchData *_t%d = sp_re_matchdata(%s, ", tm, rp.p);
+            emit_str_expr(c, argv[0], b);
+            buf_printf(b, "); sp_RbVal _t%d = sp_box_nil(); SP_GC_ROOT_RBVAL(_t%d); if (_t%d) { ",
+                       tr2, tr2, tm);
+            if (mp0r) buf_printf(b, "lv_%s = _t%d; ", mp0r, tm);
+            for (int j = 0; j + 1 < mbn; j++) { emit_stmt(c, mbb[j], b, 0); }
+            if (mbn > 0) { buf_printf(b, "_t%d = ", tr2); emit_boxed(c, mbb[mbn - 1], b); buf_puts(b, "; "); }
+            buf_printf(b, "} _t%d; })", tr2);
             free(rp.p); return;
           }
           if (sp_streq(name, "match") && (argc == 1 || argc == 2)) {

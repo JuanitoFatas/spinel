@@ -2534,7 +2534,8 @@ else {
   /* Regexp instance methods */
   if (recv >= 0 && rt == TY_REGEX) {
     if (sp_streq(name, "match?") || sp_streq(name, "===")) return TY_BOOL;
-    if (sp_streq(name, "match")) return TY_MATCHDATA;
+    /* the block form evaluates to the block's value (nil on a miss) (#3642) */
+    if (sp_streq(name, "match")) return nt_ref(nt, id, "block") >= 0 ? TY_POLY : TY_MATCHDATA;
     if (sp_streq(name, "=~")) return TY_POLY;
     if (sp_streq(name, "~") && argc == 0) return TY_POLY;   /* ~ /re/ == /re/ =~ $_ */
     if (sp_streq(name, "source") || sp_streq(name, "inspect") || sp_streq(name, "to_s")) return TY_STRING;
@@ -5883,7 +5884,8 @@ else {
   }
   if (sp_streq(name, "match") && recv >= 0 && (argc == 1 || argc == 2)) {
     TyKind a0t = argc > 0 ? infer_type(c, argv[0]) : TY_UNKNOWN;
-    if (rt == TY_REGEX || a0t == TY_REGEX) return TY_MATCHDATA;
+    if (rt == TY_REGEX || a0t == TY_REGEX)
+      return nt_ref(nt, id, "block") >= 0 ? TY_POLY : TY_MATCHDATA;
     /* String#match with a String pattern (regexp source) -> MatchData */
     if ((rt == TY_STRING || rt == TY_STRBUF) && a0t == TY_STRING)
       return nt_ref(nt, id, "block") >= 0 ? TY_POLY : TY_MATCHDATA;

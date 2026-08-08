@@ -8430,8 +8430,11 @@ int infer_block_params(Compiler *c) {
       int margs = nt_ref(nt, id, "arguments");
       int mac = 0; const int *mav = margs >= 0 ? nt_arr(nt, margs, "arguments", &mac) : NULL;
       const char *mrt = nt_type(nt, recv), *mat = mac > 0 ? nt_type(nt, mav[0]) : NULL;
+      /* the pattern may also be a Regexp-typed local or an interpolated
+         literal rather than a bare /re/ node (#3642) */
       if ((mrt && sp_streq(mrt, "RegularExpressionNode")) ||
-          (mat && sp_streq(mat, "RegularExpressionNode"))) {
+          (mat && sp_streq(mat, "RegularExpressionNode")) ||
+          rt == TY_REGEX || (mac > 0 && infer_type(c, mav[0]) == TY_REGEX)) {
         Scope *ms = comp_scope_of(c, block);
         LocalVar *mp = scope_local_intern(ms, p0); mp->is_block_param = 1;
         TyKind mm = ty_unify(mp->type, TY_MATCHDATA);
