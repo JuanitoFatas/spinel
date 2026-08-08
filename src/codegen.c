@@ -6718,6 +6718,11 @@ char *codegen_program(const NodeTable *nt) {
       buf_puts(&b, " break;\n");
     }
     buf_puts(&b, "    }\n");
+    /* A module has no superclass chain: `M.ancestors` is [M] and
+       `N.ancestors` (N includes M) is [N, M]. The walk used to follow the
+       Object parent a module shares with a class and append Object, Kernel,
+       BasicObject to both. */
+    buf_puts(&b, "    if(sp_class_is_module_val(cur))break;\n");
     buf_puts(&b, "    sp_Class next=sp_class_superclass(cur);\n");
     buf_puts(&b, "    if(next.cls_id==cur.cls_id)break;\n");
     buf_puts(&b, "    cur=next;\n");
@@ -6730,7 +6735,10 @@ char *codegen_program(const NodeTable *nt) {
     buf_puts(&b, "static sp_PolyArray *sp_class_included_modules(sp_Class c){\n");
     buf_puts(&b, "  sp_PolyArray *a=sp_class_ancestors(c); SP_GC_ROOT(a);\n");
     buf_puts(&b, "  sp_PolyArray *r=sp_PolyArray_new(); SP_GC_ROOT(r);\n");
+    /* the receiver itself is not one of the modules it includes: a module's
+       ancestors now start with the module, and it showed up in its own list */
     buf_puts(&b, "  for(mrb_int i=0;a&&i<a->len;i++){ sp_Class m={a->data[i].v.i,NULL};\n");
+    buf_puts(&b, "    if(m.cls_id==c.cls_id) continue;\n");
     buf_puts(&b, "    if(sp_class_is_module_val(m)) sp_PolyArray_push(r,a->data[i]); }\n");
     buf_puts(&b, "  return r;\n}\n\n");
     /* Module-aware <= by walking sp_class_ancestors (replaces simpler versions). */

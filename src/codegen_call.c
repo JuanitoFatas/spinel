@@ -13969,7 +13969,11 @@ else { memcpy(dir, sf, n); dir[n] = 0; } }
       const char *rcn2 = (rvt2 && (sp_streq(rvt2, "ConstantReadNode") ||
                                    sp_streq(rvt2, "ConstantPathNode"))) ? nt_str(nt, recv, "name") : NULL;
       if (rcn2 && (comp_class_index(c, rcn2) >= 0 ||
-                   sp_streq(rcn2, "TrueClass") || sp_streq(rcn2, "FalseClass"))) {
+                   sp_streq(rcn2, "TrueClass") || sp_streq(rcn2, "FalseClass") ||
+                   /* the roots: every object is one, and `Object === x` used to
+                      fall past this arm into the missing-method gate */
+                   sp_streq(rcn2, "Object") || sp_streq(rcn2, "BasicObject") ||
+                   sp_streq(rcn2, "Kernel"))) {
         /* Module#=== is `arg.is_a?(self)`. TrueClass/FalseClass receivers read
            the arg's runtime class, so a non-literal boolean matches (#2966).
            (Only these builtins emit as a usable class value here.) */

@@ -3663,7 +3663,30 @@ void emit_case(Compiler *c, int id, Buf *b, int indent) {
             buf_printf(b, "sp_poly_eq(_t%d, ", t); emit_boxed(c, conds[j], b); buf_puts(b, ")");
           }
           else {
-            buf_printf(b, "(_t%d == ", t); emit_expr(c, conds[j], b); buf_puts(b, ")");
+            /* `when <obj>` is `<obj> === scrutinee`, which for a plain object
+               is its own ==; comparing the two pointers answered false for two
+               equal instances of a class that defines one (#3741). */
+            TyKind wpt = comp_ntype(c, conds[j]);
+            int wcid = ty_is_object(wpt) ? ty_object_class(wpt) : -1;
+            int wdef = -1;
+            int weq = wcid >= 0 ? comp_method_in_chain(c, wcid, "===", &wdef) : -1;
+            if (weq < 0 && wcid >= 0) weq = comp_method_in_chain(c, wcid, "==", &wdef);
+            if (weq >= 0 && wdef >= 0 && !comp_ty_value_obj(c, wpt)) {
+              buf_printf(b, "sp_%s_%s(", c->classes[wdef].c_name, mc(c->scopes[weq].name));
+              emit_expr(c, conds[j], b);
+              buf_printf(b, ", ");
+              /* the user method takes its argument boxed when its parameter is
+                 poly, which is the shape these comparison methods settle on */
+              { Scope *ws = &c->scopes[weq];
+                LocalVar *wp = ws->nparams > 0 ? scope_local(ws, ws->pnames[0]) : NULL;
+                TyKind wpt2 = wp ? wp->type : TY_POLY;
+                char sref[24]; snprintf(sref, sizeof sref, "_t%d", t);
+                if (wpt2 == TY_POLY) { Buf bx; memset(&bx, 0, sizeof bx);
+                  emit_boxed_text(c, pt, sref, &bx); buf_puts(b, bx.p ? bx.p : sref); free(bx.p); }
+                else buf_puts(b, sref); }
+              buf_puts(b, ")");
+            }
+            else { buf_printf(b, "(_t%d == ", t); emit_expr(c, conds[j], b); buf_puts(b, ")"); }
           }
           } /* close non-ConstantReadNode else */
           } /* close else { int reidx... } */
