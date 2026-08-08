@@ -2345,9 +2345,15 @@ static void synth_struct_each(Compiler *c) {
         nt_node_set_str(nt, sy, "value", cls->ivars[j] + 1);
         int ivr = nt_new_node(nt, "InstanceVariableReadNode");
         nt_node_set_str(nt, ivr, "name", cls->ivars[j]);
+        /* ONE argument, the [name, value] pair: CRuby's each_pair yields the
+           pair, so a single-parameter block sees it whole and a two-parameter
+           one destructures it. Yielding two values gave the 1-param form only
+           the name. */
         int ya[2] = { sy, ivr };
+        int pair = nt_new_node(nt, "ArrayNode");
+        nt_node_set_arr(nt, pair, "elements", ya, 2);
         int yargs = nt_new_node(nt, "ArgumentsNode");
-        nt_node_set_arr(nt, yargs, "arguments", ya, 2);
+        nt_node_set_arr(nt, yargs, "arguments", &pair, 1);
         int yn = nt_new_node(nt, "YieldNode");
         nt_node_set_ref(nt, yn, "arguments", yargs);
         pst[pn++] = yn;
@@ -4590,6 +4596,31 @@ int desugar_enum_method_recv(Compiler *c) {
         changed = 1;
       }
       continue;
+    }
+    /* Blockless each_pair on a Struct answers an Enumerator over the
+       [name, value] pairs, which is what the member hash's own blockless
+       #each answers; the synthesized yielding each_pair raised LocalJumpError.
+       Ahead of the Enumerable-name gate, which does not list each_pair (and
+       must not: its block form yields pairs, not members). */
+    if (nm && sp_streq(nm, "each_pair") && nt_ref(nt, id, "block") < 0) {
+      int prv = nt_ref(nt, id, "receiver");
+      TyKind prt = prv >= 0 ? infer_type(c, prv) : TY_UNKNOWN;
+      int pcid = ty_is_object(prt) ? ty_object_class(prt) : -1;
+      if (pcid >= 0 && pcid < c->nclasses && c->classes[pcid].is_struct) {
+        int wrap = nt_new_node(nt, "CallNode");
+        if (wrap >= 0) {
+          nt_node_set_str(nt, wrap, "name", "to_h");
+          nt_node_set_ref(nt, wrap, "receiver", prv);
+          nt_node_set_ref(nt, wrap, "arguments", -1);
+          nt_node_set_ref(nt, wrap, "block", -1);
+          nt_node_set_ref(nt, id, "receiver", wrap);
+          nt_node_set_str(nt, id, "name", "each");
+          comp_grow_node_arrays(c);
+          c->nscope[wrap] = c->nscope[id];
+          changed = 1;
+          continue;
+        }
+      }
     }
     if (!nm || !is_array_enum_method(nm)) continue;
     int recv = nt_ref(nt, id, "receiver");

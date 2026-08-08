@@ -7335,8 +7335,11 @@ int emit_object_call(Compiler *c, int id, Buf *b) {
           if (nt_int(nt, argv[a4], "flags", 0) & 4) hi4--;
           if (lo4 < 0) lo4 += sc->nivars;
           if (hi4 < 0) hi4 += sc->nivars;
-          for (long long ix = lo4; ix <= hi4 && ix < sc->nivars; ix++) {
+          /* a Range that runs past the last member pads with nil, the way
+             Array#values_at does; the walk used to stop at the last member */
+          for (long long ix = lo4; ix <= hi4; ix++) {
             if (ix < 0) continue;
+            if (ix >= sc->nivars) { buf_printf(b, " sp_PolyArray_push(_t%d, sp_box_nil());", to4); continue; }
             char fb4[300]; snprintf(fb4, sizeof fb4, "_t%d->iv_%s", tv4, iv_c(sc->ivars[(int)ix] + 1));
             buf_printf(b, " sp_PolyArray_push(_t%d, ", to4);
             emit_boxed_text(c, sc->ivar_types[(int)ix], fb4, b);

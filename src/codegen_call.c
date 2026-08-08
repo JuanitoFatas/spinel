@@ -5501,6 +5501,18 @@ static int emit_class_new_call(Compiler *c, int id, Buf *b) {
           return 1;
         }
         int kwh = (argc == 1 && nt_type(nt, argv[0]) && sp_streq(nt_type(nt, argv[0]), "KeywordHashNode")) ? argv[0] : -1;
+        /* a keyword_init Struct takes keywords and nothing else: CRuby answers
+           "wrong number of arguments" for a positional call, where these were
+           being bound to the members in order */
+        if (kwh < 0 && argc > 0 && cls->kw_init > 0 && !cls->is_data) {
+          buf_puts(b, "({ ");
+          for (int e2 = 0; e2 < argc; e2++) {
+            buf_puts(b, "(void)("); emit_boxed(c, argv[e2], b); buf_puts(b, "); ");
+          }
+          buf_printf(b, "sp_raise_cls(\"ArgumentError\", sp_sprintf(\"wrong number of arguments (given %d, expected 0)\")); (sp_%s *)0; })",
+                     argc, cls->c_name);
+          return 1;
+        }
         /* a keyword whose name is not a member is an ArgumentError for both Data
            and keyword_init Structs (#3079); a plain Struct treats a trailing
            keyword hash as a positional value, so it is exempt. */
@@ -13669,6 +13681,22 @@ else { memcpy(dir, sf, n); dir[n] = 0; } }
     }
     if (!cls_shadowed &&
         (sp_streq(name, "to_s") || sp_streq(name, "name") || sp_streq(name, "inspect"))) {
+      /* An anonymous Struct/Data class has no name: CRuby answers nil for
+         #name (and an `#<Class:0x...>`-shaped #to_s). The synthetic
+         StructAnon_<n> the compiler keys it by is not a Ruby-visible name. */
+      if (sp_streq(name, "name")) {
+        /* the anon class is registered under a name keyed by the node that
+           produced it (analyze_scope), so the receiver node identifies it */
+        int acid = -1;
+        { char an[48]; snprintf(an, sizeof an, "StructAnon_%d", recv);
+          int rcid = comp_class_index(c, an);
+          if (rcid >= 0 && rcid < c->nclasses && c->classes[rcid].is_anon_struct) acid = rcid; }
+        if (acid >= 0) {
+          buf_puts(b, "((void)("); emit_expr(c, recv, b);
+          buf_puts(b, "), (const char *)NULL)");
+          return;
+        }
+      }
       buf_printf(b, "({ sp_Class _cl%d = ", _clt); emit_expr(c, recv, b);
       buf_printf(b, "; sp_class_to_s(_cl%d); })", _clt);
       return;
