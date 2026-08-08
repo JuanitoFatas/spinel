@@ -1687,6 +1687,15 @@ mrb_int sp_re_options(void *vpat) {
   if (f & RE_FLAG_DOTALL)     o |= 4;
   return o;
 }
+/* Regexp#== / #eql? is source AND options: /ab/ and /ab/i are different
+   patterns, and comparing only the source made them equal (#3631). */
+mrb_bool sp_re_eq(void *a, void *b) {
+  if (a == b) return 1;
+  if (!a || !b) return 0;
+  const char *sa = sp_re_source(a), *sb = sp_re_source(b);
+  if (!sa || !sb) return sa == sb;
+  return strcmp(sa, sb) == 0 && sp_re_options(a) == sp_re_options(b);
+}
 mrb_bool sp_re_casefold_p(void *vpat) {
   mrb_regexp_pattern *pat = (mrb_regexp_pattern *)vpat;
   return (pat && (pat->flags & RE_FLAG_IGNORECASE)) ? TRUE : FALSE;

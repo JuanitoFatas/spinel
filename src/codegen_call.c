@@ -17016,12 +17016,18 @@ else { memcpy(dir, sf, n); dir[n] = 0; } }
   if (recv >= 0 && comp_ntype(c, recv) == TY_REGEX && argc == 1 &&
       (sp_streq(name, "==") || sp_streq(name, "!=")) &&
       comp_ntype(c, argv[0]) == TY_REGEX) {
-    buf_puts(b, sp_streq(name, "!=") ? "(!(" : "((");
-    buf_puts(b, "strcmp(sp_re_source((void *)(");
+    buf_puts(b, sp_streq(name, "!=") ? "(!sp_re_eq((void *)(" : "(sp_re_eq((void *)(");
     emit_expr(c, recv, b);
-    buf_puts(b, ")), sp_re_source((void *)(");
+    buf_puts(b, "), (void *)(");
     emit_expr(c, argv[0], b);
-    buf_puts(b, sp_streq(name, "!=") ? "))) == 0))" : "))) == 0))");
+    buf_puts(b, ")))");
+    return;
+  }
+  /* #eql? is value equality too, like #== (only #equal? is identity) */
+  if (recv >= 0 && comp_ntype(c, recv) == TY_REGEX && argc == 1 &&
+      sp_streq(name, "eql?") && comp_ntype(c, argv[0]) == TY_REGEX) {
+    buf_puts(b, "sp_re_eq((void *)("); emit_expr(c, recv, b);
+    buf_puts(b, "), (void *)("); emit_expr(c, argv[0], b); buf_puts(b, "))");
     return;
   }
   if (recv >= 0 && comp_ntype(c, recv) == TY_REGEX && argc == 1 &&

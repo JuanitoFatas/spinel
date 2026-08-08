@@ -1391,6 +1391,7 @@ const char *sp_re_inspect_str(void *pat);
 const char *sp_re_to_s_str(void *pat);
 const char *sp_re_source(void *pat);
 mrb_int sp_re_options(void *pat);
+mrb_bool sp_re_eq(void *a, void *b);
 mrb_bool sp_re_casefold_p(void *pat);
 uint32_t sp_re_raw_flags(void *pat);
 uint32_t sp_re_opts_to_flags(mrb_int o);
