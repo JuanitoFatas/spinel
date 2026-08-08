@@ -654,6 +654,30 @@ int emit_array_call(Compiler *c, int id, Buf *b) {
       buf_printf(b, " } _t%d; })", tr2);
       return 1;
     }
+    if (argc == 2 && re_lit_index(c, argv[0]) >= 0) {
+      /* slice!(/re/, n): remove the nth capture group of the first match and
+         evaluate to it. sp_re_caps holds each group's byte span, so the removal
+         is the group's own occurrence rather than the first textual one, which
+         is a different character when the group repeats (#3543). */
+      int ts = ++g_tmp, tn = ++g_tmp, th = ++g_tmp;
+      buf_printf(b, "({ const char *_t%d = ", ts); emit_expr(c, recv, b);
+      buf_printf(b, "; mrb_int _t%d = ", tn); emit_int_expr(c, argv[1], b);
+      buf_printf(b, "; const char *_t%d = sp_re_match(sp_re_pat_%d, _t%d) >= 0"
+                    " ? (_t%d == 0 ? sp_re_match_str"
+                    "    : (_t%d >= 1 && _t%d <= 9 ? sp_re_captures[_t%d] : NULL)) : NULL;",
+                 th, re_lit_index(c, argv[0]), ts, tn, tn, tn, tn);
+      if (sb_asgn) {
+        buf_printf(b, " if (_t%d && _t%d >= 0 && _t%d <= 9) { sp_str_check_mutable(_t%d);"
+                      " mrb_int _b = sp_re_caps[2 * _t%d], _e = sp_re_caps[2 * _t%d + 1]; ",
+                   th, tn, tn, ts, tn, tn);
+        emit_expr(c, recv, b);
+        buf_printf(b, " = sp_str_concat(sp_str_byteslice(_t%d, 0, _b),"
+                      " sp_str_byteslice(_t%d, _e, (mrb_int)sp_str_byte_len(_t%d) - _e)); }",
+                   ts, ts, ts);
+      }
+      buf_printf(b, " _t%d; })", th);
+      return 1;
+    }
     if (sb_asgn && argc == 2) {
       /* character-indexed splice, not byte-indexed, for a multibyte receiver (#3084) */
       int ti2 = ++g_tmp, tl2 = ++g_tmp, tn2 = ++g_tmp, tr2 = ++g_tmp;

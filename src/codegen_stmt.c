@@ -9252,6 +9252,27 @@ int emit_array_mutate_stmt(Compiler *c, int id, Buf *b, int indent) {
       buf_puts(b, ", 0); }\n");
       return 1;
     }
+    /* s[/re/, n] = v: replace the nth capture group's span (#3548) */
+    if (assignable && sp_streq(name, "[]=") && argc == 3 && re_lit_index(c, argv[0]) >= 0) {
+      int ts = ++g_tmp, tn = ++g_tmp;
+      emit_indent(b, indent);
+      buf_printf(b, "{ const char *_t%d = ", ts); emit_expr(c, recv, b);
+      buf_printf(b, "; sp_str_check_mutable(_t%d);", ts);
+      buf_printf(b, " mrb_int _t%d = ", tn); emit_int_expr(c, argv[1], b);
+      buf_printf(b, "; if (sp_re_match(sp_re_pat_%d, _t%d) < 0)"
+                    " sp_raise_cls(\"IndexError\", \"regexp not matched\");",
+                 re_lit_index(c, argv[0]), ts);
+      buf_printf(b, " if (_t%d < 0 || _t%d > 9)"
+                    " sp_raise_cls(\"IndexError\", sp_sprintf(\"index %%lld out of regexp\","
+                    " (long long)_t%d));", tn, tn, tn);
+      buf_printf(b, " { mrb_int _b = sp_re_caps[2 * _t%d], _e = sp_re_caps[2 * _t%d + 1]; ", tn, tn);
+      emit_expr(c, recv, b);
+      buf_printf(b, " = sp_str_concat(sp_str_concat(sp_str_byteslice(_t%d, 0, _b), ", ts);
+      emit_str_expr(c, argv[2], b);
+      buf_printf(b, "), sp_str_byteslice(_t%d, _e, (mrb_int)sp_str_byte_len(_t%d) - _e)); } }\n",
+                 ts, ts);
+      return 1;
+    }
     /* s[/re/] = v: replace the first match's span; no match raises IndexError */
     if (assignable && sp_streq(name, "[]=") && argc == 2 && re_lit_index(c, argv[0]) >= 0) {
       emit_indent(b, indent); buf_puts(b, "sp_str_check_mutable("); emit_expr(c, recv, b); buf_puts(b, ");\n");
