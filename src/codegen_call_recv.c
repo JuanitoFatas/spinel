@@ -1380,6 +1380,25 @@ int emit_array_call(Compiler *c, int id, Buf *b) {
       }
     }
     if (sp_streq(name, "fill") && argc >= 1 && argc <= 3) {
+      /* fill(value, start[, length]): start and length are offsets, and a
+         value with no integer conversion is CRuby's TypeError. They went into
+         the offset slot as-is, so a String start read as a pointer and the
+         fill quietly did nothing (#3611). */
+      for (int fa = 1; fa < argc; fa++) {
+        TyKind ft = comp_ntype(c, argv[fa]);
+        /* nil is allowed: it means "from the start" / "to the end" */
+        const char *fcn = ft == TY_STRING ? "String" : ft == TY_SYMBOL ? "Symbol"
+                        : ty_is_array(ft) ? "Array"
+                        : ty_is_hash(ft) ? "Hash" : NULL;
+        if (!fcn) continue;
+        int tf = ++g_tmp;
+        buf_printf(b, "({ (void)("); emit_expr(c, recv, b); buf_puts(b, "); (void)(");
+        emit_expr(c, argv[fa], b);
+        buf_printf(b, "); sp_raise_cls(\"TypeError\", \"no implicit conversion of %s into Integer\");"
+                      " (sp_%sArray *)0; })", fcn, (rt == TY_POLY_ARRAY) ? "Poly" : k);
+        (void)tf;
+        return 1;
+      }
       /* a fill VALUE incompatible with the element type rebuilds through a
          poly array (inference typed the result poly to match); only literal
          and temp receivers reach this -- a conflicting fill on a LOCAL
