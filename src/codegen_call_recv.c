@@ -1493,6 +1493,15 @@ int emit_array_call(Compiler *c, int id, Buf *b) {
       buf_puts(b, ", sp_PolyArray_sum_poly("); emit_expr(c, recv, b); buf_puts(b, "))");
       return 1;
     }
+    if (rt == TY_POLY_ARRAY && sp_streq(name, "cycle") && argc == 1 &&
+        nt_ref(nt, id, "block") < 0 && comp_ntype(c, id) == TY_ENUMERATOR) {
+      /* the call is typed as an Enumerator, so it has to BE one: materializing
+         the repeated array here handed a poly array to sp_Enumerator_to_a,
+         which read it as an Enumerator (#3617) */
+      buf_puts(b, "sp_Enumerator_new_cycle("); emit_boxed(c, recv, b);
+      buf_puts(b, ", "); emit_int_expr(c, argv[0], b); buf_puts(b, ")");
+      return 1;
+    }
     if (rt == TY_POLY_ARRAY && sp_streq(name, "cycle") && argc == 1 && nt_ref(nt, id, "block") < 0) {
       int t = ++g_tmp, tn2 = ++g_tmp, tr2 = ++g_tmp, tj = ++g_tmp, ti2 = ++g_tmp;
       buf_printf(b, "({ sp_PolyArray *_t%d = ", t); emit_expr(c, recv, b);
