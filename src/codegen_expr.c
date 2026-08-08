@@ -2637,7 +2637,7 @@ else {
     int t = ++g_tmp;
     buf_puts(b, "({ ");
     emit_ctype(c, rt, b);
-    buf_printf(b, " _t%d = %s; sp_exc_rootmark[sp_exc_top] = sp_gc_nroots; sp_exc_msg[sp_exc_top] = 0; sp_exc_obj[sp_exc_top] = 0; sp_exc_top++;\n", t, default_value(rt));
+    buf_printf(b, " _t%d = %s; sp_exc_rootmark[sp_exc_top] = sp_gc_nroots; sp_rescue_mark[sp_exc_top] = sp_rescue_sp; sp_exc_msg[sp_exc_top] = 0; sp_exc_obj[sp_exc_top] = 0; sp_exc_top++;\n", t, default_value(rt));
     buf_puts(b, "if (setjmp(sp_exc_stack[sp_exc_top-1]) == 0) {\n");
     /* expression arm — assign result to temp (skip diverging exprs like raise) */
     TyKind et = e >= 0 ? comp_ntype(c, e) : TY_UNKNOWN;
@@ -2682,7 +2682,11 @@ else {
       buf_printf(b, "%s;", ev.p ? ev.p : "");
       free(epre.p); free(ev.p);
     }
+    /* restore the handled-exception depth too: a body that exits by raising
+       out of its own rescue leaves its push behind, and `$!` would keep
+       reading it long after the handler is gone (#3726) */
     buf_puts(b, " sp_exc_top--;\n}\nelse {\n  sp_exc_top--;\n  sp_gc_nroots = sp_exc_rootmark[sp_exc_top];\n  "
+                "sp_rescue_sp = sp_rescue_mark[sp_exc_top];\n  "
                 "if (sp_unwind_kind == SP_UNWIND_NONE) sp_proc_homes_unwind();\n  "
                 "if (sp_unwind_kind != SP_UNWIND_NONE) sp_unwind_resume();\n  ");
     /* materialize the handled exception and push it so `$!` (and #cause

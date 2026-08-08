@@ -3497,8 +3497,10 @@ static const char *sp_str_format_polyarr(const char *fmt, sp_PolyArray *a) {
     }
     if (!*p) break;
     char conv = *p++; spec[sl++] = conv;
+    /* Ruby's %u is %d: it prints a negative as -N rather than wrapping */
+    if (conv == 'u') { conv = 'd'; spec[sl - 1] = 'd'; }
     char fmt_use[80];
-    if (conv == 'd' || conv == 'i' || conv == 'x' || conv == 'X' || conv == 'o') {
+    if (conv == 'd' || conv == 'i') {
       memcpy(fmt_use, spec, sl - 1);
       fmt_use[sl - 1] = 'l'; fmt_use[sl] = 'l'; fmt_use[sl + 1] = conv; fmt_use[sl + 2] = 0;
     }
@@ -3513,54 +3515,16 @@ else {
       if (idx >= a->len) { free(buf); sp_raise_cls("ArgumentError", "too few arguments"); }
       v = a->data[idx]; idx++;
     }
-    if (conv == 'd' || conv == 'i' || conv == 'x' || conv == 'X' || conv == 'o') {
+    if (conv == 'd' || conv == 'i' || conv == 'x' || conv == 'X' || conv == 'o' ||
+        conv == 'b' || conv == 'B') {
       long long lv = 0;
       if (v.tag == SP_TAG_INT) lv = (long long)v.v.i;
       else if (v.tag == SP_TAG_FLT) lv = (long long)v.v.f;
       else if (v.tag == SP_TAG_STR && v.v.s) lv = strtoll(v.v.s, NULL, 10);
-      if (lv < 0 && (conv == 'x' || conv == 'X' || conv == 'o')) {
-        /* Ruby renders a negative under a non-decimal base as an infinite
-           two's complement: ".." + (base-1 digit) + the digits that differ
-           (a '+'/' ' flag switches to the signed magnitude form instead). */
-        int has_sign_flag = 0;
-        for (size_t fi = 1; fi < sl - 1; fi++)
-          if (spec[fi] == '+' || spec[fi] == ' ') { has_sign_flag = 1; break; }
-        int b2 = conv == 'o' ? 8 : 16;
-        if (has_sign_flag) {
-          char core[64]; int cn = 0;
-          unsigned long long uv = (unsigned long long)(-lv);
-          if (conv == 'o') cn = snprintf(core, sizeof core, "%llo", uv);
-          else if (conv == 'x') cn = snprintf(core, sizeof core, "%llx", uv);
-          else cn = snprintf(core, sizeof core, "%llX", uv);
-          (void)cn;
-          wn = snprintf(tmp, sizeof(tmp), "-%s", core);
-        }
-        else {
-          char digs[64]; int nd2 = 0;
-          long long w2 = lv;
-          while (w2 != -1) {
-            long long d2 = w2 % b2;
-            if (d2 < 0) d2 += b2;
-            digs[nd2++] = (char)(d2 < 10 ? '0' + d2
-                                : (conv == 'X' ? 'A' : 'a') + (d2 - 10));
-            w2 = (w2 - d2) / b2;
-          }
-          char top = conv == 'o' ? '7' : (conv == 'X' ? 'F' : 'f');
-          int o2 = 0;
-          tmp[o2++] = '.'; tmp[o2++] = '.'; tmp[o2++] = top;
-          for (int di = nd2 - 1; di >= 0; di--) tmp[o2++] = digs[di];
-          tmp[o2] = 0;
-          wn = o2;
-        }
-      }
-      else wn = snprintf(tmp, sizeof(tmp), fmt_use, lv);
-    }
-else if (conv == 'b' || conv == 'B') {
-      long long lv = 0;
-      if (v.tag == SP_TAG_INT) lv = (long long)v.v.i;
-      else if (v.tag == SP_TAG_FLT) lv = (long long)v.v.f;
-      else if (v.tag == SP_TAG_STR && v.v.s) lv = strtoll(v.v.s, NULL, 10);
-      wn = sp_fmt_binary(spec, sl, conv, lv, tmp, sizeof(tmp));
+      /* the non-decimal bases go through our own formatter: C's printf drops
+         the '+' and ' ' flags on them and has no two's-complement form */
+      if (conv == 'd' || conv == 'i') wn = snprintf(tmp, sizeof(tmp), fmt_use, lv);
+      else wn = sp_fmt_binary(spec, sl, conv, lv, tmp, sizeof(tmp));
     }
 else if (conv == 'f' || conv == 'e' || conv == 'E' || conv == 'g' || conv == 'G' ||
          conv == 'a' || conv == 'A') {
@@ -5066,6 +5030,21 @@ static sp_RbVal sp_poly_each_elem(sp_RbVal a, mrb_int i) {
       return sp_box_poly_array(pair); }
     default: return sp_box_nil();
   }
+}
+/* Kernel#warn's per-message rendering: an Array contributes one line per
+   element (recursively, so a nested array flattens and an empty one
+   contributes nothing); anything else is its to_s on a line of its own. A
+   message that already ends in a newline does not get a second one. */
+static void sp_poly_warn_line(sp_RbVal v, FILE *f) {
+  if (v.tag == SP_TAG_OBJ && sp_poly_is_array_kind(v.cls_id)) {
+    mrb_int n = sp_poly_arr_len(v);
+    for (mrb_int i = 0; i < n; i++) sp_poly_warn_line(sp_poly_each_elem(v, i), f);
+    return;
+  }
+  const char *s = sp_poly_to_s(v);
+  if (!s) s = sp_str_empty;
+  fputs(s, f);
+  if (!*s || s[strlen(s) - 1] != '\n') fputc('\n', f);
 }
 
 static sp_StrPolyHash *sp_StrPolyHash_from_poly(sp_RbVal src) {

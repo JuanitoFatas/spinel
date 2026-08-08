@@ -52,10 +52,15 @@ extern int sp_gc_rem_peak;   /* lib/sp_gc.c: high-water mark of the remembered s
 #  define HAVE_EXECINFO_H 1
 #endif
 
-/* Integer#% / Kernel#format "%b"/"%B": binary formatting with Ruby's flag,
-   width, precision, and two's-complement-for-negative rules. */
+/* Integer#% / Kernel#format "%b"/"%B"/"%o"/"%x"/"%X": non-decimal formatting
+   with Ruby's flag, width, precision, and two's-complement-for-negative rules.
+   C's printf drops the '+' and ' ' flags on these conversions and has no
+   two's-complement form, so none of it can be delegated to libc. */
 int sp_fmt_binary(const char *spec, size_t sl, char conv, long long val,
                   char *out, size_t osz) {
+  int base = (conv == 'o') ? 8 : (conv == 'x' || conv == 'X') ? 16 : 2;
+  int upper = (conv == 'X' || conv == 'B');
+  char topd = (char)(base == 8 ? '7' : base == 2 ? '1' : (upper ? 'F' : 'f'));
   /* parse "%<flags><width>.<prec>b" out of spec[0..sl-1] (spec[sl-1] == conv) */
   int f_minus = 0, f_plus = 0, f_space = 0, f_hash = 0, f_zero = 0;
   size_t i = 1;
@@ -81,25 +86,35 @@ int sp_fmt_binary(const char *spec, size_t sl, char conv, long long val,
   int twos = neg && !f_plus && !f_space;
   char digits[256]; int dn = 0;
   if (twos) {
-    unsigned long long uv = (unsigned long long)val;
-    int p = -1;  /* highest 0-bit position; -1 means val == -1 (all ones) */
-    for (int bit = 62; bit >= 0; bit--) if (!((uv >> bit) & 1ULL)) { p = bit; break; }
-    int ndig = p + 2; if (ndig < 1) ndig = 1;
-    for (int bit = ndig - 1; bit >= 0; bit--) digits[dn++] = (char)('0' + (int)((uv >> bit) & 1ULL));
+    /* the digits that differ from the infinite run of sign digits, plus one
+       leading sign digit: -255 in base 16 is "..f01" */
+    char t[80]; int tn = 0;
+    long long w = val;
+    while (w != -1 && tn < (int)sizeof t) {
+      long long d = w % base;
+      if (d < 0) d += base;
+      t[tn++] = (char)(d < 10 ? '0' + d : (upper ? 'A' : 'a') + (d - 10));
+      w = (w - d) / base;
+    }
+    digits[dn++] = topd;
+    while (tn) digits[dn++] = t[--tn];
   }
   else {
-    /* signed magnitude: |val| in binary. 0 has no significant digits, so it
+    /* signed magnitude: |val| in the base. 0 has no significant digits, so it
        contributes a single '0' only when precision is not 0. */
     unsigned long long mag = neg ? (unsigned long long)(-(val + 1)) + 1 : (unsigned long long)val;
     if (mag == 0) { if (prec != 0) digits[dn++] = '0'; }
-    else { char t[80]; int tn = 0; while (mag) { t[tn++] = (char)('0' + (int)(mag & 1ULL)); mag >>= 1; }
+    else { char t[80]; int tn = 0;
+           while (mag) { int d = (int)(mag % (unsigned)base);
+                         t[tn++] = (char)(d < 10 ? '0' + d : (upper ? 'A' : 'a') + (d - 10));
+                         mag /= (unsigned)base; }
            while (tn) digits[dn++] = t[--tn]; }
   }
   /* precision: minimum digit count. The ".." body counts as 2 toward it and pads
-     with the sign bit (1); signed magnitude pads with 0. */
+     with sign digits; signed magnitude pads with 0. */
   if (prec >= 0) {
     int target = twos ? (prec - 2) : prec;
-    char padc = twos ? '1' : '0';
+    char padc = twos ? topd : '0';
     int t2 = target - dn;
     if (t2 > 0) {
       /* clamp to the digits buffer (output is capped at osz anyway) */
@@ -114,9 +129,21 @@ int sp_fmt_binary(const char *spec, size_t sl, char conv, long long val,
   char body[300]; int bn = 0;
   char sign = twos ? 0 : (neg ? '-' : (f_plus ? '+' : (f_space ? ' ' : 0)));
   char prefix0 = 0, prefix1 = 0;
-  if (f_hash && val != 0) { prefix0 = '0'; prefix1 = (conv == 'B') ? 'B' : 'b'; }
+  if (f_hash && base == 8) {
+    /* octal's alternate form has no letter: it just guarantees a leading 0,
+       so it adds nothing to a body that already starts with one (and nothing
+       at all to the two's-complement form, where a 0 would misread) */
+    if (!twos) {
+      if (dn == 0) digits[dn++] = '0';
+      else if (digits[0] != '0') prefix0 = '0';
+    }
+  }
+  else if (f_hash && val != 0) {
+    prefix0 = '0';
+    prefix1 = (base == 2) ? (upper ? 'B' : 'b') : (upper ? 'X' : 'x');
+  }
   if (sign) body[bn++] = sign;
-  if (prefix0) { body[bn++] = prefix0; body[bn++] = prefix1; }
+  if (prefix0) { body[bn++] = prefix0; if (prefix1) body[bn++] = prefix1; }
   if (twos) { body[bn++] = '.'; body[bn++] = '.'; }
   for (int k = 0; k < dn; k++) body[bn++] = digits[k];
 
@@ -125,8 +152,8 @@ int sp_fmt_binary(const char *spec, size_t sl, char conv, long long val,
   if (pad > 0 && !f_minus && f_zero) {
     /* zero-pad: emit sign/prefix/".." first, then fill, then the rest. A two's-
        complement body fills with the sign bit (1); signed magnitude with 0. */
-    int head = (sign ? 1 : 0) + (prefix0 ? 2 : 0) + (twos ? 2 : 0);
-    char fillc = twos ? '1' : '0';
+    int head = (sign ? 1 : 0) + (prefix0 ? (prefix1 ? 2 : 1) : 0) + (twos ? 2 : 0);
+    char fillc = twos ? topd : '0';
     for (int k = 0; k < head && o < (int)osz; k++) out[o++] = body[k];
     for (int k = 0; k < pad && o < (int)osz; k++) out[o++] = fillc;
     for (int k = head; k < bn && o < (int)osz; k++) out[o++] = body[k];

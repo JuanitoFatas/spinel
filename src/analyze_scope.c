@@ -2933,6 +2933,26 @@ void process_include_body(Compiler *c, int ci, int body_node) {
         const char *dst_name = src->name;
         char inc_shadow[256];
         int own = comp_method_in_class(c, ci, src->name);
+        if (own >= 0 && c->scopes[own].is_include_copy) {
+          /* An earlier include of another module put this name here. Ruby's MRO
+             puts the LAST include first, so this module supersedes it: rename
+             the earlier copy to a shadow (carrying its own super target with
+             it) and let this one take the real name, with its super, if any,
+             reaching the earlier copy (#3731). */
+          ClassInfo *cif = &c->classes[ci];
+          snprintf(inc_shadow, sizeof inc_shadow, "__inc %d %s",
+                   cif->prep_shadow_count++, src->name);
+          for (int kk = 0; kk < cif->nprep_chain; kk++)
+            if (sp_streq(cif->prep_from[kk], src->name)) {
+              free(cif->prep_from[kk]); cif->prep_from[kk] = strdup(inc_shadow);
+              break;
+            }
+          free(c->scopes[own].name);
+          c->scopes[own].name = strdup(inc_shadow);
+          if (scope_body_has_super(c, ms)) comp_prep_chain_add(cif, src->name, inc_shadow);
+          else c->scopes[own].reachable = 0;   /* nothing can reach it now */
+          own = -1;
+        }
         if (own >= 0) {
           /* The class overrides the module method. If the override calls super,
              the module method is the super target: copy it under a shadow name
@@ -3015,6 +3035,7 @@ else {
         }
         dst->class_id = ci;
         dst->is_cmethod = 0;
+        dst->is_include_copy = 1;
         dst->reachable = src->reachable;
         dst->yields = src->yields;
         dst->nrequired = src->nrequired;

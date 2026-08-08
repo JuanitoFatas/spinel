@@ -113,6 +113,9 @@ typedef struct {
   int reachable;    /* method name is referenced somewhere (else dead code) */
   int is_cmethod;   /* `def self.foo`: a class (singleton) method, no instance self */
   int is_transplanted_source; /* method was copied into another class via include/prepend */
+  int is_include_copy;        /* this scope IS such a copy: a later include of a
+                                 module defining the same name replaces it, and
+                                 the replacement's super chains to it (#3731) */
   int is_proc_form;  /* a clone of a yielding method whose `yield` is a call on
                         a real &blk parameter, for the poly dispatch. Its body
                         is typed independently of the inlined original: the

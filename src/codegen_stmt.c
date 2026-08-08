@@ -803,20 +803,20 @@ else {
         else if (at == TY_INT) { buf_puts(b, "sp_int_to_s("); emit_expr(c, argv[k], b); buf_puts(b, ")"); }
         else if (at == TY_FLOAT) { buf_puts(b, "sp_float_to_s("); emit_expr(c, argv[k], b); buf_puts(b, ")"); }
         else if (at == TY_SYMBOL) { buf_puts(b, "sp_sym_to_s("); emit_expr(c, argv[k], b); buf_puts(b, ")"); }
-        else { buf_puts(b, "((void)("); emit_expr(c, argv[k], b); buf_puts(b, "), \"\")"); }
+        else { buf_puts(b, "sp_poly_to_s("); emit_boxed(c, argv[k], b); buf_puts(b, ")"); }
         buf_puts(b, ";\n");
         emit_indent(b, indent);
         buf_printf(b, "if (gv_stderr) { sp_StringIO_write(gv_stderr, _t%d); sp_StringIO_write(gv_stderr, \"\\n\"); }"
                       "\nelse { fputs(_t%d, stderr); fputc('\\n', stderr); }\n", wt, wt);
         continue;
       }
-      emit_indent(b, indent); buf_puts(b, "fputs(");
-      if (at == TY_STRING) emit_expr(c, argv[k], b);
-      else if (at == TY_INT) { buf_puts(b, "sp_int_to_s("); emit_expr(c, argv[k], b); buf_puts(b, ")"); }
-      else if (at == TY_FLOAT) { buf_puts(b, "sp_float_to_s("); emit_expr(c, argv[k], b); buf_puts(b, ")"); }
-      else if (at == TY_SYMBOL) { buf_puts(b, "sp_sym_to_s("); emit_expr(c, argv[k], b); buf_puts(b, ")"); }
-      else { buf_puts(b, "((void)("); emit_expr(c, argv[k], b); buf_puts(b, "), \"\")"); }
-      buf_puts(b, ", stderr); fputc('\\n', stderr);\n");
+      /* every message renders like puts: an Array writes one line per element,
+         anything else its to_s, and a message already ending in a newline does
+         not get a second one (#3728) */
+      (void)at;
+      emit_indent(b, indent); buf_puts(b, "sp_poly_warn_line(");
+      emit_boxed(c, argv[k], b);
+      buf_puts(b, ", stderr);\n");
     }
     return 1;
   }
