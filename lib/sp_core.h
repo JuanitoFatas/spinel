@@ -19,7 +19,9 @@ double sp_str_to_f_cruby(const char *s);
 intptr_t sp_str_to_i_base(const char *s, intptr_t base);
 intptr_t sp_str_to_i_strict(const char *s);
 intptr_t sp_str_to_i_strict_base(const char *s, intptr_t base);
+intptr_t sp_str_to_i_lenient_base(const char *s, intptr_t base);
 double  sp_str_to_f_strict(const char *s);
+double sp_str_to_f_lenient(const char *s);
 int     sp_snprintf_c_float(char *buf, size_t size, const char *fmt, double v);
 
 /* Cold integer-math + String#oct helpers. */

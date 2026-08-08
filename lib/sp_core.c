@@ -194,12 +194,15 @@ mrb_int sp_str_to_i_strict(const char *s) {SP_GC_ROOT_STR(s);
 /* `Integer(s, base)` with explicit base. Bases 2..36, MRI-compatible
    prefix recognition (0x / 0b / 0o when the base matches). Raises
    ArgumentError on invalid input or unsupported base. Issue #887. */
-mrb_int sp_str_to_i_strict_base(const char *s, mrb_int base) {SP_GC_ROOT_STR(s);
-  if (!s) sp_raise_cls("ArgumentError", "invalid value for Integer(): nil");
+/* The shared body. `lenient` is Kernel#Integer's `exception: false`: every
+   rejection answers nil (SP_INT_NIL) instead of raising (#3718). */
+static mrb_int sp_str_to_i_base_impl(const char *s, mrb_int base, int lenient) {SP_GC_ROOT_STR(s);
+#define SP_INT_REJECT(cls, msg) do { if (lenient) return SP_INT_NIL; sp_raise_cls(cls, msg); } while (0)
+  if (!s) SP_INT_REJECT("ArgumentError", "invalid value for Integer(): nil");
   /* an embedded NUL makes the Ruby string longer than its C prefix: CRuby
      rejects it, a C-string scan would silently parse the prefix. */
   if (strlen(s) != sp_str_byte_len(s))
-    sp_raise_cls("ArgumentError", sp_sprintf("invalid value for Integer(): \"%s\"", s));
+    SP_INT_REJECT("ArgumentError", sp_sprintf("invalid value for Integer(): \"%s\"", s));
   if (base == 0) {
     /* auto-detect the base from the literal's prefix */
     const char *q = s;
@@ -215,7 +218,7 @@ mrb_int sp_str_to_i_strict_base(const char *s, mrb_int base) {SP_GC_ROOT_STR(s);
     }
     else base = 10;
   }
-  if (base < 2 || base > 36) sp_raise_cls("ArgumentError", sp_sprintf("invalid radix %lld", (long long)base));
+  if (base < 2 || base > 36) SP_INT_REJECT("ArgumentError", sp_sprintf("invalid radix %lld", (long long)base));
   const char *p = s;
   while (isspace((unsigned char)*p)) p++;
   int neg = 0;
@@ -226,7 +229,7 @@ mrb_int sp_str_to_i_strict_base(const char *s, mrb_int base) {SP_GC_ROOT_STR(s);
     else if ((base == 2) && (p[1] == 'b' || p[1] == 'B')) p += 2;
     else if ((base == 8) && (p[1] == 'o' || p[1] == 'O')) p += 2;
   }
-  if (*p == '\0') sp_raise_cls("ArgumentError", sp_sprintf("invalid value for Integer(): \"%s\"", s));
+  if (*p == '\0') SP_INT_REJECT("ArgumentError", sp_sprintf("invalid value for Integer(): \"%s\"", s));
   mrb_int v = 0;
   int any = 0;
   while (*p) {
@@ -249,24 +252,32 @@ mrb_int sp_str_to_i_strict_base(const char *s, mrb_int base) {SP_GC_ROOT_STR(s);
       mrb_int t;
       if (__builtin_mul_overflow(v, base, &t) ||
           __builtin_add_overflow(t, (mrb_int)d, &v)) {
-        sp_raise_cls("RangeError", sp_sprintf("integer overflow parsing \"%s\"", s));
+        SP_INT_REJECT("RangeError", sp_sprintf("integer overflow parsing \"%s\"", s));
       }
     }
     any = 1;
     p++;
   }
-  if (!any) sp_raise_cls("ArgumentError", sp_sprintf("invalid value for Integer(): \"%s\"", s));
+  if (!any) SP_INT_REJECT("ArgumentError", sp_sprintf("invalid value for Integer(): \"%s\"", s));
   while (isspace((unsigned char)*p)) p++;
-  if (*p != '\0') sp_raise_cls("ArgumentError", sp_sprintf("invalid value for Integer(): \"%s\"", s));
+  if (*p != '\0') SP_INT_REJECT("ArgumentError", sp_sprintf("invalid value for Integer(): \"%s\"", s));
   return neg ? -v : v;
+#undef SP_INT_REJECT
+}
+mrb_int sp_str_to_i_strict_base(const char *s, mrb_int base) {
+  return sp_str_to_i_base_impl(s, base, 0);
+}
+/* Kernel#Integer(s[, base], exception: false) */
+mrb_int sp_str_to_i_lenient_base(const char *s, mrb_int base) {
+  return sp_str_to_i_base_impl(s, base, 1);
 }
 
 /* Kernel#Float() raises ArgumentError on unparseable input. strtod
    on its own would silently return 0.0 for "abc" or empty input;
    match MRI semantics by validating at-least-one-digit + no-trailing-
    junk. Whitespace flanking is fine. Issue #888. */
-mrb_float sp_str_to_f_strict(const char *s) {SP_GC_ROOT_STR(s);
-  if (!s) sp_raise_cls("ArgumentError", "invalid value for Float(): nil");
+static mrb_float sp_str_to_f_impl(const char *s, int lenient) {SP_GC_ROOT_STR(s);
+  if (!s) { if (lenient) return sp_float_nil(); sp_raise_cls("ArgumentError", "invalid value for Float(): nil"); }
   /* embedded NUL: the Ruby string extends past its C prefix -- reject rather
      than silently parsing the prefix ("1\\0" is not a float in CRuby). */
   size_t blen = sp_str_byte_len(s);
@@ -366,9 +377,13 @@ mrb_float sp_str_to_f_strict(const char *s) {SP_GC_ROOT_STR(s);
     if (buf != sbuf) free(buf);
   }
 bad0:
+  /* Kernel#Float(s, exception: false) answers nil for everything this rejects */
+  if (lenient) return sp_float_nil();
   sp_raise_cls("ArgumentError", sp_sprintf("invalid value for Float(): \"%s\"", s));
   return 0.0;  /* unreachable */
 }
+mrb_float sp_str_to_f_strict(const char *s)  { return sp_str_to_f_impl(s, 0); }
+mrb_float sp_str_to_f_lenient(const char *s) { return sp_str_to_f_impl(s, 1); }
 
 /* Kernel#sprintf's float directives (%f/%e/%g/%a with width/flags) are emitted
    by faithfully delegating to libc snprintf, which is locale-sensitive for the

@@ -3659,7 +3659,14 @@ else {
      avoid structurally, and looped forever on whole-program shapes with
      zero conversion calls (the tep regression). Only the six capitalized
      conversion names ever pay the receiver inference. */
-  if (recv >= 0 && (argc == 1 || argc == 2) && name[0] >= 'A' && name[0] <= 'Z' &&
+  /* Kernel#Integer/#Float take `exception: false`; the keyword hash is not one
+     of the value arguments, so it must not shift the arity (#3718) */
+  int kw_argc = argc;
+  if (argc > 0) {
+    const char *lkt = nt_type(c->nt, argv[argc - 1]);
+    if (lkt && sp_streq(lkt, "KeywordHashNode")) kw_argc--;
+  }
+  if (recv >= 0 && (kw_argc == 1 || kw_argc == 2) && name[0] >= 'A' && name[0] <= 'Z' &&
       (sp_streq(name, "Integer") || sp_streq(name, "Float") ||
        sp_streq(name, "String") || sp_streq(name, "Rational") ||
        sp_streq(name, "Complex") || sp_streq(name, "Array"))) {
@@ -3669,8 +3676,8 @@ else {
                 ((krt == TY_NIL || krt == TY_POLY || krt == TY_UNKNOWN) &&
                  comp_method_index(c, name) < 0);
     if (kdisp) {
-      if (sp_streq(name, "Integer") && (argc == 1 || argc == 2)) return TY_INT;
-      if (argc == 1) {
+      if (sp_streq(name, "Integer") && (kw_argc == 1 || kw_argc == 2)) return TY_INT;
+      if (kw_argc == 1) {
         if (sp_streq(name, "Float"))    return TY_FLOAT;
         if (sp_streq(name, "String"))   return TY_STRING;
         if (sp_streq(name, "Rational")) return TY_RATIONAL;
@@ -3692,8 +3699,8 @@ else {
     if (mi < 0) mi = comp_included_method_index(c, name);
     if (mi >= 0) return method_call_ret(c, mi, id);
     /* Kernel conversions */
-    if (sp_streq(name, "Integer") && (argc == 1 || argc == 2)) return TY_INT;
-    if (sp_streq(name, "Float") && argc == 1) return TY_FLOAT;
+    if (sp_streq(name, "Integer") && (kw_argc == 1 || kw_argc == 2)) return TY_INT;
+    if (sp_streq(name, "Float") && kw_argc == 1) return TY_FLOAT;
     if (sp_streq(name, "String") && argc == 1) return TY_STRING;
     if (sp_streq(name, "Array") && argc == 1) {
       TyKind at = infer_type(c, argv[0]);

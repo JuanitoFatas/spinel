@@ -12285,13 +12285,61 @@ else { memcpy(dir, sf, n); dir[n] = 0; } }
   if (kconv) {
     int args = nt_ref(nt, id, "arguments");
     int ac = 0; const int *av = args >= 0 ? nt_arr(nt, args, "arguments", &ac) : NULL;
+    /* `exception: false` asks for nil instead of a raise. The keyword hash is
+       not a positional argument: passed through as one it reached the base
+       slot as a pointer (#3718). */
+    int kconv_noraise = 0;
+    if (ac > 0 && (sp_streq(name, "Integer") || sp_streq(name, "Float"))) {
+      const char *lty = nt_type(nt, av[ac - 1]);
+      if (lty && sp_streq(lty, "KeywordHashNode")) {
+        int en = 0; const int *el = nt_arr(nt, av[ac - 1], "elements", &en);
+        for (int e = 0; e < en; e++) {
+          int k = nt_ref(nt, el[e], "key"), v = nt_ref(nt, el[e], "value");
+          const char *kt = k >= 0 ? nt_type(nt, k) : NULL;
+          const char *kn = (kt && sp_streq(kt, "SymbolNode")) ? nt_str(nt, k, "value") : NULL;
+          const char *vt = v >= 0 ? nt_type(nt, v) : NULL;
+          if (kn && sp_streq(kn, "exception") && vt && sp_streq(vt, "FalseNode"))
+            kconv_noraise = 1;
+        }
+        ac--;   /* the rest of this arm counts positionals only */
+      }
+    }
+    if (kconv_noraise && sp_streq(name, "Integer") && (ac == 1 || ac == 2)) {
+      TyKind at0 = comp_ntype(c, av[0]);
+      if (at0 == TY_STRING) {
+        buf_puts(b, "sp_str_to_i_lenient_base("); emit_expr(c, av[0], b); buf_puts(b, ", ");
+        if (ac == 2) emit_int_expr(c, av[1], b); else buf_puts(b, "0");
+        buf_puts(b, ")");
+        return;
+      }
+      if (at0 == TY_INT) { emit_expr(c, av[0], b); return; }
+      if (at0 == TY_FLOAT) { buf_puts(b, "((mrb_int)("); emit_expr(c, av[0], b); buf_puts(b, "))"); return; }
+      buf_puts(b, "((void)("); emit_expr(c, av[0], b); buf_puts(b, "), SP_INT_NIL)");
+      return;
+    }
+    if (kconv_noraise && sp_streq(name, "Float") && ac == 1) {
+      TyKind at0 = comp_ntype(c, av[0]);
+      if (at0 == TY_STRING) { buf_puts(b, "sp_str_to_f_lenient("); emit_expr(c, av[0], b); buf_puts(b, ")"); return; }
+      if (at0 == TY_INT) { buf_puts(b, "((mrb_float)("); emit_expr(c, av[0], b); buf_puts(b, "))"); return; }
+      if (at0 == TY_FLOAT) { emit_expr(c, av[0], b); return; }
+      buf_puts(b, "((void)("); emit_expr(c, av[0], b); buf_puts(b, "), sp_float_nil())");
+      return;
+    }
     if (sp_streq(name, "Integer") && ac == 1) {
       TyKind at = comp_ntype(c, av[0]);
       if (at == TY_STRING) { buf_puts(b, "sp_str_to_i_strict("); emit_expr(c, av[0], b); buf_puts(b, ")"); }
       else if (at == TY_FLOAT) { buf_puts(b, "((mrb_int)("); emit_expr(c, av[0], b); buf_puts(b, "))"); }
       else if (at == TY_NIL) { buf_puts(b, "((void)("); emit_expr(c, av[0], b); buf_puts(b, "), sp_raise_cls(\"TypeError\", \"can't convert nil into Integer\"), (mrb_int)0)"); }  /* #2514 */
       else if (at == TY_POLY) { buf_puts(b, "sp_poly_Integer("); emit_expr(c, av[0], b); buf_puts(b, ")"); }
-      else { buf_puts(b, "("); emit_expr(c, av[0], b); buf_puts(b, ")"); }
+      else if (at == TY_INT || at == TY_UNKNOWN) { buf_puts(b, "("); emit_expr(c, av[0], b); buf_puts(b, ")"); }
+      else {
+        /* an Array, Hash, Range, Symbol or object has no to_int: CRuby's
+           TypeError, not the value reinterpreted as an integer (#3717) */
+        buf_puts(b, "((void)("); emit_expr(c, av[0], b);
+        buf_puts(b, "), sp_raise_cls(\"TypeError\", sp_sprintf(\"can't convert %s into Integer\", sp_poly_class_name(");
+        emit_boxed(c, av[0], b);
+        buf_puts(b, "))), (mrb_int)0)");
+      }
       return;
     }
     if (sp_streq(name, "Integer") && ac == 2) {
