@@ -3954,6 +3954,17 @@ else {
            StrArray for ["a","b"], PolyArray for mixed); sp_poly_arr_get boxes an
            element from any of them, so key/value extraction works regardless. */
         buf_printf(b, " sp_RbVal _t%d = sp_PolyArray_get(_t%d, _t%d);", tp, tr, ti);
+        /* every element must be a two-element array; a longer or shorter one
+           is an ArgumentError and a non-array a TypeError, where the extra
+           elements were simply dropped (#3616) */
+        buf_printf(b, " if (_t%d.tag != SP_TAG_OBJ || !sp_poly_is_array_kind(_t%d.cls_id))"
+                      " sp_raise_cls(\"TypeError\", sp_sprintf(\"wrong element type %%s at %%lld (expected array)\","
+                      " sp_poly_class_name(_t%d), (long long)_t%d));"
+                      " { mrb_int _n%d = sp_poly_arr_len(_t%d);"
+                      " if (_n%d != 2) sp_raise_cls(\"ArgumentError\","
+                      " sp_sprintf(\"wrong array length at %%lld (expected 2, was %%lld)\","
+                      " (long long)_t%d, (long long)_n%d)); }",
+                   tp, tp, tp, ti, tp, tp, tp, ti, tp);
         buf_printf(b, " sp_%sHash_set(_t%d, ", hn, th);
         char kexpr[128];
         if (kty == TY_SYMBOL)      snprintf(kexpr, sizeof kexpr, "(sp_sym)sp_poly_arr_get(_t%d, 0).v.i", tp);
