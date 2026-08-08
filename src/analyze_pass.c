@@ -6880,6 +6880,72 @@ int desugar_sort_by_with_index(Compiler *c) {
   return changed;
 }
 
+/* An Enumerable method whose receiver is a Hash or a Range, where only the
+   Array arm exists: `{a: 1}.each_slice(2)`, `(1..5).sort`. Every one of these
+   answers exactly what the same call on `receiver.to_a` answers -- Enumerable
+   over a Hash walks its pairs, over a Range its elements -- so route it
+   through that rather than leaving a compile-time refusal.
+
+   The list is deliberately the methods whose result is NOT of the receiver's
+   own kind. Hash#select and friends answer Hashes and have their own arms;
+   rewriting one of those would change what it returns. Runs after inference,
+   so the receiver's kind is known; the caller re-runs the fixpoint. */
+/* 1 = route whatever the call's shape; 2 = only with a block, because the
+   blockless form answers an Enumerator that keeps its source (`(1..6)
+   .each_slice(2)` inspects as `1..6:each_slice(2)`, not as its elements). */
+static int enum_via_to_a_name(const char *n) {
+  static const char *always[] = {
+    "take_while", "drop_while", "grep", "grep_v", "chunk_while", "slice_when",
+    "slice_before", "slice_after", "sort", "minmax", "minmax_by", "zip",
+    "find_index", "uniq", "flat_map", "collect_concat", NULL
+  };
+  static const char *with_block[] = {
+    "each_slice", "each_cons", "each_entry", "cycle", NULL
+  };
+  for (int i = 0; always[i]; i++) if (sp_streq(n, always[i])) return 1;
+  for (int i = 0; with_block[i]; i++) if (sp_streq(n, with_block[i])) return 2;
+  return 0;
+}
+int desugar_enumerable_via_to_a(Compiler *c) {
+  NodeTable *nt = (NodeTable *)c->nt;
+  int changed = 0;
+  int n0 = nt->count;
+  for (int id = 0; id < n0; id++) {
+    if (nt_kind(nt, id) != NK_CallNode) continue;
+    const char *nm = nt_str(nt, id, "name");
+    int how = nm ? enum_via_to_a_name(nm) : 0;
+    if (!how) continue;
+    int recv = nt_ref(nt, id, "receiver");
+    if (recv < 0) continue;
+    /* skip one we already rewrote (its receiver IS the to_a) */
+    const char *rnm = nt_kind(nt, recv) == NK_CallNode ? nt_str(nt, recv, "name") : NULL;
+    if (rnm && sp_streq(rnm, "to_a")) continue;
+    TyKind rt = comp_ntype(c, recv);
+    if (!ty_is_hash(rt) && rt != TY_RANGE) continue;
+    /* Only where the call found no arm at all. A form that IS wired -- a
+       blockless each_slice answering an Enumerator, say -- has a type, and
+       rerouting it through to_a would answer an Array instead. */
+    if (comp_ntype(c, id) != TY_UNKNOWN) continue;
+    /* A blockless each_* over a Range has an arm already, and its Enumerator
+       keeps the Range as its source (`(1..6).each_slice(2)` inspects as
+       `1..6:each_slice(2)`); routing it would answer the elements instead. A
+       Hash has no such arm, so it routes either way. */
+    if (how == 2 && rt == TY_RANGE && nt_ref(nt, id, "block") < 0) continue;
+    int base = nt->count;
+    int toa = nt_new_node(nt, "CallNode");
+    if (toa < 0) continue;
+    nt_node_set_ref(nt, toa, "receiver", recv);
+    nt_node_set_str(nt, toa, "name", "to_a");
+    nt_node_set_ref(nt, toa, "arguments", -1);
+    nt_node_set_ref(nt, toa, "block", -1);
+    nt_node_set_ref(nt, id, "receiver", toa);
+    comp_grow_node_arrays(c);
+    for (int j = base; j < nt->count; j++) c->nscope[j] = c->nscope[id];
+    changed = 1;
+  }
+  return changed;
+}
+
 int desugar_block_destructure_params(Compiler *c) {
   NodeTable *nt = (NodeTable *)c->nt;
   int changed = 0;

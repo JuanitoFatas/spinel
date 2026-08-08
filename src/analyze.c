@@ -9771,6 +9771,9 @@ void analyze_program(Compiler *c) {
        after the ivar narrowing so a table read out of an ivar is already
        typed when the local reading it is derived. */
     if (narrow_object_arrays(c)) ch |= infer_write_types(c);
+    /* Enumerable over a Hash/Range with only an Array arm: route through to_a
+       (needs the receiver kind, so it runs inside the fixpoint). */
+    if (desugar_enumerable_via_to_a(c)) ch |= infer_write_types(c);
     narrow_locals_from_arrays(c);
     ch |= infer_param_types(c);
     ch |= bind_coerce_operator_params(c);   /* 3 + obj calls obj's op WITH obj */
