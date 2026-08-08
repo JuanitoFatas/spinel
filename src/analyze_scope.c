@@ -3522,11 +3522,26 @@ void register_prepends(Compiler *c) {
    layout is [parent ivars..., own ivars...] (cast-compatible). Types are
    propagated later in the fixpoint. Parent-first order. */
 void inherit_members(Compiler *c) {
-  for (int i = 0; i < c->nclasses; i++) {
+  /* Parent-before-child order, by dependency rather than by index: a class
+     whose superclass is an anonymous Struct (`class Kid < Struct.new(:a)`)
+     can be registered BEFORE that Struct, and the old index test skipped it,
+     leaving the subclass without the members it inherits (#3576). */
+  char *done = (char *)calloc((size_t)(c->nclasses > 0 ? c->nclasses : 1), 1);
+  if (!done) return;
+  for (int i = 0; i < c->nclasses; i++)
+    if (c->classes[i].parent < 0) done[i] = 1;
+  for (int round = 0; round < c->nclasses + 1; round++) {
+    int progressed = 0;
+    for (int i = 0; i < c->nclasses; i++) {
     ClassInfo *ci = &c->classes[i];
     int p = ci->parent;
-    if (p < 0 || p >= i) continue;  /* parent defined earlier; already merged */
+    if (done[i]) continue;
+    if (p < 0 || p >= c->nclasses || !done[p]) continue;  /* parent not merged yet */
+    done[i] = 1; progressed = 1;
     ClassInfo *pc = &c->classes[p];
+    /* a subclass of a Struct is a Struct: it keeps the members, the positional
+       constructor and the member face (#3576) */
+    if (pc->is_struct && !ci->is_struct && !ci->is_data) ci->is_struct = 1;
 
     char **old = ci->ivars; TyKind *oldt = ci->ivar_types; int oldn = ci->nivars;
     ci->ivars = NULL; ci->ivar_types = NULL; ci->ivar_nullable_int = NULL; ci->ivar_nullable_int_elem = NULL; ci->ivar_arr_elem_arr_or_nil = NULL; ci->nivars = ci->civars = 0;
@@ -3567,7 +3582,10 @@ void inherit_members(Compiler *c) {
 
     for (int k = 0; k < pc->nreaders; k++) comp_add_reader(ci, pc->readers[k]);
     for (int k = 0; k < pc->nwriters; k++) comp_add_writer(ci, pc->writers[k]);
+    }
+    if (!progressed) break;   /* the rest are cycles or dangling parents */
   }
+  free(done);
 }
 
 /* Propagate inherited @ivar types parent -> child. */
