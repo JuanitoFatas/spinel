@@ -2252,6 +2252,7 @@ static sp_RbVal sp_poly_truncate(sp_RbVal v) { if (v.tag == SP_TAG_FLT) { sp_pol
    the array-kind predicate for cross-kind value equality. */
 static mrb_int sp_poly_length(sp_RbVal v);
 static sp_RbVal sp_poly_arr_get(sp_RbVal a, mrb_int i);
+static sp_PolyArray *sp_poly_user_elems(sp_RbVal v);   /* fwd: user Enumerable elements */
 /* poly-valued hash variants are defined later in this header */
 typedef struct sp_StrPolyHash sp_StrPolyHash;
 typedef struct sp_SymPolyHash sp_SymPolyHash;
@@ -3293,6 +3294,10 @@ static mrb_int sp_PolyArray_rindex(sp_PolyArray *a, sp_RbVal v) { if (!a) return
 /* Array#index / #rindex with a VALUE argument, over any array storage kind:
    the first (or last) position comparing equal, or SP_INT_NIL for none. Used
    by the poly-receiver arm, where the element kind is only known at run time. */
+/* include? over a user Enumerable read out of a container: its elements,
+   compared the way the array arms compare (#3761). Answers -1 when the
+   receiver is not one, so a caller can fall through. */
+static int sp_poly_user_include(sp_RbVal recv, sp_RbVal x);
 static mrb_int sp_poly_arr_index_val(sp_RbVal a, sp_RbVal v, int rev) {
   mrb_int n = sp_poly_arr_len(a);
   if (rev) { for (mrb_int i = n - 1; i >= 0; i--) if (sp_poly_eq(sp_poly_arr_get(a, i), v)) return i; }
@@ -5810,6 +5815,8 @@ static sp_RbVal sp_poly_to_a_m(sp_RbVal v) {
      unboxed representation (the nil case dominates; identity is not kept) */
   if (v.tag == SP_TAG_OBJ && sp_poly_is_array_kind(v.cls_id))
     return sp_box_poly_array(sp_poly_to_poly_array(v));
+  { sp_PolyArray *ue = sp_poly_user_elems(v);
+    if (ue) return sp_box_poly_array(ue); }
   sp_raise_cls("NoMethodError", sp_sprintf("undefined method 'to_a' for %s", sp_poly_class_name(v)));
 }
 static sp_RbVal sp_poly_to_h_m(sp_RbVal v) {
@@ -5872,6 +5879,24 @@ static sp_RbVal sp_poly_to_c_m(sp_RbVal v) {
    element's cls_id and returns a boxed result, so `runs.map { |r| r.sum }` and
    friends work without statically knowing the run's array type. first/last reuse
    the generic boxed-element accessors. */
+/* A user object whose class mixes in Enumerable is opaque to the poly ops --
+   its cls_id is its own, and every switch below falls to a default that
+   answers the empty-collection value (0, nil, false). The generated TU
+   installs sp_obj_to_a_fn for every class with an #each, so its elements are
+   reachable; the ops consult it rather than answering for an empty one.
+   sp_poly_length already did this; the rest did not (#3761). */
+static sp_PolyArray *sp_poly_user_elems(sp_RbVal v) {
+  if (v.tag != SP_TAG_OBJ || v.cls_id < 0 || !sp_obj_to_a_fn) return NULL;
+  sp_RbVal a = sp_obj_to_a_fn(v);
+  if (a.tag == SP_TAG_OBJ && sp_poly_is_array_kind(a.cls_id)) return sp_poly_to_poly_array(a);
+  return NULL;
+}
+static int sp_poly_user_include(sp_RbVal recv, sp_RbVal x) {
+  sp_PolyArray *ue = sp_poly_user_elems(recv);
+  if (!ue) return -1;
+  for (mrb_int i = 0; i < ue->len; i++) if (sp_poly_eq(ue->data[i], x)) return 1;
+  return 0;
+}
 static sp_RbVal sp_poly_sum(sp_RbVal v) {
   /* String#sum is a byte checksum, not a container fold: a boxed String fell
      past the switch below and answered 0 (#3446). */
@@ -5890,7 +5915,10 @@ static sp_RbVal sp_poly_sum(sp_RbVal v) {
       SP_GC_ROOT(ia);
       return sp_box_int(sp_IntArray_sum(ia, 0));
     }
-    default: return sp_box_int(0);
+    default: {
+      sp_PolyArray *ue = sp_poly_user_elems(v);
+      return ue ? sp_PolyArray_sum_poly(ue) : sp_box_int(0);
+    }
   }
 }
 /* sum(seed) over a container-read row: accumulate through sp_poly_add from
@@ -5976,7 +6004,8 @@ static sp_RbVal sp_poly_min(sp_RbVal v) {
     case SP_BUILTIN_STR_ARRAY:  { const char *m = sp_StrArray_min((sp_StrArray *)v.v.p); return m ? sp_box_str(m) : sp_box_nil(); }
     case SP_BUILTIN_SYM_ARRAY:  return sp_PolyArray_min(sp_poly_to_poly_array(v));
     case SP_BUILTIN_POLY_ARRAY: return sp_PolyArray_min((sp_PolyArray *)v.v.p);
-    default: return sp_box_nil();
+    default: { sp_PolyArray *ue = sp_poly_user_elems(v);
+               return ue ? sp_PolyArray_min(ue) : sp_box_nil(); }
   }
 }
 static sp_RbVal sp_poly_max(sp_RbVal v) {
@@ -5988,7 +6017,8 @@ static sp_RbVal sp_poly_max(sp_RbVal v) {
     case SP_BUILTIN_STR_ARRAY:  { const char *m = sp_StrArray_max((sp_StrArray *)v.v.p); return m ? sp_box_str(m) : sp_box_nil(); }
     case SP_BUILTIN_SYM_ARRAY:  return sp_PolyArray_max(sp_poly_to_poly_array(v));
     case SP_BUILTIN_POLY_ARRAY: return sp_PolyArray_max((sp_PolyArray *)v.v.p);
-    default: return sp_box_nil();
+    default: { sp_PolyArray *ue = sp_poly_user_elems(v);
+               return ue ? sp_PolyArray_max(ue) : sp_box_nil(); }
   }
 }
 /* Hash#first / #last answer a [key, value] pair; sp_poly_arr_get indexes the
@@ -7294,6 +7324,10 @@ static sp_PolyArray *sp_poly_to_a_arr(sp_RbVal v) {
     if (h.tag == SP_TAG_OBJ && h.cls_id == SP_BUILTIN_SYM_POLY_HASH)
       return sp_SymPolyHash_values((sp_SymPolyHash *)h.v.p);
   }
+  /* a user class that includes Enumerable: its elements, through the
+     materializer the generated to_a dispatch calls (#3761) */
+  { sp_PolyArray *ue = sp_poly_user_elems(v);
+    if (ue) return ue; }
   sp_raise_nomethod(sp_nomethod_msg("to_a", v));
   return NULL;
 }

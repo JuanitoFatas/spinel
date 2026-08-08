@@ -4766,6 +4766,18 @@ else {
         buf_puts(b, " break;");
       }
       if (is_include) {
+        /* a user Enumerable read out of a container answers from its elements;
+           -1 means "not one", and the arms below still decide (#3761) */
+        { Buf ab5; memset(&ab5, 0, sizeof ab5);
+          char tn5[24]; snprintf(tn5, sizeof tn5, "_t%d", atmp[0]);
+          if (atmp_ty[0] == TY_POLY) buf_puts(&ab5, tn5);
+          else emit_boxed_text(c, atmp_ty[0], tn5, &ab5);
+          /* not a user Enumerable -> the answer the switch used to fall
+             through to (false), so no other receiver changes */
+          buf_printf(b, " default: { int _ui%d = sp_poly_user_include(_t%d, %s);"
+                        " _t%d = _ui%d > 0; break; }",
+                     tv, tv, ab5.p ? ab5.p : "sp_box_nil()", tr, tv);
+          free(ab5.p); }
         TyKind at = infer_type(c, argv[0]);
         if (at == TY_INT) {
           buf_printf(b, " case SP_BUILTIN_INT_ARRAY: _t%d = sp_IntArray_include((sp_IntArray *)_t%d.v.p, _t%d); break;", tr, tv, atmp[0]);

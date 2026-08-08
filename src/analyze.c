@@ -114,7 +114,11 @@ static int method_name_implicitly_invoked(const char *nm) {
   static const char *const implicit[] = {
     "to_s", "inspect", "==", "<=>", "eql?", "hash", "each", "coerce",
     "to_str", "to_ary", "to_a", "to_i", "to_int", "to_h", "to_proc", "call",
-    "initialize_copy", NULL };
+    "initialize_copy",
+    /* the materializer synthesized for a class that includes Enumerable: the
+       generated sp_obj_to_a dispatch calls it for an instance the poly
+       machinery meets, and nothing in the program names it (#3761) */
+    "__enum_to_a", NULL };
   if (!nm) return 0;
   for (int i = 0; implicit[i]; i++) if (sp_streq(implicit[i], nm)) return 1;
   return 0;
@@ -4589,7 +4593,33 @@ int desugar_enum_method_recv(Compiler *c) {
     }
     if (!nm || !is_array_enum_method(nm)) continue;
     int recv = nt_ref(nt, id, "receiver");
-    if (recv < 0) continue;
+    if (recv < 0) {
+      /* `count` with no receiver inside another method of the same class: the
+         redirect below keys on the receiver's type, and an implicit self has
+         no receiver node at all, so an Enumerable call on self was left with
+         nothing to resolve to. Give it one. */
+      Scope *osc = comp_scope_of(c, id);
+      int ocid = osc ? osc->class_id : -1;
+      if (ocid < 0 || osc->is_cmethod) continue;
+      /* a Data class includes no Enumerable in CRuby -- `to_a` inside one is a
+         NameError, not its members */
+      if (ocid < c->nclasses && c->classes[ocid].is_data) continue;
+      if (comp_method_in_chain(c, ocid, "__enum_to_a", NULL) < 0) continue;
+      if (comp_method_in_chain(c, ocid, nm, NULL) >= 0) continue;   /* the class's own */
+      int selfn = nt_new_node(nt, "SelfNode");
+      int wrap = nt_new_node(nt, "CallNode");
+      if (selfn < 0 || wrap < 0) continue;
+      nt_node_set_str(nt, wrap, "name", "__enum_to_a");
+      nt_node_set_ref(nt, wrap, "receiver", selfn);
+      nt_node_set_ref(nt, wrap, "arguments", -1);
+      nt_node_set_ref(nt, wrap, "block", -1);
+      nt_node_set_ref(nt, id, "receiver", wrap);
+      comp_grow_node_arrays(c);
+      c->nscope[selfn] = c->nscope[id];
+      c->nscope[wrap] = c->nscope[id];
+      changed = 1;
+      continue;
+    }
     /* find_all == select once the receiver is ARRAY-shaped (a hash receiver
        reaches here as the redispatched pair array, so the result is the
        Enumerable pair list, not a hash) */
@@ -4712,6 +4742,39 @@ int desugar_enum_method_recv(Compiler *c) {
       c->nscope[wrap] = c->nscope[id];
       changed = 1;
       continue;
+    }
+    /* An enumerable ARGUMENT gets the same treatment as the receiver: `a.zip(b)`
+       where b is a user Enumerable handed the array path a raw instance
+       pointer. Done before the receiver check so an Array receiver with such
+       an argument is covered too. */
+    if (sp_streq(nm, "zip") || sp_streq(nm, "product")) {
+      int zargs = nt_ref(nt, id, "arguments");
+      int zn = 0; const int *zav = zargs >= 0 ? nt_arr(nt, zargs, "arguments", &zn) : NULL;
+      for (int zi = 0; zi < zn && zav; zi++) {
+        int za = zav[zi];
+        if (nt_kind(nt, za) == NK_CallNode) {
+          const char *zn2 = nt_str(nt, za, "name");
+          if (zn2 && sp_streq(zn2, "__enum_to_a")) continue;   /* idempotent */
+        }
+        TyKind zat = infer_type(c, za);
+        if (!ty_is_object(zat)) continue;
+        int zcid = ty_object_class(zat);
+        if (zcid < 0 || comp_method_in_chain(c, zcid, "__enum_to_a", NULL) < 0) continue;
+        int zwrap = nt_new_node(nt, "CallNode");
+        if (zwrap < 0) continue;
+        nt_node_set_str(nt, zwrap, "name", "__enum_to_a");
+        nt_node_set_ref(nt, zwrap, "receiver", za);
+        nt_node_set_ref(nt, zwrap, "arguments", -1);
+        nt_node_set_ref(nt, zwrap, "block", -1);
+        int newargs[8];
+        if (zn > 8) break;
+        for (int k = 0; k < zn; k++) newargs[k] = (k == zi) ? zwrap : zav[k];
+        nt_node_set_arr(nt, zargs, "arguments", newargs, zn);
+        comp_grow_node_arrays(c);
+        c->nscope[zwrap] = c->nscope[id];
+        changed = 1;
+        zav = nt_arr(nt, zargs, "arguments", &zn);
+      }
     }
     if (!ty_is_object(rt)) continue;
     int cid = ty_object_class(rt);

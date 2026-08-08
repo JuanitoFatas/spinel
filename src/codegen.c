@@ -4350,12 +4350,26 @@ static void emit_obj_to_h_dispatch(Compiler *c, Buf *b) {
    instantiated class defining a no-arg to_a with a callable symbol, so a
    container-read Set (or any to_a-bearing object) can be iterated by the
    generic poly machinery (#3234). */
+/* The method that materializes this class's elements: its own #to_a, or the
+   __enum_to_a synthesized for a class that includes Enumerable and defines
+   #each. Without the second, an instance of such a class read out of a
+   container was opaque to the poly machinery, which answered for an empty
+   collection (0 / nil / false) (#3761). */
+static int obj_to_a_method(Compiler *c, int cid, int *defc) {
+  int mi = comp_method_in_chain(c, cid, "to_a", defc);
+  if (mi >= 0 && c->scopes[mi].nparams == 0 && scope_has_callable_symbol(c, mi)) return mi;
+  /* Not for a Data class: CRuby's Data has no #to_a at all (Struct does), and
+     answering its members here turned that NameError into an array. */
+  if (cid >= 0 && cid < c->nclasses && c->classes[cid].is_data) return -1;
+  mi = comp_method_in_chain(c, cid, "__enum_to_a", defc);
+  if (mi >= 0 && c->scopes[mi].nparams == 0 && scope_has_callable_symbol(c, mi)) return mi;
+  return -1;
+}
 static int obj_to_a_any(Compiler *c) {
   for (int i = 0; i < c->nclasses; i++) {
     ClassInfo *ci = &c->classes[i];
     if (ci->is_native_class || !ci->instantiated) continue;
-    int mi = comp_method_in_chain(c, i, "to_a", NULL);
-    if (mi >= 0 && c->scopes[mi].nparams == 0 && scope_has_callable_symbol(c, mi)) return 1;
+    if (obj_to_a_method(c, i, NULL) >= 0) return 1;
   }
   return 0;
 }
@@ -4367,12 +4381,14 @@ static void emit_obj_to_a_dispatch(Compiler *c, Buf *b) {
     ClassInfo *ci = &c->classes[i];
     if (ci->is_native_class || !ci->instantiated) continue;
     int defc = -1;
-    int mi = comp_method_in_chain(c, i, "to_a", &defc);
-    if (mi < 0 || c->scopes[mi].nparams != 0 || !scope_has_callable_symbol(c, mi)) continue;
+    int mi = obj_to_a_method(c, i, &defc);
+    if (mi < 0) continue;
     TyKind mret = (TyKind)c->scopes[mi].ret;
     buf_printf(b, "    case %d: {\n", i);
     char callx[256];
-    snprintf(callx, sizeof callx, "sp_%s_%s((sp_%s *)v.v.p)",
+    /* a value-type class is passed by value, not behind a pointer */
+    int vobj = comp_ty_value_obj(c, ty_object(defc));
+    snprintf(callx, sizeof callx, vobj ? "sp_%s_%s(*(sp_%s *)v.v.p)" : "sp_%s_%s((sp_%s *)v.v.p)",
              c->classes[defc].c_name, mc(c->scopes[mi].name), c->classes[defc].c_name);
     buf_puts(b, "      return ");
     if (mret == TY_POLY) buf_puts(b, callx);
