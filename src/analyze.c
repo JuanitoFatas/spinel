@@ -4922,6 +4922,41 @@ int desugar_enum_method_recv(Compiler *c) {
    the for-loop iterates it via the existing array path. Without this the loop
    collection is unrecognized and silently iterates nothing. Idempotent; struct
    classes serve to_a natively and are left alone. */
+/* A terminal that the lazy pipeline does not fuse -- sum, count, min, include?
+   and friends -- runs on the materialized result instead: `lz.sum` becomes
+   `lz.to_a.sum`. Without this the call had no lazy arm at all and answered nil
+   or refused to compile (#3585). */
+static int desugar_lazy_terminal(Compiler *c) {
+  NodeTable *nt = (NodeTable *)c->nt;
+  static const char *const TERMS[] = {
+    "sum", "count", "min", "max", "minmax", "min_by", "max_by", "tally",
+    "include?", "member?", "reduce", "inject", "group_by", "partition",
+    "sort", "sort_by", "each_with_object", "find_index", "each_entry", NULL };
+  int changed = 0;
+  int n0 = nt->count;
+  for (int id = 0; id < n0; id++) {
+    if (!nt_type(nt, id) || !sp_streq(nt_type(nt, id), "CallNode")) continue;
+    const char *nm = nt_str(nt, id, "name");
+    if (!nm) continue;
+    int hit = 0;
+    for (int t = 0; TERMS[t] && !hit; t++) if (sp_streq(nm, TERMS[t])) hit = 1;
+    if (!hit) continue;
+    int recv = nt_ref(nt, id, "receiver");
+    if (recv < 0 || !chain_is_lazy_valued(c, recv)) continue;
+    int wrap = nt_new_node(nt, "CallNode");
+    if (wrap < 0) continue;
+    nt_node_set_str(nt, wrap, "name", "to_a");
+    nt_node_set_ref(nt, wrap, "receiver", recv);
+    nt_node_set_ref(nt, wrap, "arguments", -1);
+    nt_node_set_ref(nt, wrap, "block", -1);
+    nt_node_set_ref(nt, id, "receiver", wrap);
+    comp_grow_node_arrays(c);
+    c->nscope[wrap] = c->nscope[id];
+    changed = 1;
+  }
+  return changed;
+}
+
 static int desugar_for_enumerable(Compiler *c) {
   NodeTable *nt = (NodeTable *)c->nt;
   int changed = 0;
@@ -9948,6 +9983,7 @@ void analyze_program(Compiler *c) {
     ch |= desugar_class_literal_ctors(c);      /* Array[a,b] -> [a,b]; Range.new -> (a..b) */
     ch |= desugar_enum_method_recv(c);         /* obj.map{} -> obj.__enum_to_a.map{} */
     ch |= desugar_for_enumerable(c);           /* for x in obj -> for x in obj.__enum_to_a */
+    ch |= desugar_lazy_terminal(c);            /* lz.sum -> lz.to_a.sum */
     ch |= desugar_to_enum(c);                  /* recv.to_enum(:m) -> generator/blockless */
     ch |= type_block_rest_params(c);           /* |*rest| locals are poly arrays */
     ch |= desugar_public_method(c);            /* recv.public_method(:m) -> recv.method(:m) */
