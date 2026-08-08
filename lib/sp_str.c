@@ -503,6 +503,16 @@ uint32_t*sp_utf8_decode_charset_n(const char*s,size_t bl,size_t*out_n){SP_GC_ROO
     uint32_t cp;
     int len=sp_utf8_decode(p,&cp);
     p+=len;
+    /* A backslash escapes the next character, so `"a\\-b"` is the three
+       members a, - and b rather than the range a..b (#3552). */
+    if(cp=='\\'&&p<end){
+      int elen=sp_utf8_decode(p,&cp);
+      p+=elen;
+      if(n>=cap){cap*=2;cps=(uint32_t*)realloc(cps,cap*sizeof(uint32_t));}
+      cps[n++]=cp;
+      prev=cp; has_prev=1;
+      continue;
+    }
     /* Detect range: prev '-' next  (but leading or trailing '-'
        is literal). When current char is '-' and there's a next
        non-'-' char and we have a prev, expand. */
