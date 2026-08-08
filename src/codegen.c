@@ -2929,6 +2929,7 @@ void emit_proc_literal(Compiler *c, int create, Buf *b) {
   /* numbered params have no parameters node; the highest _N used is the
      mandatory count (-> { _2 }.arity == 2). */
   if (nnumbered > 0) meta_arity = nnumbered;
+
   {
     int pn = proc_params_node(c, create);
     if (pn >= 0) {
@@ -2947,9 +2948,23 @@ void emit_proc_literal(Compiler *c, int create, Buf *b) {
       const char *kwt = kwrest >= 0 ? nt_type(nt, kwrest) : NULL;
       int has_kwrest = kwt && sp_streq(kwt, "KeywordRestParameterNode");
       int mandatory = arity + npost + (has_req_kw ? 1 : 0);
+      /* `|a,|`'s rest is an ImplicitRestNode: it names nothing and collects
+         nothing, and CRuby reports the signature as exactly its required
+         count (`lambda { |a,| }.arity == 1`). */
+      const char *rest_ty = rest >= 0 ? nt_type(nt, rest) : NULL;
+      if (rest_ty && sp_streq(rest_ty, "ImplicitRestNode")) rest = -1;
       int neg = rest >= 0 || (nopt > 0 && is_lambda) ||
                 ((has_opt_kw || has_kwrest) && !has_req_kw);
       meta_arity = neg ? -(mandatory + 1) : mandatory;
+      /* the trailing parameter synthesized for a `|x,|` rest is not one the
+         signature has -- CRuby reports `proc { |x,| }.arity` as 1 */
+      for (int k = 0; k < arity; k++) {
+        const char *pnm = proc_param_name(c, create, k);
+        if (pnm && strncmp(pnm, "__implicit_rest_", 16) == 0) {
+          meta_arity = meta_arity < 0 ? meta_arity + 1 : meta_arity - 1;
+          break;
+        }
+      }
     }
   }
   /* the Symbol#to_proc lambda answers -2 whatever it was synthesized with */

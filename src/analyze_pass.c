@@ -6739,6 +6739,62 @@ static int bdp_has_name(NodeTable *nt, int node) {
   return 1;
 }
 
+/* `|x,|` -- a trailing comma in a BLOCK's parameter list -- is Ruby's way of
+   saying "destructure the element and take the leading names, drop the rest".
+   Prism spells the comma as an ImplicitRestNode in the rest slot, and nothing
+   downstream read it, so `|x,|` behaved as `|x|` and bound the whole element:
+   `[[1, 2]].map { |x,| x }` answered `[[1, 2]]` where Ruby answers `[1]`.
+   Give the list a trailing parameter nobody names, which is what the rest is,
+   and every multi-parameter path destructures it from there. A method
+   definition's trailing comma means nothing and is left alone. */
+int desugar_block_implicit_rest(Compiler *c) {
+  NodeTable *nt = (NodeTable *)c->nt;
+  int changed = 0;
+  int n0 = nt->count;
+  /* A lambda is strict about its parameter list, and there the trailing comma
+     changes nothing: `lambda { |a,| }` takes exactly one argument and raises
+     on two. Only a block (or a proc, which is lenient) destructures. */
+  char *is_lambda_params = (char *)calloc(n0 > 0 ? (size_t)n0 : 1, 1);
+  if (!is_lambda_params) return 0;
+  for (int id = 0; id < n0; id++) {
+    const char *ty = nt_type(nt, id);
+    int bp = -1;
+    if (ty && sp_streq(ty, "LambdaNode")) bp = nt_ref(nt, id, "parameters");
+    else if (ty && sp_streq(ty, "CallNode")) {
+      const char *cn = nt_str(nt, id, "name");
+      if (!cn || !sp_streq(cn, "lambda")) continue;
+      int blk = nt_ref(nt, id, "block");
+      if (blk >= 0) bp = nt_ref(nt, blk, "parameters");
+    }
+    if (bp >= 0 && bp < n0) is_lambda_params[bp] = 1;
+  }
+  for (int id = 0; id < n0; id++) {
+    const char *ty = nt_type(nt, id);
+    if (!ty || !sp_streq(ty, "BlockParametersNode")) continue;
+    if (is_lambda_params[id]) continue;
+    int pn = nt_ref(nt, id, "parameters");
+    if (pn < 0) continue;
+    int rest = nt_ref(nt, pn, "rest");
+    const char *rty = rest >= 0 ? nt_type(nt, rest) : NULL;
+    if (!rty || !sp_streq(rty, "ImplicitRestNode")) continue;
+    int rn = 0; const int *reqs = nt_arr(nt, pn, "requireds", &rn);
+    if (!reqs || rn < 1 || rn > 30) continue;
+    int copy[32];
+    for (int k = 0; k < rn; k++) copy[k] = reqs[k];
+    int p = nt_new_node(nt, "RequiredParameterNode");
+    if (p < 0) continue;
+    char nm[32]; snprintf(nm, sizeof nm, "__implicit_rest_%d", id);
+    nt_node_set_str(nt, p, "name", nm);
+    copy[rn] = p;
+    nt_node_set_arr(nt, pn, "requireds", copy, rn + 1);
+    nt_node_set_ref(nt, pn, "rest", -1);
+    comp_grow_node_arrays(c);
+    changed = 1;
+  }
+  free(is_lambda_params);
+  return changed;
+}
+
 int desugar_block_destructure_params(Compiler *c) {
   NodeTable *nt = (NodeTable *)c->nt;
   int changed = 0;

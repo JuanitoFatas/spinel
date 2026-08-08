@@ -248,6 +248,7 @@ int desugar_to_hash_splat(Compiler *c);
 int desugar_lazy_method_call(Compiler *c);
 int desugar_value_callable_forwards(Compiler *c);
 int desugar_block_destructure_params(Compiler *c);
+int desugar_block_implicit_rest(Compiler *c);
 int desugar_public_method(Compiler *c);
 int desugar_class_eval_value(Compiler *c);
 int desugar_instance_eval_builtin(Compiler *c);
