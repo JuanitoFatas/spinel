@@ -7011,7 +7011,10 @@ char *codegen_program(const NodeTable *nt) {
     emit_ctype(c, lv->type, &b);
     buf_printf(&b, " gv_%s = %s;\n", lv->name,
                lv->type == TY_RANGE ? "{0}" :
-               lv->type == TY_POLY  ? "{SP_TAG_NIL, 0, {0}}" : default_value(lv->type));
+               lv->type == TY_POLY  ? "{SP_TAG_NIL, 0, {0}}" :
+               /* a global read before its first write is nil, and a nil string
+                  is NULL (the ivar convention), not the empty string */
+               lv->type == TY_STRING ? "NULL" : default_value(lv->type));
   }
   for (int i = 0; i < c->nconsts; i++) {
     LocalVar *lv = &c->consts[i];

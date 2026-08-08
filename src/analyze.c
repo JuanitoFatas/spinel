@@ -11732,6 +11732,29 @@ void analyze_program(Compiler *c) {
   mark_array_or_nil_slots(c);
   check_seed_contradictions(c);
 
+  /* A global the program only ever mentions holding nil -- `$log = nil` and
+     nothing else, or a read of one never assigned at all -- settles at no type,
+     and a global with no type gets no slot, so the reference does not compile.
+     Ruby's answer for both is nil, which the boxed form holds. Done after the
+     fixpoint so a global that any write gives a real type keeps it. */
+  { int promoted = 0;
+    for (int i = 0; i < c->ngvars; i++)
+      if (c->gvars[i].type == TY_UNKNOWN) { c->gvars[i].type = TY_POLY; promoted = 1; }
+    /* Stamp the reads too: a node's type is cached from the round that typed
+       it, and every round so far saw this global as having no type. */
+    if (promoted) {
+      NodeTable *ntg = (NodeTable *)c->nt;
+      for (int id = 0; id < ntg->count && id < c->node_cap; id++) {
+        if (nt_kind(ntg, id) != NK_GlobalVariableReadNode) continue;
+        if (c->ntype[id] != TY_UNKNOWN) continue;
+        const char *nm = nt_str(ntg, id, "name");
+        const char *rn = nm ? comp_resolve_gvar(c, nm + 1) : NULL;
+        LocalVar *g = rn ? comp_gvar(c, rn) : NULL;
+        if (g && g->type == TY_POLY) c->ntype[id] = TY_POLY;
+      }
+    }
+  }
+
   /* Last: the capture pass again, on the settled types. a_block_is_lifted asks
      whether the receiver is poly, and a receiver that widened after the
      earlier run answered no then and yes now -- so codegen routes the call to

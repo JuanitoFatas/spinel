@@ -6623,7 +6623,12 @@ else {
       if (hrn && sp_streq(hrn, "Hash") && han == 0) v_empty_hash = 1;
     }
     if (vty && sp_streq(vty, "NilNode"))
-      buf_puts(b, lv->type == TY_RANGE ? "(sp_Range){0}" : default_value(lv->type));
+      /* A nil string is NULL, the way an ivar's is: default_value's "" is the
+         zero a fresh slot starts at, not nil, and `.nil?` compares against
+         NULL -- so assigning it answered false for a global that had just been
+         set to nil. */
+      buf_puts(b, lv->type == TY_RANGE ? "(sp_Range){0}"
+                : lv->type == TY_STRING ? "NULL" : default_value(lv->type));
     else if (v_empty_arr && lv->type == TY_POLY_ARRAY) buf_puts(b, "sp_PolyArray_new()");
     else if (v_empty_arr && array_kind(lv->type)) buf_printf(b, "sp_%sArray_new()", array_kind(lv->type));
     else if (v_empty_hash && ty_is_hash(lv->type)) {
