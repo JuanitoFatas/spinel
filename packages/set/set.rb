@@ -250,23 +250,38 @@ class Set
     h
   end
 
+  # The containment predicates take a Set and nothing else: CRuby answers
+  # ArgumentError("value must be a set") for anything else, where passing an
+  # Array reached `other.subset?` and refused to compile at all.
+  def self.check_set(x)
+    raise ArgumentError, "value must be a set" unless x.is_a?(Set)
+    x
+  end
+
   def subset?(other)
+    Set.check_set(other)
     @data.all? { |x| other.include?(x) }
   end
   alias <= subset?
 
   def superset?(other)
-    other.subset?(self)
+    Set.check_set(other)
+    # Walk the operand rather than calling ITS #subset?: the parameter's type
+    # is bound from every call site, so a rejected Array argument still had to
+    # answer a Set-only method for the program to compile.
+    other.all? { |x| include?(x) }
   end
   alias >= superset?
 
   def proper_subset?(other)
+    Set.check_set(other)
     size < other.size && subset?(other)
   end
   alias < proper_subset?
 
   def proper_superset?(other)
-    size > other.size && superset?(other)
+    Set.check_set(other)
+    size > other.size && other.all? { |x| include?(x) }
   end
   alias > proper_superset?
 
