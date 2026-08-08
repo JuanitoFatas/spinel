@@ -6492,8 +6492,12 @@ int desugar_value_callable_forwards(Compiler *c) {
     if (ex < 0) continue;  /* anonymous `&`: inline-forward path, not a value */
     const char *exty = nt_type(nt, ex);
     if (!exty) continue;
+    /* a constant read is as deterministic and side-effect-free as a local one,
+       so `&SOME_LAMBDA` forwards the same way (#3689) */
     int simple_ref = sp_streq(exty, "LocalVariableReadNode") ||
-                     sp_streq(exty, "InstanceVariableReadNode");
+                     sp_streq(exty, "InstanceVariableReadNode") ||
+                     sp_streq(exty, "ConstantReadNode") ||
+                     sp_streq(exty, "ConstantPathNode");
     /* `&method(:m)`: a deterministic method-object lookup, safe to re-evaluate */
     int method_obj = sp_streq(exty, "CallNode") && nt_str(nt, ex, "name") &&
                      sp_streq(nt_str(nt, ex, "name"), "method");
