@@ -7463,6 +7463,36 @@ static int emit_array_arith_call(Compiler *c, int id, Buf *b) {
         return 1;
       }
     }
+    /* the same coercion rule on the Float side, which had no guard at all:
+       `1.5 + nil` evaluated to nil and `1.5 + "s"` emitted double + char *
+       (#3645) */
+    if (rt == TY_FLOAT && is_arith_op(name)) {
+      TyKind at8 = comp_ntype(c, argv[0]);
+      const char *cn8 =
+        at8 == TY_STRING ? "String" : at8 == TY_NIL ? "nil" :
+        ty_is_array(at8) ? "Array" : ty_is_hash(at8) ? "Hash" :
+        at8 == TY_RANGE ? "Range" : NULL;
+      if (at8 == TY_BOOL) {
+        buf_puts(b, "({ (void)("); emit_expr(c, recv, b);
+        buf_puts(b, "); sp_raise_cls(\"TypeError\", sp_sprintf(\"%s can't be coerced into Float\", (");
+        emit_expr(c, argv[0], b);
+        buf_puts(b, ") ? \"true\" : \"false\")); (mrb_float)0; })");
+        return 1;
+      }
+      if (at8 == TY_SYMBOL) {
+        buf_puts(b, "({ (void)("); emit_expr(c, recv, b);
+        buf_puts(b, "); sp_raise_cls(\"TypeError\", sp_sprintf(\"%s can't be coerced into Float\", sp_sym_inspect(");
+        emit_expr(c, argv[0], b);
+        buf_puts(b, "))); (mrb_float)0; })");
+        return 1;
+      }
+      if (cn8) {
+        buf_puts(b, "({ (void)("); emit_expr(c, recv, b); buf_puts(b, "); (void)(");
+        emit_expr(c, argv[0], b);
+        buf_printf(b, "); sp_raise_cls(\"TypeError\", \"%s can't be coerced into Float\"); (mrb_float)0; })", cn8);
+        return 1;
+      }
+    }
     if (rt == TY_STRING && sp_streq(name, "+")) {
       /* `str + <non-string>` is a TypeError in CRuby (no implicit conversion);
          a statically non-string, non-poly argument raises rather than emitting
