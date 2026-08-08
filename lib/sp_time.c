@@ -8,6 +8,7 @@
  */
 
 #include <ctype.h>
+#include "sp_core.h"
 #include <math.h>
 #include <stdio.h>
 #include <string.h>
@@ -126,6 +127,29 @@ static int64_t sp_time_civil_epoch(int64_t y, int64_t mo, int64_t d,
 }
 
 /* Time.utc(y, m, d, h, mi, s) — UTC construction. */
+/* The month argument of the civil constructors accepts an English month name
+   as well as a number: Time.utc(2020, "feb", 4). A plain strtoll read those as
+   zero and the constructor rejected them (#3703). */
+int64_t sp_time_month_arg(const char *s) {
+  static const char *const names[12] = {
+    "jan", "feb", "mar", "apr", "may", "jun",
+    "jul", "aug", "sep", "oct", "nov", "dec" };
+  if (!s) return 0;
+  if (strlen(s) == 3) {
+    char pre[4];
+    for (int i = 0; i < 3; i++) {
+      char ch = s[i];
+      pre[i] = (ch >= 'A' && ch <= 'Z') ? (char)(ch - 'A' + 'a') : ch;
+    }
+    pre[3] = '\0';
+    for (int m = 0; m < 12; m++)
+      if (strcmp(pre, names[m]) == 0) return (int64_t)(m + 1);
+  }
+  /* anything else is read as an Integer, and rejected the way Integer() would
+     be: CRuby takes only the three-letter abbreviations by name */
+  return (int64_t)sp_str_to_i_strict(s);
+}
+
 sp_Time sp_time_new_utc(int64_t y, int64_t mo, int64_t d,
                         int64_t h, int64_t mi, int64_t s) {
   sp_time_check_args(mo, d, h, mi, s);

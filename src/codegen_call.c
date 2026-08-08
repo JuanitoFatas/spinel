@@ -5291,7 +5291,9 @@ else buf_printf(b, "sp_time_new%s(", is_utc ? "_utc" : "");
       /* a numeric-string civil field is coerced to its Integer value, as CRuby
          does (Time.utc("2020", "3", "4")); a poly field unboxes. (#2689) */
       TyKind fit = comp_ntype(c, argv[i]);
-      if (fit == TY_STRING) { buf_puts(b, "(int64_t)strtoll("); emit_expr(c, argv[i], b); buf_puts(b, ", NULL, 10)"); }
+      /* the month field also takes an English month name (#3703) */
+      if (fit == TY_STRING && i == 1) { buf_puts(b, "sp_time_month_arg("); emit_expr(c, argv[i], b); buf_puts(b, ")"); }
+      else if (fit == TY_STRING) { buf_puts(b, "(int64_t)strtoll("); emit_expr(c, argv[i], b); buf_puts(b, ", NULL, 10)"); }
       else if (fit == TY_POLY || fit == TY_UNKNOWN) { buf_puts(b, "sp_poly_to_i("); emit_boxed(c, argv[i], b); buf_puts(b, ")"); }
       else emit_expr(c, argv[i], b);
     }

@@ -29,6 +29,7 @@ sp_Time sp_time_at_float(double epoch);
 sp_Time sp_time_at_div(int64_t num, int64_t den);
 sp_Time sp_time_parse(const char *s);
 sp_Time sp_time_new(int64_t y, int64_t mo, int64_t d, int64_t h, int64_t mi, int64_t s);
+int64_t sp_time_month_arg(const char *s);
 sp_Time sp_time_new_utc(int64_t y, int64_t mo, int64_t d, int64_t h, int64_t mi, int64_t s);
 sp_Time sp_time_new_off(int64_t y, int64_t mo, int64_t d, int64_t h, int64_t mi, int64_t s, int64_t off);
 sp_Time sp_time_with_usec(sp_Time t, int64_t usec);
