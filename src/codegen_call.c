@@ -11277,9 +11277,25 @@ void emit_call(Compiler *c, int id, Buf *b) {
       buf_printf(b, "sp_file_%s(sp_File_path(%s))", name, r);
       free(rb.p); return;
     }
-    if (argc == 0 && sp_streq(name, "mode") &&
-        (strstr(r, "sp_file_stat_handle") || strstr(r, "sp_file_lstat_handle"))) {
+    /* File::Stat is carried as the IO handle itself, so its accessors ride the
+       same receiver. They used to be gated on the receiver TEXT still reading
+       `sp_file_stat_handle(...)`, which held only while the stat stayed an
+       unnamed temp: `st = f.stat; st.mode` lost the spelling and fell through
+       to the unsupported-call reject. None of these names is an IO method in
+       CRuby, so answering them for any handle costs nothing. */
+    if (argc == 0 && sp_streq(name, "mode")) {
       buf_printf(b, "sp_stat_mode(%s)", r);
+      free(rb.p); return;
+    }
+    if (argc == 0 && (sp_streq(name, "file?") || sp_streq(name, "directory?") ||
+                      sp_streq(name, "symlink?") || sp_streq(name, "owned?") ||
+                      sp_streq(name, "grpowned?") || sp_streq(name, "setuid?") ||
+                      sp_streq(name, "setgid?") || sp_streq(name, "sticky?") ||
+                      sp_streq(name, "socket?"))) {
+      char fn[32];
+      size_t nl = strlen(name);
+      snprintf(fn, sizeof fn, "%.*s", (int)(nl - 1), name);   /* drop the `?` */
+      buf_printf(b, "sp_file_%s(sp_File_path(%s))", fn, r);
       free(rb.p); return;
     }
     if (argc == 0 && sp_streq(name, "lstat")) {
@@ -11424,7 +11440,8 @@ void emit_call(Compiler *c, int id, Buf *b) {
       }
     }
     if (argc == 0 && sp_streq(name, "stat")) {
-      buf_printf(b, "sp_file_stat_handle(sp_File_path(%s))", r);
+      /* by path when the handle has one, else fstat(2) on the descriptor */
+      buf_printf(b, "sp_io_stat_handle(%s)", r);
       free(rb.p); return;
     }
     if (sp_streq(name, "read")) {
@@ -15175,8 +15192,10 @@ else { memcpy(dir, sf, n); dir[n] = 0; } }
     /* IO.pipe / IO.copy_stream / IO.sysopen (#2815) */
     if (tcn && sp_streq(tcn, "IO")) {
       if (sp_streq(name, "pipe") && argc == 0) { buf_puts(b, "sp_io_pipe()"); return; }
-      /* IO.for_fd(fd [, mode] [, autoclose: bool]) */
-      if (sp_streq(name, "for_fd") && argc >= 1) {
+      /* IO.for_fd(fd [, mode] [, autoclose: bool]). IO.new takes the same
+         descriptor form -- it is how CRuby spells "wrap this fd", and the way
+         to reach a File::Stat from one. */
+      if ((sp_streq(name, "for_fd") || sp_streq(name, "new")) && argc >= 1) {
         const char *lty = nt_type(nt, argv[argc - 1]);
         int kwh = (lty && sp_streq(lty, "KeywordHashNode")) ? argv[argc - 1] : -1;
         int ac = kwh >= 0 ? kwh_lookup(nt, kwh, "autoclose") : -1;

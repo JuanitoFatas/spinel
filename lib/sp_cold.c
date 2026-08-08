@@ -1572,19 +1572,52 @@ sp_File *sp_file_lstat_handle(const char *path) {SP_GC_ROOT_STR(path);
 mrb_bool sp_stat_nofollow(sp_File *f) {
   return f && f->mode && strcmp(f->mode, "lstat") == 0;
 }
+/* IO#stat. A handle opened from a descriptor (IO.new(fd) / IO.for_fd) has no
+   path to stat, so the handle it answers carries the stream instead and the
+   accessors below fstat(2) it. */
+static int sp_stat_pathless(sp_File *f) {
+  return f && f->fp && (!f->path || f->path[0] == 0);
+}
+sp_File *sp_io_stat_handle(sp_File *f) {SP_GC_ROOT(f);
+  if (!f) sp_raise_cls("IOError", "closed stream");
+  if (f->path && f->path[0]) return sp_file_stat_handle(f->path);
+  struct stat st;
+  if (!f->fp || fstat(fileno(f->fp), &st) != 0)
+    sp_raise_cls("Errno::EBADF", "Bad file descriptor");
+  sp_File *h = (sp_File *)sp_gc_alloc(sizeof(sp_File), NULL, sp_file_stat_scan);
+  h->fp = f->fp;
+  h->path = sp_str_empty;
+  h->mode = (&("\xff" "stat")[1]);
+  h->lineno = 0;
+  return h;
+}
 mrb_int sp_stat_size(sp_File *f) {SP_GC_ROOT(f);
   struct stat st;
+  if (sp_stat_pathless(f))
+    return fstat(fileno(f->fp), &st) == 0 ? (mrb_int)st.st_size : SP_INT_NIL;
   const char *p = (f && f->path) ? f->path : "";
   int r = sp_stat_nofollow(f) ? lstat(p, &st) : stat(p, &st);
   return r == 0 ? (mrb_int)st.st_size : SP_INT_NIL;
 }
 mrb_int sp_stat_mode(sp_File *f) {SP_GC_ROOT(f);
   struct stat st;
+  if (sp_stat_pathless(f))
+    return fstat(fileno(f->fp), &st) == 0 ? (mrb_int)st.st_mode : 0;
   const char *p = (f && f->path) ? f->path : "";
   int r = sp_stat_nofollow(f) ? lstat(p, &st) : stat(p, &st);
   return r == 0 ? (mrb_int)st.st_mode : 0;
 }
 const char *sp_stat_ftype(sp_File *f) {SP_GC_ROOT(f);
+  if (sp_stat_pathless(f)) {
+    struct stat st;
+    if (fstat(fileno(f->fp), &st) != 0) return sp_str_empty;
+    if (S_ISDIR(st.st_mode))  return (&("\xff" "directory")[1]);
+    if (S_ISCHR(st.st_mode))  return (&("\xff" "characterSpecial")[1]);
+    if (S_ISBLK(st.st_mode))  return (&("\xff" "blockSpecial")[1]);
+    if (S_ISFIFO(st.st_mode)) return (&("\xff" "fifo")[1]);
+    if (S_ISSOCK(st.st_mode)) return (&("\xff" "socket")[1]);
+    return (&("\xff" "file")[1]);
+  }
   /* sp_file_ftype already lstat()s, so it is exactly the lstat answer; a
      following handle resolves the link first. */
   const char *p = (f && f->path) ? f->path : "";

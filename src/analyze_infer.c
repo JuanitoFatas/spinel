@@ -2394,6 +2394,7 @@ else {
       if (cn && sp_streq(cn, "Regexp")) return TY_REGEX;
       if (cn && sp_streq(cn, "Fiber")) return TY_FIBER;
       if (cn && sp_streq(cn, "File")) return TY_IO;   /* File.new is File.open (#2779) */
+      if (cn && sp_streq(cn, "IO")) return TY_IO;     /* IO.new(fd) is IO.for_fd */
       if (cn && sp_streq(cn, "Dir")) return TY_DIR;   /* Dir.new is an open handle (#2821) */
       /* the socket classes ARE IO handles (#2922) */
       if (cn && (sp_streq(cn, "TCPServer") || sp_streq(cn, "TCPSocket") ||
@@ -2490,6 +2491,7 @@ else {
       if (cn && sp_streq(cn, "ConditionVariable")) return TY_CONDVAR;
       if (cn && sp_streq(cn, "Random")) return TY_RANDOM;
       if (cn && sp_streq(cn, "File")) return TY_IO;   /* File.new is File.open (#2779) */
+      if (cn && sp_streq(cn, "IO")) return TY_IO;     /* IO.new(fd) is IO.for_fd */
       if (cn && sp_streq(cn, "Dir")) return TY_DIR;   /* Dir.new is an open handle (#2821) */
       /* the socket classes ARE IO handles (#2922) */
       if (cn && (sp_streq(cn, "TCPServer") || sp_streq(cn, "TCPSocket") ||
@@ -2724,7 +2726,8 @@ else {
       /* IO.pipe -> [reader, writer], boxed IO handles (#2815) */
       if (sp_streq(name, "pipe")) return TY_POLY_ARRAY;
       if (sp_streq(name, "copy_stream") || sp_streq(name, "sysopen")) return TY_INT;
-      if (sp_streq(name, "for_fd") && argc >= 1) return TY_IO;
+      /* IO.new(fd, ...) is the descriptor form, same as IO.for_fd */
+      if ((sp_streq(name, "for_fd") || sp_streq(name, "new")) && argc >= 1) return TY_IO;
       /* [ready_read, ready_write, ready_error] or nil on timeout */
       if (sp_streq(name, "select") && argc >= 1) return TY_POLY;
     }
@@ -3041,6 +3044,12 @@ else {
         sp_streq(name, "tty?") || sp_streq(name, "isatty") ||
         sp_streq(name, "sync") || sp_streq(name, "sync=") ||
         sp_streq(name, "autoclose?") ||
+        /* the File::Stat predicates: a stat is carried as the handle itself */
+        sp_streq(name, "file?") || sp_streq(name, "directory?") ||
+        sp_streq(name, "symlink?") || sp_streq(name, "owned?") ||
+        sp_streq(name, "grpowned?") || sp_streq(name, "setuid?") ||
+        sp_streq(name, "setgid?") || sp_streq(name, "sticky?") ||
+        sp_streq(name, "socket?") ||
         sp_streq(name, "==") || sp_streq(name, "equal?") || sp_streq(name, "eql?"))
       return TY_BOOL;
     if (sp_streq(name, "fileno") || sp_streq(name, "to_i") || sp_streq(name, "lineno") ||

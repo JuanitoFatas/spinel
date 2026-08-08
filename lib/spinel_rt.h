@@ -6995,6 +6995,7 @@ sp_File *sp_File_open_flags(const char *path, mrb_int fl);
    File::Stat this backend models (#2775, #2790). */
 void sp_file_stat_scan(void *p);
 sp_File *sp_file_stat_handle(const char *path);
+sp_File *sp_io_stat_handle(sp_File *f);   /* IO#stat: by path, or fstat(2) for a descriptor handle */
 sp_File *sp_file_lstat_handle(const char *path);
 mrb_bool sp_stat_nofollow(sp_File *f);
 mrb_int sp_stat_size(sp_File *f);
