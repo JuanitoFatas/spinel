@@ -3956,7 +3956,9 @@ else {
         buf_printf(b, " sp_RbVal _t%d = sp_PolyArray_get(_t%d, _t%d);", tp, tr, ti);
         /* every element must be a two-element array; a longer or shorter one
            is an ArgumentError and a non-array a TypeError, where the extra
-           elements were simply dropped (#3616) */
+           elements were simply dropped (#3616). Hash[...] desugars to this
+           same emitter but is laxer, so it opts out. */
+        if (!nt_int(nt, id, "hash_brackets", 0))
         buf_printf(b, " if (_t%d.tag != SP_TAG_OBJ || !sp_poly_is_array_kind(_t%d.cls_id))"
                       " sp_raise_cls(\"TypeError\", sp_sprintf(\"wrong element type %%s at %%lld (expected array)\","
                       " sp_poly_class_name(_t%d), (long long)_t%d));"

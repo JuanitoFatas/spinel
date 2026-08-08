@@ -2998,6 +2998,9 @@ static void desugar_enum_chain_shapes(Compiler *c) {
           nt_node_set_str(nt, id, "name", "to_h");
           nt_node_set_ref(nt, id, "receiver", av0[0]);
           nt_node_set_ref(nt, id, "arguments", -1);
+          /* Hash[] is laxer about pair shape than Array#to_h: a one-element
+             sub-array gives a nil value rather than raising */
+          nt_node_set_int(nt, id, "hash_brackets", 1);
           continue;
         }
         /* Hash[arg] with any single non-literal argument: the same pairs.to_h
@@ -3007,6 +3010,7 @@ static void desugar_enum_chain_shapes(Compiler *c) {
           nt_node_set_str(nt, id, "name", "to_h");
           nt_node_set_ref(nt, id, "receiver", av0[0]);
           nt_node_set_ref(nt, id, "arguments", -1);
+          nt_node_set_int(nt, id, "hash_brackets", 1);
           continue;
         }
         if (an >= 2 && an % 2 == 0 && an <= 64) {
