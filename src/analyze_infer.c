@@ -5250,7 +5250,10 @@ else {
         if (a >= 0) cur = a;
       }
     }
-    if (ok && (saw_op || sp_streq(name, "to_a") || sp_streq(name, "force")) && lazy_src >= 0) {
+    /* `first` needs no stage between it and the lazy source: `e.lazy.first(2)`
+       is as well defined as `e.lazy.map { }.first(2)` (#3586) */
+    if (ok && (saw_op || sp_streq(name, "to_a") || sp_streq(name, "force") ||
+               sp_streq(name, "first")) && lazy_src >= 0) {
       TyKind st = infer_type(c, lazy_src);
       /* bare `first` unwraps to the single element, not the collected array */
       TyKind res = (sp_streq(name, "first") && argc == 0) ? TY_POLY : TY_POLY_ARRAY;
