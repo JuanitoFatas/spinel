@@ -4347,6 +4347,10 @@ int emit_hash_call(Compiler *c, int id, Buf *b) {
           /* remaining keys via sp_poly_get_sym / sp_poly_get_str / sp_poly_arr_get */
           for (int di = 1; di < argc; di++) {
             int tk = ++g_tmp;
+            /* Ruby's dig stops at nil and raises on anything else that has no
+               #dig; only the first receiver is known to be a container, so
+               every later step has to check what it landed on (#3567). */
+            buf_printf(b, " sp_poly_dig_check(_t%d);", tr);
             /* Past the first key the receiver `_tr` is whatever the previous
                step returned (a nested hash, an Array element, ...), whose key
                type is not the top hash's key type. So `{a:[10,20]}.dig(:a,1)`

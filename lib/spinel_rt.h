@@ -4509,6 +4509,12 @@ typedef mrb_int  (*sp_obj_hash_fn)(int cls_id, void *p);
 typedef mrb_bool (*sp_obj_eql_fn)(int cls_id, void *a, void *b);
 static sp_obj_hash_fn sp_obj_hash_hook = NULL;
 static sp_obj_eql_fn  sp_obj_eql_hook  = NULL;
+/* Depth guard for the container branches below: `h[:a] = h` and `a << a` are
+   legal, and hashing them by content would otherwise not terminate. CRuby
+   answers a fixed value for the recursive reference; so does this, once the
+   walk is deeper than any real key nesting. */
+static int sp_rbval_hash_depth = 0;
+#define SP_RBVAL_HASH_MAX_DEPTH 24
 static mrb_int sp_rbval_hash_key(sp_RbVal v) {
   switch (v.tag) {
     case SP_TAG_INT: case SP_TAG_BOOL: case SP_TAG_NIL: case SP_TAG_SYM:
@@ -4525,6 +4531,9 @@ static mrb_int sp_rbval_hash_key(sp_RbVal v) {
          PolyArray [0, 0] (e.g. one built by Array#product) are `==` and must
          hash alike to collide in a Hash, so hash each element through
          sp_rbval_hash_key rather than the raw IntArray words (#2911). */
+      if (sp_poly_is_array_kind(v.cls_id) || sp_poly_is_hash_kind(v.cls_id)) {
+        if (sp_rbval_hash_depth >= SP_RBVAL_HASH_MAX_DEPTH) return 0;
+      }
       if (sp_poly_is_array_kind(v.cls_id)) {
         /* unsigned accumulator: the rolling h*31+x is meant to wrap, but on a
            signed type that is UB rather than wraparound -- and this is a
@@ -4533,8 +4542,32 @@ static mrb_int sp_rbval_hash_key(sp_RbVal v) {
            lookup would silently miss. Same rule as the Rational key below. */
         mrb_int n = sp_poly_length(v);
         uint64_t h = 0;
+        sp_rbval_hash_depth++;
         for (mrb_int i = 0; i < n; i++)
           h = (h * 31) + (uint64_t)sp_rbval_hash_key(sp_poly_arr_get(v, i));
+        sp_rbval_hash_depth--;
+        return (mrb_int)h;
+      }
+      if (sp_poly_is_hash_kind(v.cls_id)) {
+        /* Hashes hash by content, and Hash#hash does not depend on insertion
+           order, so the per-entry terms are combined with a commutative
+           operation: two `==` hashes must agree, whatever order they were
+           built in. Unsigned for the same reason the array accumulator is. */
+        mrb_int n = sp_poly_length(v);
+        uint64_t h = 0;
+        sp_rbval_hash_depth++;
+        for (mrb_int i = 0; i < n; i++) {
+          sp_RbVal k, val;
+          sp_poly_hash_pair(v, i, &k, &val);
+          /* Mix each pair before combining: the combination has to be
+             commutative (Hash#hash ignores insertion order), and a plain
+             xor-then-sum let {a: 2, b: 2} and {a: 7, b: 7} collide. */
+          uint64_t t = ((uint64_t)sp_rbval_hash_key(k) * 0x9E3779B97F4A7C15ULL) +
+                       (uint64_t)sp_rbval_hash_key(val);
+          t ^= t >> 33; t *= 0xff51afd7ed558ccdULL; t ^= t >> 33;
+          h += t;
+        }
+        sp_rbval_hash_depth--;
         return (mrb_int)h;
       }
       if (v.cls_id == SP_BUILTIN_METHOD) {
@@ -5280,10 +5313,29 @@ static sp_RbVal sp_poly_delete_key(sp_RbVal recv, sp_RbVal key) {
   sp_raise_nomethod(sp_nomethod_msg("delete", recv));
   return sp_box_nil();
 }
+/* The kinds Ruby's #dig walks through: Array, Hash, Struct and anything the
+   runtime models as one of those. A String or a number has no #dig. */
+static int sp_poly_diggable(sp_RbVal v) {
+  if (v.tag != SP_TAG_OBJ) return 0;
+  return sp_poly_is_hash_kind(v.cls_id) || sp_poly_is_array_kind(v.cls_id) ||
+         v.cls_id >= 0;   /* a user object: its own #dig answers, or NoMethodError does */
+}
+/* One step of a dig has landed on `v`: nil ends the walk, a container
+   continues it, and anything else is the TypeError CRuby raises. */
+static void sp_poly_dig_check(sp_RbVal v) {
+  if (v.tag == SP_TAG_NIL || sp_poly_diggable(v)) return;
+  sp_raise_cls("TypeError", sp_sprintf("%s does not have #dig method",
+                                       sp_poly_class_name(v)));
+}
 static sp_RbVal sp_poly_dig_n(sp_RbVal recv, mrb_int n, const sp_RbVal *keys) {
   sp_RbVal cur = recv;
   for (mrb_int i = 0; i < n; i++) {
     if (cur.tag == SP_TAG_NIL) return cur;
+    /* a step onto something that cannot be dug is a TypeError naming the
+       class, not a quiet nil: only nil short-circuits (#3567) */
+    if (!sp_poly_diggable(cur))
+      sp_raise_cls("TypeError", sp_sprintf("%s does not have #dig method",
+                                           sp_poly_class_name(cur)));
     cur = sp_poly_index_poly(cur, keys[i]);
   }
   return cur;
