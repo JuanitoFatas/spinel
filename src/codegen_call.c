@@ -7634,6 +7634,16 @@ static int emit_array_arith_call(Compiler *c, int id, Buf *b) {
         buf_printf(b, "; double _t%d = sp_rational_to_f(", tu); emit_expr(c, argv[0], b);
         buf_printf(b, "); sp_time_add_f(_t%d, %s_t%d); })", tt, sp_streq(name, "-") ? "-" : "", tu);
       }
+      else if (at == TY_STRING || at == TY_NIL || at == TY_BOOL || at == TY_SYMBOL ||
+               ty_is_array(at) || ty_is_hash(at)) {
+        /* Time shifts by a number of seconds; anything else is CRuby's
+           TypeError, not the operand read as an integer (#3695) */
+        buf_printf(b, "({ sp_Time _t%d = ", tt); emit_expr(c, recv, b);
+        buf_puts(b, "; (void)("); emit_expr(c, argv[0], b);
+        buf_puts(b, "); sp_raise_cls(\"TypeError\", sp_sprintf(\"can't convert %s into an exact number\", sp_poly_class_name(");
+        emit_boxed(c, argv[0], b);
+        buf_printf(b, "))); _t%d; })", tt);
+      }
       else {
         buf_printf(b, "({ sp_Time _t%d = ", tt); emit_expr(c, recv, b);
         buf_printf(b, "; mrb_int _t%d = ", tu); emit_int_expr(c, argv[0], b);
