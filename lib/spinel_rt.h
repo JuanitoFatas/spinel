@@ -4507,7 +4507,10 @@ static mrb_int sp_rbval_hash_key(sp_RbVal v) {
       return v.v.s ? (mrb_int)sp_str_hash(v.v.s) : 0;
     case SP_TAG_ENCODING:
       return v.v.s ? (mrb_int)sp_str_hash(v.v.s) : 0;
-    case SP_TAG_FLT: { uint64_t b; memcpy(&b, &v.v.f, sizeof(b)); return (mrb_int)b; }
+    /* -0.0 and 0.0 are eql?, so they must hash alike: normalize the sign of
+       zero away before hashing the bits (#3651). */
+    case SP_TAG_FLT: { double f = v.v.f == 0.0 ? 0.0 : v.v.f;
+                       uint64_t b; memcpy(&b, &f, sizeof(b)); return (mrb_int)b; }
     case SP_TAG_OBJ:
       /* Arrays hash by value across storage kinds: an IntArray [0, 0] and a
          PolyArray [0, 0] (e.g. one built by Array#product) are `==` and must
