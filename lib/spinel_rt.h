@@ -1662,6 +1662,7 @@ static const char *sp_poly_class_name(sp_RbVal v) {
         case SP_BUILTIN_OBJECT: return SPL("Object");   /* a bare Object.new instance */
         case SP_BUILTIN_BASIC_OBJECT: return SPL("BasicObject");
         case SP_BUILTIN_PROC: return SPL("Proc");
+        case SP_BUILTIN_ENUMERATOR: return SPL("Enumerator");
         case SP_BUILTIN_IO: {
           /* the handle kind names the class, through the same authority the
              typed .class emit uses -- a boxed socket must not report plain IO */
@@ -1763,6 +1764,8 @@ static mrb_bool sp_poly_responds_builtin(sp_RbVal v, const char *m) {
     return sp_str_in_list(m, enumm) || sp_str_in_list(m, rngm);
   if (strcmp(cn, "Symbol") == 0) return sp_str_in_list(m, symm);
   if (strcmp(cn, "Proc") == 0) return sp_str_in_list(m, procm);
+  /* an Enumerator answers the Enumerable face (#3625) */
+  if (strcmp(cn, "Enumerator") == 0) return sp_str_in_list(m, enumm);
   if (v.tag == SP_TAG_OBJ && v.cls_id == SP_BUILTIN_EXCEPTION)
     return sp_str_in_list(m, excm);
   return 0;

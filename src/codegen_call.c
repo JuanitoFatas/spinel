@@ -3775,10 +3775,18 @@ static int emit_poly_method_dispatch(Compiler *c, int id, Buf *b) {
          converter (#3278) */
       if (is_poly_to_a) {
         buf_printf(b, "if (_t%d.tag == SP_TAG_OBJ && (sp_poly_is_hash_kind(_t%d.cls_id)"
-                      " || sp_poly_is_array_kind(_t%d.cls_id))) { _t%d = ",
-                   tv, tv, tv, tr);
+                      " || sp_poly_is_array_kind(_t%d.cls_id)"
+                      " || _t%d.cls_id == SP_BUILTIN_RANGE)) { _t%d = ",
+                   tv, tv, tv, tv, tr);
         if (ret == TY_POLY) buf_printf(b, "sp_box_poly_array(sp_poly_to_a_arr(_t%d))", tv);
         else buf_printf(b, "sp_poly_to_a_arr(_t%d)", tv);
+        buf_puts(b, "; }\nelse ");
+        /* an Enumerator materializes through its own reader (#3624) */
+        buf_printf(b, "if (_t%d.tag == SP_TAG_OBJ && _t%d.cls_id == SP_BUILTIN_ENUMERATOR) { _t%d = ",
+                   tv, tv, tr);
+        if (ret == TY_POLY)
+          buf_printf(b, "sp_box_poly_array(sp_Enumerator_to_a((sp_Enumerator *)_t%d.v.p))", tv);
+        else buf_printf(b, "sp_Enumerator_to_a((sp_Enumerator *)_t%d.v.p)", tv);
         buf_puts(b, "; }\nelse ");
       }
       /* rewind on a runtime IO / StringIO stream (#3257); value is the seed

@@ -20,10 +20,13 @@ class Set
     @data = []
     if enum
       Set.check_enum(enum)
+      # materialize first: the operand may be an Enumerator (or any other
+      # Enumerable), whose #each is not reachable through a poly slot (#3625)
+      src = enum.to_a
       if block_given?
-        enum.each { |x| add(yield(x)) }
+        src.each { |x| add(yield(x)) }
       else
-        enum.each { |x| add(x) }
+        src.each { |x| add(x) }
       end
     end
   end
@@ -78,6 +81,9 @@ class Set
   alias === include?
 
   def each
+    # CRuby's Set#each answers an Enumerator when called without a block; the
+    # yield below would raise LocalJumpError instead (#3624).
+    return @data.dup.each unless block_given?
     _i = 0
     while _i < @data.size
       x = @data[_i]
