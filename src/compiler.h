@@ -113,6 +113,8 @@ typedef struct {
   int reachable;    /* method name is referenced somewhere (else dead code) */
   int is_cmethod;   /* `def self.foo`: a class (singleton) method, no instance self */
   int is_transplanted_source; /* method was copied into another class via include/prepend */
+  int origin_module_ci;      /* +1-based module this copy came from (0 = none):
+                                Method#owner names the module, not the includer */
   int is_include_copy;        /* this scope IS such a copy: a later include of a
                                  module defining the same name replaces it, and
                                  the replacement's super chains to it (#3731) */

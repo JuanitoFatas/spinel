@@ -9769,9 +9769,10 @@ void emit_call(Compiler *c, int id, Buf *b) {
   #define BUILD_METHOD_DESC(mi_, sym_, unbound_, out_) do { \
     Scope *_m = &c->scopes[(mi_)]; \
     const char *_ow = "Object"; char _sep = '#'; \
-    if (_m->class_id >= 0) { \
-      const char *_rn = class_ruby_name(c, _m->class_id); \
-      _ow = _rn ? _rn : c->classes[_m->class_id].name; \
+    int _owci = _m->origin_module_ci ? _m->origin_module_ci - 1 : _m->class_id; \
+    if (_owci >= 0) { \
+      const char *_rn = class_ruby_name(c, _owci); \
+      _ow = _rn ? _rn : c->classes[_owci].name; \
       if (_m->is_cmethod) _sep = '.'; \
     } \
     size_t _off = 0, _cap = sizeof (out_); \
@@ -10380,7 +10381,11 @@ void emit_call(Compiler *c, int id, Buf *b) {
     int mrecv = mn >= 0 ? nt_ref(nt, mn, "receiver") : -1;
     if (sp_streq(name, "owner")) {
       if (target >= 0 && !is_bam) {
-        int ocid = c->scopes[target].class_id;
+        /* a method a module provides is owned by that module, however many
+           classes include it (#3662) */
+        int ocid = c->scopes[target].origin_module_ci
+                     ? c->scopes[target].origin_module_ci - 1
+                     : c->scopes[target].class_id;
         const char *ocn = ocid >= 0 ? (class_ruby_name(c, ocid) ? class_ruby_name(c, ocid)
                                                                 : c->classes[ocid].name) : "Object";
         buf_printf(b, "((void)("); emit_expr(c, recv, b);

@@ -1362,6 +1362,7 @@ static void sg_transplant_module(Compiler *c, int mod_ci, int newci) {
     dst->rest_idx = src->rest_idx;
     dst->kwrest_idx = src->kwrest_idx;
     src->is_transplanted_source = 1;   /* the module original is copied away */
+    dst->origin_module_ci = mod_ci + 1;  /* #owner names the module (#3662) */
     if (src->blk_param) dst->blk_param = strdup(src->blk_param);
     dst->nparams = src->nparams;
     if (src->nparams > 0) {
@@ -3085,6 +3086,7 @@ void process_include_body(Compiler *c, int ci, int body_node) {
 else {
           dst->body = src->body;
         }
+        dst->origin_module_ci = src->class_id + 1;  /* #owner names it (#3662) */
         dst->class_id = ci;
         dst->is_cmethod = 0;
         dst->is_include_copy = 1;
