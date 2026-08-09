@@ -1430,7 +1430,15 @@ int emit_array_call(Compiler *c, int id, Buf *b) {
           buf_printf(b, " sp_Range _t%d = ", tr); emit_expr(c, argv[1], b);
           buf_printf(b, "; mrb_int _t%d = _t%d.first; if (_t%d < 0) _t%d += _t%d; if (_t%d < 0) _t%d = 0;",
                      ts, tr, ts, ts, tn, ts, ts);
-          buf_printf(b, " mrb_int _t%d = _t%d.last - _t%d.excl;", te, tr, tr);
+          /* a negative end counts from the end, an endless one runs to the
+             last element -- unnormalized, `fill(v, 2..)` grew the array
+             forever (#3605) and `fill(v, 1..-1)` filled nothing (#3606) */
+          buf_printf(b, " mrb_int _t%d = _t%d.last;"
+                        " if (_t%d == INTPTR_MAX) _t%d = _t%d - 1;"
+                        " else { if (_t%d < 0) _t%d += _t%d; _t%d -= _t%d.excl; }",
+                     te, tr,
+                     te, te, tn,
+                     te, te, tn, te, tr);
           buf_printf(b, " for (mrb_int _t%d = _t%d; _t%d <= _t%d; _t%d++)"
                         " sp_%sArray_set(_t%d, _t%d, _t%d); _t%d; })",
                      ti, ts, ti, te, ti, fk, t, ti, tv, t);
