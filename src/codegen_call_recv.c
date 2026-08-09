@@ -8426,6 +8426,17 @@ int emit_value_recv_call(Compiler *c, int id, Buf *b) {
           buf_printf(b, " sp_PolyArray_push(_t%d, sp_box_nullable_str(sp_MatchData_aref_name(_t%d, ", at, mt);
           emit_expr(c, argv[i], b); buf_puts(b, ")));");
         }
+        else if (kt3 == TY_RANGE) {
+          /* a Range argument selects a run of groups, as Array#values_at does;
+             it went into sp_MatchData_aref's mrb_int slot as a struct (#3627) */
+          int rk = ++g_tmp, rj = ++g_tmp, rlo = ++g_tmp, rhi = ++g_tmp;
+          buf_printf(b, " sp_Range _t%d = ", rk); emit_expr(c, argv[i], b);
+          buf_printf(b, "; mrb_int _t%d = _t%d.first, _t%d = _t%d.last - (_t%d.excl ? 1 : 0);",
+                     rlo, rk, rhi, rk, rk);
+          buf_printf(b, " for (mrb_int _t%d = _t%d; _t%d <= _t%d; _t%d++)"
+                        " sp_PolyArray_push(_t%d, sp_box_nullable_str(sp_MatchData_aref(_t%d, _t%d)));",
+                     rj, rlo, rj, rhi, rj, at, mt, rj);
+        }
         else if (kt3 == TY_POLY) {
           /* a poly key dispatches at runtime like #[]: a Symbol/String resolves
              by name, anything else is an index. Passing the raw sp_RbVal to
