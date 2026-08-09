@@ -6164,6 +6164,28 @@ static sp_PolyArray *sp_poly_hash_sum_arr(sp_RbVal v, sp_PolyArray *init) {
   }
   return out;
 }
+/* Time#deconstruct_keys(nil): every field, for a hash pattern to match
+   against (#3702). The symbols are interned at run time because these names
+   are synthesized after the static symbol table is written. */
+static sp_SymPolyHash *sp_time_deconstruct_all(sp_Time t) {
+  sp_SymPolyHash *h = sp_SymPolyHash_new(); SP_GC_ROOT(h);
+  sp_SymPolyHash_set(h, sp_sym_intern("year"), sp_box_int(sp_time_year(t)));
+  sp_SymPolyHash_set(h, sp_sym_intern("month"), sp_box_int(sp_time_mon(t)));
+  sp_SymPolyHash_set(h, sp_sym_intern("mon"), sp_box_int(sp_time_mon(t)));
+  sp_SymPolyHash_set(h, sp_sym_intern("day"), sp_box_int(sp_time_mday(t)));
+  sp_SymPolyHash_set(h, sp_sym_intern("mday"), sp_box_int(sp_time_mday(t)));
+  sp_SymPolyHash_set(h, sp_sym_intern("hour"), sp_box_int(sp_time_hour(t)));
+  sp_SymPolyHash_set(h, sp_sym_intern("min"), sp_box_int(sp_time_min(t)));
+  sp_SymPolyHash_set(h, sp_sym_intern("sec"), sp_box_int(sp_time_sec(t)));
+  sp_SymPolyHash_set(h, sp_sym_intern("wday"), sp_box_int(sp_time_wday(t)));
+  sp_SymPolyHash_set(h, sp_sym_intern("yday"), sp_box_int(sp_time_yday(t)));
+  sp_SymPolyHash_set(h, sp_sym_intern("subsec"),
+                     t.tv_nsec == 0 ? sp_box_int(0)
+                                    : sp_box_rational(sp_rational_new((mrb_int)t.tv_nsec, 1000000000)));
+  sp_SymPolyHash_set(h, sp_sym_intern("dst"), sp_box_bool(sp_time_isdst(t) != 0));
+  sp_SymPolyHash_set(h, sp_sym_intern("zone"), sp_box_str(sp_time_zone(t)));
+  return h;
+}
 static sp_RbVal sp_poly_first(sp_RbVal v) {
   if (v.tag != SP_TAG_OBJ) return sp_box_nil();
   { sp_PolyArray *ps = sp_poly_hash_pairs_or_null(v);

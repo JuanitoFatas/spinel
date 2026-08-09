@@ -2153,6 +2153,16 @@ int emit_pm_cond(Compiler *c, int pat, int t, TyKind pt, Buf *b) {
        unresolvable class returns 0 so the caller reports it unsupported rather
        than emitting a silently-wrong match. Everything is validated before any
        emit, so a reject never leaves half-built helper code in g_pre. */
+    /* a Time answers a hash pattern through its #deconstruct_keys (#3702) */
+    if (pt == TY_TIME) {
+      int tth = ++g_tmp;
+      Buf *hs0 = g_pm_hash_sink ? g_pm_hash_sink : g_pre;
+      int hi0 = g_pm_hash_sink ? g_pm_hash_sink_indent : g_indent;
+      emit_indent(hs0, hi0);
+      buf_printf(hs0, "sp_SymPolyHash *_t%d = sp_time_deconstruct_all(_t%d); SP_GC_ROOT(_t%d);\n",
+                 tth, t, tth);
+      return emit_pm_cond(c, pat, tth, TY_SYM_POLY_HASH, b);
+    }
     const char *hn = ty_is_hash(pt) ? ty_hash_cname(pt) : NULL;
     if (!hn) return 0;
     TyKind hvt = ty_hash_val(pt);
@@ -2679,6 +2689,14 @@ void emit_case_match(Compiler *c, int id, Buf *b, int indent, int tail, int valu
     if (pt == TY_MATCHDATA && sp_streq(pty, "HashPatternNode")) {
       char md[24]; snprintf(md, sizeof md, "_t%d", t);
       arm_t = emit_md_deconstruct_keys(b, indent + 1, md);
+      arm_pt = TY_SYM_POLY_HASH;
+    }
+    /* a hash pattern asks a Time for #deconstruct_keys: its fields (#3702) */
+    else if (pt == TY_TIME && sp_streq(pty, "HashPatternNode")) {
+      arm_t = ++g_tmp;
+      emit_indent(b, indent + 1);
+      buf_printf(b, "sp_SymPolyHash *_t%d = sp_time_deconstruct_all(_t%d); SP_GC_ROOT(_t%d);\n",
+                 arm_t, t, arm_t);
       arm_pt = TY_SYM_POLY_HASH;
     }
     /* an array pattern asks a MatchData for #deconstruct: its captures (#3675) */
