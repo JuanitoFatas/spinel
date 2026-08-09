@@ -3220,9 +3220,9 @@ sp_RbVal sp_poly_replace(sp_RbVal recv, sp_RbVal src);
 static sp_PolyArray *sp_PolyArray_slice_bang(sp_PolyArray *a, mrb_int from, mrb_int n) {sp_gc_wb((void*)a); 
   if (!a) return sp_PolyArray_new();
   if (a->frozen) { sp_raise_frozen_array_at(a, SP_BUILTIN_POLY_ARRAY); return sp_PolyArray_new(); }
+  /* a start past the end is nil, not an empty slice (#3607) */
   if (from < 0) from += a->len;
-  if (from < 0) from = 0;
-  if (from > a->len) from = a->len;
+  if (from < 0 || from > a->len) return NULL;
   if (n < 0) n = 0;
   if (from + n > a->len) n = a->len - from;
   sp_PolyArray *r = sp_PolyArray_new();

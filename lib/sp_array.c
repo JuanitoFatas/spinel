@@ -591,9 +591,10 @@ sp_PolyArray *sp_FloatArray_to_poly(sp_FloatArray *a) {
 sp_IntArray *sp_IntArray_slice_bang(sp_IntArray *a, mrb_int from, mrb_int n) {SP_GC_ROOT(a);
   if (!a) return sp_IntArray_new();
   if (a->frozen) { sp_raise_frozen_array_at(a, SP_BUILTIN_INT_ARRAY); return sp_IntArray_new(); }
+  /* a start past the end (or before it after normalizing) is nil, not an
+     empty slice: only start == len answers [] (#3607) */
   if (from < 0) from += a->len;
-  if (from < 0) from = 0;
-  if (from > a->len) from = a->len;
+  if (from < 0 || from > a->len) return NULL;
   if (n < 0) n = 0;
   if (from + n > a->len) n = a->len - from;
   sp_IntArray *r = sp_IntArray_new();
@@ -611,9 +612,10 @@ else {
 sp_FloatArray *sp_FloatArray_slice_bang(sp_FloatArray *a, mrb_int from, mrb_int n) {SP_GC_ROOT(a);
   if (!a) return sp_FloatArray_new();
   if (a->frozen) { sp_raise_frozen_array_at(a, SP_BUILTIN_FLT_ARRAY); return sp_FloatArray_new(); }
+  /* a start past the end (or before it after normalizing) is nil, not an
+     empty slice: only start == len answers [] (#3607) */
   if (from < 0) from += a->len;
-  if (from < 0) from = 0;
-  if (from > a->len) from = a->len;
+  if (from < 0 || from > a->len) return NULL;
   if (n < 0) n = 0;
   if (from + n > a->len) n = a->len - from;
   sp_FloatArray *r = sp_FloatArray_new();
@@ -625,9 +627,10 @@ sp_FloatArray *sp_FloatArray_slice_bang(sp_FloatArray *a, mrb_int from, mrb_int 
 sp_StrArray *sp_StrArray_slice_bang(sp_StrArray *a, mrb_int from, mrb_int n) {SP_GC_ROOT(a); sp_gc_wb((void*)a);
   if (!a) return sp_StrArray_new();
   if (a->frozen) { sp_raise_frozen_array_at(a, SP_BUILTIN_STR_ARRAY); return sp_StrArray_new(); }
+  /* a start past the end (or before it after normalizing) is nil, not an
+     empty slice: only start == len answers [] (#3607) */
   if (from < 0) from += a->len;
-  if (from < 0) from = 0;
-  if (from > a->len) from = a->len;
+  if (from < 0 || from > a->len) return NULL;
   if (n < 0) n = 0;
   if (from + n > a->len) n = a->len - from;
   sp_StrArray *r = sp_StrArray_new();
@@ -639,9 +642,10 @@ sp_StrArray *sp_StrArray_slice_bang(sp_StrArray *a, mrb_int from, mrb_int n) {SP
 sp_PtrArray *sp_PtrArray_slice_bang(sp_PtrArray *a, mrb_int from, mrb_int n) {SP_GC_ROOT(a); sp_gc_wb((void*)a);
   if (!a) return sp_PtrArray_new_scan(NULL);
   if (a->frozen) { sp_raise_frozen_array_at(a, SP_BUILTIN_PTR_ARRAY); return sp_PtrArray_new_scan(a->scan_elem); }
+  /* a start past the end (or before it after normalizing) is nil, not an
+     empty slice: only start == len answers [] (#3607) */
   if (from < 0) from += a->len;
-  if (from < 0) from = 0;
-  if (from > a->len) from = a->len;
+  if (from < 0 || from > a->len) return NULL;
   if (n < 0) n = 0;
   if (from + n > a->len) n = a->len - from;
   sp_PtrArray *r = sp_PtrArray_new_scan(a->scan_elem);
