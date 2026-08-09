@@ -3298,12 +3298,12 @@ else {
         return 1;
       }
       if ((sp_streq(name, "min") || sp_streq(name, "max")) && argc == 1 && block < 0) {
-        int t = ++g_tmp;
+        int t = ++g_tmp, tn = ++g_tmp;
         buf_printf(b, "({ sp_%sArray *_t%d = sp_%sArray_sort(", k, t, k); emit_expr(c, recv, b);
-        buf_printf(b, "); SP_GC_ROOT(_t%d);", t);
+        buf_printf(b, "); SP_GC_ROOT(_t%d); mrb_int _t%d = ", t, tn); emit_int_expr(c, argv[0], b);
+        buf_printf(b, "; if (_t%d < 0) sp_raise_cls(\"ArgumentError\", \"negative array size\");", tn);
         if (sp_streq(name, "max")) buf_printf(b, " sp_%sArray_reverse_bang(_t%d);", k, t);
-        buf_printf(b, " sp_%sArray_slice(_t%d, 0, ", k, t); emit_int_expr(c, argv[0], b);
-        buf_puts(b, "); })");
+        buf_printf(b, " sp_%sArray_slice(_t%d, 0, _t%d); })", k, t, tn);
         return 1;
       }
     }
@@ -3469,12 +3469,12 @@ else {
         return 1;
       }
       if ((sp_streq(name, "min") || sp_streq(name, "max")) && argc == 1 && nt_ref(nt, id, "block") < 0) {
-        int t = ++g_tmp;
+        int t = ++g_tmp, tn = ++g_tmp;
         buf_printf(b, "({ sp_PolyArray *_t%d = sp_PolyArray_sort(", t); emit_expr(c, recv, b);
-        buf_printf(b, "); SP_GC_ROOT(_t%d);", t);
+        buf_printf(b, "); SP_GC_ROOT(_t%d); mrb_int _t%d = ", t, tn); emit_int_expr(c, argv[0], b);
+        buf_printf(b, "; if (_t%d < 0) sp_raise_cls(\"ArgumentError\", \"negative array size\");", tn);
         if (sp_streq(name, "max")) buf_printf(b, " sp_PolyArray_reverse_bang(_t%d);", t);
-        buf_printf(b, " sp_PolyArray_slice(_t%d, 0, ", t); emit_int_expr(c, argv[0], b);
-        buf_puts(b, "); })");
+        buf_printf(b, " sp_PolyArray_slice(_t%d, 0, _t%d); })", t, tn);
         return 1;
       }
       if ((sp_streq(name, "all?") || sp_streq(name, "any?") ||
@@ -9037,7 +9037,8 @@ int emit_range_call(Compiler *c, int id, Buf *b) {
           int tf = ++g_tmp, tn = ++g_tmp, ti = ++g_tmp, tc = ++g_tmp;
           buf_printf(b, "({ sp_IntArray *_t%d = sp_IntArray_new(); mrb_int _t%d = ", tf, tn);
           emit_expr(c, argv[0], b);
-          buf_printf(b, "; mrb_int _t%d = sp_range_count(_t%d); mrb_int _t%d = sp_range_step(_t%d);"
+          buf_printf(b, "; if (_t%d < 0) sp_raise_cls(\"ArgumentError\", \"negative array size\");", tn);
+          buf_printf(b, " mrb_int _t%d = sp_range_count(_t%d); mrb_int _t%d = sp_range_step(_t%d);"
                         " for (mrb_int _i%d = 0; _i%d < _t%d && _i%d < _t%d; _i%d++)"
                         " sp_IntArray_push(_t%d, _t%d.first + _i%d * _t%d); _t%d; })",
                      tc, t, ti, t, tf, tf, tn, tf, tc, tf, tf, t, tf, ti, tf);
@@ -9057,7 +9058,8 @@ int emit_range_call(Compiler *c, int id, Buf *b) {
           /* last(n): collect up to n elements ending at last */
           int tf = ++g_tmp, tn = ++g_tmp, ts = ++g_tmp, te = ++g_tmp;
           buf_printf(b, "({ mrb_int _t%d = ", tn); emit_int_expr(c, argv[0], b);
-          buf_printf(b, "; mrb_int _t%d = _t%d.last - _t%d.excl;", te, t, t);
+          buf_printf(b, "; if (_t%d < 0) sp_raise_cls(\"ArgumentError\", \"negative array size\");", tn);
+          buf_printf(b, " mrb_int _t%d = _t%d.last - _t%d.excl;", te, t, t);
           buf_printf(b, " mrb_int _t%d = _t%d - _t%d + 1; if (_t%d < _t%d.first) _t%d = _t%d.first;", ts, te, tn, ts, t, ts, t);
           buf_printf(b, " sp_IntArray *_t%d = sp_IntArray_new(); for (mrb_int _i%d = _t%d; _i%d <= _t%d; _i%d++)"
                         " sp_IntArray_push(_t%d, _i%d); _t%d; })",
