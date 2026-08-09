@@ -4679,6 +4679,19 @@ else {
         buf_printf(b, "(sp_%sHash_length(", hn); emit_expr(c, recv, b); buf_puts(b, ") == 0)");
         return 1;
       }
+      /* an Array init concatenates the pairs onto it, flat (#3571) */
+      if (sp_streq(name, "sum") && argc == 1 && nt_ref(nt, id, "block") < 0 &&
+          (ty_is_array(comp_ntype(c, argv[0])) ||
+           (nt_type(nt, argv[0]) && sp_streq(nt_type(nt, argv[0]), "ArrayNode")))) {
+        buf_puts(b, "sp_poly_hash_sum_arr("); emit_boxed(c, recv, b); buf_puts(b, ", ");
+        if (ty_is_array(comp_ntype(c, argv[0]))) {
+          if (comp_ntype(c, argv[0]) == TY_POLY_ARRAY) emit_expr(c, argv[0], b);
+          else { buf_puts(b, "sp_poly_to_poly_array("); emit_boxed(c, argv[0], b); buf_puts(b, ")"); }
+        }
+        else { buf_puts(b, "((void)("); emit_expr(c, argv[0], b); buf_puts(b, "), sp_PolyArray_new())"); }
+        buf_puts(b, ")");
+        return 1;
+      }
       if (sp_streq(name, "sum") && argc <= 1 && nt_ref(nt, id, "block") < 0) {
         /* Hash#sum without a block folds each [k,v] PAIR into the init value;
            `init + [k,v]` is Integer#+ Array -> TypeError, so only an empty hash

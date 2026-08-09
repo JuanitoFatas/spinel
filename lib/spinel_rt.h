@@ -6093,6 +6093,24 @@ static sp_PolyArray *sp_poly_hash_pairs_or_null(sp_RbVal v) {
   if (v.tag == SP_TAG_OBJ && sp_poly_is_hash_kind(v.cls_id)) return sp_enum_items_from(v);
   return NULL;
 }
+/* Blockless Hash#sum with an Array init: Enumerable#sum folds each [k, v]
+   pair into the init with `+`, which for an Array init is concatenation, so
+   the keys and values land flat in order (#3571). */
+static sp_PolyArray *sp_poly_hash_sum_arr(sp_RbVal v, sp_PolyArray *init) {
+  SP_GC_ROOT_RBVAL(v); SP_GC_ROOT(init);
+  sp_PolyArray *out = sp_PolyArray_new(); SP_GC_ROOT(out);
+  if (init) for (mrb_int i = 0; i < init->len; i++) sp_PolyArray_push(out, init->data[i]);
+  sp_PolyArray *ps = sp_poly_hash_pairs_or_null(v);
+  if (ps) {
+    SP_GC_ROOT(ps);
+    for (mrb_int i = 0; i < ps->len; i++) {
+      sp_PolyArray *pair = sp_poly_to_poly_array(ps->data[i]);
+      if (!pair) continue;
+      for (mrb_int j = 0; j < pair->len; j++) sp_PolyArray_push(out, pair->data[j]);
+    }
+  }
+  return out;
+}
 static sp_RbVal sp_poly_first(sp_RbVal v) {
   if (v.tag != SP_TAG_OBJ) return sp_box_nil();
   { sp_PolyArray *ps = sp_poly_hash_pairs_or_null(v);

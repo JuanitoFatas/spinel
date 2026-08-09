@@ -5425,6 +5425,10 @@ else {
     /* blockless Hash#sum: folds each [k, v] pair into the init, which is only
        well-defined for an empty hash (else `init + [k,v]` raises TypeError).
        The result is the init's type -- int by default. */
+    if (nt_ref(nt, id, "block") < 0 && sp_streq(name, "sum") && argc == 1 &&
+        (ty_is_array(infer_type(c, argv[0])) ||
+         (nt_type(nt, argv[0]) && sp_streq(nt_type(nt, argv[0]), "ArrayNode"))))
+      return TY_POLY_ARRAY;   /* an Array init concatenates the pairs (#3571) */
     if (nt_ref(nt, id, "block") < 0 && sp_streq(name, "sum") && argc <= 1)
       return TY_INT;
     if (nt_ref(nt, id, "block") >= 0 &&
