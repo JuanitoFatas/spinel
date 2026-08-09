@@ -62,6 +62,14 @@ int sp_exc_cls_matches(const char *raised, const char *target);
 SP_COLD void sp_exc_acc_gate(sp_Exception *e, const char *cls, const char *acc);
 int sp_exc_is_standard_error(const char *raised);
 sp_Exception *sp_exc_new_for_catch(const char *cls, const char *msg);
+/* The message a bare `raise` carries: empty, and distinct from "no message
+   given" (which falls back to the class name, as Exception.new does) (#3711). */
+extern const char *const sp_exc_no_msg;
+/* An explicitly given raise message: an empty one stays empty rather than
+   falling back to the class name the way a message-less raise does. */
+static inline const char *sp_exc_msg_given(const char *m) {
+  return (m && !m[0]) ? sp_exc_no_msg : m;
+}
 void *sp_exc_new_sub_sized(size_t sz, const char *cls_name, const char *msg);
 
 void sp_exc_gc_scan(void *p);

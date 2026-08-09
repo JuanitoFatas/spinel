@@ -12904,7 +12904,7 @@ else { memcpy(dir, sf, n); dir[n] = 0; } }
     }
     if (ac == 0) {
       if (g_rescue_cls) buf_printf(b, "sp_raise_cls(%s, %s)", g_rescue_cls, g_rescue_msg);
-      else buf_puts(b, "sp_raise((&(\"\\xff\")[1]))");
+      else buf_puts(b, "sp_raise(sp_exc_no_msg)");   /* a bare raise's message is "" (#3711) */
     }
     else if (ac == 1 && nt_type(nt, av[0]) &&
              (sp_streq(nt_type(nt, av[0]), "ConstantReadNode") || sp_streq(nt_type(nt, av[0]), "ConstantPathNode"))) {
@@ -12984,10 +12984,12 @@ else { memcpy(dir, sf, n); dir[n] = 0; } }
           buf_puts(b, "))");
         }
         else {
-          buf_printf(b, "sp_raise_cls(\"%s\", ", effn);
+          /* an explicitly given message is kept even when empty, unlike the
+             class-only form, which falls back to the class name (#3711) */
+          buf_printf(b, "sp_raise_cls(\"%s\", sp_exc_msg_given(", effn);
           if (comp_ntype(c, av[1]) == TY_STRING) emit_expr(c, av[1], b);
           else { buf_puts(b, "sp_poly_to_s("); emit_boxed(c, av[1], b); buf_puts(b, ")"); }
-          buf_puts(b, ")");
+          buf_puts(b, "))");
         }
       }
     }
@@ -13007,7 +13009,7 @@ else { memcpy(dir, sf, n); dir[n] = 0; } }
       }
       else if (at == TY_STRING) {
         /* `raise "msg"` raises RuntimeError with the message */
-        buf_puts(b, "sp_raise("); emit_expr(c, av[0], b); buf_puts(b, ")");
+        buf_puts(b, "sp_raise(sp_exc_msg_given("); emit_expr(c, av[0], b); buf_puts(b, "))");
       }
       else if (at == TY_POLY || at == TY_CLASS) {
         /* the runtime value may be a string, an exception object, an exception
