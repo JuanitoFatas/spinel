@@ -10477,9 +10477,35 @@ void emit_call(Compiler *c, int id, Buf *b) {
       emit_expr(c, argv[splat_at2], b);
       buf_printf(b, "; SP_GC_ROOT(_t%d); ", tsplat);
     }
+    /* A target with a rest parameter takes ONE array there, not one C argument
+       per call-site argument: bound positionally, the first argument went into
+       the array pointer's slot and the call died (#3691). */
+    int *atmp = eargc ? (int *)calloc((size_t)eargc, sizeof(int)) : NULL;
+    int rest_at = (tm && tm->rest_idx >= 0 && splat_at2 < 0) ? tm->rest_idx - shift : -1;
+    if (rest_at >= 0 && rest_at <= eargc) {
+      int trest = ++g_tmp;
+      buf_printf(b, "sp_PolyArray *_t%d = sp_PolyArray_new(); SP_GC_ROOT(_t%d); ", trest, trest);
+      for (int k = rest_at; k < eargc; k++) {
+        buf_printf(b, "sp_PolyArray_push(_t%d, ", trest);
+        emit_boxed(c, argv[k], b);
+        buf_puts(b, "); ");
+      }
+      int *atmp2 = (int *)calloc((size_t)(rest_at + 1), sizeof(int));
+      for (int k = 0; k < rest_at; k++) {
+        atmp2[k] = ++g_tmp;
+        LocalVar *pp = (tm && k + shift < tm->nparams) ? scope_local(tm, tm->pnames[k + shift]) : NULL;
+        emit_ctype(c, pp ? pp->type : TY_INT, b);
+        buf_printf(b, " _t%d = ", atmp2[k]); emit_arg_or_default(c, tm, k + shift, argv[k], b);
+        buf_puts(b, "; ");
+      }
+      atmp2[rest_at] = trest;
+      free(atmp);
+      atmp = atmp2;
+      eargc = rest_at + 1;
+      goto bm_emit_call;
+    }
     /* Hoist each argument into a temp so both call arms (self-ful / self-less)
        reference it without re-evaluating (#3252). */
-    int *atmp = eargc ? (int *)calloc((size_t)eargc, sizeof(int)) : NULL;
     for (int k = 0; k < eargc; k++) {
       atmp[k] = ++g_tmp;
       if (splat_at2 >= 0 && k >= splat_at2) {
@@ -10508,6 +10534,7 @@ void emit_call(Compiler *c, int id, Buf *b) {
     }
     /* A top-level def has a self-less C ABI (fn(args)); an object-bound method
        is fn(self, args). The bound method carries a NULL self for the former. */
+  bm_emit_call:
     buf_printf(b, "_t%d->self != NULL ? ", tr);
     for (int arm = 0; arm < 2; arm++) {
       if (arm) buf_puts(b, " : ");
