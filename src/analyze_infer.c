@@ -708,6 +708,27 @@ int reduce_tail_from_acc(Compiler *c, int tail, const char *accp) {
   return 0;
 }
 
+/* Does this subtree pull from an external Enumerator (`e.next`)? Such a call
+   is what ends a break-less `loop` with StopIteration (#3588). */
+static int an_subtree_calls_enum_next(Compiler *c, int root) {
+  const NodeTable *nt = c->nt;
+  if (root < 0) return 0;
+  if (nt_kind(nt, root) == NK_CallNode) {
+    const char *n = nt_str(nt, root, "name");
+    if (n && sp_streq(n, "next") && nt_ref(nt, root, "receiver") >= 0) return 1;
+  }
+  int nr = nt_num_refs(nt, root);
+  for (int i = 0; i < nr; i++)
+    if (an_subtree_calls_enum_next(c, nt_ref_at(nt, root, i))) return 1;
+  int na = nt_num_arrs(nt, root);
+  for (int i = 0; i < na; i++) {
+    int n2 = 0; const int *el = nt_arr_at(nt, root, i, &n2);
+    for (int j = 0; j < n2; j++)
+      if (an_subtree_calls_enum_next(c, el[j])) return 1;
+  }
+  return 0;
+}
+
 /* Zero-argument builtin methods the poly dispatch already serves with a real
    arm. `require "ostruct"` turns any other bare name on a poly receiver into
    a possible OpenStruct member read (#3197); these must NOT be swallowed by
@@ -1815,6 +1836,10 @@ TyKind infer_call(Compiler *c, int id) {
         TyKind bt = scan_break_type(c, body, 0);
         if (bt != TY_UNKNOWN) return bt;
       }
+      /* A loop ended by StopIteration answers that exception's #result -- the
+         exhausted enumerator. Only a body that pulls from one can end that
+         way; every other break-less loop keeps its nil (#3588). */
+      if (body >= 0 && an_subtree_calls_enum_next(c, body)) return TY_POLY;
       return TY_NIL;
     }
     /* blockless `loop` is an infinite Enumerator yielding nil (#3236) */

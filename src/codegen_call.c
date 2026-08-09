@@ -8873,6 +8873,11 @@ void emit_call(Compiler *c, int id, Buf *b) {
         emit_indent(g_pre, g_indent + 1); buf_puts(g_pre, "sp_gc_nroots = sp_exc_rootmark[sp_exc_top];\n");
         emit_indent(g_pre, g_indent + 1);
         buf_puts(g_pre, "if (!sp_exc_cls_matches((const char *)sp_last_exc_cls, \"StopIteration\")) sp_raise_cls(sp_exc_cls[sp_exc_top], sp_exc_msg[sp_exc_top]);\n");
+        /* the loop's value is the exhausted iteration's result (#3588) */
+        if (bt == TY_POLY) {
+          emit_indent(g_pre, g_indent + 1);
+          buf_printf(g_pre, "if (sp_exc_obj[sp_exc_top]) _t%d = ((sp_Exception *)sp_exc_obj[sp_exc_top])->result;\n", t);
+        }
         emit_indent(g_pre, g_indent); buf_puts(g_pre, "}\n");
         buf_printf(b, "_t%d", t);
         return;
