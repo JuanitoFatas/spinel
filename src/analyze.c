@@ -4926,6 +4926,46 @@ int desugar_enum_method_recv(Compiler *c) {
    and friends -- runs on the materialized result instead: `lz.sum` becomes
    `lz.to_a.sum`. Without this the call had no lazy arm at all and answered nil
    or refused to compile (#3585). */
+/* `a.upto(b)` over Strings is the String range `(a..b)`: the succ-based walk
+   the range's own iteration already does. There was no arm for it at all
+   (#3600). The Integer form has its own emitter and is left alone. */
+static int desugar_string_upto(Compiler *c) {
+  NodeTable *nt = (NodeTable *)c->nt;
+  int changed = 0;
+  int n0 = nt->count;
+  for (int id = 0; id < n0; id++) {
+    if (!nt_type(nt, id) || !sp_streq(nt_type(nt, id), "CallNode")) continue;
+    const char *nm = nt_str(nt, id, "name");
+    if (!nm || !sp_streq(nm, "upto")) continue;
+    int recv = nt_ref(nt, id, "receiver");
+    int args = nt_ref(nt, id, "arguments");
+    int ac = 0; const int *av = args >= 0 ? nt_arr(nt, args, "arguments", &ac) : NULL;
+    if (recv < 0 || (ac != 1 && ac != 2)) continue;
+    if (infer_type(c, recv) != TY_STRING || infer_type(c, av[0]) != TY_STRING) continue;
+    /* the second argument is the exclusive flag, which is the range's own */
+    int excl = 0;
+    if (ac == 2) {
+      const char *ety = nt_type(nt, av[1]);
+      if (ety && sp_streq(ety, "TrueNode")) excl = 1;
+      else if (!(ety && sp_streq(ety, "FalseNode"))) continue;
+    }
+    int rng = nt_new_node(nt, "RangeNode");
+    if (rng < 0) continue;
+    nt_node_set_ref(nt, rng, "left", recv);
+    nt_node_set_ref(nt, rng, "right", av[0]);
+    nt_node_set_int(nt, rng, "flags", excl ? 4 : 0);
+    nt_node_set_ref(nt, id, "receiver", rng);
+    nt_node_set_str(nt, id, "name", "each");
+    nt_node_set_ref(nt, id, "arguments", -1);
+    /* upto answers the RECEIVER, not the range it walks */
+    if (nt_ref(nt, id, "block") >= 0) nt_node_set_int(nt, id, "enum_self_result", recv);
+    comp_grow_node_arrays(c);
+    c->nscope[rng] = c->nscope[id];
+    changed = 1;
+  }
+  return changed;
+}
+
 static int desugar_lazy_terminal(Compiler *c) {
   NodeTable *nt = (NodeTable *)c->nt;
   static const char *const TERMS[] = {
@@ -9994,6 +10034,7 @@ void analyze_program(Compiler *c) {
     ch |= desugar_enum_method_recv(c);         /* obj.map{} -> obj.__enum_to_a.map{} */
     ch |= desugar_for_enumerable(c);           /* for x in obj -> for x in obj.__enum_to_a */
     ch |= desugar_lazy_terminal(c);            /* lz.sum -> lz.to_a.sum */
+    ch |= desugar_string_upto(c);              /* "a".upto("c") -> ("a".."c").each */
     ch |= desugar_to_enum(c);                  /* recv.to_enum(:m) -> generator/blockless */
     ch |= type_block_rest_params(c);           /* |*rest| locals are poly arrays */
     ch |= desugar_public_method(c);            /* recv.public_method(:m) -> recv.method(:m) */

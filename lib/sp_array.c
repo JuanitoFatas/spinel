@@ -516,8 +516,17 @@ sp_StrArray *sp_StrArray_from_string_range(const char *s, const char *e, mrb_int
   const char *cur = s;
   SP_GC_ROOT_STR(cur);
   int iters = 0;
+  /* Two all-digit endpoints walk numerically, so ("9".."11") holds "9", "10",
+     "11" -- a plain byte compare stops at once because "9" > "1" (#3549).
+     Anything else keeps the byte order, where ("y".."ab") is empty. */
+  size_t elen = strlen(e);
+  int numeric = *s && *e;
+  for (const char *q = s; numeric && *q; q++) if (*q < '0' || *q > '9') numeric = 0;
+  for (const char *q = e; numeric && *q; q++) if (*q < '0' || *q > '9') numeric = 0;
   while (iters < 4096) {
-    int cmp = sp_str_cmp_bytes(cur, e);
+    size_t clen = strlen(cur);
+    int cmp = (numeric && clen != elen) ? (clen < elen ? -1 : 1)
+                                        : sp_str_cmp_bytes(cur, e);
     if (cmp > 0) break;
     if (cmp == 0 && excl) break;
     char *copy = sp_str_alloc(strlen(cur));
