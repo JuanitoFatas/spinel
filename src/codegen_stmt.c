@@ -5886,8 +5886,35 @@ else {
           int fargs = nt_ref(nt, id, "arguments");
           int fac = 0; if (fargs >= 0) nt_arr(nt, fargs, "arguments", &fac);
           if (fac == 0) {
+            /* the receiver must be an assignable name: a shared-buffer local
+               reads back as an expression, which cannot be assigned to (#3749) */
+            Buf fb; memset(&fb, 0, sizeof fb);
+            emit_expr(c, frcv, &fb);
+            int plain = fb.p != NULL;
+            for (const char *q = fb.p; plain && *q; q++)
+              if (!(*q == '_' || (*q >= 'a' && *q <= 'z') || (*q >= 'A' && *q <= 'Z') ||
+                    (*q >= '0' && *q <= '9') || *q == '.' || *q == '-' || *q == '>')) plain = 0;
+            if (plain) {
+              emit_indent(b, indent);
+              buf_puts(b, fb.p); buf_puts(b, " = sp_str_freeze_val("); buf_puts(b, fb.p); buf_puts(b, ");\n");
+              free(fb.p);
+              return;
+            }
+            free(fb.p);
+            /* a shared-buffer local IS the sp_String: freeze the buffer, which
+               is what every later mutation checks (#3749) */
+            if (sp_streq(rty2, "LocalVariableReadNode")) {
+              const char *lnm = nt_str(nt, frcv, "name");
+              Scope *lsc = comp_scope_of(c, frcv);
+              LocalVar *llv = (lnm && lsc) ? scope_local(lsc, lnm) : NULL;
+              if (llv && llv->type == TY_STRBUF) {
+                emit_indent(b, indent);
+                buf_printf(b, "sp_gc_freeze((void *)lv_%s);\n", rename_local(lnm));
+                return;
+              }
+            }
             emit_indent(b, indent);
-            emit_expr(c, frcv, b); buf_puts(b, " = sp_str_freeze_val("); emit_expr(c, frcv, b); buf_puts(b, ");\n");
+            buf_puts(b, "(void)("); emit_expr(c, frcv, b); buf_puts(b, ");\n");
             return;
           }
         }
