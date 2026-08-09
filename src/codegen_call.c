@@ -8713,6 +8713,18 @@ void emit_call(Compiler *c, int id, Buf *b) {
     int recv_is_tilde = rvty0 &&
         (sp_streq(rvty0, "GlobalVariableReadNode") || sp_streq(rvty0, "BackReferenceReadNode")) &&
         nt_str(nt, recv, "name") && sp_streq(nt_str(nt, recv, "name"), "$~");
+    /* a Symbol or String key names a capture group, so resolve it through the
+       MatchData face instead of coercing the key to an index (#3601) */
+    if (recv_is_tilde && sp_streq(name, "[]") && argc == 1 &&
+        (comp_ntype(c, argv[0]) == TY_SYMBOL || comp_ntype(c, argv[0]) == TY_STRING)) {
+      buf_puts(b, "sp_MatchData_aref_name(sp_re_last_matchdata(), ");
+      if (comp_ntype(c, argv[0]) == TY_SYMBOL) {
+        buf_puts(b, "sp_sym_to_s("); emit_expr(c, argv[0], b); buf_puts(b, ")");
+      }
+      else emit_expr(c, argv[0], b);
+      buf_puts(b, ")");
+      return;
+    }
     if (recv_is_tilde && sp_streq(name, "[]") && argc == 1) {
       buf_puts(b, "({ mrb_int _mi = "); emit_int_expr(c, argv[0], b);
       buf_puts(b, "; _mi == 0 ? sp_re_match_str : (_mi >= 1 && _mi <= 9 ? sp_re_captures[_mi] : (const char *)0); })");

@@ -5515,6 +5515,33 @@ static int same_sefree_lvalue(Compiler *c, int a, int b) {
   return na && nb && sp_streq(na, nb);
 }
 
+/* Does this subtree read the regexp match globals ($~, $1..$9, $&, $`, $')?
+   A scan block that does needs the match registers refreshed per iteration,
+   which the pre-computed rows alone do not do (#3601). */
+static int subtree_reads_match_globals(Compiler *c, int root) {
+  if (root < 0) return 0;
+  const NodeTable *nt = c->nt;
+  const char *ty = nt_type(nt, root);
+  if (ty) {
+    if (sp_streq(ty, "BackReferenceReadNode") || sp_streq(ty, "NumberedReferenceReadNode"))
+      return 1;
+    if (sp_streq(ty, "GlobalVariableReadNode")) {
+      const char *gn = nt_str(nt, root, "name");
+      if (gn && (sp_streq(gn, "$~") || sp_streq(gn, "$&") || sp_streq(gn, "$`") ||
+                 sp_streq(gn, "$'") || sp_streq(gn, "$+")))
+        return 1;
+    }
+  }
+  int nr = nt_num_refs(nt, root);
+  for (int i = 0; i < nr; i++) if (subtree_reads_match_globals(c, nt_ref_at(nt, root, i))) return 1;
+  int na = nt_num_arrs(nt, root);
+  for (int i = 0; i < na; i++) {
+    int n = 0; const int *el = nt_arr_at(nt, root, i, &n);
+    for (int j = 0; j < n; j++) if (subtree_reads_match_globals(c, el[j])) return 1;
+  }
+  return 0;
+}
+
 int emit_scalar_call(Compiler *c, int id, Buf *b) {
   /* Shared-mutable shim (#3227): setbyte on a strbuf local -- shadow-copy
      re-entry, same as emit_array_call's. */
@@ -5669,8 +5696,22 @@ int emit_scalar_call(Compiler *c, int id, Buf *b) {
           emit_expr(c, argv[0], g_pre);
           buf_printf(g_pre, "); SP_GC_ROOT(_t%d);\n", tm);
         }
+        /* the rows are pre-computed, so the match registers still hold the
+           last match; walk the subject again per iteration when the body
+           reads $~ or a capture global (#3601) */
+        int sc_pos = (re_idx >= 0 && subtree_reads_match_globals(c, body)) ? ++g_tmp : -1;
+        if (sc_pos >= 0) {
+          emit_indent(g_pre, g_indent);
+          buf_printf(g_pre, "mrb_int _t%d = 0;\n", sc_pos);
+        }
         emit_indent(g_pre, g_indent);
         buf_printf(g_pre, "for (mrb_int _t%d = 0; _t%d < _t%d->len; _t%d++) {\n", ti, ti, tm, ti);
+        if (sc_pos >= 0) {
+          emit_indent(g_pre, g_indent + 1);
+          buf_printf(g_pre, "if (sp_re_match_at(sp_re_pat_%d, _t%d, _t%d) >= 0)"
+                            " _t%d = sp_re_caps[1] > sp_re_caps[0] ? sp_re_caps[1] : sp_re_caps[1] + 1;\n",
+                     re_idx, tr, sc_pos, sc_pos);
+        }
         if (has_cap && np >= 2) {
           int trow = ++g_tmp;
           emit_indent(g_pre, g_indent + 1);
