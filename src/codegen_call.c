@@ -8168,6 +8168,27 @@ void emit_call(Compiler *c, int id, Buf *b) {
       return;
     }
   }
+  /* `!` and `!=` are ordinary methods a class may override, so dispatch to the
+     definition before the default negation takes over (#3740). */
+  {
+    int nr2 = nt_ref(nt, id, "receiver");
+    const char *nn2 = nt_str(nt, id, "name");
+    int na2 = nt_ref(nt, id, "arguments");
+    int nc2 = 0; const int *nv2 = na2 >= 0 ? nt_arr(nt, na2, "arguments", &nc2) : NULL;
+    if (nr2 >= 0 && nn2 && (sp_streq(nn2, "!") || sp_streq(nn2, "!=")) &&
+        nc2 == (sp_streq(nn2, "!") ? 0 : 1) && ty_is_object(comp_ntype(c, nr2))) {
+      int nd = ty_object_class(comp_ntype(c, nr2)), ndef = nd;
+      if (comp_method_in_chain(c, nd, nn2, &ndef) >= 0) {
+        buf_printf(b, "sp_%s_%s((sp_%s *)(", c->classes[ndef].c_name, mc(nn2),
+                   c->classes[ndef].c_name);
+        emit_expr(c, nr2, b);
+        buf_puts(b, ")");
+        if (nc2 == 1) { buf_puts(b, ", "); emit_expr(c, nv2[0], b); }
+        buf_puts(b, ")");
+        return;
+      }
+    }
+  }
   /* Float#equal? is identity, and a NaN is not == to itself, so compare the
      bit patterns rather than the values (#3650). */
   {

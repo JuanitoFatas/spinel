@@ -743,6 +743,17 @@ TyKind infer_call(Compiler *c, int id) {
   if (args >= 0) argv = nt_arr(nt, args, "arguments", &argc);
   if (!name) return TY_UNKNOWN;
 
+  /* `!` and `!=` are ordinary methods a class may override, so the result is
+     whatever its definition answers, not a bool (#3740) */
+  if (recv >= 0 && (sp_streq(name, "!") || sp_streq(name, "!=")) &&
+      argc == (sp_streq(name, "!") ? 0 : 1)) {
+    TyKind nrt = infer_type(c, recv);
+    if (ty_is_object(nrt)) {
+      int nmi = comp_method_in_chain(c, ty_object_class(nrt), name, NULL);
+      if (nmi >= 0) return (TyKind)c->scopes[nmi].ret;
+    }
+  }
+
   /* $~'s MatchData face over the match registers (codegen reads the same
      backing the back-references use): nullable strings. */
   if (recv >= 0 && nt_type(nt, recv) &&
@@ -5894,6 +5905,14 @@ else {
     const char *cgn = NULL;
     if (cgt && sp_streq(cgt, "SymbolNode")) cgn = nt_str(nt, argv[0], "value");
     else if (cgt && sp_streq(cgt, "StringNode")) cgn = nt_str(nt, argv[0], "content");
+    /* const_get(name, false) searches only the receiver's own constants, so an
+       inherited one is a NameError, not that constant's type (#3762) */
+    if (cgn && argc >= 2 && nt_type(nt, argv[1]) && sp_streq(nt_type(nt, argv[1]), "FalseNode")) {
+      const char *cg_rty = nt_type(nt, recv);
+      const char *cg_rnm = (cg_rty && (sp_streq(cg_rty, "ConstantReadNode") ||
+                                       sp_streq(cg_rty, "ConstantPathNode"))) ? nt_str(nt, recv, "name") : NULL;
+      if (cg_rnm && !const_owned_by_class(c, cg_rnm, cgn)) return TY_POLY;
+    }
     if (cgn) { LocalVar *cv = comp_const(c, cgn); if (cv && cv->type != TY_UNKNOWN) return cv->type; return TY_POLY; }
   }
   if (sp_streq(name, "nil?") && recv >= 0 && argc == 0) return TY_BOOL;
