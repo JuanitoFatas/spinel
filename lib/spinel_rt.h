@@ -4592,6 +4592,10 @@ static mrb_int sp_rbval_hash_key(sp_RbVal v) {
         sp_rbval_hash_depth--;
         return (mrb_int)h;
       }
+      /* two patterns with the same source are one Hash key, whichever way each
+         was built (a literal or Regexp.new) (#3681) */
+      if (v.cls_id == SP_BUILTIN_REGEX)
+        return v.v.p ? (mrb_int)sp_str_hash(sp_re_source(v.v.p)) : 0;
       if (v.cls_id == SP_BUILTIN_METHOD) {
         /* Method keys hash/eql by (bound self, fn ptr, name), so two
            `obj.method(:m)` instances collapse to one entry (optcarrot
@@ -4681,6 +4685,8 @@ static mrb_bool sp_rbval_eql_key(sp_RbVal a, sp_RbVal b) {
       }
       if (a.cls_id != b.cls_id) return FALSE;
       if (a.v.p == b.v.p) return TRUE;
+      if (a.cls_id == SP_BUILTIN_REGEX)
+        return sp_re_eq(a.v.p, b.v.p);   /* same source, same pattern (#3681) */
       if (a.cls_id == SP_BUILTIN_METHOD) {
         sp_BoundMethod *ma = (sp_BoundMethod *)a.v.p, *mb = (sp_BoundMethod *)b.v.p;
         if (!ma || !mb) return ma == mb;
