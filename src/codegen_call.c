@@ -8831,11 +8831,17 @@ void emit_call(Compiler *c, int id, Buf *b) {
           emit_stmt(c, last, g_pre, g_indent + 1);
         }
         else {
+          /* build the value into its own buffer first: emitting it straight
+             into g_pre let a nested construct (another catch) append ITS
+             statements in the middle of the assignment (#3706) */
+          Buf cvb; memset(&cvb, 0, sizeof cvb);
+          int sv_ind = g_indent; g_indent = g_indent + 1;
+          if (bt == TY_POLY && lt != TY_POLY) emit_boxed(c, last, &cvb);
+          else emit_expr(c, last, &cvb);
+          g_indent = sv_ind;
           emit_indent(g_pre, g_indent + 1);
-          buf_printf(g_pre, "_t%d = ", t);
-          if (bt == TY_POLY && lt != TY_POLY) emit_boxed(c, last, g_pre);
-          else emit_expr(c, last, g_pre);
-          buf_puts(g_pre, ";\n");
+          buf_printf(g_pre, "_t%d = %s;\n", t, cvb.p ? cvb.p : "0");
+          free(cvb.p);
         }
       }
       emit_indent(g_pre, g_indent + 1); buf_puts(g_pre, "sp_catch_top--;\n");
