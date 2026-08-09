@@ -838,6 +838,7 @@ TyKind infer_call(Compiler *c, int id) {
         sp_streq(name, "instance_of?") || sp_streq(name, "equal?"))
       return TY_BOOL;
     if (sp_streq(name, "to_s") || sp_streq(name, "inspect")) return TY_STRING;
+    if (sp_streq(name, "minmax") && argc == 0) return TY_FLOAT_ARRAY;  /* the endpoints (#3690) */
     if (sp_streq(name, "step")) return TY_FLOAT_ARRAY;
     if (sp_streq(name, "bsearch") && nt_ref(nt, id, "block") >= 0) return TY_FLOAT;
     if (sp_streq(name, "class")) return TY_CLASS;

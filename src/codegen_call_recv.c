@@ -8663,6 +8663,17 @@ int emit_range_call(Compiler *c, int id, Buf *b) {
       buf_printf(b, "({ sp_FloatRange _t%d = ", tr); emit_expr(c, recv, b);
       buf_printf(b, "; sp_frange_max(_t%d); })", tr); return 1;
     }
+    /* minmax reads the endpoints instead of iterating, which a Float begin
+       cannot do (#3690) */
+    if (argc == 0 && sp_streq(name, "minmax") && nt_ref(nt, id, "block") < 0) {
+      int tm = ++g_tmp;
+      buf_printf(b, "({ sp_FloatRange _t%d = ", tr); emit_expr(c, recv, b);
+      buf_printf(b, "; mrb_float _t%d = sp_frange_max(_t%d);"
+                    " sp_FloatArray *_r%d = sp_FloatArray_new(); SP_GC_ROOT(_r%d);"
+                    " sp_FloatArray_push(_r%d, _t%d.first); sp_FloatArray_push(_r%d, _t%d);"
+                    " _r%d; })", tm, tr, tr, tr, tr, tr, tr, tm, tr);
+      return 1;
+    }
     if ((sp_streq(name, "cover?") || sp_streq(name, "include?") ||
          sp_streq(name, "member?") || sp_streq(name, "===")) && argc == 1) {
       if (a0 == TY_INT || a0 == TY_FLOAT) {
