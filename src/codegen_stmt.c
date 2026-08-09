@@ -1726,8 +1726,22 @@ static void emit_pm_array_cond(Compiler *c, int pat, const char *arr, Buf *b) {
      any SP_TAG_OBJ: a Hash is also SP_TAG_OBJ and sp_poly_length returns its
      pair count, so without the array-kind guard `{a: 1, r: 2}` would wrongly
      match `[x, y]` (a Hash has no #deconstruct in CRuby). */
+  /* A Struct or Data element answers #deconstruct, so convert it to that array
+     before the array-kind guard rejects it (#3580). The conversion is a
+     statement-expression so it stays inside this condition. */
+  int tdc = ++g_tmp;
+  Buf dbuf; memset(&dbuf, 0, sizeof dbuf);
+  buf_printf(&dbuf, "({ sp_RbVal _t%d = %s;"
+                    " if (_t%d.tag == SP_TAG_OBJ && _t%d.cls_id >= 0"
+                    " && !sp_poly_is_array_kind(_t%d.cls_id) && sp_obj_to_a_fn)"
+                    " _t%d = sp_obj_to_a_fn(_t%d); _t%d; })",
+             tdc, arr, tdc, tdc, tdc, tdc, tdc, tdc);
+  int tda = ++g_tmp;
+  buf_printf(b, "({ sp_RbVal _t%d = %s; ", tda, dbuf.p ? dbuf.p : arr);
+  free(dbuf.p);
+  { char nb[24]; snprintf(nb, sizeof nb, "_t%d", tda); arr = nb;
   buf_printf(b, "((%s).tag == SP_TAG_OBJ && sp_poly_is_array_kind((%s).cls_id) && sp_poly_length(%s) %s %dLL",
-             arr, arr, arr, has_rest ? ">=" : "==", apn + npost);
+             arr, arr, arr, has_rest ? ">=" : "==", apn + npost); }
   for (int i = 0; i < apn; i++) {
     /* the element accessor nests one level per recursion (arr grows), so build
        it in a Buf rather than a fixed buffer that would truncate. */
@@ -1750,7 +1764,7 @@ static void emit_pm_array_cond(Compiler *c, int pat, const char *arr, Buf *b) {
     }
     free(e.p); free(sub.p);
   }
-  buf_puts(b, ")");
+  buf_puts(b, "); })");
 }
 
 /* Hash-pattern match condition over a BOXED value (any hash variant),
