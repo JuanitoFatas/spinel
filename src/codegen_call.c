@@ -13087,9 +13087,14 @@ else { memcpy(dir, sf, n); dir[n] = 0; } }
       buf_puts(b, "(("); emit_expr(c, recv, b); buf_puts(b, ") == NULL)");
       return;
     }
-    /* a raised/constructed exception is not frozen in CRuby (#3004) */
+    /* a raised/constructed exception is not frozen in CRuby (#3004), but one
+       the program froze itself reads back frozen (#3709) */
     if (sp_streq(name, "frozen?") && argc == 0) {
-      buf_puts(b, "((void)("); emit_expr(c, recv, b); buf_puts(b, "), (mrb_bool)0)");
+      buf_puts(b, "sp_gc_is_frozen((void *)("); emit_expr(c, recv, b); buf_puts(b, "))");
+      return;
+    }
+    if (sp_streq(name, "freeze") && argc == 0) {
+      buf_puts(b, "((sp_Exception *)sp_gc_freeze((void *)("); emit_expr(c, recv, b); buf_puts(b, ")))");
       return;
     }
     /* eql? is Object#eql? -- identity, not Exception#== (#2769) */
