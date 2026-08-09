@@ -8390,7 +8390,15 @@ int emit_value_recv_call(Compiler *c, int id, Buf *b) {
     else if (sp_streq(name, "hash") && argc == 0) buf_printf(b, "sp_MatchData_hash(%s)", r);  /* content-based (#3014) */
     else if (sp_streq(name, "named_captures") && argc == 0) buf_printf(b, "sp_md_named_captures(%s)", r);
     /* named_captures(symbolize_names: true): symbol keys (#2530) */
-    else if (sp_streq(name, "named_captures") && argc == 1) buf_printf(b, "sp_md_named_captures_sym(%s)", r);
+    else if (sp_streq(name, "named_captures") && argc == 1) {
+      /* symbolize_names: FALSE asks for the string keys the no-argument form
+         gives; the argument was ignored and the keys came back symbols (#3640) */
+      int sym_on = 1;
+      { int kv = kwh_lookup(nt, argv[0], "symbolize_names");
+        const char *kvt = kv >= 0 ? nt_type(nt, kv) : NULL;
+        if (kvt && sp_streq(kvt, "FalseNode")) sym_on = 0; }
+      buf_printf(b, sym_on ? "sp_md_named_captures_sym(%s)" : "sp_md_named_captures(%s)", r);
+    }
     else if (sp_streq(name, "inspect") && argc == 0) buf_printf(b, "sp_MatchData_inspect(%s)", r);   /* #2500 */
     /* MatchData#match(n) is the group substring, #match_length(n) its byte
        length (nil when the group did not participate) (#2501) */

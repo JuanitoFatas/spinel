@@ -2567,7 +2567,13 @@ else {
     if (sp_streq(name, "match_length") && argc == 1) return TY_POLY;   /* int or nil (#2501) */
     if (sp_streq(name, "deconstruct") && argc == 0) return TY_POLY_ARRAY;   /* (#2503) */
     if (sp_streq(name, "deconstruct_keys") && argc == 1) return TY_SYM_POLY_HASH;   /* (#2503) */
-    if (sp_streq(name, "named_captures") && argc == 1) return TY_SYM_POLY_HASH;   /* symbolize (#2530) */
+    if (sp_streq(name, "named_captures") && argc == 1) {
+      /* symbolize_names: false asks for the string keys (#3640) */
+      int kv = kwh_lookup(nt, argv[0], "symbolize_names");
+      const char *kvt = kv >= 0 ? nt_type(nt, kv) : NULL;
+      if (kvt && sp_streq(kvt, "FalseNode")) return TY_STR_POLY_HASH;
+      return TY_SYM_POLY_HASH;   /* symbolize (#2530) */
+    }
     if (sp_streq(name, "regexp") && argc == 0) return TY_REGEX;   /* (#2499) */
     if (sp_streq(name, "pre_match") || sp_streq(name, "post_match") || sp_streq(name, "to_s")) return TY_STRING;
     if (sp_streq(name, "begin") || sp_streq(name, "end") || sp_streq(name, "length") || sp_streq(name, "size")) return TY_INT;
