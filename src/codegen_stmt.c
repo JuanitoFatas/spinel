@@ -4872,6 +4872,32 @@ void emit_rescue(Compiler *c, int id, Buf *b, int indent, int fr, const char *re
     int first = 1;
     for (int i = 0; i < nexc; i++) {
       const char *en = nt_type(nt, exc[i]);
+      /* `rescue *list`: decide against the list's members at run time, so an
+         empty list matches nothing and a non-class member is a TypeError */
+      if (en && sp_streq(en, "SplatNode")) {
+        int sx = nt_ref(nt, exc[i], "expression");
+        if (sx >= 0) {
+          if (!first) buf_puts(b, " || ");
+          first = 0;
+          buf_printf(b, "sp_exc_matches_splat(_rcls_%d, ", rc);
+          emit_boxed(c, sx, b);
+          buf_puts(b, ")");
+          continue;
+        }
+      }
+      /* an operand that is plainly not a class or module is a TypeError in
+         CRuby, not a clause that matches everything (#3712) */
+      if (en && !sp_streq(en, "ConstantReadNode") && !sp_streq(en, "ConstantPathNode")) {
+        TyKind ot = comp_ntype(c, exc[i]);
+        if (ot == TY_INT || ot == TY_FLOAT || ot == TY_STRING || ot == TY_SYMBOL ||
+            ot == TY_BOOL || ot == TY_NIL || ty_is_array(ot) || ty_is_hash(ot)) {
+          if (!first) buf_puts(b, " || ");
+          first = 0;
+          buf_puts(b, "((void)("); emit_expr(c, exc[i], b);
+          buf_puts(b, "), sp_raise_cls(\"TypeError\", \"class or module required for rescue clause\"), 0)");
+          continue;
+        }
+      }
       if (!en || (!sp_streq(en, "ConstantReadNode") && !sp_streq(en, "ConstantPathNode"))) continue;
       if (!first) buf_puts(b, " || ");
       first = 0;

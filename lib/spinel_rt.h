@@ -6519,6 +6519,26 @@ SP_NORETURN SP_COLD void sp_raise_cls(const char *cls, const char *msg) {
   fprintf(stderr, "%s (%s)\n", (msg && *msg) ? msg : cls, cls); exit(1); }
 static void sp_raise(const char *msg) { sp_raise_cls("RuntimeError", msg); }
 
+/* `rescue *list`: the clause matches when the raised class is (or descends
+   from) one named in the list. A non-class element is a TypeError, and an
+   empty list matches nothing, so the exception keeps propagating (#3712). */
+static mrb_bool sp_exc_matches_splat(const char *raised, sp_RbVal list) {
+  if (!(list.tag == SP_TAG_OBJ && sp_poly_is_array_kind(list.cls_id))) {
+    if (list.tag == SP_TAG_CLASS)
+      return sp_exc_cls_matches(raised, sp_class_val_name(list));
+    sp_raise_cls("TypeError", "class or module required for rescue clause");
+  }
+  { mrb_int n = sp_poly_length(list);
+    for (mrb_int i = 0; i < n; i++) {
+      sp_RbVal e = sp_poly_arr_get(list, i);
+      if (e.tag != SP_TAG_CLASS)
+        sp_raise_cls("TypeError", "class or module required for rescue clause");
+      if (sp_exc_cls_matches(raised, sp_class_val_name(e))) return TRUE;
+    }
+  }
+  return FALSE;
+}
+
 /* Issue #781: bridge between the regex compile-error path (which lives
    in the .a library and can't see the user program's static-inline
    sp_raise_cls) and the user's Ruby-level exception machinery. The
