@@ -8614,10 +8614,15 @@ void emit_stmt_tail_inner(Compiler *c, int id, Buf *b, int indent) {
      which need not match the merged result slot. Evaluate it for effect and
      yield the slot's zero; control never reaches the assignment anyway.
      (#3021, #3060) */
-  else if (g_result_var && !g_result_poly && sp_streq(ty, "CallNode") &&
+  /* an unknown constant read emits a raise too, and its sp_Class result type
+     mismatches the slot the same way a raising call's does (#3748) */
+  else if (g_result_var && !g_result_poly &&
+           (sp_streq(ty, "CallNode") || sp_streq(ty, "ConstantReadNode")) &&
            (vty == TY_VOID || vty == TY_NIL ||
             (g_result_ty != TY_UNKNOWN && vty != g_result_ty &&
-             !ty_is_numeric(g_result_ty)))) {
+             /* a numeric slot takes an int-ish raise result, but not a struct
+                one (an sp_Class from an unknown constant) */
+             (!ty_is_numeric(g_result_ty) || !ty_is_numeric(vty))))) {
     /* Cast the nil default to the result slot's type: a bare 0 in the comma
        expression is an int, not a null-pointer constant, so assigning it to a
        pointer slot is -Wint-conversion. typeof gives NULL for a pointer and 0
