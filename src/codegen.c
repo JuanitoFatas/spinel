@@ -2711,6 +2711,9 @@ static int proc_body_uses_self(Compiler *c, int id, int class_id) {
   if (sp_streq(ty, "CallNode") && nt_ref(c->nt, id, "receiver") < 0) {
     const char *nm = nt_str(c->nt, id, "name");
     if (nm && comp_method_in_chain(c, class_id, nm, NULL) >= 0) return 1;
+    /* an attr_reader is not a method in the chain -- it reads the ivar
+       directly off self, which the body needs captured all the same (#3750) */
+    if (nm && comp_reader_in_chain(c, class_id, nm, NULL)) return 1;
   }
   int nr = nt_num_refs(c->nt, id);
   for (int i = 0; i < nr; i++)
