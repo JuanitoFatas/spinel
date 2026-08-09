@@ -18267,7 +18267,15 @@ else { memcpy(dir, sf, n); dir[n] = 0; } }
     const char *cg_qm = NULL;
     if (cg_aty && sp_streq(cg_aty, "SymbolNode")) cg_qm = nt_str(nt, argv[0], "value");
     else if (cg_aty && sp_streq(cg_aty, "StringNode")) cg_qm = nt_str(nt, argv[0], "content");
-    if (cg_qm) {
+    /* const_get(name, false) searches only the receiver's own constants */
+    int cg_own = 0;
+    if (cg_qm && argc >= 2 && nt_type(nt, argv[1]) && sp_streq(nt_type(nt, argv[1]), "FalseNode")) {
+      const char *cg_rty = nt_type(nt, recv);
+      const char *cg_rnm = (cg_rty && (sp_streq(cg_rty, "ConstantReadNode") ||
+                                       sp_streq(cg_rty, "ConstantPathNode"))) ? nt_str(nt, recv, "name") : NULL;
+      if (cg_rnm && !const_owned_by_class(c, cg_rnm, cg_qm)) cg_own = 1;
+    }
+    if (cg_qm && !cg_own) {
       LocalVar *cv = comp_const(c, cg_qm);
       if (cv && cv->type != TY_UNKNOWN) { buf_printf(b, "cst_%s", cg_qm); return; }
       /* Builtin module constants: Klass.const_get(:C) resolves to the same value
@@ -18322,6 +18330,21 @@ else { memcpy(dir, sf, n); dir[n] = 0; } }
       buf_puts(b, "), sp_box_nil())");
       return;
     }
+    if (cg_own) {
+      /* the name exists, but not on the receiver itself, and the search was
+         asked not to climb (#3762) */
+      buf_puts(b, "((void)("); emit_expr(c, recv, b);
+      buf_puts(b, "), sp_exc_stage_recv("); emit_boxed(c, recv, b);
+      buf_puts(b, "), sp_raise_cls(\"NameError\", ");
+      {
+        const char *cg_rnm2 = nt_str(nt, recv, "name");
+        char qb[192];
+        snprintf(qb, sizeof qb, "uninitialized constant %s::%s", cg_rnm2 ? cg_rnm2 : "", cg_qm);
+        emit_str_literal(b, qb);
+      }
+      buf_puts(b, "), sp_box_nil())");
+      return;
+    }
     unsupported(c, id, "const_get (needs a compile-time-known constant name)");
     return;
   }
@@ -18344,6 +18367,12 @@ else { memcpy(dir, sf, n); dir[n] = 0; } }
         return;
       }
       int yes = comp_const(c, qm) != NULL || comp_class_index(c, qm) >= 0;
+      /* const_defined?(name, false) restricts the search to the receiver's own
+         constants, so an inherited one does not count (#3762) */
+      if (yes && argc >= 2 && nt_type(nt, argv[1]) && sp_streq(nt_type(nt, argv[1]), "FalseNode")) {
+        const char *cd_rnm = nt_str(nt, recv, "name");
+        if (cd_rnm && !const_owned_by_class(c, cd_rnm, qm)) yes = 0;
+      }
       buf_printf(b, "%d", yes);
       return;
     }

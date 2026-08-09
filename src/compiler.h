@@ -595,6 +595,7 @@ int lazy_alias_chain(Compiler *c, int var_read);
 int lazy_method_chain(Compiler *c, int call);      /* parameterless method whose body is a lazy chain -> chain node, else -1 */
 int        hash_new_default_arg(Compiler *c, int recv); /* Hash.new(d) literal: d node or -1 */
 int        hash_new_blockless(Compiler *c, int recv);  /* blockless Hash.new / {} literal */
+int        const_owned_by_class(Compiler *c, const char *clsname, const char *constname);
 /* Class index of a `class_eval`/`module_eval { defs }` reopen, else -1.
    enclosing_class resolves bare/`self.` receivers (the class whose body we are
    directly in); ignored for constant receivers. */
