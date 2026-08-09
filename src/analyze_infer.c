@@ -3747,6 +3747,8 @@ else {
     if ((sp_streq(name, "format") || sp_streq(name, "sprintf")) && argc >= 1) return TY_STRING;
     if (sp_streq(name, "system") && argc >= 1) return TY_BOOL;
     if (sp_streq(name, "trap") && argc >= 1) return TY_POLY;  /* the previous handler: a command string or a Proc */
+    /* at_exit answers the Proc it registered, so the handler stays callable (#3727) */
+    if (sp_streq(name, "at_exit") && nt_ref(nt, id, "block") >= 0) return TY_PROC;
     if (sp_streq(name, "rand")) {
       if (argc == 0) return TY_FLOAT;
       if (infer_type(c, argv[0]) == TY_FLOAT_RANGE) return TY_FLOAT;   /* rand(float range) */
