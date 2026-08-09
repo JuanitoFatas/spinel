@@ -307,6 +307,19 @@ void sp_re_expand_rep(const mrb_regexp_pattern *pat,
         i += 2;
         continue;
       }
+      else if (d == '`' || d == '\'') {
+        /* \` is the text before the match, \' the text after it (#3550) */
+        int seg_beg = (d == '`') ? 0 : caps[1];
+        int seg_end = (d == '`') ? caps[0] : (int)strlen(src);
+        if (seg_beg >= 0 && seg_end >= seg_beg) {
+          int seg_len = seg_end - seg_beg;
+          if (olen + seg_len + 1 >= cap) { cap = ((olen + seg_len) * 2) + 64; out = (char*)realloc(out, cap); }
+          memcpy(out + olen, src + seg_beg, (size_t)seg_len);
+          olen += (size_t)seg_len;
+        }
+        i += 2;
+        continue;
+      }
       else if (d == 'k' && i + 2 < rlen && rep[i+2] == '<') {
        /* \k<name>: named backreference. The name resolves against the
           pattern; an unknown or empty name raises IndexError (mirroring
