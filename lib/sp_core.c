@@ -140,6 +140,8 @@ else if (*p == '0' && p[1] != 0) {
     if ((base == 16) && (p[1] == 'x' || p[1] == 'X')) p += 2;
     else if ((base == 2) && (p[1] == 'b' || p[1] == 'B')) p += 2;
     else if ((base == 8) && (p[1] == 'o' || p[1] == 'O')) p += 2;
+    /* base 10 accepts the explicit decimal prefix too (#3719) */
+    else if ((base == 10) && (p[1] == 'd' || p[1] == 'D')) p += 2;
   }
   mrb_int v = 0;
   int any = 0;
@@ -213,6 +215,8 @@ static mrb_int sp_str_to_i_base_impl(const char *s, mrb_int base, int lenient) {
       if (n == 'x' || n == 'X') base = 16;
       else if (n == 'b' || n == 'B') base = 2;
       else if (n == 'o' || n == 'O') base = 8;
+      /* `0d19` is CRuby's explicit decimal prefix (#3719) */
+      else if (n == 'd' || n == 'D') base = 10;
       else if (n >= '0' && n <= '7') base = 8;
       else base = 10;
     }
@@ -228,6 +232,7 @@ static mrb_int sp_str_to_i_base_impl(const char *s, mrb_int base, int lenient) {
     if ((base == 16) && (p[1] == 'x' || p[1] == 'X')) p += 2;
     else if ((base == 2) && (p[1] == 'b' || p[1] == 'B')) p += 2;
     else if ((base == 8) && (p[1] == 'o' || p[1] == 'O')) p += 2;
+    else if ((base == 10) && (p[1] == 'd' || p[1] == 'D')) p += 2;
   }
   if (*p == '\0') SP_INT_REJECT("ArgumentError", sp_sprintf("invalid value for Integer(): \"%s\"", s));
   mrb_int v = 0;
