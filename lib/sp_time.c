@@ -175,6 +175,47 @@ sp_Time sp_time_new_utc(int64_t y, int64_t mo, int64_t d,
   return (sp_Time){ sp_time_civil_epoch(y, mo, d, h, mi, s), 0, 1 };
 }
 
+/* A zone argument (`in:`, or Time.new's 7th positional): "UTC" / "Z" is UTC,
+   an Integer or a "+HH[:MM[:SS]]" / "+HHMM" string a fixed offset east of
+   UTC. Anything else is CRuby's ArgumentError (#3696, #3697, #3698). */
+int64_t sp_time_zone_arg_off(const char *z, int *is_utc_out) {
+  *is_utc_out = 0;
+  if (!z) sp_raise_cls("ArgumentError", "invalid time zone");
+  if (strcmp(z, "UTC") == 0 || strcmp(z, "utc") == 0 ||
+      strcmp(z, "Z") == 0 || strcmp(z, "GMT") == 0) { *is_utc_out = 1; return 0; }
+  if (z[0] == '+' || z[0] == '-') {
+    int sign = z[0] == '-' ? -1 : 1;
+    const char *p = z + 1;
+    int f[3] = {0, 0, 0}, nf = 0;
+    while (nf < 3) {
+      if (!(p[0] >= '0' && p[0] <= '9') || !(p[1] >= '0' && p[1] <= '9')) break;
+      f[nf++] = (p[0] - '0') * 10 + (p[1] - '0');
+      p += 2;
+      if (*p == ':') p++;
+      else if (nf == 1 && *p) continue;   /* "+HHMM" */
+      else break;
+    }
+    if (nf >= 1 && !*p) return sign * (int64_t)(f[0] * 3600 + f[1] * 60 + f[2]);
+  }
+  sp_raise_cls("ArgumentError", sp_sprintf("\"+HH:MM\", \"-HH:MM\", \"UTC\" or \"A\"..\"I\",\"K\"..\"Z\" expected for utc_offset: %s", z));
+  return 0;
+}
+
+/* Re-read a Time in the zone the argument names (#3698). */
+sp_Time sp_time_in_zone_i(sp_Time t, int64_t off) {
+  if (off <= -86400 || off >= 86400)
+    sp_raise_cls("ArgumentError", "utc_offset out of range");
+  t.is_utc = 2; t.utc_off = (int32_t)off;
+  return t;
+}
+sp_Time sp_time_in_zone_s(sp_Time t, const char *z) {
+  int isu = 0;
+  int64_t off = sp_time_zone_arg_off(z, &isu);
+  if (isu) { t.is_utc = 1; t.utc_off = 0; }
+  else { t.is_utc = 2; t.utc_off = (int32_t)off; }
+  return t;
+}
+
 /* Time.new(y, mo, d, h, mi, s, utc_offset) — the civil value is read in a
    fixed zone off seconds east of UTC, so the epoch is the UTC epoch of the
    same civil value minus that offset. CRuby bounds the offset to a day. */

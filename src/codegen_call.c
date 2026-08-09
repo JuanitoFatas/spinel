@@ -16670,21 +16670,47 @@ else { memcpy(dir, sf, n); dir[n] = 0; } }
     }
     /* Time.at(sec, in: "+HH:MM"): the epoch instant carried with a fixed UTC
        offset (is_utc == 2), so #utc_offset returns it. (#2681) */
-    if (sp_streq(name, "at") && argc == 2 &&
-        nt_type(nt, argv[1]) && sp_streq(nt_type(nt, argv[1]), "KeywordHashNode")) {
-      int inv = struct_kwarg_value(c, argv[1], "in");
-      const char *off = (inv >= 0 && nt_type(nt, inv) && sp_streq(nt_type(nt, inv), "StringNode"))
-                        ? nt_str(nt, inv, "content") : NULL;
-      if (off && strlen(off) == 6 && (off[0] == '+' || off[0] == '-') && off[3] == ':' &&
-          off[1] >= '0' && off[1] <= '9' && off[2] >= '0' && off[2] <= '9' &&
-          off[4] >= '0' && off[4] <= '9' && off[5] >= '0' && off[5] <= '9') {
-        long osec = ((off[1] - '0') * 10 + (off[2] - '0')) * 3600 + ((off[4] - '0') * 10 + (off[5] - '0')) * 60;
-        if (off[0] == '-') osec = -osec;
-        int ts = ++g_tmp;
-        buf_printf(b, "({ sp_Time _t%d = sp_time_at_int(", ts); emit_int_expr(c, argv[0], b);
-        buf_printf(b, "); _t%d.is_utc = 2; _t%d.utc_off = %ld; _t%d; })", ts, ts, osec, ts);
-        return;
+    /* Time.at(..., in: zone): build the time from the positional arguments,
+       then re-read it in the zone the keyword names -- a name, an Integer
+       offset or an offset string, whatever their types (#3696, #3698). */
+    if (sp_streq(name, "at") && argc >= 2 &&
+        nt_type(nt, argv[argc - 1]) && sp_streq(nt_type(nt, argv[argc - 1]), "KeywordHashNode") &&
+        struct_kwarg_value(c, argv[argc - 1], "in") >= 0) {
+      int inv = struct_kwarg_value(c, argv[argc - 1], "in");
+      int ts = ++g_tmp;
+      TyKind st = comp_ntype(c, argv[0]);
+      buf_printf(b, "({ sp_Time _t%d = ", ts);
+      if (st == TY_TIME) emit_expr(c, argv[0], b);
+      else if (st == TY_FLOAT) { buf_puts(b, "sp_time_at_float("); emit_expr(c, argv[0], b); buf_puts(b, ")"); }
+      else if (st == TY_RATIONAL) {
+        int trq = ++g_tmp;
+        buf_printf(b, "({ sp_Rational _t%d = ", trq); emit_expr(c, argv[0], b);
+        buf_printf(b, "; sp_time_at_div(_t%d.num, _t%d.den); })", trq, trq);
       }
+      else if (st == TY_POLY || st == TY_UNKNOWN) {
+        buf_puts(b, "sp_time_at_float(sp_poly_to_f("); emit_boxed(c, argv[0], b); buf_puts(b, "))");
+      }
+      else { buf_puts(b, "sp_time_at_int("); emit_int_expr(c, argv[0], b); buf_puts(b, ")"); }
+      buf_puts(b, ";");
+      /* a second positional argument is microseconds */
+      if (argc >= 3) {
+        buf_printf(b, " _t%d = sp_time_add_nsec(_t%d, (int64_t)((", ts, ts);
+        emit_int_expr(c, argv[1], b);
+        buf_puts(b, ")) * 1000);");
+      }
+      TyKind zt = comp_ntype(c, inv);
+      if (zt == TY_STRING) { buf_printf(b, " sp_time_in_zone_s(_t%d, ", ts); emit_expr(c, inv, b); buf_puts(b, "); })"); }
+      else if (zt == TY_INT) { buf_printf(b, " sp_time_in_zone_i(_t%d, ", ts); emit_int_expr(c, inv, b); buf_puts(b, "); })"); }
+      else {
+        int tz = ++g_tmp;
+        buf_printf(b, " sp_RbVal _t%d = ", tz); emit_boxed(c, inv, b);
+        buf_printf(b, "; _t%d.tag == SP_TAG_STR ? sp_time_in_zone_s(_t%d, _t%d.v.s)"
+                      " : _t%d.tag == SP_TAG_INT ? sp_time_in_zone_i(_t%d, _t%d.v.i)"
+                      " : _t%d.tag == SP_TAG_NIL ? _t%d"
+                      " : (sp_raise_cls(\"ArgumentError\", \"invalid time zone\"), _t%d); })",
+                   tz, ts, tz, tz, ts, tz, tz, ts, ts);
+      }
+      return;
     }
     /* Time.at(sec, num, :unit): the third argument names the second one's
        unit -- :millisecond / :usec / :microsecond / :nanosecond (and their

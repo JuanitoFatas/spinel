@@ -27,6 +27,9 @@ sp_Time sp_time_now(void);
 sp_Time sp_time_at_int(int64_t sec);
 sp_Time sp_time_norm(sp_Time t);   /* carry a whole second out of tv_nsec */
 sp_Time sp_time_add_nsec(sp_Time t, int64_t ns);
+int64_t sp_time_zone_arg_off(const char *z, int *is_utc_out);
+sp_Time sp_time_in_zone_i(sp_Time t, int64_t off);
+sp_Time sp_time_in_zone_s(sp_Time t, const char *z);
 sp_Time sp_time_at_float(double epoch);
 sp_Time sp_time_at_div(int64_t num, int64_t den);
 sp_Time sp_time_parse(const char *s);
