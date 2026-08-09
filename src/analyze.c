@@ -3680,6 +3680,17 @@ static int desugar_kernel_method_block_arg(Compiler *c) {
     int ex = nt_ref(nt, blk, "expression");
     if (ex < 0 || !nt_type(nt, ex) || !sp_streq(nt_type(nt, ex), "CallNode")) continue;
     const char *exn = nt_str(nt, ex, "name");
+    /* `&p.to_proc` on a Proc is `&p`: to_proc is self there (#3687) */
+    if (exn && sp_streq(exn, "to_proc")) {
+      int tpr = nt_ref(nt, ex, "receiver");
+      int targs = nt_ref(nt, ex, "arguments"); int tac = 0;
+      if (targs >= 0) nt_arr(nt, targs, "arguments", &tac);
+      if (tpr >= 0 && tac == 0 && infer_type(c, tpr) == TY_PROC) {
+        nt_node_set_ref(nt, blk, "expression", tpr);
+        changed = 1;
+      }
+      continue;
+    }
     if (!exn || !sp_streq(exn, "method")) continue;
     if (nt_ref(nt, ex, "receiver") >= 0) continue;      /* recv.method(:x): wrapper path */
     const char *sym = method_sym_arg(c, ex);

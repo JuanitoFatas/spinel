@@ -2005,6 +2005,8 @@ TyKind infer_call(Compiler *c, int id) {
     return g_promote_mode ? TY_POLY : TY_INT;
   }
   if (recv >= 0 && rt == TY_METHOD && argc == 0 && sp_streq(name, "to_proc")) return TY_PROC;
+  /* Proc#to_proc is self (#3687) */
+  if (recv >= 0 && rt == TY_PROC && argc == 0 && sp_streq(name, "to_proc")) return TY_PROC;
   /* Method/UnboundMethod reflection (#3247) */
   if (recv >= 0 && rt == TY_METHOD && argc == 0) {
     if (sp_streq(name, "original_name")) return TY_SYMBOL;

@@ -10038,6 +10038,11 @@ void emit_call(Compiler *c, int id, Buf *b) {
      result boxed in _sp_proc_poly_ret -- the universal first-class-proc
      return ABI a later `.call` reads back. Falls back to the generic runtime
      trampoline when the target is unresolved. */
+  /* Proc#to_proc is self (#3687) */
+  if (recv >= 0 && comp_ntype(c, recv) == TY_PROC && argc == 0 && sp_streq(name, "to_proc")) {
+    emit_expr(c, recv, b);
+    return;
+  }
   if (recv >= 0 && comp_ntype(c, recv) == TY_METHOD && argc == 0 && sp_streq(name, "to_proc")) {
     int mn = method_recv_node(c, recv);
     int target = mn >= 0 ? method_obj_target_mi(c, mn) : -1;
