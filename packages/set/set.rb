@@ -226,10 +226,14 @@ class Set
   end
 
   # Set operators build fresh sets; the operand only needs #include? /#each.
+  # The intersection ENUMERATES the operand and keeps what the receiver holds
+  # -- so a Hash operand contributes its [key, value] pairs, and the result
+  # follows the operand's order, as CRuby's does. Asking the operand for
+  # #include? instead read a Hash by key (#3676).
   def &(other)
     Set.check_enum(other)
     r = Set.new
-    @data.each { |x| r.add(x) if other.include?(x) }
+    other.each { |x| r.add(x) if include?(x) }
     r
   end
   alias intersection &
@@ -243,10 +247,11 @@ class Set
   alias union |
   alias + |
 
+  # The difference enumerates the operand too, for the same reason.
   def -(other)
     Set.check_enum(other)
-    r = Set.new
-    @data.each { |x| r.add(x) unless other.include?(x) }
+    r = Set.new(@data)
+    other.each { |x| r.delete(x) }
     r
   end
   alias difference -
