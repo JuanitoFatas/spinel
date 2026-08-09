@@ -912,6 +912,11 @@ TyKind infer_call(Compiler *c, int id) {
         return TY_INT_ARRAY;
     }
   }
+  /* min(n) / max(n) on an Integer Range answer an Array of its ints, however
+     the Range is bounded (#3665) */
+  if (rt == TY_RANGE && recv >= 0 && argc == 1 && nt_ref(nt, id, "block") < 0 &&
+      (sp_streq(name, "min") || sp_streq(name, "max")))
+    return TY_INT_ARRAY;
   if (rt == TY_RANGE && sp_streq(name, "sum") && argc == 1 &&
       nt_ref(nt, id, "block") < 0)
     return infer_type(c, argv[0]) == TY_FLOAT ? TY_FLOAT : TY_INT;

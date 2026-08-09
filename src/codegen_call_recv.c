@@ -8711,6 +8711,18 @@ int emit_range_call(Compiler *c, int id, Buf *b) {
       buf_printf(b, "({ sp_StrRange _t%d = ", tr); emit_expr(c, recv, b);
       buf_printf(b, "; _t%d.last; })", tr); return 1;
     }
+    /* min(n) / max(n): the n smallest or largest members (#3665) */
+    if (argc == 1 && (sp_streq(name, "min") || sp_streq(name, "max")) &&
+        nt_ref(nt, id, "block") < 0) {
+      int ta = ++g_tmp, tn = ++g_tmp;
+      buf_printf(b, "({ sp_StrRange _t%d = ", tr); emit_expr(c, recv, b);
+      buf_printf(b, "; sp_StrArray *_t%d = sp_srange_to_a(_t%d); SP_GC_ROOT(_t%d);", ta, tr, ta);
+      buf_printf(b, " mrb_int _t%d = ", tn); emit_int_expr(c, argv[0], b);
+      buf_printf(b, "; if (_t%d < 0) sp_raise_cls(\"ArgumentError\", \"negative array size\");", tn);
+      if (sp_streq(name, "max")) buf_printf(b, " sp_StrArray_reverse_bang(_t%d);", ta);
+      buf_printf(b, " sp_StrArray_slice(_t%d, 0, _t%d); })", ta, tn);
+      return 1;
+    }
     if ((sp_streq(name, "cover?") || sp_streq(name, "include?") ||
          sp_streq(name, "member?") || sp_streq(name, "===")) && argc == 1) {
       if (a0 == TY_STRING) {
@@ -8787,6 +8799,15 @@ int emit_range_call(Compiler *c, int id, Buf *b) {
     if (argc == 0 && sp_streq(name, "max")) {
       buf_printf(b, "({ sp_FloatRange _t%d = ", tr); emit_expr(c, recv, b);
       buf_printf(b, "; sp_frange_max(_t%d); })", tr); return 1;
+    }
+    /* min(n)/max(n) enumerate, which a Float bound cannot (#3665) */
+    if (argc == 1 && (sp_streq(name, "min") || sp_streq(name, "max")) &&
+        nt_ref(nt, id, "block") < 0) {
+      buf_puts(b, "({ (void)("); emit_expr(c, recv, b); buf_puts(b, "); (void)(");
+      emit_expr(c, argv[0], b);
+      buf_puts(b, "); sp_raise_cls(\"TypeError\", \"can't iterate from Float\");"
+                  " sp_box_nil(); })");
+      return 1;
     }
     /* minmax reads the endpoints instead of iterating, which a Float begin
        cannot do (#3690) */
@@ -9097,6 +9118,38 @@ int emit_range_call(Compiler *c, int id, Buf *b) {
         buf_printf(b, "; sp_range_str(_t%d); })", tq);
         return 1;
       }
+    }
+    /* min(n) / max(n): the n smallest or largest members, walked from the
+       endpoint the count starts at, so a one-sided Range answers without
+       materializing (and raises from the side it has no end on) (#3665). */
+    if (argc == 1 && (sp_streq(name, "min") || sp_streq(name, "max")) && block < 0) {
+      int trr = ++g_tmp, tnn = ++g_tmp, too = ++g_tmp, thi = ++g_tmp, tii = ++g_tmp;
+      int want_min = sp_streq(name, "min");
+      buf_printf(b, "({ sp_Range _t%d = ", trr); emit_expr(c, recv, b);
+      buf_printf(b, "; mrb_int _t%d = ", tnn); emit_int_expr(c, argv[0], b);
+      buf_printf(b, "; if (_t%d < 0) sp_raise_cls(\"ArgumentError\", \"negative array size\");", tnn);
+      if (want_min)
+        buf_printf(b, " if (_t%d.first == INTPTR_MIN) sp_raise_cls(\"RangeError\","
+                      " \"cannot get the minimum of beginless range\");", trr);
+      else
+        buf_printf(b, " if (_t%d.last == INTPTR_MAX) sp_raise_cls(\"RangeError\","
+                      " \"cannot get the maximum of endless range\");", trr);
+      buf_printf(b, " mrb_int _t%d = _t%d.last - (_t%d.excl ? 1 : 0);", thi, trr, trr);
+      buf_printf(b, " sp_IntArray *_t%d = sp_IntArray_new(); SP_GC_ROOT(_t%d);", too, too);
+      if (want_min)
+        buf_printf(b, " for (mrb_int _t%d = 0; _t%d < _t%d; _t%d++) {"
+                      " mrb_int _v = _t%d.first + _t%d;"
+                      " if (_t%d.last != INTPTR_MAX && _v > _t%d) break;"
+                      " sp_IntArray_push(_t%d, _v); }",
+                   tii, tii, tnn, tii, trr, tii, trr, thi, too);
+      else
+        buf_printf(b, " for (mrb_int _t%d = 0; _t%d < _t%d; _t%d++) {"
+                      " mrb_int _v = _t%d - _t%d;"
+                      " if (_t%d.first != INTPTR_MIN && _v < _t%d.first) break;"
+                      " sp_IntArray_push(_t%d, _v); }",
+                   tii, tii, tnn, tii, thi, tii, trr, trr, too);
+      buf_printf(b, " _t%d; })", too);
+      return 1;
     }
     static const char *const rmeths[] = {
       "to_a", "entries", "include?", "member?", "cover?", "===", "sum", "min", "max",
