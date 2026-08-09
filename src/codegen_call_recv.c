@@ -6052,11 +6052,24 @@ int emit_scalar_call(Compiler *c, int id, Buf *b) {
         int lo_n, hi_n;
         if (argc == 2) { lo_n = argv[0]; hi_n = argv[1]; }
         else { int rn = argv[0]; lo_n = nt_ref(c->nt, rn, "left"); hi_n = nt_ref(c->nt, rn, "right"); }
+        /* an exclusive Range has no greatest member to clamp to, and a
+           two-argument min above max is out of order: both raise (#3593) */
+        int excl_r = (argc == 1 && (nt_int(c->nt, argv[0], "flags", 0) & 4)) ? 1 : 0;
         int tc = ++g_tmp, tlo = ++g_tmp, thi = ++g_tmp;
-        buf_printf(b, "({ const char *_t%d = %s; const char *_t%d = ", tc, r, tlo); emit_expr(c, lo_n, b);
-        buf_printf(b, "; const char *_t%d = ", thi); emit_expr(c, hi_n, b);
-        buf_printf(b, "; sp_str_cmp_bytes(_t%d, _t%d) < 0 ? _t%d : (sp_str_cmp_bytes(_t%d, _t%d) > 0 ? _t%d : _t%d); })",
-                   tc, tlo, tlo, tc, thi, thi, tc);
+        buf_printf(b, "({ const char *_t%d = %s; const char *_t%d = ", tc, r, tlo);
+        if (lo_n >= 0) emit_expr(c, lo_n, b); else buf_puts(b, "NULL");
+        buf_printf(b, "; const char *_t%d = ", thi);
+        if (hi_n >= 0) emit_expr(c, hi_n, b); else buf_puts(b, "NULL");
+        buf_puts(b, ";");
+        if (excl_r)
+          buf_puts(b, " sp_raise_cls(\"ArgumentError\", \"cannot clamp with an exclusive range\");");
+        buf_printf(b, " if (_t%d && _t%d && sp_str_cmp_bytes(_t%d, _t%d) > 0)"
+                      " sp_raise_cls(\"ArgumentError\", \"min argument must be less than or equal to max argument\");",
+                   tlo, thi, tlo, thi);
+        /* a one-sided Range clamps on the side it has (#3593) */
+        buf_printf(b, " (_t%d && sp_str_cmp_bytes(_t%d, _t%d) < 0) ? _t%d :"
+                      " ((_t%d && sp_str_cmp_bytes(_t%d, _t%d) > 0) ? _t%d : _t%d); })",
+                   tlo, tc, tlo, tlo, thi, tc, thi, thi, tc);
       }
       else if (sp_streq(name, "oct") && argc == 0) buf_printf(b, "sp_str_oct(%s)", r);
       else if (sp_streq(name, "hex") && argc == 0) buf_printf(b, "sp_str_to_i_base(%s, 16)", r);
