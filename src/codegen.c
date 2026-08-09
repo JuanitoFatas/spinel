@@ -6425,6 +6425,7 @@ char *codegen_program(const NodeTable *nt) {
     buf_puts(&b, "case -174:return SPL(\"Thread\");case -175:return SPL(\"Thread::Mutex\");");
     buf_puts(&b, "case -176:return SPL(\"Thread::Queue\");case -177:return SPL(\"Thread::SizedQueue\");");
     buf_puts(&b, "case -178:return SPL(\"Thread::ConditionVariable\");case -179:return SPL(\"Fiber\");");
+    buf_puts(&b, "case -180:return SPL(\"MatchData\");");
     buf_puts(&b, "default:return sp_str_empty;} }\n\n");
     /* Inverse of the table above, for resolving a class carried by NAME back to
        its builtin id so the id-keyed hierarchy walks work on it (#3022). Cold

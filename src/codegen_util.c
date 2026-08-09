@@ -877,6 +877,8 @@ int builtin_class_id(const char *name) {
     if (sp_streq(name, "Thread::ConditionVariable")) return -178;
     if (sp_streq(name, "Fiber"))             return -179;
   }
+  /* `p MatchData` named a class every match already answers to #class (#3639) */
+  if (sp_streq(name, "MatchData")) return -180;
   return 0;
 }
 const char *c_type_name(TyKind t) {
