@@ -334,7 +334,24 @@ sp_StrArray *sp_str_rpartition(const char *s, const char *sep) {
 /* String#lines(sep) / #each_line(sep): segments each keeping the separator
    (the trailing fragment keeps whatever remains). An empty sep is CRuby's
    "paragraph mode" -- not supported here; callers gate on a non-empty sep. */
-sp_StrArray*sp_str_lines_sep(const char*s,const char*sep){SP_GC_ROOT_STR(s);SP_GC_ROOT_STR(sep);sp_StrArray*a=sp_StrArray_new();SP_GC_ROOT(a);if(!s||*s==0)return a;size_t sl=sep?strlen(sep):0;if(sl==0){sp_StrArray_push(a,sp_str_dup(s));return a;}const char*end=s+strlen(s);const char*p=s;while(p<end){const char*hit=strstr(p,sep);size_t n=hit?(size_t)(hit-p)+sl:(size_t)(end-p);char*r=sp_str_alloc_raw(n+1);memcpy(r,p,n);r[n]=0;sp_StrArray_push(a,r);if(!hit)break;p=hit+sl;}return a;}
+/* lines(sep, chomp: true): the separator's run is trimmed off each piece
+   (#3546) */
+sp_StrArray*sp_str_lines_sep_chomp(const char*s,const char*sep){SP_GC_ROOT_STR(s);SP_GC_ROOT_STR(sep);
+  sp_StrArray*src=sp_str_lines_sep(s,sep);SP_GC_ROOT(src);
+  sp_StrArray*a=sp_StrArray_new();SP_GC_ROOT(a);
+  size_t sl=sep?strlen(sep):0;
+  for(mrb_int i=0;i<sp_StrArray_length(src);i++){
+    const char*e=sp_StrArray_get(src,i);size_t n=e?strlen(e):0;
+    if(sl==0){while(n>0&&e[n-1]=='\n')n--;}
+    else if(n>=sl&&memcmp(e+n-sl,sep,sl)==0)n-=sl;
+    char*r=sp_str_alloc_raw(n+1);memcpy(r,e,n);r[n]=0;sp_str_set_len(r,n);
+    sp_StrArray_push(a,r);
+  }
+  return a;
+}
+sp_StrArray*sp_str_lines_sep(const char*s,const char*sep){SP_GC_ROOT_STR(s);SP_GC_ROOT_STR(sep);sp_StrArray*a=sp_StrArray_new();SP_GC_ROOT(a);if(!s||*s==0)return a;size_t sl=sep?strlen(sep):0;/* an empty separator is CRuby's paragraph mode: split after each run of two
+   or more newlines, keeping the run with the paragraph (#3546) */
+if(sl==0){const char*end0=s+strlen(s);const char*p0=s;while(p0<end0){const char*q=p0;while(q<end0){if(*q=='\n'){const char*b1=q;while(b1<end0&&*b1=='\n')b1++;if(b1-q>=2)break;q=b1;continue;}q++;}size_t n0=(q>=end0)?(size_t)(end0-p0):(size_t)(q-p0)+2;char*r0=sp_str_alloc_raw(n0+1);memcpy(r0,p0,n0);r0[n0]=0;sp_str_set_len(r0,n0);sp_StrArray_push(a,r0);if(q>=end0)break;{const char*b2=q;while(b2<end0&&*b2=='\n')b2++;p0=b2;}}return a;}const char*end=s+strlen(s);const char*p=s;while(p<end){const char*hit=strstr(p,sep);size_t n=hit?(size_t)(hit-p)+sl:(size_t)(end-p);char*r=sp_str_alloc_raw(n+1);memcpy(r,p,n);r[n]=0;sp_StrArray_push(a,r);if(!hit)break;p=hit+sl;}return a;}
 sp_StrArray*sp_str_lines(const char*s){sp_StrArray*a=sp_StrArray_new();if(*s==0)return a;SP_GC_ROOT(a);SP_GC_ROOT_STR(s);const char*end=s+strlen(s);const char*p=s;while(p<end){const char*nl=strchr(p,'\n');size_t n=nl?(size_t)(nl-p+1):(size_t)(end-p);char*r=sp_str_alloc_raw(n+1);memcpy(r,p,n);r[n]=0;sp_StrArray_push(a,r);if(!nl)break;p=nl+1;}return a;}
 sp_StrArray*sp_str_lines_chomp(const char*s){sp_StrArray*a=sp_StrArray_new();if(*s==0)return a;SP_GC_ROOT(a);SP_GC_ROOT_STR(s);const char*end=s+strlen(s);const char*p=s;while(p<end){const char*nl=strchr(p,'\n');size_t n=nl?(size_t)(nl-p):(size_t)(end-p);if(nl&&nl>s&&nl[-1]=='\r')n--;char*r=sp_str_alloc_raw(n+1);memcpy(r,p,n);r[n]=0;sp_StrArray_push(a,r);if(!nl)break;p=nl+1;}return a;}
 /* String#byteslice(start,len): byte-indexed (unlike the char-indexed

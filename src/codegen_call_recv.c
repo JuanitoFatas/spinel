@@ -6177,6 +6177,15 @@ int emit_scalar_call(Compiler *c, int id, Buf *b) {
       else if (sp_streq(name, "lines") && argc == 1 && comp_ntype(c, argv[0]) == TY_STRING) {
         buf_printf(b, "sp_str_lines_sep(%s, ", r); emit_expr(c, argv[0], b); buf_puts(b, ")");
       }
+      /* lines(sep, chomp: true): a separator and the keyword together (#3546) */
+      else if (sp_streq(name, "lines") && argc == 2 &&
+               comp_ntype(c, argv[0]) == TY_STRING && nt_type(nt, argv[1]) &&
+               sp_streq(nt_type(nt, argv[1]), "KeywordHashNode")) {
+        int chv = struct_kwarg_value(c, argv[1], "chomp");
+        int isc = (chv >= 0 && nt_type(nt, chv) && sp_streq(nt_type(nt, chv), "TrueNode"));
+        buf_printf(b, "%s(%s, ", isc ? "sp_str_lines_sep_chomp" : "sp_str_lines_sep", r);
+        emit_expr(c, argv[0], b); buf_puts(b, ")");
+      }
       else if (sp_streq(name, "lines") && argc == 1 && nt_type(nt, argv[0]) &&
                sp_streq(nt_type(nt, argv[0]), "KeywordHashNode")) {
         int chomp_v = struct_kwarg_value(c, argv[0], "chomp");

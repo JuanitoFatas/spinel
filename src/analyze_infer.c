@@ -5707,6 +5707,9 @@ else {
       return TY_ENUMERATOR;  /* each_line(sep) blockless */
     if (sp_streq(name, "lines") && argc == 1 && infer_type(c, argv[0]) == TY_STRING)
       return TY_STR_ARRAY;   /* lines(sep) */
+    if (sp_streq(name, "lines") && argc == 2 && infer_type(c, argv[0]) == TY_STRING &&
+        nt_type(nt, argv[1]) && sp_streq(nt_type(nt, argv[1]), "KeywordHashNode"))
+      return TY_STR_ARRAY;   /* lines(sep, chomp: true) (#3546) */
     if (sp_streq(name, "each_char") || sp_streq(name, "each_line") || sp_streq(name, "each_byte")) return TY_STRING;
     { int blk = nt_ref(nt, id, "block");
       if (blk >= 0 && (sp_streq(name, "chars") || sp_streq(name, "lines"))) return TY_STRING;

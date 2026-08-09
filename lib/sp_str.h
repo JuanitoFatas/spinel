@@ -94,6 +94,7 @@ sp_StrArray *sp_str_partition(const char *s, const char *sep);
 sp_StrArray *sp_str_rpartition(const char *s, const char *sep);
 sp_StrArray*sp_str_lines(const char*s);
 sp_StrArray*sp_str_lines_sep(const char*s,const char*sep);
+sp_StrArray*sp_str_lines_sep_chomp(const char*s,const char*sep);
 sp_StrArray*sp_str_lines_chomp(const char*s);
 const char*sp_str_byteslice(const char*s,mrb_int start,mrb_int len);
 const char*sp_str_byteslice1(const char*s,mrb_int i);
