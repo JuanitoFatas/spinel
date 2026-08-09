@@ -1671,6 +1671,13 @@ int emit_array_call(Compiler *c, int id, Buf *b) {
           for (int j = 0; j < tw_bn - 1; j++) emit_stmt(c, tw_bb[j], g_pre, g_indent + 1);
           int sv = g_indent; g_indent = g_indent + 1;
           Buf cb = expr_buf(c, tw_bb[tw_bn - 1]); g_indent = sv;
+          /* a boxed block value is a struct, so `!(rbval)` is not valid C;
+             Ruby's truthiness is what the condition wants anyway */
+          if (comp_ntype(c, tw_bb[tw_bn - 1]) == TY_POLY) {
+            Buf tb2; memset(&tb2, 0, sizeof tb2);
+            buf_printf(&tb2, "sp_poly_truthy(%s)", cb.p ? cb.p : "sp_box_nil()");
+            free(cb.p); cb = tb2;
+          }
           if (is_drop) {
             emit_indent(g_pre, g_indent + 1);
             buf_printf(g_pre, "if (_dropping && !(%s)) _dropping = 0;\n", cb.p ? cb.p : "0");
