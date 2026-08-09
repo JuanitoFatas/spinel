@@ -3616,6 +3616,14 @@ static int emit_poly_builtin_method(Compiler *c, int id, Buf *b) {
      receiver widened to poly late in the fixpoint): coerce the boxed
      result so the C assignment target type still matches, with nil
      mapping to the scalar's nil representation. */
+  /* pop(n) / shift(n): n elements, as an Array (#3613) */
+  if ((sp_streq(name, "pop") || sp_streq(name, "shift")) && argc == 1) {
+    buf_printf(b, "sp_poly_pop_n(");
+    emit_expr(c, recv, b); buf_puts(b, ", ");
+    emit_int_expr(c, argv[0], b);
+    buf_printf(b, ", %d)", sp_streq(name, "shift") ? 1 : 0);
+    return 1;
+  }
   if ((sp_streq(name, "pop") || sp_streq(name, "shift")) && argc == 0) {
     TyKind want = comp_ntype(c, id);
     int tv = 0;
@@ -17885,11 +17893,29 @@ else { memcpy(dir, sf, n); dir[n] = 0; } }
      methods directly against an empty (poly) array. */
   if (recv >= 0 && rt == TY_UNKNOWN) {
     const char *rty = nt_type(nt, recv);
+    int empty_recv = 0;
     if (rty && sp_streq(rty, "ArrayNode")) {
       int en = 0; nt_arr(nt, recv, "elements", &en);
-      if (en == 0) {
+      empty_recv = (en == 0);
+    }
+    /* an argument-less `Array.new` is the same empty array, and carries the
+       same unknown element type (#3613) */
+    else if (rty && sp_streq(rty, "CallNode") && nt_str(nt, recv, "name") &&
+             sp_streq(nt_str(nt, recv, "name"), "new") && nt_ref(nt, recv, "block") < 0) {
+      int arn = nt_ref(nt, recv, "receiver");
+      int aa = nt_ref(nt, recv, "arguments");
+      int aac = 0; if (aa >= 0) nt_arr(nt, aa, "arguments", &aac);
+      if (aac == 0 && arn >= 0 && nt_type(nt, arn) &&
+          sp_streq(nt_type(nt, arn), "ConstantReadNode") &&
+          nt_str(nt, arn, "name") && sp_streq(nt_str(nt, arn, "name"), "Array"))
+        empty_recv = 1;
+    }
+    {
+      if (empty_recv) {
         if ((sp_streq(name, "length") || sp_streq(name, "size") || sp_streq(name, "count")) && argc == 0) { buf_puts(b, "0"); return; }
         if (sp_streq(name, "empty?") && argc == 0) { buf_puts(b, "1"); return; }
+        if (sp_streq(name, "frozen?") && argc == 0) { buf_puts(b, "0"); return; }
+        if (sp_streq(name, "class") && argc == 0) { buf_puts(b, "((sp_Class){(mrb_int)-1, SPL(\"Array\")})"); return; }
         /* first/last type poly (boxed nil, printable as nil); the rest keep
            the historical int-nil sentinel pending their own nil arms */
         if ((sp_streq(name, "first") || sp_streq(name, "last")) && argc == 0) { buf_puts(b, "sp_box_nil()"); return; }

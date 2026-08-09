@@ -4803,6 +4803,22 @@ static sp_RbVal sp_poly_clear(sp_RbVal v) {
    parameter, e.g. one call site passes a StrArray and another a PolyArray):
    mutate the underlying container in place, dispatching on its runtime kind,
    and return the removed element boxed (nil when empty). */
+/* Array#pop(n) / #shift(n) on a boxed array: the last (or first) n elements,
+   removed, as an Array (#3613). */
+static sp_RbVal sp_poly_pop(sp_RbVal v);
+static sp_RbVal sp_poly_shift(sp_RbVal v);
+static sp_PolyArray *sp_poly_pop_n(sp_RbVal v, mrb_int n, int from_front) {
+  SP_GC_ROOT_RBVAL(v);
+  if (n < 0) sp_raise_cls("ArgumentError", "negative array size");
+  sp_PolyArray *out = sp_PolyArray_new(); SP_GC_ROOT(out);
+  for (mrb_int i = 0; i < n; i++) {
+    sp_RbVal e = from_front ? sp_poly_shift(v) : sp_poly_pop(v);
+    if (e.tag == SP_TAG_NIL && sp_poly_length(v) == 0) break;
+    sp_PolyArray_push(out, e);
+  }
+  if (!from_front) sp_PolyArray_reverse_bang(out);
+  return out;
+}
 static sp_RbVal sp_poly_pop(sp_RbVal v) {
   if (v.tag == SP_TAG_OBJ && v.v.p) {
     switch (v.cls_id) {

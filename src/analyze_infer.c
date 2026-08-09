@@ -2215,6 +2215,17 @@ TyKind infer_call(Compiler *c, int id) {
       int en0 = 0;
       if (sp_streq(rty0, "ArrayNode")) { nt_arr(nt, recv, "elements", &en0); if (!en0) return TY_CLASS; }
       if (sp_streq(rty0, "HashNode") || sp_streq(rty0, "KeywordHashNode")) { nt_arr(nt, recv, "elements", &en0); if (!en0) return TY_CLASS; }
+      /* an argument-less `Array.new` is that same empty array (#3613) */
+      if (sp_streq(rty0, "CallNode") && nt_str(nt, recv, "name") &&
+          sp_streq(nt_str(nt, recv, "name"), "new") && nt_ref(nt, recv, "block") < 0) {
+        int arn0 = nt_ref(nt, recv, "receiver");
+        int aa0 = nt_ref(nt, recv, "arguments"); int aac0 = 0;
+        if (aa0 >= 0) nt_arr(nt, aa0, "arguments", &aac0);
+        if (aac0 == 0 && arn0 >= 0 && nt_type(nt, arn0) &&
+            sp_streq(nt_type(nt, arn0), "ConstantReadNode") &&
+            nt_str(nt, arn0, "name") && sp_streq(nt_str(nt, arn0, "name"), "Array"))
+          return TY_CLASS;
+      }
       /* top-level `self.class`: self is main (an Object) -> Object (#3035) */
       if (sp_streq(rty0, "SelfNode")) {
         Scope *ss = comp_scope_of(c, id);
@@ -2838,6 +2849,12 @@ else {
         sp_streq(name, "name") || sp_streq(name, "name=")) return TY_POLY;
     if (sp_streq(name, "key?") || sp_streq(name, "equal?")) return TY_BOOL;
   }
+
+  /* Array#pop(n) / #shift(n) on a boxed array answer an Array of the removed
+     elements (#3613) */
+  if (recv >= 0 && rt == TY_POLY && argc == 1 &&
+      (sp_streq(name, "pop") || sp_streq(name, "shift")))
+    return TY_POLY_ARRAY;
 
   /* TY_QUEUE instance methods */
   if (recv >= 0 && rt == TY_QUEUE) {
