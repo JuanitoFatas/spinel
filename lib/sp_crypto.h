@@ -74,8 +74,16 @@ const char *sp_crypto_b64url_encode(const char *src);
 const char *sp_crypto_b64url_decode(const char *src);
 
 /* PBKDF2-HMAC-SHA256(password, salt, iters) -> 43-char unpadded
- * base64url (32 bytes derived; dkLen > 32 not supported). */
+ * base64url (32 bytes derived -- the one-block case). */
 const char *sp_crypto_pbkdf2_sha256_b64url(const char *password, const char *salt, int iters);
+
+/* Same, with an explicit derived length in BYTES (clamped to [1, 64]);
+ * 64 bytes -> 86 unpadded b64url chars. Rails derives its signed-cookie
+ * and signed-id keys at dkLen 64 (ActiveSupport::KeyGenerator#
+ * generate_key's default key_size), so a spinel program that reads or
+ * mints one needs the two-block form. */
+const char *sp_crypto_pbkdf2_sha256_b64url_len(const char *password, const char *salt,
+                                               int iters, int dklen);
 
 /* CSPRNG: nbytes random bytes (clamped to [1, 64]) as unpadded
  * base64url. Uses arc4random_buf on BSD/macOS; on Linux/POSIX
