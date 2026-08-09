@@ -2292,8 +2292,21 @@ static int emit_complex_rational_call(Compiler *c, int id, Buf *b) {
        reading the string pointer as an integer. */
     if (argc == 1 && comp_ntype(c, argv[0]) == TY_STRING) {
       Buf sb = expr_buf(c, argv[0]);
-      buf_printf(b, "sp_str_to_r(%s)", sb.p ? sb.p : "\"\"");
+      buf_printf(b, "sp_str_to_r_strict(%s)", sb.p ? sb.p : "\"\"");
       free(sb.p);
+      return 1;
+    }
+    /* two String arguments are the quotient of the two parsed values (#3720) */
+    if (argc == 2 && comp_ntype(c, argv[0]) == TY_STRING && comp_ntype(c, argv[1]) == TY_STRING) {
+      buf_puts(b, "sp_rational_div(sp_str_to_r_strict("); emit_expr(c, argv[0], b);
+      buf_puts(b, "), sp_str_to_r_strict("); emit_expr(c, argv[1], b); buf_puts(b, "))");
+      return 1;
+    }
+    /* nil has no rational reading (#3720) */
+    if (argc == 1 && comp_ntype(c, argv[0]) == TY_NIL) {
+      buf_puts(b, "((void)("); emit_expr(c, argv[0], b);
+      buf_puts(b, "), sp_raise_cls(\"TypeError\", \"can't convert nil into Rational\"),"
+                  " sp_rational_new(0, 1))");
       return 1;
     }
     /* Rational(Float) is the exact value of the double (5/2 for 2.5), not the

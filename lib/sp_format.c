@@ -230,6 +230,47 @@ sp_Rational sp_str_to_r(const char *s) {SP_GC_ROOT_STR(s);
   if (!any) return sp_rational_new(0, 1);
   return sp_rational_new(sign * num, den);
 }
+/* Kernel#Rational(String): unlike String#to_r, the whole string must be a
+   rational literal -- trailing text, an empty string and a second `/` are all
+   ArgumentError, and an exponent is honoured (#3720). */
+sp_Rational sp_str_to_r_strict(const char *s) {SP_GC_ROOT_STR(s);
+  const char *p = s;
+  if (!p) sp_raise_cls("TypeError", "can't convert nil into Rational");
+  while (*p == ' ' || *p == '\t' || *p == '\n' || *p == '\r' || *p == '\f' || *p == '\v') p++;
+  mrb_int sign = 1;
+  if (*p == '+') p++;
+  else if (*p == '-') { sign = -1; p++; }
+  mrb_int num = 0, den = 1;
+  int any = 0;
+  while ((*p >= '0' && *p <= '9') || *p == '_') { if (*p != '_') { num = num * 10 + (*p - '0'); any = 1; } p++; }
+  if (*p == '.') {
+    p++;
+    while ((*p >= '0' && *p <= '9') || *p == '_') { if (*p != '_') { num = num * 10 + (*p - '0'); den *= 10; any = 1; } p++; }
+  }
+  if (!any) sp_raise_cls("ArgumentError", sp_sprintf("invalid value for Rational(): \"%s\"", s));
+  if (*p == 'e' || *p == 'E') {
+    const char *q = p + 1;
+    mrb_int esign = 1;
+    if (*q == '+') q++; else if (*q == '-') { esign = -1; q++; }
+    mrb_int ev = 0; int anye = 0;
+    while (*q >= '0' && *q <= '9') { ev = ev * 10 + (*q - '0'); q++; anye = 1; }
+    if (anye) {
+      for (mrb_int k = 0; k < ev; k++) { if (esign > 0) num *= 10; else den *= 10; }
+      p = q;
+    }
+  }
+  if (*p == '/') {
+    p++;
+    mrb_int d2 = 0; int anyd = 0;
+    while ((*p >= '0' && *p <= '9') || *p == '_') { if (*p != '_') { d2 = d2 * 10 + (*p - '0'); anyd = 1; } p++; }
+    if (!anyd) sp_raise_cls("ArgumentError", sp_sprintf("invalid value for Rational(): \"%s\"", s));
+    if (d2 == 0) sp_raise_cls("ZeroDivisionError", "divided by 0");
+    den *= d2;
+  }
+  while (*p == ' ' || *p == '\t' || *p == '\n' || *p == '\r' || *p == '\f' || *p == '\v') p++;
+  if (*p) sp_raise_cls("ArgumentError", sp_sprintf("invalid value for Rational(): \"%s\"", s));
+  return sp_rational_new(sign * num, den);
+}
 #if INTPTR_MAX > 0x7fffffff
 typedef __int128 sp_rat_wide;
 #else
