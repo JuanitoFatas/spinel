@@ -4731,6 +4731,11 @@ else {
       /* poly.arity on a Method read out of a container: the stamped arity, an
          Integer (#3231). */
       if (argc == 0 && sp_streq(name, "arity")) return TY_INT;
+      /* the rest of the Proc face on a value read out of a container (#3685) */
+      if (argc == 0 && sp_streq(name, "lambda?")) return TY_BOOL;
+      if (argc == 0 && sp_streq(name, "parameters")) return TY_POLY_ARRAY;
+      if (argc == 0 && sp_streq(name, "curry")) return TY_CURRY;
+      if (argc == 0 && sp_streq(name, "to_proc")) return TY_POLY;
       /* String transforms on a boxed value: emit_poly_call routes these
          through sp_poly_to_s and re-boxes the result, so the value stays
          poly (mirrors the codegen list in codegen_call_recv.c). */

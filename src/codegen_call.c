@@ -3420,6 +3420,43 @@ static int emit_poly_builtin_method(Compiler *c, int id, Buf *b) {
                tv, tv, tv, tv);
     return 1;
   }
+  /* the same reads for a Proc carried in a poly slot -- one read out of an
+     Array or Hash had no arm for either (#3685) */
+  if (sp_streq(name, "lambda?") && argc == 0) {
+    int tv = ++g_tmp;
+    buf_printf(b, "({ sp_RbVal _t%d = ", tv); emit_expr(c, recv, b);
+    buf_printf(b, "; _t%d.tag == SP_TAG_OBJ && _t%d.cls_id == SP_BUILTIN_PROC"
+                  " ? (mrb_bool)((sp_Proc *)_t%d.v.p)->lambda_p"
+                  " : (mrb_bool)(sp_raise_nomethod(sp_nomethod_msg(\"lambda?\", _t%d)), 0); })",
+               tv, tv, tv, tv);
+    return 1;
+  }
+  if (sp_streq(name, "to_proc") && argc == 0) {
+    int tv = ++g_tmp;
+    buf_printf(b, "({ sp_RbVal _t%d = ", tv); emit_expr(c, recv, b);
+    buf_printf(b, "; _t%d.tag == SP_TAG_OBJ && _t%d.cls_id == SP_BUILTIN_PROC"
+                  " ? _t%d : (sp_raise_nomethod(sp_nomethod_msg(\"to_proc\", _t%d)), sp_box_nil()); })",
+               tv, tv, tv, tv);
+    return 1;
+  }
+  if (sp_streq(name, "parameters") && argc == 0) {
+    int tv = ++g_tmp;
+    buf_printf(b, "({ sp_RbVal _t%d = ", tv); emit_expr(c, recv, b);
+    buf_printf(b, "; _t%d.tag == SP_TAG_OBJ && _t%d.cls_id == SP_BUILTIN_PROC"
+                  " ? sp_proc_parameters_ids((sp_Proc *)_t%d.v.p, -1, (sp_sym)%d, (sp_sym)%d)"
+                  " : (sp_PolyArray *)(sp_raise_nomethod(sp_nomethod_msg(\"parameters\", _t%d)), (void *)0); })",
+               tv, tv, tv, comp_sym_intern(c, "req"), comp_sym_intern(c, "opt"), tv);
+    return 1;
+  }
+  if (sp_streq(name, "curry") && argc == 0) {
+    int tv = ++g_tmp;
+    buf_printf(b, "({ sp_RbVal _t%d = ", tv); emit_expr(c, recv, b);
+    buf_printf(b, "; _t%d.tag == SP_TAG_OBJ && _t%d.cls_id == SP_BUILTIN_PROC"
+                  " ? sp_curry_new((sp_Proc *)_t%d.v.p)"
+                  " : (sp_Curry *)(sp_raise_nomethod(sp_nomethod_msg(\"curry\", _t%d)), (void *)0); })",
+               tv, tv, tv, tv);
+    return 1;
+  }
   /* Integer#to_s(base): base-N string of a poly integer. */
   if (sp_streq(name, "to_s") && argc == 1) {
     int tv = ++g_tmp;
