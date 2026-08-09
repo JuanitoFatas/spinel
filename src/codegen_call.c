@@ -13730,6 +13730,15 @@ else { memcpy(dir, sf, n); dir[n] = 0; } }
       nt_str(nt, recv, "name") && sp_streq(nt_str(nt, recv, "name"), "Regexp")) {
     if (nt_type(nt, argv[0]) && sp_streq(nt_type(nt, argv[0]), "RegularExpressionNode"))
       buf_puts(b, re_src_has_backref(nt_str(nt, argv[0], "unescaped")) ? "FALSE" : "TRUE");
+    /* a pattern reached through a variable, or given as a String source, is
+       inspected at run time rather than assumed linear (#3684) */
+    else if (comp_ntype(c, argv[0]) == TY_STRING) {
+      buf_puts(b, "sp_re_src_linear_time("); emit_expr(c, argv[0], b); buf_puts(b, ")");
+    }
+    else if (comp_ntype(c, argv[0]) == TY_REGEX) {
+      buf_puts(b, "sp_re_src_linear_time(sp_re_source((void *)(");
+      emit_expr(c, argv[0], b); buf_puts(b, ")))");
+    }
     else { buf_puts(b, "((void)("); emit_expr(c, argv[0], b); buf_puts(b, "), TRUE)"); }
     return;
   }

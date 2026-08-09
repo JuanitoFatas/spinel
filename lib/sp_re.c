@@ -826,6 +826,25 @@ const char *sp_MatchData_aref_name(sp_MatchData *m, const char *name) {SP_GC_ROO
 }
 /* `md.names`: the capture names in declaration order. */
 /* Regexp#names on the pattern itself: named groups in declaration order. */
+/* Regexp.linear_time?: a backreference (\1..\9, \k<name>, \g<name>) defeats
+   the linear-time matcher. Inside a character class those are not
+   backreferences, so track class membership (#3684). */
+mrb_bool sp_re_src_linear_time(const char *src) {SP_GC_ROOT_STR(src);
+  if (!src) return TRUE;
+  int in_class = 0;
+  for (const char *s = src; *s; s++) {
+    if (*s == '\\' && s[1]) {
+      char n = s[1];
+      if (!in_class && ((n >= '1' && n <= '9') || n == 'k' || n == 'g')) return FALSE;
+      s++;
+      continue;
+    }
+    if (in_class) { if (*s == ']') in_class = 0; }
+    else if (*s == '[') in_class = 1;
+  }
+  return TRUE;
+}
+
 sp_StrArray *sp_Regexp_names(const mrb_regexp_pattern *pat) {
   sp_StrArray *a = sp_StrArray_new();
   SP_GC_ROOT(a);
