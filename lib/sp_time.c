@@ -526,6 +526,9 @@ const char *sp_time_iso8601_frac(sp_Time t, int64_t digits) {
 }
 
 const char *sp_time_zone(sp_Time t) {
+  /* a fixed-offset Time has no zone NAME, and CRuby answers nil for it rather
+     than the empty string the broken-down form leaves behind (#3701) */
+  if (t.is_utc == 2) return NULL;
   char buf[8];
   struct tm b;
   sp_time_vtm(t, &b, NULL, buf);
