@@ -4396,11 +4396,21 @@ static sp_SymPolyHash *sp_md_named_captures_sym(sp_MatchData *m) {
    empty hash right away when more keys are asked for than exist (#3015). */
 static sp_SymPolyHash *sp_md_deconstruct_keys(sp_MatchData *m, sp_RbVal keys) {
   if (keys.tag == SP_TAG_NIL) return sp_md_named_captures_sym(m);
+  /* only an Array of Symbols selects keys; anything else is a TypeError (#3643) */
+  if (!(keys.tag == SP_TAG_OBJ && sp_poly_is_array_kind(keys.cls_id)))
+    sp_raise_cls("TypeError", sp_sprintf("wrong argument type %s (expected Array or nil)",
+                                         sp_poly_class_name(keys)));
   sp_SymPolyHash *h = sp_SymPolyHash_new();
   if (!m) return h;
   SP_GC_ROOT(h);
   int nnamed = re_num_named(m->pat);
   mrb_int klen = sp_poly_length(keys);
+  for (mrb_int i = 0; i < klen; i++) {
+    sp_RbVal ck = sp_poly_arr_get(keys, i);
+    if (ck.tag != SP_TAG_SYM)
+      sp_raise_cls("TypeError", sp_sprintf("wrong argument type %s (expected Symbol)",
+                                           sp_poly_class_name(ck)));
+  }
   if (klen > nnamed) return h;
   for (mrb_int i = 0; i < klen; i++) {
     sp_RbVal k = sp_poly_arr_get(keys, i);
