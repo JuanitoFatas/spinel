@@ -650,7 +650,10 @@ else {
         c == '-' || c == ' ' || c == '\t' || c == '\n' || c == '\r' ||
         c == '\f' || c == '\v') {
       buf[j++] = '\\';
-      buf[j++] = (char)c;
+      /* a control character escapes to its LETTER form ("\n", not a backslash
+         followed by a real newline), which is what CRuby produces (#3635) */
+      buf[j++] = c == '\n' ? 'n' : c == '\t' ? 't' : c == '\r' ? 'r'
+               : c == '\f' ? 'f' : c == '\v' ? 'v' : (char)c;
     }
 else {
       buf[j++] = (char)c;
