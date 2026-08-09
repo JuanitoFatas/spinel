@@ -28,8 +28,27 @@ typedef struct {
   uint16_t num_named;
   mrb_bool has_backref;
   mrb_bool needs_backtrack;
+  /* Ruby stops capturing plain `(...)` groups once the pattern names one, so
+     the whole source is scanned for a name before compiling (#3678). */
+  mrb_bool has_named_group;
   char *stripped;           /* allocated buffer for x-mode preprocessing */
 } re_compiler;
+
+/* Does the pattern source declare a named group -- `(?<name>` or `(?'name'`,
+   as opposed to the lookbehinds `(?<=` / `(?<!`? Character classes are skipped
+   so a bracketed `(` cannot open a group (#3678). */
+static mrb_bool re_src_has_named_group(const char *p, const char *end) {
+  int in_class = 0;
+  for (; p < end; p++) {
+    if (*p == '\\') { p++; continue; }
+    if (in_class) { if (*p == ']') in_class = 0; continue; }
+    if (*p == '[') { in_class = 1; continue; }
+    if (*p != '(' || p + 2 >= end || p[1] != '?') continue;
+    if (p[2] == '\'') return TRUE;
+    if (p[2] == '<' && p + 3 < end && p[3] != '=' && p[3] != '!') return TRUE;
+  }
+  return FALSE;
+}
 
 static void compile_alt(re_compiler *c);  /* forward */
 
@@ -866,6 +885,8 @@ compile_atom(re_compiler *c)
         }
       }
 
+      /* a named group in the pattern turns off numbered capturing (#3678) */
+      if (capturing && !cap_name && c->has_named_group) capturing = FALSE;
       uint16_t group = 0;
       if (capturing) {
         if (c->num_captures >= RE_MAX_CAPTURES) {
@@ -1454,6 +1475,7 @@ re_compile(const char *pattern, mrb_int len, uint32_t flags)
   c.p = pattern;
   c.flags = flags;
   c.num_captures = 1;  /* group 0 = whole match */
+  c.has_named_group = re_src_has_named_group(c.p, c.src_end);
 
   /* group 0 start */
   emit(&c, RE_SAVE, 0, 0);
