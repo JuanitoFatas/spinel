@@ -833,7 +833,9 @@ sp_StrArray *sp_Regexp_names(const mrb_regexp_pattern *pat) {
   int n = re_num_named(pat);
   for (int i = 0; i < n; i++) {
     const char *nm = re_named_name(pat, i, NULL);
-    if (nm) sp_StrArray_push(a, sp_str_dup(nm));
+    /* a name reused across alternatives is one name, however many groups
+       carry it (#3682) */
+    if (nm && !sp_StrArray_include(a, nm)) sp_StrArray_push(a, sp_str_dup(nm));
   }
   return a;
 }
@@ -850,7 +852,7 @@ sp_StrArray *sp_MatchData_names(sp_MatchData *m) {SP_GC_ROOT(m);
   int n = re_num_named(m->pat);
   for (int i = 0; i < n; i++) {
     const char *nm = re_named_name(m->pat, i, NULL);
-    if (nm) sp_StrArray_push(a, sp_str_dup(nm));
+    if (nm && !sp_StrArray_include(a, nm)) sp_StrArray_push(a, sp_str_dup(nm));
   }
   return a;
 }
