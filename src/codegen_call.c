@@ -3444,8 +3444,12 @@ static int emit_poly_builtin_method(Compiler *c, int id, Buf *b) {
     buf_printf(b, "({ sp_RbVal _t%d = ", tv); emit_expr(c, recv, b);
     buf_printf(b, "; _t%d.tag == SP_TAG_OBJ && _t%d.cls_id == SP_BUILTIN_PROC"
                   " ? sp_proc_parameters_ids((sp_Proc *)_t%d.v.p, -1, (sp_sym)%d, (sp_sym)%d)"
+                  /* a Method read out of a container answers from its own
+                     rendering, which carries the parameter list (#3692) */
+                  " : _t%d.tag == SP_TAG_OBJ && _t%d.cls_id == SP_BUILTIN_METHOD"
+                  " ? sp_bm_parameters((sp_BoundMethod *)_t%d.v.p)"
                   " : (sp_PolyArray *)(sp_raise_nomethod(sp_nomethod_msg(\"parameters\", _t%d)), (void *)0); })",
-               tv, tv, tv, comp_sym_intern(c, "req"), comp_sym_intern(c, "opt"), tv);
+               tv, tv, tv, comp_sym_intern(c, "req"), comp_sym_intern(c, "opt"), tv, tv, tv, tv);
     return 1;
   }
   if (sp_streq(name, "curry") && argc == 0) {
@@ -9550,6 +9554,38 @@ void emit_call(Compiler *c, int id, Buf *b) {
     }
   }
 
+  /* A Method read out of a container widened to poly: answer from the
+     sp_BoundMethod itself, which carries everything the compile-time arms
+     read off the AST (#3692). */
+  if (recv >= 0 && comp_ntype(c, recv) == TY_POLY && argc == 0 &&
+      (sp_streq(name, "name") || sp_streq(name, "owner")) &&
+      /* #name also names a Class and an Encoding, #receiver an exception's:
+         take this arm only where the result slot is the boxed one those other
+         readings do not use */
+      comp_ntype(c, id) == TY_POLY &&
+      (!sp_streq(name, "name") || !sp_feature_required("ostruct"))) {
+    int has_user = 0;
+    for (int _k = 0; _k < c->nclasses && !has_user; _k++)
+      if (comp_method_in_class(c, _k, name) >= 0) has_user = 1;
+    if (!has_user) {
+      int t = ++g_tmp;
+      buf_printf(b, "({ sp_RbVal _t%d = ", t); emit_expr(c, recv, b);
+      buf_printf(b, "; _t%d.cls_id == SP_BUILTIN_METHOD ? ", t);
+      if (sp_streq(name, "name"))
+        buf_printf(b, "sp_box_sym(sp_sym_intern(((sp_BoundMethod *)_t%d.v.p)->name))"
+                      " : _t%d.tag == SP_TAG_CLASS ? sp_box_str(sp_class_val_name(_t%d))"
+                      " : _t%d.tag == SP_TAG_ENCODING ? sp_box_str(_t%d.v.s)", t, t, t, t, t);
+      else if (sp_streq(name, "owner"))
+        buf_printf(b, "({ const char *_o = sp_bm_owner_name((sp_BoundMethod *)_t%d.v.p);"
+                      " _o ? sp_box_class_name(_o) : sp_box_nil(); })", t);
+
+
+      else
+        buf_printf(b, "sp_box_obj(sp_method_to_proc((sp_BoundMethod *)_t%d.v.p), SP_BUILTIN_PROC)", t);
+      buf_printf(b, " : (sp_raise_nomethod(sp_nomethod_msg(\"%s\", _t%d)), sp_box_nil()); })", name, t);
+      return;
+    }
+  }
   /* poly_val.arity — a Method read out of a container widened to poly. The
      arity was stamped onto the sp_BoundMethod at creation, so read it back
      (a non-Method poly here is a genuine NoMethodError, as before) (#3231). */

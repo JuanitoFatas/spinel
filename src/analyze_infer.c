@@ -708,6 +708,21 @@ int reduce_tail_from_acc(Compiler *c, int tail, const char *accp) {
   return 0;
 }
 
+/* Does the program build Method objects (`method(:x)` / `instance_method(:x)`)?
+   Only then can a boxed value answering #name be a Method (#3692). */
+static int an_program_builds_methods(Compiler *c) {
+  static const NodeTable *memo_nt = NULL; static int memo = 0;
+  if (memo_nt == c->nt) return memo;
+  memo_nt = c->nt; memo = 0;
+  for (int id = 0; id < c->nt->count && !memo; id++) {
+    if (nt_kind(c->nt, id) != NK_CallNode) continue;
+    const char *n = nt_str(c->nt, id, "name");
+    if (n && (sp_streq(n, "method") || sp_streq(n, "instance_method") ||
+              sp_streq(n, "unbind"))) memo = 1;
+  }
+  return memo;
+}
+
 /* Does this subtree pull from an external Enumerator (`e.next`)? Such a call
    is what ends a break-less `loop` with StopIteration (#3588). */
 static int an_subtree_calls_enum_next(Compiler *c, int root) {
@@ -1103,10 +1118,17 @@ TyKind infer_call(Compiler *c, int id) {
      (Base.subclasses / #ancestors hand back boxed classes, #2656). Only when no
      user class defines the method -- then it dispatches to that instead. */
   if (recv >= 0 && rt == TY_POLY && argc == 0 &&
-      ((sp_streq(name, "name") && !sp_feature_required("ostruct")) ||
-       sp_streq(name, "to_s") || sp_streq(name, "inspect")) &&
+      (sp_streq(name, "to_s") || sp_streq(name, "inspect")) &&
       !an_user_defines_method(c, name))
     return TY_STRING;
+  /* #name is a class name (a String) for a boxed Class and the method name (a
+     Symbol) for a boxed Method, so where the program builds Method objects at
+     all the static result is poly (#3692) */
+  if (recv >= 0 && rt == TY_POLY && argc == 0 && sp_streq(name, "name") &&
+      !sp_feature_required("ostruct") && !an_user_defines_method(c, name)) {
+    if (an_program_builds_methods(c)) return TY_POLY;
+    return TY_STRING;
+  }
   /* Complex#real / #imaginary on a poly value (a Complex read out of a
      container): the component is int- or float-classed at runtime, so the
      static result is poly. Without this the call typed nil and the boxed
@@ -2005,6 +2027,11 @@ TyKind infer_call(Compiler *c, int id) {
     return g_promote_mode ? TY_POLY : TY_INT;
   }
   if (recv >= 0 && rt == TY_METHOD && argc == 0 && sp_streq(name, "to_proc")) return TY_PROC;
+  /* A Method read out of a container answers these from its sp_BoundMethod;
+     the value is boxed, so the call is poly (#3692). */
+  if (recv >= 0 && argc == 0 && infer_type(c, recv) == TY_POLY &&
+      sp_streq(name, "owner") && !an_user_defines_or_reads(c, name))
+    return TY_POLY;
   /* Proc#to_proc is self (#3687) */
   if (recv >= 0 && rt == TY_PROC && argc == 0 && sp_streq(name, "to_proc")) return TY_PROC;
   /* Method/UnboundMethod reflection (#3247) */

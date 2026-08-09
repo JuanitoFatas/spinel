@@ -1669,6 +1669,7 @@ static const char *sp_poly_class_name(sp_RbVal v) {
         case SP_BUILTIN_OBJECT: return SPL("Object");   /* a bare Object.new instance */
         case SP_BUILTIN_BASIC_OBJECT: return SPL("BasicObject");
         case SP_BUILTIN_PROC: return SPL("Proc");
+        case SP_BUILTIN_METHOD: return SPL("Method");   /* (#3692) */
         case SP_BUILTIN_ENUMERATOR: return SPL("Enumerator");
         case SP_BUILTIN_IO: {
           /* the handle kind names the class, through the same authority the
@@ -6576,6 +6577,58 @@ SP_NORETURN SP_COLD void sp_raise_cls(const char *cls, const char *msg) {
      location CRuby prefixes is not carried through the raise machinery. */
   fprintf(stderr, "%s (%s)\n", (msg && *msg) ? msg : cls, cls); exit(1); }
 static void sp_raise(const char *msg) { sp_raise_cls("RuntimeError", msg); }
+
+/* A Method read back out of a container has only its sp_BoundMethod: #owner
+   comes from the compile-time rendering it carries ("#<Method: Owner#name>"),
+   and #receiver from the object's own class id (#3692). */
+static const char *sp_bm_owner_name(sp_BoundMethod *m) {
+  if (!m || !m->desc) return NULL;
+  const char *p = strstr(m->desc, ": ");
+  if (!p) return NULL;
+  p += 2;
+  const char *e = p;
+  while (*e && *e != '#' && *e != '.' && *e != '>') e++;
+  if (e == p) return NULL;
+  { size_t n = (size_t)(e - p);
+    char *r = sp_str_alloc(n);
+    memcpy(r, p, n); r[n] = 0;
+    return r; }
+}
+/* #parameters from the same rendering: `a`, `b=...`, `*r`, `**k` (#3692). */
+static sp_PolyArray *sp_bm_parameters(sp_BoundMethod *m) {
+  sp_PolyArray *out = sp_PolyArray_new(); SP_GC_ROOT(out);
+  if (!m || !m->desc) return out;
+  const char *o = strchr(m->desc, '(');
+  if (!o) return out;
+  const char *p = o + 1;
+  while (*p && *p != ')') {
+    while (*p == ' ' || *p == ',') p++;
+    if (!*p || *p == ')') break;
+    const char *kind = "req";
+    if (p[0] == '*' && p[1] == '*') { kind = "keyrest"; p += 2; }
+    else if (p[0] == '*') { kind = "rest"; p++; }
+    const char *ns = p;
+    while (*p && *p != ',' && *p != ')' && *p != '=') p++;
+    { size_t n = (size_t)(p - ns);
+      char nm[128]; if (n >= sizeof nm) n = sizeof nm - 1;
+      memcpy(nm, ns, n); nm[n] = 0;
+      if (*p == '=') { kind = "opt"; while (*p && *p != ',' && *p != ')') p++; }
+      if (n) {
+        sp_PolyArray *pair = sp_PolyArray_new(); SP_GC_ROOT(pair);
+        sp_PolyArray_push(pair, sp_box_sym(sp_sym_intern(kind)));
+        sp_PolyArray_push(pair, sp_box_sym(sp_sym_intern(nm)));
+        sp_PolyArray_push(out, sp_box_poly_array(pair));
+      }
+    }
+  }
+  return out;
+}
+static sp_RbVal sp_bm_receiver(sp_BoundMethod *m) {
+  if (!m || !m->self) return sp_box_nil();
+  if (m->self_kind == SP_BM_SELF_STR) return sp_box_str((const char *)m->self);
+  if (m->self_kind == SP_BM_SELF_OBJ) return sp_box_obj(m->self, *(mrb_int *)m->self);
+  return sp_box_nil();
+}
 
 /* Float#round(half: mode) where the mode is only known at run time (#3646).
    A nil mode is the default (round half up, away from zero). */
