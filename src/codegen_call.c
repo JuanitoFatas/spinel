@@ -13007,6 +13007,19 @@ else { memcpy(dir, sf, n); dir[n] = 0; } }
       buf_puts(b, ")))");
       return;
     }
+    /* #inspect on an exception subclass is "#<Class: message>"; the generic
+       object renderer had no idea and printed "#<Object>" (#3713) */
+    if (sp_streq(name, "inspect") && argc == 0 &&
+        comp_method_in_chain(c, ty_object_class(comp_ntype(c, recv)), "inspect", NULL) < 0) {
+      int ti = ++g_tmp;
+      buf_printf(b, "({ sp_Exception *_t%d = (sp_Exception *)(", ti); emit_expr(c, recv, b);
+      buf_printf(b, "); const char *_ecn%d = _t%d->cls_name ? _t%d->cls_name : \"Exception\";"
+                    " const char *_emg%d = sp_exc_message(_t%d);"
+                    " (!_emg%d || !*_emg%d) ? _ecn%d"
+                    " : sp_sprintf(\"#<%%s: %%s>\", _ecn%d, _emg%d); })",
+                 ti, ti, ti, ti, ti, ti, ti, ti, ti, ti);
+      return;
+    }
     if (sp_streq(name, "message") || sp_streq(name, "to_s") || sp_streq(name, "to_str")) {
       /* the class's OWN to_s answers whatever it answers -- a Symbol, say --
          so it cannot go through the message helpers, whose result is a string
@@ -13147,6 +13160,8 @@ else { memcpy(dir, sf, n); dir[n] = 0; } }
     if (sp_streq(name, "inspect") && argc == 0) {
       int ei = ++g_tmp;
       buf_printf(b, "({ sp_Exception *_t%d = (sp_Exception *)(", ei); emit_expr(c, recv, b);
+      /* an exception with no message of its own inspects as just the class
+         name, as CRuby's does (#3713) */
       buf_printf(b, "); _t%d ? sp_sprintf(\"#<%%s: %%s>\", sp_exc_class_name(_t%d), sp_exc_message(_t%d))"
                     " : (&(\"\\xff\" \"nil\")[1]); })", ei, ei, ei);
       return;
