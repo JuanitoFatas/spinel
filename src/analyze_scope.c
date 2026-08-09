@@ -799,6 +799,17 @@ void walk_scope(Compiler *c, int id, int scope_idx, int class_id) {
             const char *pnm = nt_str(c->nt, dm_reqs[p], "name");
             if (pnm) scope_add_param(dm_s, pnm, -1);
           }
+          /* a defined method takes its parameters with METHOD semantics, so a
+             defaulted one is a real parameter with that default, and the
+             required count is what a call must supply (#3752) */
+          dm_s->nrequired = dm_rn;
+          { int dm_on = 0;
+            const int *dm_opts = dm_pnode >= 0 ? nt_arr(c->nt, dm_pnode, "optionals", &dm_on) : NULL;
+            for (int p = 0; p < dm_on; p++) {
+              const char *pnm = nt_str(c->nt, dm_opts[p], "name");
+              int dv = nt_ref(c->nt, dm_opts[p], "value");
+              if (pnm) scope_add_param(dm_s, pnm, dv);
+            } }
           child = dm_new_idx;
         }
       }
