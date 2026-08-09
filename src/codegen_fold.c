@@ -3235,6 +3235,12 @@ int emit_reduce_block_expr(Compiler *c, int id, Buf *b) {
     else if (rbt == TY_POLY && acc_ty == TY_FLOAT) { buf_puts(&tail, "sp_poly_to_f("); emit_expr(c, bb[bn - 1], &tail); buf_puts(&tail, ")"); }
     else if (rbt == TY_POLY && acc_ty == TY_STRING) { buf_puts(&tail, "sp_poly_to_s("); emit_expr(c, bb[bn - 1], &tail); buf_puts(&tail, ")"); }
     else if (rbt == TY_POLY && acc_ty == TY_SYMBOL) { buf_puts(&tail, "(sp_sym)("); emit_expr(c, bb[bn - 1], &tail); buf_puts(&tail, ").v.i"); }
+    /* `acc + elem` on an array accumulator answers a BOXED array (the concat
+       runs through the poly adder), which cannot be assigned to the array
+       pointer the accumulator slot holds (#3609) */
+    else if (rbt == TY_POLY && acc_ty == TY_POLY_ARRAY) {
+      buf_puts(&tail, "sp_poly_to_poly_array("); emit_expr(c, bb[bn - 1], &tail); buf_puts(&tail, ")");
+    }
     /* The mirror: a concretely typed block value going back into a boxed
        accumulator has to be boxed. Without this a fold with no init over
        Hashes assigned a hash pointer into the sp_RbVal seed slot. */
