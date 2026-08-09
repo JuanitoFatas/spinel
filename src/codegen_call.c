@@ -28,7 +28,9 @@ static int parse_named_format(const char *fmt, Buf *rew, const char **names,
       /* the caller copies the name into a fixed char[128]; reject a longer name
          rather than silently truncating it to the wrong symbol. */
       if (n >= maxn || len >= 128) return -1;
-      names[n] = p + 2; name_len[n] = len; n++;
+      /* keep the delimiter with the name: CRuby's KeyError message quotes the
+         form the format used ("key{a}" vs "key<a>") */
+      names[n] = p + 1; name_len[n] = len + 2; n++;
       has_named = 1;
       p = e + 1;
       if (close == '}') { buf_puts(rew, "%s"); continue; }  /* %{name} -> to_s */
@@ -17592,10 +17594,14 @@ else { memcpy(dir, sf, n); dir[n] = 0; } }
         buf_printf(b, "; SP_GC_ROOT_RBVAL(_t%d); sp_PolyArray *_t%d = sp_PolyArray_new();"
                       " SP_GC_ROOT(_t%d); ", th, ta, ta);
         for (int k = 0; k < nref; k++) {
-          char nm[128];   /* parse_named_format guarantees name_len[k] < 128 */
-          memcpy(nm, names[k], (size_t)name_len[k]); nm[name_len[k]] = 0;
-          buf_printf(b, "sp_PolyArray_push(_t%d, sp_poly_get_sym(_t%d, (sp_sym)%d)); ",
+          char disp[132];  /* "{name}" / "<name>"; the name itself is < 128 */
+          memcpy(disp, names[k], (size_t)name_len[k]); disp[name_len[k]] = 0;
+          char nm[128];
+          memcpy(nm, disp + 1, (size_t)(name_len[k] - 2)); nm[name_len[k] - 2] = 0;
+          buf_printf(b, "sp_PolyArray_push(_t%d, sp_fmt_hash_fetch(_t%d, (sp_sym)%d, ",
                      ta, th, comp_sym_intern(c, nm));
+          emit_str_literal(b, disp);
+          buf_puts(b, ")); ");
         }
         buf_puts(b, "sp_str_format_polyarr(");
         emit_str_literal(b, rew.p ? rew.p : "");

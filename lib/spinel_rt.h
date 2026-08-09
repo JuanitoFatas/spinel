@@ -3521,7 +3521,9 @@ else {
       long long lv = 0;
       if (v.tag == SP_TAG_INT) lv = (long long)v.v.i;
       else if (v.tag == SP_TAG_FLT) lv = (long long)v.v.f;
-      else if (v.tag == SP_TAG_STR && v.v.s) lv = strtoll(v.v.s, NULL, 10);
+      /* a String argument converts the way Integer() does, so unparseable text
+         is an ArgumentError rather than a silent zero (#3554) */
+      else if (v.tag == SP_TAG_STR && v.v.s) lv = (long long)sp_str_to_i_strict(v.v.s);
       /* the non-decimal bases go through our own formatter: C's printf drops
          the '+' and ' ' flags on them and has no two's-complement form */
       if (conv == 'd' || conv == 'i') wn = snprintf(tmp, sizeof(tmp), fmt_use, lv);
@@ -5315,6 +5317,13 @@ static mrb_bool sp_poly_has_key(sp_RbVal recv, sp_RbVal key) {
     case SP_BUILTIN_INT_INT_HASH:   return key.tag == SP_TAG_INT && sp_IntIntHash_has_key((sp_IntIntHash *)recv.v.p, key.v.i);
     default: return FALSE;
   }
+}
+/* `"%{name}" % hash` / `"%<name>s" % hash`: a missing key is CRuby's KeyError,
+   not a nil that renders as the empty string (#3554). */
+static sp_RbVal sp_fmt_hash_fetch(sp_RbVal h, sp_sym k, const char *nm) {
+  if (!sp_poly_has_key(h, sp_box_sym(k)))
+    sp_raise_cls("KeyError", sp_sprintf("key%s not found", nm));
+  return sp_poly_index_poly(h, sp_box_sym(k));
 }
 
 /* Kind-dispatching `delete`, `dig` and `values_at` for a poly receiver. Each
