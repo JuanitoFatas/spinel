@@ -60,7 +60,9 @@ void emit_method_call(Compiler *c, int id, Buf *b) {
   const char *name = nt_str(nt, id, "name");
   int mi = comp_method_index(c, name);
   Scope *m = mi >= 0 ? &c->scopes[mi] : NULL;
-  buf_printf(b, "sp_%s(", mc(name));
+  /* a top-level alias resolves to the target's scope: emit ITS symbol, since
+     the alias has no function of its own (#3730) */
+  buf_printf(b, "sp_%s(", mc(m && m->name ? m->name : name));
   emit_args_filled(c, mi, nt_ref(nt, id, "arguments"), "", b);
   /* pass &block as sp_Proc * when the callee has a blk_param and isn't inlined */
   if (m && m->blk_param && m->blk_param[0] && !m->yields) {

@@ -1756,6 +1756,33 @@ void register_aliases(Compiler *c) {
     if (id == c->classes[ci].def_node) continue;
     register_aliases_body(c, &c->classes[ci], nt_ref(nt, id, "body"));
   }
+  /* Pass 3: the top level, whose methods live on the Toplevel pseudo-class.
+     It is not a ClassNode, so neither pass above saw it and a top-level
+     `alias b a` left b undefined (#3730). */
+  {
+    /* only when there IS one: creating the pseudo-class for every program
+       shifts every class index and is not free */
+    int have_tl_alias = 0;
+    for (int pid = 0; pid < nt->count && !have_tl_alias; pid++) {
+      const char *pty = nt_type(nt, pid);
+      if (!pty || !sp_streq(pty, "ProgramNode")) continue;
+      int sb = nt_ref(nt, pid, "statements");
+      int sn = 0; const int *ss = sb >= 0 ? nt_arr(nt, sb, "body", &sn) : NULL;
+      for (int k = 0; k < sn; k++) {
+        const char *sty2 = nt_type(nt, ss[k]);
+        if (sty2 && sp_streq(sty2, "AliasMethodNode")) { have_tl_alias = 1; break; }
+      }
+    }
+    if (have_tl_alias) {
+      int tl = comp_class_index(c, "Toplevel");
+      if (tl < 0) { comp_class_new(c, "Toplevel", -1); tl = c->nclasses - 1; }
+      for (int pid = 0; pid < nt->count; pid++) {
+        const char *pty = nt_type(nt, pid);
+        if (!pty || !sp_streq(pty, "ProgramNode")) continue;
+        register_aliases_body(c, &c->classes[tl], nt_ref(nt, pid, "statements"));
+      }
+    }
+  }
 }
 
 void register_undefs_body(Compiler *c, ClassInfo *cls, int body) {

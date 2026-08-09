@@ -1007,7 +1007,24 @@ int comp_lvw_next(const Compiler *c, int w) {
   return (w >= 0 && w < c->lvw_count) ? c->lvw_next[w] : -1;
 }
 
+static int comp_method_index_direct(Compiler *c, const char *name);
 int comp_method_index(Compiler *c, const char *name) {
+  int mi = comp_method_index_direct(c, name);
+  if (mi >= 0) return mi;
+  /* Only when nothing owns the name: a top-level `alias b a` registers on the
+     Toplevel pseudo-class, while the methods it names are free functions, so
+     the lookup has to consult it here or the alias resolves to nothing
+     (#3730). */
+  {
+    int tl = name ? comp_class_index(c, "Toplevel") : -1;
+    if (tl >= 0) {
+      const char *res = comp_resolve_alias(c, tl, name);
+      if (res && !sp_streq(res, name)) return comp_method_index_direct(c, res);
+    }
+  }
+  return -1;
+}
+static int comp_method_index_direct(Compiler *c, const char *name) {
   if (!name) return -1;
   if (!sm_frozen) {
     for (int s = 0; s < c->nscopes; s++)
