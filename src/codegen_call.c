@@ -5768,8 +5768,11 @@ static int emit_class_new_call(Compiler *c, int id, Buf *b) {
             else
               buf_printf(b, "sp_exc_new_sub(\"%s\", \"%s\", ", cn2, par);
             if (argc >= 1) {
+              /* an explicitly given message stays, even empty (#3713) */
+              buf_puts(b, "sp_exc_msg_given(");
               if (comp_ntype(c, argv[0]) == TY_STRING) emit_expr(c, argv[0], b);
               else { buf_puts(b, "sp_poly_to_s("); emit_boxed(c, argv[0], b); buf_puts(b, ")"); }
+              buf_puts(b, ")");
             }
             else buf_puts(b, "(&(\"\\xff\")[1])");
             buf_puts(b, c->classes[ci].nivars > 0 ? "))" : ")");
@@ -5980,8 +5983,12 @@ static int emit_class_new_call(Compiler *c, int id, Buf *b) {
         if (tex) buf_printf(b, "({ sp_Exception *_t%d = ", tex);
         buf_printf(b, "sp_exc_new(\"%s\", ", cn);
         if (argc >= 1) {
+          /* an explicitly given message stays, even empty; only a message-less
+             .new falls back to the class name (#3713) */
+          buf_puts(b, "sp_exc_msg_given(");
           if (comp_ntype(c, argv[0]) == TY_STRING) emit_expr(c, argv[0], b);
           else { buf_puts(b, "sp_poly_to_s("); emit_boxed(c, argv[0], b); buf_puts(b, ")"); }
+          buf_puts(b, ")");
         }
         else buf_puts(b, "(&(\"\\xff\")[1])");
         buf_puts(b, ")");
@@ -13379,8 +13386,11 @@ else { memcpy(dir, sf, n); dir[n] = 0; } }
       buf_printf(b, "({ sp_Exception *_t%d = (sp_Exception *)(", ei); emit_expr(c, recv, b);
       /* an exception with no message of its own inspects as just the class
          name, as CRuby's does (#3713) */
-      buf_printf(b, "); _t%d ? sp_sprintf(\"#<%%s: %%s>\", sp_exc_class_name(_t%d), sp_exc_message(_t%d))"
-                    " : (&(\"\\xff\" \"nil\")[1]); })", ei, ei, ei);
+      /* an empty message renders as the bare class name (#3713) */
+      buf_printf(b, "); _t%d ? (sp_exc_message(_t%d) && *sp_exc_message(_t%d)"
+                    " ? sp_sprintf(\"#<%%s: %%s>\", sp_exc_class_name(_t%d), sp_exc_message(_t%d))"
+                    " : sp_exc_class_name(_t%d))"
+                    " : (&(\"\\xff\" \"nil\")[1]); })", ei, ei, ei, ei, ei, ei);
       return;
     }
     if (sp_streq(name, "message") || sp_streq(name, "to_s") || sp_streq(name, "to_str")) {
@@ -13431,7 +13441,10 @@ else { memcpy(dir, sf, n); dir[n] = 0; } }
       emit_indent(g_pre, g_indent);
       buf_printf(g_pre, "sp_Exception *_t%d = ", t);
       buf_puts(g_pre, rb.p ? rb.p : ""); buf_puts(g_pre, ";\n"); free(rb.p);
-      buf_printf(b, "(_t%d ? sp_sprintf(\"#<%%s: %%s>\", sp_exc_class_name(_t%d), sp_exc_message(_t%d)) : \"nil\")", t, t, t);
+      /* an empty message renders as the bare class name (#3713) */
+      buf_printf(b, "(_t%d ? (sp_exc_message(_t%d) && *sp_exc_message(_t%d)"
+                    " ? sp_sprintf(\"#<%%s: %%s>\", sp_exc_class_name(_t%d), sp_exc_message(_t%d))"
+                    " : sp_exc_class_name(_t%d)) : \"nil\")", t, t, t, t, t, t);
       return;
     }
     if (sp_streq(name, "class")) {  /* a Class carried by name (complete for every exception class) */

@@ -98,6 +98,11 @@ int sp_exc_is_standard_error(const char *raised) {
   }
   return 1;
 }
+/* the 0xff byte is the frozen-literal marker sp_exc_gc_scan reads at msg[-1];
+   the string itself is the empty one that follows it */
+static const char sp_exc_no_msg_storage[] = "\xff";
+const char *const sp_exc_no_msg = sp_exc_no_msg_storage + 1;
+
 /* Create an exception for a `rescue => e` binding: like sp_exc_new but
    also looks up the parent class via the user hierarchy callback. */
 sp_Exception *sp_exc_new_for_catch(const char *cls, const char *msg) {SP_GC_ROOT_STR(cls);SP_GC_ROOT_STR(msg);
@@ -125,7 +130,9 @@ void *sp_exc_new_sub_sized(size_t sz, const char *cls_name, const char *msg) {SP
   /* heap-launder the message (see sp_exc_new); memset left msg NULL, so a GC
      during the copy scans a consistent struct */
   SP_GC_ROOT(e);
-  e->msg = sp_sprintf("%s", (msg && msg[0]) ? msg : e->cls_name);
+  /* an explicitly given message stays, even empty (#3713) */
+  e->msg = sp_sprintf("%s", (msg && msg[0]) ? msg
+                            : (msg == sp_exc_no_msg ? "" : e->cls_name));
   return e;
 }
 void sp_exc_gc_scan(void *p) {
@@ -138,11 +145,6 @@ void sp_exc_gc_scan(void *p) {
   sp_mark_rbval(e->xrecv);
   /* cls_name/parent_cls_name point into rodata -- not GC-managed strings */
 }
-/* the 0xff byte is the frozen-literal marker sp_exc_gc_scan reads at msg[-1];
-   the string itself is the empty one that follows it */
-static const char sp_exc_no_msg_storage[] = "\xff";
-const char *const sp_exc_no_msg = sp_exc_no_msg_storage + 1;
-
 sp_Exception *sp_exc_new(const char *cls_name, const char *msg) {SP_GC_ROOT_STR(cls_name);SP_GC_ROOT_STR(msg);
   sp_Exception *e = (sp_Exception *)sp_gc_alloc(sizeof(sp_Exception), NULL, sp_exc_gc_scan);
   e->cls_name = cls_name ? cls_name : "RuntimeError";
