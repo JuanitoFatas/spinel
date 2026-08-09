@@ -13918,6 +13918,9 @@ else { memcpy(dir, sf, n); dir[n] = 0; } }
   if (recv >= 0 && argc >= 1 && sp_streq(name, "compile") &&
       nt_type(nt, recv) && sp_streq(nt_type(nt, recv), "ConstantReadNode") &&
       nt_str(nt, recv, "name") && sp_streq(nt_str(nt, recv, "name"), "Regexp")) {
+    /* given a Regexp, the pattern is copied: hand back the pattern itself
+       rather than reading its pointer as a source string (#3686) */
+    if (comp_ntype(c, argv[0]) == TY_REGEX) { emit_expr(c, argv[0], b); return; }
     int tp = ++g_tmp, ts = ++g_tmp;
     /* See the Regexp.new path: emit the pattern into a local buffer so an
        interpolated arg's embedded-call arg roots land in g_pre as whole
