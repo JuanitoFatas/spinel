@@ -905,7 +905,9 @@ TyKind infer_call(Compiler *c, int id) {
         (nt_ref(nt, rnA, "right") < 0 ||
          infer_end_is_float_inf(c, nt_ref(nt, rnA, "right"))) &&
         nt_ref(nt, rnA, "left") >= 0) {
-      if (sp_streq(name, "size") && argc == 0) return TY_FLOAT;
+      if ((sp_streq(name, "size") || sp_streq(name, "count")) && argc == 0 &&
+          nt_ref(nt, id, "block") < 0)
+        return TY_FLOAT;   /* an endless range counts forever: Infinity (#3668) */
       if ((sp_streq(name, "take") || sp_streq(name, "first")) && argc == 1)
         return TY_INT_ARRAY;
     }

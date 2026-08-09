@@ -8989,7 +8989,10 @@ int emit_range_call(Compiler *c, int id, Buf *b) {
           (nt_ref(nt, rn9, "right") < 0 ||
            lazy_endpoint_is_infinite(c, nt_ref(nt, rn9, "right"))) &&
           nt_ref(nt, rn9, "left") >= 0) {
-        if (sp_streq(name, "size") && argc == 0) {
+        /* #count enumerates forever on an endless range, so like #size it
+           answers Infinity (#3668) */
+        if ((sp_streq(name, "size") || sp_streq(name, "count")) && argc == 0 &&
+            nt_ref(nt, id, "block") < 0) {
           buf_puts(b, "(HUGE_VAL)");
           return 1;
         }
@@ -9151,7 +9154,11 @@ int emit_range_call(Compiler *c, int id, Buf *b) {
       else if (sp_streq(name, "min"))  /* smallest enumerated element (direction-aware) */
         buf_printf(b, "sp_range_min_v(_t%d)", t);
       else if (sp_streq(name, "first") || sp_streq(name, "begin")) {
-        if (argc == 1) {
+        /* #first enumerates, so a beginless range has none (#3668) */
+        if (argc == 0 && sp_streq(name, "first"))
+          buf_printf(b, "({ if (_t%d.first == INTPTR_MIN) sp_raise_cls(\"RangeError\","
+                        " \"cannot get the first element of beginless range\"); _t%d.first; })", t, t);
+        else if (argc == 1) {
           /* first(n): the first n elements from `first`, walking by step. */
           int tf = ++g_tmp, tn = ++g_tmp, ti = ++g_tmp, tc = ++g_tmp;
           buf_printf(b, "({ sp_IntArray *_t%d = sp_IntArray_new(); mrb_int _t%d = ", tf, tn);
@@ -9173,7 +9180,11 @@ int emit_range_call(Compiler *c, int id, Buf *b) {
         buf_puts(b, "sp_box_nil()"); (void)t;
       }
       else if (sp_streq(name, "last") || sp_streq(name, "end")) {
-        if (argc == 1 && sp_streq(name, "last")) {
+        /* #last enumerates, so an endless range has none (#3668) */
+        if (argc == 0 && sp_streq(name, "last"))
+          buf_printf(b, "({ if (_t%d.last == INTPTR_MAX) sp_raise_cls(\"RangeError\","
+                        " \"cannot get the last element of endless range\"); _t%d.last; })", t, t);
+        else if (argc == 1 && sp_streq(name, "last")) {
           /* last(n): collect up to n elements ending at last */
           int tf = ++g_tmp, tn = ++g_tmp, ts = ++g_tmp, te = ++g_tmp;
           buf_printf(b, "({ mrb_int _t%d = ", tn); emit_int_expr(c, argv[0], b);

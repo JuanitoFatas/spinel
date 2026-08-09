@@ -35,6 +35,7 @@ static inline mrb_int sp_range_count(sp_Range r){
 static inline sp_IntArray *sp_range_to_ia(sp_Range r){
   /* an endless range cannot materialize (CRuby raises instead of hanging) */
   if(r.last==INTPTR_MAX)sp_raise_cls("RangeError","cannot convert endless range to an array");
+  if(r.first==INTPTR_MIN)sp_raise_cls("TypeError","can't iterate from NilClass");
   mrb_int s=sp_range_step(r);
   if(s==1)return sp_IntArray_from_range(r.first,r.last-r.excl);
   return sp_IntArray_from_range_step(r.first,r.last,s,r.excl);
@@ -49,8 +50,16 @@ static inline mrb_int sp_range_last_elem(sp_Range r){
    (SP_INT_NIL, the nullable-int sentinel) -- CRuby returns nil there. A
    descending step range (5.downto(1)) still enumerates, so only a
    positive-step empty span is nil (#2412). */
-static inline mrb_int sp_range_min_v(sp_Range r){ if(sp_range_count(r)<=0)return SP_INT_NIL; mrb_int a=r.first,b=sp_range_last_elem(r); return a<b?a:b; }
-static inline mrb_int sp_range_max_v(sp_Range r){ if(sp_range_count(r)<=0)return SP_INT_NIL; mrb_int a=r.first,b=sp_range_last_elem(r); return a>b?a:b; }
+static inline mrb_int sp_range_min_v(sp_Range r){
+  /* a beginless range has no minimum; an endless one's is its begin (#3668) */
+  if(r.first==INTPTR_MIN)sp_raise_cls("RangeError","cannot get the minimum of beginless range");
+  if(r.last==INTPTR_MAX)return r.first;
+  if(sp_range_count(r)<=0)return SP_INT_NIL; mrb_int a=r.first,b=sp_range_last_elem(r); return a<b?a:b; }
+static inline mrb_int sp_range_max_v(sp_Range r){
+  /* a beginless range's maximum is its end; an endless one has none (#3668) */
+  if(r.last==INTPTR_MAX)sp_raise_cls("RangeError","cannot get the maximum of endless range");
+  if(r.first==INTPTR_MIN)return r.excl?r.last-1:r.last;
+  if(sp_range_count(r)<=0)return SP_INT_NIL; mrb_int a=r.first,b=sp_range_last_elem(r); return a>b?a:b; }
 static inline mrb_bool sp_range_eq(sp_Range a,sp_Range b){return a.first==b.first&&a.last==b.last&&a.excl==b.excl;}
 
 mrb_bool sp_range_include(sp_Range *r, mrb_int x);
