@@ -101,6 +101,8 @@ void sp_raise_frozen_str(const char*s){SP_GC_ROOT_STR(s);const char*ins=sp_str_i
 /* String#inspect: wrap in double quotes and escape \, ", \n, \t, \r,
    plus any non-printable byte as \xNN. Output is always ASCII-safe. */
 const char*sp_str_inspect(const char*s){SP_GC_ROOT_STR(s);if(!s){char*r=sp_str_alloc_raw(4);r[0]='n';r[1]='i';r[2]='l';r[3]=0;return r;}size_t sl=sp_str_byte_len(s);size_t cap=(sl*6)+3;char*r=sp_str_alloc_raw(cap);size_t o=0;r[o++]='"';for(size_t i=0;i<sl;i++){unsigned char c=(unsigned char)s[i];if(c=='\\'||c=='"'){r[o++]='\\';r[o++]=c;}
+/* `#` is escaped only where it would start an interpolation (#3558) */
+else if(c=='#'&&i+1<sl&&(s[i+1]=='{'||s[i+1]=='$'||s[i+1]=='@')){r[o++]='\\';r[o++]='#';}
 else if(c=='\a'){r[o++]='\\';r[o++]='a';}
 else if(c=='\b'){r[o++]='\\';r[o++]='b';}
 else if(c=='\t'){r[o++]='\\';r[o++]='t';}
@@ -214,7 +216,8 @@ const char*sp_str_dump(const char*s){SP_GC_ROOT_STR(s);
     unsigned char c=(unsigned char)s[i];
     if(c=='"'){out[oi++]='\\';out[oi++]='"';}
     else if(c=='\\'){out[oi++]='\\';out[oi++]='\\';}
-    else if(c=='#'){out[oi++]='\\';out[oi++]='#';}
+    /* `#` is escaped only where it would start an interpolation (#3558) */
+    else if(c=='#'&&i+1<n&&(s[i+1]=='{'||s[i+1]=='$'||s[i+1]=='@')){out[oi++]='\\';out[oi++]='#';}
     else if(c=='\n'){out[oi++]='\\';out[oi++]='n';}
     else if(c=='\t'){out[oi++]='\\';out[oi++]='t';}
     else if(c=='\r'){out[oi++]='\\';out[oi++]='r';}
@@ -225,6 +228,19 @@ const char*sp_str_dump(const char*s){SP_GC_ROOT_STR(s);
     else if(c==27){out[oi++]='\\';out[oi++]='e';}
     else if(c==0){out[oi++]='\\';out[oi++]='0';}
     else if(c<0x20){oi+=(size_t)sprintf(out+oi,"\\x%02X",c);}
+    /* #dump promises a pure-ASCII, re-evaluable form: a non-ASCII character
+       is written as its \uXXXX escape (#3558) */
+    else if(c>=0x80){
+      unsigned cp=0;int extra=0;
+      if((c&0xE0)==0xC0){cp=c&0x1Fu;extra=1;}
+      else if((c&0xF0)==0xE0){cp=c&0x0Fu;extra=2;}
+      else if((c&0xF8)==0xF0){cp=c&0x07u;extra=3;}
+      else{oi+=(size_t)sprintf(out+oi,"\\x%02X",c);continue;}
+      if(i+(size_t)extra>=n){oi+=(size_t)sprintf(out+oi,"\\x%02X",c);continue;}
+      for(int k=0;k<extra;k++)cp=(cp<<6)|((unsigned char)s[++i]&0x3Fu);
+      if(cp>0xFFFFu)oi+=(size_t)sprintf(out+oi,"\\u{%X}",cp);
+      else oi+=(size_t)sprintf(out+oi,"\\u%04X",cp);
+    }
     else{out[oi++]=(char)c;}
   }
   out[oi++]='"';out[oi]=0;sp_str_set_len(out,oi);return out;
