@@ -6951,6 +6951,20 @@ TyKind infer_uncached(Compiler *c, int id) {
       int bn2 = 0; const int *bs2 = nt_arr(nt, body, "body", &bn2);
       if (bs2 && bn2 > 0 && node_is_empty_container(nt, bs2[bn2 - 1])) r = TY_POLY;
     }
+    /* A body that carries a value of a type not settled yet is not the same as
+       a body that carries none: taking the handler's type alone made the whole
+       begin an Integer when the body answered an array whose local had not been
+       typed at this point in the walk, and the array was coerced into an int
+       slot (#3708). Stay UNKNOWN and let a later round settle it. */
+    if (r == TY_UNKNOWN && body >= 0) {
+      int bn3 = 0; const int *bs3 = nt_arr(nt, body, "body", &bn3);
+      /* only for a local read: its slot is typed by a write that comes later
+         in the walk, so within this round it reads UNKNOWN however concrete it
+         really is. Anything else that answers UNKNOWN here genuinely has no
+         value, and the handler's type is the right answer for it. */
+      if (bs3 && bn3 > 0 && nt_kind(nt, bs3[bn3 - 1]) == NK_LocalVariableReadNode)
+        return TY_UNKNOWN;
+    }
     int have = !(r == TY_UNKNOWN || r == TY_VOID);
     for (int rs = nt_ref(nt, id, "rescue_clause"); rs >= 0; rs = nt_ref(nt, rs, "subsequent")) {
       int st = nt_ref(nt, rs, "statements");
