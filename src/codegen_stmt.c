@@ -5072,7 +5072,8 @@ void emit_rescue(Compiler *c, int id, Buf *b, int indent, int fr, const char *re
     buf_printf(b, "sp_Exception *_ce_%d = sp_exc_obj[sp_exc_top] ? (sp_Exception *)sp_exc_obj[sp_exc_top]"
                   " : sp_exc_new_for_catch(_rcls_%d, _rmsg_%d);\n", rc, rc, rc);
   emit_indent(b, indent);
-  buf_printf(b, "_ce_%d->cause = (sp_Exception *)sp_pending_cause; sp_pending_cause = NULL;\n", rc);
+  /* an exception never loses a cause it already carries (#3745) */
+  buf_printf(b, "if (!_ce_%d->cause) _ce_%d->cause = (sp_Exception *)sp_pending_cause; sp_pending_cause = NULL;\n", rc, rc);
   emit_indent(b, indent);
   buf_printf(b, "sp_rescue_push((void *)_ce_%d);\n", rc);
   g_rescue_save_stack[g_rescue_save_depth++] = (RescueSave){ g_exc_frame_depth };
@@ -5260,7 +5261,16 @@ void emit_begin(Compiler *c, int id, Buf *b, int indent, const char *resultvar) 
     emit_indent(b, indent);
     buf_printf(b, "int _uk%d = sp_unwind_kind, _ut%d = sp_unwind_target, _ue%d = sp_unwind_exc_top; sp_proc_home *_uh%d = sp_unwind_home;\n",
                eid, eid, eid, eid);
+    /* an exception raised from inside this ensure takes the one unwinding
+       through it as its cause (#3745) */
+    emit_indent(b, indent);
+    buf_printf(b, "void *_ic%d = sp_inflight_cause;"
+                  " if (_excf%d) sp_inflight_cause = _excobj%d ? _excobj%d"
+                  " : (void *)sp_exc_new_for_catch(_exccls%d, _excmsg%d);\n",
+               eid, eid, eid, eid, eid, eid);
     emit_stmts(c, ensure_stmts, b, indent);
+    emit_indent(b, indent);
+    buf_printf(b, "sp_inflight_cause = _ic%d;\n", eid);
     emit_indent(b, indent);
     buf_printf(b, "sp_unwind_kind = _uk%d; sp_unwind_target = _ut%d; sp_unwind_exc_top = _ue%d; sp_unwind_home = _uh%d;\n",
                eid, eid, eid, eid);

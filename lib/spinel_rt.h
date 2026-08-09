@@ -6435,6 +6435,12 @@ static SP_TLS void *sp_pending_exc_obj = NULL;
    captured for the next raised exception -- Exception#cause threads the former
    into a newly raised exception's `cause` field. */
 static SP_TLS void *sp_pending_cause = NULL;
+/* The exception unwinding through an `ensure` body: a raise from inside that
+   body takes it as its cause, the way a raise inside a rescue takes $! (#3745). */
+static SP_TLS void *sp_inflight_cause = NULL;
+/* A bare `raise` re-raises the handled exception itself, keeping the cause it
+   already carries rather than becoming its own cause (#3745). */
+static SP_TLS int sp_reraise_current = 0;
 /* `raise ..., cause: exc`: the explicit cause overrides the implicit
    currently-handled exception for exactly one raise. The `_set` flag records
    that a cause: was given at all, so `cause: nil` suppresses the implicit cause
@@ -6535,6 +6541,12 @@ SP_NORETURN SP_COLD void sp_raise_cls(const char *cls, const char *msg) {
      inside an `ensure` running during a proc-return / throw): clear the unwind so
      an outer handler treats this as an exception, not a continued unwind. */
   sp_unwind_kind = SP_UNWIND_NONE;
+  /* a bare `raise` inside a rescue re-raises the handled exception itself, so
+     it keeps the cause it already has (#3745) */
+  if (sp_reraise_current) {
+    sp_reraise_current = 0;
+    if (!sp_pending_exc_obj && sp_cur_handled()) sp_pending_exc_obj = sp_cur_handled();
+  }
   /* NameError/NoMethodError#name: the runtime raisers' messages carry the
      offending name as the first quoted token ("undefined method 'foo' for
      ..."); materialize the carried object with #name set so a rescue binding
@@ -6557,7 +6569,7 @@ SP_NORETURN SP_COLD void sp_raise_cls(const char *cls, const char *msg) {
      heap, where it has a marker and the mark is meaningful. */
   /* the bare-raise sentinel is already a marked literal, and its identity is
      what tells an empty message apart from no message at all (#3711) */
-  if (sp_exc_top > 0) { sp_exc_msg[sp_exc_top-1] = msg == sp_exc_no_msg ? msg : msg ? sp_str_dup_external(msg) : NULL; sp_exc_cls[sp_exc_top-1] = cls; sp_exc_obj[sp_exc_top-1] = sp_pending_exc_obj; sp_pending_exc_obj = NULL; sp_pending_cause = sp_explicit_cause_set ? sp_explicit_cause : sp_cur_handled(); sp_explicit_cause = NULL; sp_explicit_cause_set = 0; sp_last_exc_cls = cls; longjmp(sp_exc_stack[sp_exc_top-1], 1); }
+  if (sp_exc_top > 0) { sp_exc_msg[sp_exc_top-1] = msg == sp_exc_no_msg ? msg : msg ? sp_str_dup_external(msg) : NULL; sp_exc_cls[sp_exc_top-1] = cls; sp_exc_obj[sp_exc_top-1] = sp_pending_exc_obj; sp_pending_exc_obj = NULL; sp_pending_cause = sp_explicit_cause_set ? sp_explicit_cause : (sp_cur_handled() ? sp_cur_handled() : sp_inflight_cause); sp_inflight_cause = NULL; sp_explicit_cause = NULL; sp_explicit_cause_set = 0; sp_last_exc_cls = cls; longjmp(sp_exc_stack[sp_exc_top-1], 1); }
   /* Uncaught SystemExit terminates silently with its status (Kernel#exit). */
   if (strcmp(cls, "SystemExit") == 0) exit(sp_exc_exit_status(sp_pending_exc_obj));
   /* Uncaught: CRuby's tail format "<message> (<ClassName>)". The source
@@ -6645,6 +6657,7 @@ static void sp_mark_in_flight_exceptions(void) {
   }
   if (sp_pending_exc_obj) sp_gc_mark(sp_pending_exc_obj);
   if (sp_pending_cause) sp_gc_mark(sp_pending_cause);
+  if (sp_inflight_cause) sp_gc_mark(sp_inflight_cause);
   for (int i = 0; i < sp_rescue_sp; i++)
     if (sp_exc_handling[i]) sp_gc_mark(sp_exc_handling[i]);  /* handled exceptions */
 }
@@ -6947,6 +6960,7 @@ static void sp_mark_brk_vals(void) {
   for (int i = 0; i < sp_catch_top; i++) sp_mark_rbval(sp_catch_val[i]);
   /* cause chain in flight between a raise and its handler */
   if (sp_pending_cause) sp_gc_mark(sp_pending_cause);
+  if (sp_inflight_cause) sp_gc_mark(sp_inflight_cause);
   if (sp_explicit_cause) sp_gc_mark(sp_explicit_cause);
   /* introspection values staged between a raise and its handler */
   if (sp_pending_exc_flags & 1) sp_mark_rbval(sp_pending_exc_recv);

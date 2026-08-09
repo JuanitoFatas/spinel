@@ -12973,7 +12973,8 @@ else { memcpy(dir, sf, n); dir[n] = 0; } }
       buf_puts(b, "), ");
     }
     if (ac == 0) {
-      if (g_rescue_cls) buf_printf(b, "sp_raise_cls(%s, %s)", g_rescue_cls, g_rescue_msg);
+      /* a bare re-raise keeps the handled exception's own cause (#3745) */
+      if (g_rescue_cls) buf_printf(b, "(sp_reraise_current = 1, sp_raise_cls(%s, %s))", g_rescue_cls, g_rescue_msg);
       else buf_puts(b, "sp_raise(sp_exc_no_msg)");   /* a bare raise's message is "" (#3711) */
     }
     else if (ac == 1 && nt_type(nt, av[0]) &&
