@@ -6477,11 +6477,13 @@ int emit_scalar_call(Compiler *c, int id, Buf *b) {
       }
       else if (sp_streq(name, "modulo") && argc == 1) { buf_printf(b, "sp_imod(%s, ", r); emit_int_divisor(c, argv[0], b); buf_puts(b, ")"); }
       else if (sp_streq(name, "remainder") && argc == 1 && comp_ntype(c, argv[0]) == TY_FLOAT) {
-        /* x - y * (x/y).truncate, in doubles (7.remainder(2.5) is 2.0) */
+        /* x - y * (x/y).truncate, in doubles (7.remainder(2.5) is 2.0); a zero
+           divisor raises like every other division-derived operation (#3649) */
         int tb = ++g_tmp;
         buf_printf(b, "({ double _t%d = ", tb); emit_expr(c, argv[0], b);
-        buf_printf(b, "; (double)(%s) - _t%d * trunc((double)(%s) / _t%d); })",
-                   r, tb, r, tb);
+        buf_printf(b, "; _t%d == 0 ? (sp_raise_cls(\"ZeroDivisionError\", \"divided by 0\"), 0.0)"
+                      " : (double)(%s) - _t%d * trunc((double)(%s) / _t%d); })",
+                   tb, r, tb, r, tb);
       }
       else if (sp_streq(name, "remainder") && argc == 1 &&
                comp_ntype(c, argv[0]) == TY_RATIONAL) {
@@ -6927,7 +6929,7 @@ int emit_scalar_call(Compiler *c, int id, Buf *b) {
       /* Float#remainder: truncated remainder, sign following the dividend -- exactly
          C fmod (distinct from Ruby's floored % / modulo). */
       else if (sp_streq(name, "remainder") && argc == 1) {
-        buf_printf(b, "fmod(%s, ", r); emit_float_expr(c, argv[0], b); buf_puts(b, ")");
+        buf_printf(b, "sp_fremainder(%s, ", r); emit_float_expr(c, argv[0], b); buf_puts(b, ")");
       }
       /* Complex-view methods: a Float is a real Complex (imaginary part 0). */
       else if (sp_streq(name, "abs2"))               buf_printf(b, "((%s) * (%s))", r, r);

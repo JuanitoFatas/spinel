@@ -185,6 +185,12 @@ static inline double sp_fmod(double a, double b) {
   if (r != 0.0 && ((r < 0.0) != (b < 0.0))) r += b;
   return r;
 }
+/* Float#remainder: plain C fmod, but a zero divisor raises the way every other
+   Float division-derived operation does (#3649). */
+static inline double sp_fremainder(double a, double b) {
+  if (b == 0) sp_raise_cls("ZeroDivisionError", "divided by 0");
+  return fmod(a, b);
+}
 /* Integer#remainder: truncated remainder (sign follows the dividend, i.e. plain
    C `%`), unlike the floored sp_imod. Zero divisor raises like sp_imod/sp_idiv. */
 static inline mrb_int sp_iremainder(mrb_int a, mrb_int b) {
