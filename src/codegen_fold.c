@@ -4034,6 +4034,16 @@ int emit_partition_expr(Compiler *c, int id, Buf *b) {
   g_indent = saveIndent;
 
   emit_indent(g_pre, innerIndent);
+  /* a boxed block value is a struct: `if (rbval)` is not valid C, and Ruby's
+     truthiness is "not nil and not false" anyway (#3610) */
+  {
+    TyKind pvt = comp_ntype(c, bb[bn - 1]);
+    if (pvt == TY_POLY) {
+      Buf tb; memset(&tb, 0, sizeof tb);
+      buf_printf(&tb, "sp_poly_truthy(%s)", vb.p ? vb.p : "sp_box_nil()");
+      free(vb.p); vb = tb;
+    }
+  }
   buf_printf(g_pre, "if (%s) sp_%sArray_push(_t%d, sp_%sArray_get(_t%d, _t%d));\n",
              vb.p ? vb.p : "0", k, ttrue, k, trecv, ti);
   emit_indent(g_pre, innerIndent);
