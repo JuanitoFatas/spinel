@@ -4126,6 +4126,9 @@ int desugar_enum_method_recv(Compiler *c) {
         }
         else if (ty_is_array(ert) || ty_is_hash(ert) || ert == TY_RANGE ||
                  ert == TY_ENUMERATOR || ert == TY_DIR) {
+          /* #each_entry answers the receiver, which #each does not do for an
+             Enumerator; record it before the name is gone (#3591) */
+          if (ert == TY_ENUMERATOR) nt_node_set_int(nt, id, "enum_self_result", erecv);
           nt_node_set_str(nt, id, "name", "each");
           changed = 1;
         }
@@ -4816,6 +4819,13 @@ int desugar_enum_method_recv(Compiler *c) {
     if (rt == TY_ENUMERATOR && !recv_is_index_enum &&
         !sp_streq(nm, "to_a") && !sp_streq(nm, "entries") &&
         (nt_ref(nt, id, "block") >= 0 || enum_terminal)) {
+      /* the block forms of these answer the RECEIVING Enumerator, but the
+         redirect makes the call read the materialized array, whose own
+         each_cons/each_slice/each_entry answers that array (#3591) */
+      if (nt_ref(nt, id, "block") >= 0 &&
+          (sp_streq(nm, "each_slice") || sp_streq(nm, "each_cons") ||
+           sp_streq(nm, "each_entry")))
+        nt_node_set_int(nt, id, "enum_self_result", recv);
       int wrap = nt_new_node(nt, "CallNode");
       nt_node_set_str(nt, wrap, "name", "to_a");
       nt_node_set_ref(nt, wrap, "receiver", recv);
