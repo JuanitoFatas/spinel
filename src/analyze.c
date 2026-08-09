@@ -9551,6 +9551,23 @@ void analyze_program(Compiler *c) {
       if (un >= 0 && un != ex) nt_node_set_ref(ntm, id, "expression", un);
     }
   }
+  /* A block written with its own rescue clause (`do ... rescue ... end`) has a
+     BeginNode where every other block has a StatementsNode, so the body read as
+     empty and the block's value was nil. Wrap it once here (#3710). */
+  {
+    NodeTable *ntm = (NodeTable *)c->nt;
+    int n0 = ntm->count;
+    for (int id = 0; id < n0; id++) {
+      if (nt_kind(ntm, id) != NK_BlockNode) continue;
+      int bd = nt_ref(ntm, id, "body");
+      if (bd < 0 || nt_kind(ntm, bd) == NK_StatementsNode) continue;
+      int st = nt_new_node(ntm, "StatementsNode");
+      if (st < 0) continue;
+      nt_node_set_arr(ntm, st, "body", &bd, 1);
+      nt_node_set_ref(ntm, id, "body", st);
+      comp_grow_node_arrays(c);
+    }
+  }
   rename_shadowing_block_params(c);
   /* `:m.to_proc.call(r, a)` -> `r.m(a)`, before the to_proc rewrite below
      turns the receiver into a fixed-arity lambda (#3097). */
