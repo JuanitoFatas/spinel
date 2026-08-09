@@ -8209,7 +8209,11 @@ int emit_value_recv_call(Compiler *c, int id, Buf *b) {
       int tt = ++g_tmp, td = ++g_tmp;
       buf_printf(b, "({ sp_Time _t%d = %s; mrb_int _t%d = ", tt, r, td);
       emit_int_expr(c, argv[0], b);
-      buf_printf(b, "; if (_t%d < 9) { if (_t%d < 0) _t%d = 0;"
+      /* a negative digit count is CRuby's ArgumentError, not a clamp to zero
+         (#3700) */
+      buf_printf(b, "; if (_t%d < 0) sp_raise_cls(\"ArgumentError\","
+                    " sp_sprintf(\"negative ndigits given: %%lld\", (long long)_t%d));", td, td);
+      buf_printf(b, " if (_t%d < 9) { if (_t%d < 0) _t%d = 0;"
                     " int64_t _sc = 1; for (mrb_int _k = _t%d; _k < 9; _k++) _sc *= 10;"
                     " int64_t _ns = _t%d.tv_nsec; ", td, td, td, td, tt);
       if (sp_streq(name, "floor"))     buf_puts(b, "_ns = _ns / _sc * _sc;");
