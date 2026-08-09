@@ -3399,7 +3399,24 @@ static int subtree_has_loop_break(Compiler *c, int root) {
    condition isn't a range with String endpoints. */
 static int emit_when_string_range(Compiler *c, int cond, int t, Buf *b) {
   const NodeTable *nt = c->nt;
+  /* `when ("a".."e")` wraps the range in parentheses, and the literal check
+     below saw only the wrapper -- the arm declined and the whole when folded
+     to false (#3694) */
+  while (cond >= 0 && nt_type(nt, cond) && sp_streq(nt_type(nt, cond), "ParenthesesNode")) {
+    int pb = nt_ref(nt, cond, "body");
+    int pn = 0; const int *pd = pb >= 0 ? nt_arr(nt, pb, "body", &pn) : NULL;
+    if (pn != 1) break;
+    cond = pd[0];
+  }
   const char *cty = nt_type(nt, cond);
+  /* a String range held in a variable has no literal to read: cover it with
+     the runtime check */
+  if (cty && !sp_streq(cty, "RangeNode") && comp_ntype(c, cond) == TY_STR_RANGE) {
+    int trg = ++g_tmp;
+    buf_printf(b, "({ sp_StrRange _t%d = ", trg); emit_expr(c, cond, b);
+    buf_printf(b, "; sp_srange_cover(_t%d, _t%d); })", trg, t);
+    return 1;
+  }
   if (!cty || !sp_streq(cty, "RangeNode")) return 0;
   int left = nt_ref(nt, cond, "left");
   int right = nt_ref(nt, cond, "right");
