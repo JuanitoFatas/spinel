@@ -10976,6 +10976,15 @@ void emit_call(Compiler *c, int id, Buf *b) {
        sp_streq(name, "map") || sp_streq(name, "collect") ||
        sp_streq(name, "select") || sp_streq(name, "filter") ||
        sp_streq(name, "find_all") || sp_streq(name, "reject") ||
+       /* the rest of the block-taking Enumerables answer one too (#3757) */
+       sp_streq(name, "sort_by") || sp_streq(name, "group_by") ||
+       sp_streq(name, "min_by") || sp_streq(name, "max_by") ||
+       sp_streq(name, "find") || sp_streq(name, "detect") ||
+       sp_streq(name, "flat_map") || sp_streq(name, "collect_concat") ||
+       sp_streq(name, "filter_map") || sp_streq(name, "partition") ||
+       sp_streq(name, "take_while") || sp_streq(name, "drop_while") ||
+       sp_streq(name, "find_index") || sp_streq(name, "chunk_while") ||
+       sp_streq(name, "minmax_by") ||
        sp_streq(name, "each_entry"))) {
     /* a blockless map/select/reject is the same element snapshot; only its
        #inspect method name differs (the deferred block is supplied by a later

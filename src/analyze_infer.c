@@ -4207,7 +4207,16 @@ else {
     if (block < 0 && argc == 0 && nt_ref(nt, id, "block") < 0 &&
         (sp_streq(name, "map") || sp_streq(name, "collect") ||
          sp_streq(name, "select") || sp_streq(name, "filter") ||
-         sp_streq(name, "find_all") || sp_streq(name, "reject")) &&
+         sp_streq(name, "find_all") || sp_streq(name, "reject") ||
+         /* the rest of the block-taking Enumerables answer one too (#3757) */
+         sp_streq(name, "sort_by") || sp_streq(name, "group_by") ||
+         sp_streq(name, "min_by") || sp_streq(name, "max_by") ||
+         sp_streq(name, "find") || sp_streq(name, "detect") ||
+         sp_streq(name, "flat_map") || sp_streq(name, "collect_concat") ||
+         sp_streq(name, "filter_map") || sp_streq(name, "partition") ||
+         sp_streq(name, "take_while") || sp_streq(name, "drop_while") ||
+         sp_streq(name, "find_index") || sp_streq(name, "chunk_while") ||
+         sp_streq(name, "minmax_by")) &&
         !call_is_chain_receiver_with_block(c, id)) return TY_ENUMERATOR;
     /* arr.each_slice(n) / arr.each_cons(n) with no block -> a materialized
        Enumerator of slices / windows. The direct-block form has block >= 0 and
