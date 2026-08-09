@@ -1822,6 +1822,37 @@ int emit_iteration_stmt(Compiler *c, int id, Buf *b, int indent) {
     int args = nt_ref(nt, id, "arguments"); int sargc = 0;
     const int *sargv = args >= 0 ? nt_arr(nt, args, "arguments", &sargc) : NULL;
     if (sargc < 1) return 0;
+    /* An INTEGER-stepped Range walks its span directly instead of
+       materializing it: an endless range would never finish building the
+       array, so the block (and its break) was never reached (#3673). */
+    if (rt == TY_RANGE && comp_ntype(c, sargv[0]) != TY_FLOAT && sargc == 1) {
+      int tr = ++g_tmp, ts2 = ++g_tmp, tl2 = ++g_tmp, tv2 = ++g_tmp;
+      emit_indent(b, indent);
+      buf_printf(b, "sp_Range _t%d = ", tr); emit_expr(c, recv, b); buf_puts(b, ";\n");
+      emit_indent(b, indent);
+      buf_printf(b, "mrb_int _t%d = ", ts2); emit_int_expr(c, sargv[0], b); buf_puts(b, ";\n");
+      emit_indent(b, indent);
+      /* a zero step never advances; a negative one simply enumerates nothing */
+      buf_printf(b, "if (_t%d == 0) sp_raise_cls(\"ArgumentError\", \"step can't be 0\");\n", ts2);
+      emit_indent(b, indent);
+      buf_printf(b, "if (_t%d.first == INTPTR_MIN) sp_raise_cls(\"ArgumentError\","
+                    " \"#step for non-numeric beginless ranges is meaningless\");\n", tr);
+      emit_indent(b, indent);
+      buf_printf(b, "mrb_int _t%d = _t%d.last - (_t%d.excl ? 1 : 0);\n", tl2, tr, tr);
+      emit_indent(b, indent);
+      buf_printf(b, "for (mrb_int _t%d = _t%d.first; _t%d > 0 && _t%d <= _t%d; _t%d += _t%d) {\n",
+                 tv2, tr, ts2, tv2, tl2, tv2, ts2);
+      if (p0) {
+        char elem[32]; snprintf(elem, sizeof elem, "_t%d", tv2);
+        emit_iter_param_assign(c, block, p0_orig, p0, TY_INT, elem, b, indent + 1);
+      }
+      { char rs_es[32]; snprintf(rs_es, sizeof rs_es, "_t%d", tv2);
+        int rs_np = 0; while (block_param_name(c, block, rs_np)) rs_np++;
+        emit_iter_bind_rest(c, block, rs_np, TY_INT, rs_es, b, indent + 1); }
+      emit_loop_body(c, body, b, indent + 1);
+      emit_indent(b, indent); buf_puts(b, "}\n");
+      return 1;
+    }
     int t = ++g_tmp, ti = ++g_tmp;
     Buf ab; memset(&ab, 0, sizeof ab);
     TyKind at, et; const char *aty;
