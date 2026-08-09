@@ -5563,6 +5563,10 @@ else {
         return rt;
       }
     }
+    /* merge(*hashes) folds through the universal boxed merge (#3561) */
+    if (sp_streq(name, "merge") && argc == 1 && nt_ref(nt, id, "block") < 0 &&
+        nt_type(nt, argv[0]) && sp_streq(nt_type(nt, argv[0]), "SplatNode"))
+      return TY_POLY_POLY_HASH;
     if (sp_streq(name, "merge") && argc == 1) {
       TyKind at = argc >= 1 ? infer_type(c, argv[0]) : TY_UNKNOWN;
       if (at == rt) return rt;  /* same type: trivial */

@@ -5074,6 +5074,25 @@ else {
         buf_printf(b, " _t%d; })", tr);
         return 1;
       }
+      /* merge(*hashes): fold each member of the splatted list in, through the
+         universal boxed merge (#3561) */
+      if (sp_streq(name, "merge") && argc == 1 && nt_ref(nt, id, "block") < 0 &&
+          nt_type(nt, argv[0]) && sp_streq(nt_type(nt, argv[0]), "SplatNode")) {
+        int sx = nt_ref(nt, argv[0], "expression");
+        int tacc = ++g_tmp, tls = ++g_tmp, tmi = ++g_tmp;
+        buf_printf(b, "({ sp_PolyPolyHash *_t%d = sp_poly_hash_merge(", tacc);
+        emit_boxed(c, recv, b);
+        buf_printf(b, ", sp_box_nil()); SP_GC_ROOT(_t%d);", tacc);
+        buf_printf(b, " sp_PolyArray *_t%d = sp_poly_to_poly_array(", tls);
+        if (sx >= 0) emit_boxed(c, sx, b); else buf_puts(b, "sp_box_nil()");
+        buf_printf(b, "); SP_GC_ROOT(_t%d);", tls);
+        buf_printf(b, " for (mrb_int _t%d = 0; _t%d < sp_PolyArray_length(_t%d); _t%d++)"
+                      " _t%d = sp_poly_hash_merge(sp_box_nullable_obj((void *)_t%d, SP_BUILTIN_POLY_POLY_HASH),"
+                      " sp_PolyArray_get(_t%d, _t%d));",
+                   tmi, tmi, tls, tmi, tacc, tacc, tls, tmi);
+        buf_printf(b, " _t%d; })", tacc);
+        return 1;
+      }
       if (sp_streq(name, "merge") && argc == 1 &&
           (rt == TY_STR_INT_HASH || rt == TY_STR_POLY_HASH || rt == TY_SYM_POLY_HASH ||
            rt == TY_STR_STR_HASH || rt == TY_POLY_POLY_HASH || rt == TY_INT_INT_HASH ||
@@ -5180,6 +5199,26 @@ else {
         emit_expr(c, recv, b);
         buf_printf(b, "); SP_GC_ROOT(_t%d);", t);
         for (int i = 0; i < argc; i++) {
+          /* a splatted key list deletes each of its members (#3561) */
+          if (nt_type(nt, argv[i]) && sp_streq(nt_type(nt, argv[i]), "SplatNode")) {
+            int sx = nt_ref(nt, argv[i], "expression");
+            int tsa = ++g_tmp, tsi = ++g_tmp;
+            buf_printf(b, " sp_PolyArray *_t%d = sp_poly_to_poly_array(", tsa);
+            if (sx >= 0) emit_boxed(c, sx, b); else buf_puts(b, "sp_box_nil()");
+            buf_printf(b, "); SP_GC_ROOT(_t%d);", tsa);
+            buf_printf(b, " for (mrb_int _t%d = 0; _t%d < sp_PolyArray_length(_t%d); _t%d++)"
+                          " sp_%sHash_delete(_t%d, ", tsi, tsi, tsa, tsi, hn, t);
+            {
+              char el[64]; snprintf(el, sizeof el, "sp_PolyArray_get(_t%d, _t%d)", tsa, tsi);
+              TyKind kt2 = ty_hash_key(rt);
+              if (rt == TY_POLY_POLY_HASH) buf_puts(b, el);
+              else if (kt2 == TY_SYMBOL) buf_printf(b, "(sp_sym)sp_poly_to_i(%s)", el);
+              else if (kt2 == TY_STRING) buf_printf(b, "sp_poly_to_s(%s)", el);
+              else buf_printf(b, "sp_poly_to_i(%s)", el);
+            }
+            buf_puts(b, ");");
+            continue;
+          }
           buf_printf(b, " sp_%sHash_delete(_t%d, ", hn, t);
           if (rt == TY_POLY_POLY_HASH) emit_boxed(c, argv[i], b); else emit_hash_key(c, argv[i], ty_hash_key(rt), b);
           buf_puts(b, ");");
