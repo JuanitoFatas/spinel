@@ -8153,6 +8153,22 @@ void emit_call(Compiler *c, int id, Buf *b) {
     return;
   }
   const NodeTable *nt = c->nt;
+  /* Float#equal? is identity, and a NaN is not == to itself, so compare the
+     bit patterns rather than the values (#3650). */
+  {
+    int eqr = nt_ref(nt, id, "receiver");
+    const char *eqn = nt_str(nt, id, "name");
+    int eqa = nt_ref(nt, id, "arguments");
+    int eqc = 0; const int *eqv = eqa >= 0 ? nt_arr(nt, eqa, "arguments", &eqc) : NULL;
+    if (eqr >= 0 && eqn && sp_streq(eqn, "equal?") && eqc == 1 && eqv &&
+        comp_ntype(c, eqr) == TY_FLOAT && comp_ntype(c, eqv[0]) == TY_FLOAT) {
+      int t1 = ++g_tmp, t2 = ++g_tmp;
+      buf_printf(b, "({ mrb_float _t%d = ", t1); emit_expr(c, eqr, b);
+      buf_printf(b, "; mrb_float _t%d = ", t2); emit_expr(c, eqv[0], b);
+      buf_printf(b, "; (mrb_bool)(memcmp(&_t%d, &_t%d, sizeof _t%d) == 0); })", t1, t2, t1);
+      return;
+    }
+  }
   /* each_slice/each_cons over a user Enumerable: the redirect made this read
      the flat element array, so run it for its side effects and yield the
      original receiver, which is what Ruby returns (#2981). */

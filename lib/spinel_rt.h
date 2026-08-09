@@ -4632,6 +4632,10 @@ static mrb_bool sp_rbval_eql_key(sp_RbVal a, sp_RbVal b) {
       if (!a.v.s || !b.v.s) return FALSE;
       return strcmp(a.v.s, b.v.s) == 0;
     case SP_TAG_FLT:
+      /* a NaN is not == to itself, but CRuby's container lookups fall back on
+         identity, so the very same NaN is still found by its own key (#3650) */
+      if (a.v.f != a.v.f && b.v.f != b.v.f)
+        return memcmp(&a.v.f, &b.v.f, sizeof a.v.f) == 0;
       return a.v.f == b.v.f;
     case SP_TAG_OBJ:
       /* Arrays are eql across storage kinds and element-wise eql (so 1 and 1.0
