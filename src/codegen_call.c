@@ -8185,6 +8185,27 @@ void emit_call(Compiler *c, int id, Buf *b) {
     return;
   }
   const NodeTable *nt = c->nt;
+  /* Proc#=== calls the proc; a Proc read out of a container arrives boxed,
+     where a value comparison would just answer false (#3683). */
+  {
+    int pr = nt_ref(nt, id, "receiver");
+    const char *pn = nt_str(nt, id, "name");
+    int pa = nt_ref(nt, id, "arguments");
+    int pc = 0; const int *pv = pa >= 0 ? nt_arr(nt, pa, "arguments", &pc) : NULL;
+    if (pr >= 0 && pn && sp_streq(pn, "===") && pc == 1 &&
+        (comp_ntype(c, pr) == TY_POLY || comp_ntype(c, pr) == TY_PROC) &&
+        !user_defines_or_reads(c, "===")) {
+      int tp3 = ++g_tmp;
+      buf_printf(b, "({ sp_RbVal _t%d = ", tp3); emit_boxed(c, pr, b);
+      buf_printf(b, "; _t%d.tag == SP_TAG_OBJ && _t%d.cls_id == SP_BUILTIN_PROC"
+                    " ? sp_poly_truthy(sp_penum_call1((sp_Proc *)_t%d.v.p, ", tp3, tp3, tp3);
+      emit_boxed(c, pv[0], b);
+      buf_printf(b, ")) : sp_poly_eq(_t%d, ", tp3);
+      emit_boxed(c, pv[0], b);
+      buf_puts(b, "); })");
+      return;
+    }
+  }
   /* Object#initialize_copy: every object inherits it, and the default just
      answers self. A class that defines its own keeps its dispatch (#3753). */
   {

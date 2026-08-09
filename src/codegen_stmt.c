@@ -3577,6 +3577,19 @@ void emit_case(Compiler *c, int id, Buf *b, int indent) {
           if (emit_when_lambda_inline(c, conds[j], t, b)) { /* literal lambda predicate */ }
           /* `when <proc>` (a variable): Proc#=== calls the proc with the
              subject, via the proc-call ABI (mirrors the case-as-value arm) */
+          /* a Proc read out of a container arrives boxed: dispatch on the tag
+             so it is CALLED and not compared (#3683) */
+          else if (comp_ntype(c, conds[j]) == TY_POLY) {
+            char subjp[32]; snprintf(subjp, sizeof subjp, "_t%d", t);
+            int tpw = ++g_tmp;
+            buf_printf(b, "({ sp_RbVal _t%d = ", tpw); emit_boxed(c, conds[j], b);
+            buf_printf(b, "; _t%d.tag == SP_TAG_OBJ && _t%d.cls_id == SP_BUILTIN_PROC"
+                          " ? sp_poly_truthy(sp_penum_call1((sp_Proc *)_t%d.v.p, ", tpw, tpw, tpw);
+            if (pt == TY_POLY) buf_puts(b, subjp); else emit_boxed_text(c, pt, subjp, b);
+            buf_printf(b, ")) : sp_poly_eq(_t%d, ", tpw);
+            if (pt == TY_POLY) buf_puts(b, subjp); else emit_boxed_text(c, pt, subjp, b);
+            buf_puts(b, "); })");
+          }
           else if (comp_ntype(c, conds[j]) == TY_PROC) {
             g_needs_proc_poly_argslot = 1;
             char subj9[32]; snprintf(subj9, sizeof subj9, "_t%d", t);
@@ -3975,6 +3988,19 @@ void emit_case_expr(Compiler *c, int id, Buf *b) {
         }
         else if (comp_ntype(c, conds[j]) == TY_PROC &&
                  emit_when_lambda_inline(c, conds[j], t, b)) { /* literal lambda inlined */ }
+        /* a Proc read out of a container arrives boxed: dispatch on the tag so
+           it is CALLED and not compared (#3683) */
+        else if (comp_ntype(c, conds[j]) == TY_POLY) {
+          char subjp[32]; snprintf(subjp, sizeof subjp, "_t%d", t);
+          int tpw = ++g_tmp;
+          buf_printf(b, "({ sp_RbVal _t%d = ", tpw); emit_boxed(c, conds[j], b);
+          buf_printf(b, "; _t%d.tag == SP_TAG_OBJ && _t%d.cls_id == SP_BUILTIN_PROC"
+                        " ? sp_poly_truthy(sp_penum_call1((sp_Proc *)_t%d.v.p, ", tpw, tpw, tpw);
+          if (pt == TY_POLY) buf_puts(b, subjp); else emit_boxed_text(c, pt, subjp, b);
+          buf_printf(b, ")) : sp_poly_eq(_t%d, ", tpw);
+          if (pt == TY_POLY) buf_puts(b, subjp); else emit_boxed_text(c, pt, subjp, b);
+          buf_puts(b, "); })");
+        }
         else if (comp_ntype(c, conds[j]) == TY_PROC) {
           /* `when <proc>`: Proc#=== calls the proc with the subject. The
              subject is published both in the mrb_int slot (typed callee
