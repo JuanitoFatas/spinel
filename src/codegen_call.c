@@ -5234,6 +5234,40 @@ static int class_new_pos_arity(Compiler *c, int ci, int *pmin, int *pmax) {
    (argc is not the true positional count), or when the arity is variable.
    Returns 1 if a raise was emitted (caller still emits the -- now dead --
    construction so the expression stays well-typed). */
+/* Time.new(...) with a ZONE argument (the 7th positional, or `in:`): the civil
+   fields are read in that zone. A name ("UTC"/"Z"), an offset string in any of
+   CRuby's spellings, or an Integer offset -- resolved at run time so a variable
+   works too (#3697). Emits a statement expression; `npos` positional fields. */
+static void emit_time_civil_zoned(Compiler *c, int *argv, int npos, int zone, Buf *b) {
+  int tz = ++g_tmp, tu = ++g_tmp, tt = ++g_tmp;
+  TyKind zt = comp_ntype(c, zone);
+  buf_printf(b, "({ int _t%d = 0; int64_t _t%d = ", tu, tz);
+  if (zt == TY_STRING) { buf_printf(b, "sp_time_zone_arg_off("); emit_expr(c, zone, b); buf_printf(b, ", &_t%d)", tu); }
+  else if (zt == TY_INT) emit_int_expr(c, zone, b);
+  else {
+    int tb2 = ++g_tmp;
+    buf_printf(b, "({ sp_RbVal _t%d = ", tb2); emit_boxed(c, zone, b);
+    buf_printf(b, "; _t%d.tag == SP_TAG_STR ? sp_time_zone_arg_off(_t%d.v.s, &_t%d)"
+                  " : _t%d.tag == SP_TAG_INT ? (int64_t)_t%d.v.i"
+                  " : (sp_raise_cls(\"ArgumentError\", \"invalid time zone\"), (int64_t)0); })",
+               tb2, tb2, tu, tb2, tb2);
+  }
+  buf_printf(b, "; sp_Time _t%d = sp_time_new_off(", tt);
+  for (int i = 0; i < 6; i++) {
+    if (i) buf_puts(b, ", ");
+    if (i < npos) {
+      TyKind fit = comp_ntype(c, argv[i]);
+      if (fit == TY_STRING && i == 1) { buf_puts(b, "sp_time_month_arg("); emit_expr(c, argv[i], b); buf_puts(b, ")"); }
+      else if (fit == TY_STRING) { buf_puts(b, "(int64_t)strtoll("); emit_expr(c, argv[i], b); buf_puts(b, ", NULL, 10)"); }
+      else if (fit == TY_POLY || fit == TY_UNKNOWN) { buf_puts(b, "sp_poly_to_i("); emit_boxed(c, argv[i], b); buf_puts(b, ")"); }
+      else emit_int_expr(c, argv[i], b);
+    }
+    else buf_puts(b, i == 1 || i == 2 ? "1" : "0");
+  }
+  buf_printf(b, ", _t%d ? 0 : _t%d);", tu, tz);
+  buf_printf(b, " if (_t%d) { _t%d.is_utc = 1; _t%d.utc_off = 0; } _t%d; })", tu, tt, tt, tt);
+}
+
 /* Civil-argument Time constructor forms, shared by `Time.new(...)` (via the
    generic constant-new path) and Time.local/mktime/utc/gm. Up to 6 civil
    fields with CRuby's defaults (month/day 1, rest 0); a 7th positional
@@ -5292,6 +5326,11 @@ static int emit_time_civil_ctor(Compiler *c, int id, int is_utc, int is_new, Buf
     int inv = struct_kwarg_value(c, argv[argc - 1], "in");
     if (inv >= 0) {
       int npos = argc - 1;
+      /* any zone spelling, resolved at run time (#3697) */
+      if (comp_ntype(c, inv) != TY_INT) {
+        emit_time_civil_zoned(c, (int *)argv, npos, inv, b);
+        return 1;
+      }
       long koff = 0; int khave = 0;
       const char *ity = nt_type(nt, inv);
       if (ity && sp_streq(ity, "StringNode")) {
@@ -5323,6 +5362,11 @@ static int emit_time_civil_ctor(Compiler *c, int id, int is_utc, int is_new, Buf
       buf_puts(b, ")");
       return 1;
     }
+  }
+  /* the 7th positional is the zone: any spelling, resolved at run time (#3697) */
+  if (argc == 7 && is_new && comp_ntype(c, argv[6]) != TY_INT) {
+    emit_time_civil_zoned(c, (int *)argv, 6, argv[6], b);
+    return 1;
   }
   long lit_off = 0;
   int have_lit_off = 0;
