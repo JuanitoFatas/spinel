@@ -6765,7 +6765,59 @@ int emit_scalar_call(Compiler *c, int id, Buf *b) {
          with or without a digits argument. The keyword hash is peeled off
          the positional view. */
       const char *half_fn = NULL;
+      int half_dyn = -1;
       int eff_argc = argc;
+      /* only #round takes a tie-break mode; the other three reject a keyword
+         argument outright (#3646) */
+      if (!sp_streq(name, "round") && argc >= 1 && nt_type(c->nt, argv[argc - 1]) &&
+          sp_streq(nt_type(c->nt, argv[argc - 1]), "KeywordHashNode") &&
+          (sp_streq(name, "floor") || sp_streq(name, "ceil") || sp_streq(name, "truncate"))) {
+        buf_printf(b, "({ (void)(%s); sp_raise_cls(\"TypeError\","
+                      " \"no implicit conversion of Hash into Integer\"); 0.0; })", r);
+        return 1;
+      }
+      if (sp_streq(name, "round") && argc >= 1 && nt_type(c->nt, argv[argc - 1]) &&
+          sp_streq(nt_type(c->nt, argv[argc - 1]), "KeywordHashNode")) {
+        int hvd = kwh_lookup(nt, argv[argc - 1], "half");
+        /* a nil mode is the default; a mode only known at run time is chosen
+           there rather than aborting the build (#3646) */
+        if (hvd >= 0 && nt_type(c->nt, hvd) && sp_streq(nt_type(c->nt, hvd), "NilNode"))
+          eff_argc = argc - 1;
+        else if (hvd >= 0 && !(nt_type(c->nt, hvd) && sp_streq(nt_type(c->nt, hvd), "SymbolNode"))) {
+          half_dyn = hvd;
+          eff_argc = argc - 1;
+        }
+      }
+      if (half_dyn >= 0) {
+        int tmv = ++g_tmp, tsm = ++g_tmp;
+        int nd_lit = (eff_argc == 1 && nt_type(c->nt, argv[0]) &&
+                      sp_streq(nt_type(c->nt, argv[0]), "IntegerNode"))
+                     ? (int)nt_int(c->nt, argv[0], "value", 0) : 0;
+        int nd_nonlit = (eff_argc == 1 && !(nt_type(c->nt, argv[0]) &&
+                                            sp_streq(nt_type(c->nt, argv[0]), "IntegerNode")));
+        buf_printf(b, "({ double _t%d = (%s); sp_sym _t%d = ", tmv, r, tsm);
+        emit_expr(c, half_dyn, b);
+        buf_puts(b, "; ");
+        if (nd_nonlit) {
+          int tnn = ++g_tmp;
+          buf_printf(b, "mrb_int _t%d = ", tnn); emit_int_expr(c, argv[0], b);
+          buf_printf(b, "; (_t%d > 0)"
+                        " ? ({ double _f = pow(10, (double)_t%d); sp_box_float(isinf(_f) ? _t%d"
+                        " : sp_round_half_mode(_t%d * _f, _t%d) / _f); })"
+                        " : ({ double _f = pow(10, (double)(-_t%d));"
+                        " sp_box_int(isinf(_f) ? 0 : (mrb_int)(sp_round_half_mode(_t%d / _f, _t%d) * _f)); }); })",
+                     tnn, tnn, tmv, tmv, tsm, tnn, tmv, tsm);
+        }
+        else if (nd_lit > 0)
+          buf_printf(b, "double _f = pow(10, %d); sp_round_half_mode(_t%d * _f, _t%d) / _f; })",
+                     nd_lit, tmv, tsm);
+        else if (nd_lit < 0)
+          buf_printf(b, "double _f = pow(10, %d); (mrb_int)(sp_round_half_mode(_t%d / _f, _t%d) * _f); })",
+                     -nd_lit, tmv, tsm);
+        else
+          buf_printf(b, "(mrb_int)sp_round_half_mode(_t%d, _t%d); })", tmv, tsm);
+        return 1;
+      }
       if (sp_streq(name, "round") && argc >= 1 && nt_type(c->nt, argv[argc - 1]) &&
           sp_streq(nt_type(c->nt, argv[argc - 1]), "KeywordHashNode")) {
         int hv = kwh_lookup(nt, argv[argc - 1], "half");

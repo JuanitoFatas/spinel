@@ -6523,6 +6523,18 @@ SP_NORETURN SP_COLD void sp_raise_cls(const char *cls, const char *msg) {
   fprintf(stderr, "%s (%s)\n", (msg && *msg) ? msg : cls, cls); exit(1); }
 static void sp_raise(const char *msg) { sp_raise_cls("RuntimeError", msg); }
 
+/* Float#round(half: mode) where the mode is only known at run time (#3646).
+   A nil mode is the default (round half up, away from zero). */
+static double sp_round_half_mode(double x, sp_sym mode) {
+  const char *m = (mode == (sp_sym)-1) ? NULL : sp_sym_to_s(mode);
+  if (!m || !m[0]) return round(x);
+  if (strcmp(m, "even") == 0) return sp_round_half_even(x);
+  if (strcmp(m, "down") == 0) return sp_round_half_down(x);
+  if (strcmp(m, "up") == 0) return round(x);
+  sp_raise_cls("ArgumentError", sp_sprintf("invalid rounding mode: %s", m));
+  return 0.0;
+}
+
 /* `rescue *list`: the clause matches when the raised class is (or descends
    from) one named in the list. A non-class element is a TypeError, and an
    empty list matches nothing, so the exception keeps propagating (#3712). */
