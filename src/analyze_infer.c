@@ -3254,7 +3254,10 @@ else {
             if (kt == TY_STRING && vt == TY_STRING) return TY_STR_STR_HASH;
             if (kt == TY_STRING) return TY_STR_POLY_HASH;
             TyKind h = ty_hash_of(kt, vt);
-            return h != TY_UNKNOWN ? h : TY_STR_POLY_HASH;
+            /* the key is not a String here, so the string-keyed fallback would
+               have put whatever the block answers into a const char * slot
+               (#3602) */
+            return h != TY_UNKNOWN ? h : TY_POLY_POLY_HASH;
           }
         }
       }

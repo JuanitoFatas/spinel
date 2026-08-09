@@ -7425,7 +7425,8 @@ int emit_object_call(Compiler *c, int id, Buf *b) {
             buf_printf(b, " lv_%s = ", vp); emit_boxed_text(c, sc->ivar_types[i], fb, b); buf_puts(b, ";");
           }
           buf_printf(b, " sp_%sHash_set(_t%d, ", hn, rh);
-          if (ke >= 0) emit_expr(c, ke, b); else buf_puts(b, "0");
+          if (ke >= 0) { if (kt == TY_POLY && comp_ntype(c, ke) != TY_POLY) emit_boxed(c, ke, b); else emit_expr(c, ke, b); }
+          else buf_puts(b, "0");
           buf_puts(b, ", ");
           if (ve >= 0) { if (vt == TY_POLY && comp_ntype(c, ve) != TY_POLY) emit_boxed(c, ve, b); else emit_expr(c, ve, b); }
           else buf_puts(b, "0");
