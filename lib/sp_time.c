@@ -23,6 +23,25 @@ sp_Time sp_time_now(void) {
   return (sp_Time){ ts.tv_sec, (int32_t)ts.tv_nsec, 0 };
 }
 
+/* A sub-second argument of a whole unit or more belongs in the seconds
+   field, the way CRuby normalises it (#3704). */
+sp_Time sp_time_norm(sp_Time t) {
+  int64_t ns = (int64_t)t.tv_nsec;
+  if (ns >= 1000000000LL || ns < 0) {
+    int64_t carry = ns / 1000000000LL;
+    ns -= carry * 1000000000LL;
+    if (ns < 0) { ns += 1000000000LL; carry--; }
+    t.tv_sec += carry;
+    t.tv_nsec = (int32_t)ns;
+  }
+  return t;
+}
+/* Add a sub-second offset that may exceed a whole second (#3704). */
+sp_Time sp_time_add_nsec(sp_Time t, int64_t ns) {
+  t.tv_sec += ns / 1000000000LL;
+  t.tv_nsec = (int32_t)((int64_t)t.tv_nsec + ns % 1000000000LL);
+  return sp_time_norm(t);
+}
 sp_Time sp_time_at_int(int64_t sec) {
   return (sp_Time){ sec, 0, 0 };
 }

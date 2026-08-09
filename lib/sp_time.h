@@ -25,6 +25,8 @@ typedef struct { int64_t tv_sec; int32_t tv_nsec; int8_t is_utc; int32_t utc_off
 /* Constructors */
 sp_Time sp_time_now(void);
 sp_Time sp_time_at_int(int64_t sec);
+sp_Time sp_time_norm(sp_Time t);   /* carry a whole second out of tv_nsec */
+sp_Time sp_time_add_nsec(sp_Time t, int64_t ns);
 sp_Time sp_time_at_float(double epoch);
 sp_Time sp_time_at_div(int64_t num, int64_t den);
 sp_Time sp_time_parse(const char *s);

@@ -16709,12 +16709,13 @@ else { memcpy(dir, sf, n); dir[n] = 0; } }
         buf_printf(b, "({ sp_Time _t%d = ", ts);
         if (st == TY_FLOAT) { buf_puts(b, "sp_time_at_float("); emit_expr(c, argv[0], b); buf_puts(b, ")"); }
         else { buf_puts(b, "sp_time_at_int("); emit_int_expr(c, argv[0], b); buf_puts(b, ")"); }
-        buf_printf(b, "; _t%d.tv_nsec += (int32_t)(", ts);
+        buf_printf(b, "; _t%d = sp_time_add_nsec(_t%d, (int64_t)(", ts, ts);
         TyKind ut = comp_ntype(c, argv[1]);
         if (ut == TY_FLOAT) { buf_puts(b, "("); emit_expr(c, argv[1], b); buf_printf(b, ") * %ld.0", mult); }
         else if (ut == TY_RATIONAL) { buf_puts(b, "sp_rational_to_f("); emit_expr(c, argv[1], b); buf_printf(b, ") * %ld.0", mult); }
-        else { buf_puts(b, "("); emit_int_expr(c, argv[1], b); buf_printf(b, ") * %ld", mult); }
-        buf_printf(b, "); _t%d; })", ts);
+        else { buf_puts(b, "((int64_t)("); emit_int_expr(c, argv[1], b); buf_printf(b, ")) * %ld", mult); }
+        /* a whole unit or more carries into the seconds field (#3704) */
+        buf_printf(b, ")); _t%d; })", ts);
         return;
       }
     }
@@ -16729,12 +16730,13 @@ else { memcpy(dir, sf, n); dir[n] = 0; } }
       if (st == TY_FLOAT) { buf_puts(b, "sp_time_at_float("); emit_expr(c, argv[0], b); buf_puts(b, ")"); }
       else if (st == TY_POLY || st == TY_UNKNOWN) { buf_puts(b, "sp_time_at_float(sp_poly_to_f("); emit_boxed(c, argv[0], b); buf_puts(b, "))"); }
       else { buf_puts(b, "sp_time_at_int("); emit_int_expr(c, argv[0], b); buf_puts(b, ")"); }
-      buf_printf(b, "; _t%d.tv_nsec += (int32_t)(", ts);
+      buf_printf(b, "; _t%d = sp_time_add_nsec(_t%d, (int64_t)(", ts, ts);
       TyKind ut = comp_ntype(c, argv[1]);
       if (ut == TY_FLOAT) { emit_expr(c, argv[1], b); buf_puts(b, " * 1000.0"); }
       else if (ut == TY_RATIONAL) { buf_puts(b, "sp_rational_to_f("); emit_expr(c, argv[1], b); buf_puts(b, ") * 1000.0"); }
-      else { buf_puts(b, "("); emit_int_expr(c, argv[1], b); buf_puts(b, ") * 1000"); }
-      buf_printf(b, "); _t%d; })", ts);
+      else { buf_puts(b, "((int64_t)("); emit_int_expr(c, argv[1], b); buf_puts(b, ")) * 1000"); }
+      /* a whole second or more carries into the seconds field (#3704) */
+      buf_printf(b, ")); _t%d; })", ts);
       return;
     }
     if ((sp_streq(name, "local") || sp_streq(name, "mktime") ||
