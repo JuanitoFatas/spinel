@@ -3698,6 +3698,12 @@ else {
           if (kat == TY_INT)    return TY_INT_ARRAY;
           if (kat == TY_FLOAT)  return TY_FLOAT_ARRAY;
           if (kat == TY_STRING) return TY_STR_ARRAY;
+          /* an object answers through its own to_ary/to_a (#3721) */
+          if (ty_is_object(kat)) {
+            int aci = ty_object_class(kat), ami = comp_method_in_chain(c, aci, "to_ary", NULL);
+            if (ami < 0) ami = comp_method_in_chain(c, aci, "to_a", NULL);
+            if (ami >= 0) return (TyKind)c->scopes[ami].ret;
+          }
         }
       }
     }
@@ -3715,6 +3721,12 @@ else {
     if (sp_streq(name, "Array") && argc == 1) {
       TyKind at = infer_type(c, argv[0]);
       if (ty_is_array(at)) return at;
+      /* an object answers through its own to_ary/to_a (#3721) */
+      if (ty_is_object(at)) {
+        int aci2 = ty_object_class(at), ami2 = comp_method_in_chain(c, aci2, "to_ary", NULL);
+        if (ami2 < 0) ami2 = comp_method_in_chain(c, aci2, "to_a", NULL);
+        if (ami2 >= 0) return (TyKind)c->scopes[ami2].ret;
+      }
       if (at == TY_INT)    return TY_INT_ARRAY;    /* Array(int)   -> [int]   */
       if (at == TY_FLOAT)  return TY_FLOAT_ARRAY;  /* Array(float) -> [float] */
       if (at == TY_STRING) return TY_STR_ARRAY;    /* Array(str)   -> [str]   */
@@ -3724,6 +3736,11 @@ else {
     if (sp_streq(name, "Hash") && argc == 1) {
       TyKind at = infer_type(c, argv[0]);
       if (ty_is_hash(at)) return at;              /* Hash(hash) -> the hash */
+      /* an object answers through its own #to_hash (#3721) */
+      if (ty_is_object(at)) {
+        int hci2 = ty_object_class(at), hmi = comp_method_in_chain(c, hci2, "to_hash", NULL);
+        if (hmi >= 0) return (TyKind)c->scopes[hmi].ret;
+      }
       if (at == TY_POLY) return TY_POLY;          /* nil-or-hash decided at runtime */
       return TY_POLY_POLY_HASH;                   /* Hash(nil) / Hash([]) -> {} */
     }

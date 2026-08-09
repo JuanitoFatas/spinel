@@ -124,7 +124,7 @@ static int bare_rescue_spec_cid(Compiler *c, int rescue_id) {
 static int method_name_implicitly_invoked(const char *nm) {
   static const char *const implicit[] = {
     "to_s", "inspect", "==", "<=>", "eql?", "hash", "each", "coerce",
-    "to_str", "to_ary", "to_a", "to_i", "to_int", "to_h", "to_proc", "call",
+    "to_str", "to_ary", "to_a", "to_i", "to_int", "to_h", "to_hash", "to_proc", "call",
     "initialize_copy",
     /* the materializer synthesized for a class that includes Enumerable: the
        generated sp_obj_to_a dispatch calls it for an instance the poly

@@ -12508,6 +12508,14 @@ else { memcpy(dir, sf, n); dir[n] = 0; } }
       else if (at == TY_BOOL) { buf_puts(b, "("); emit_expr(c, av[0], b); buf_puts(b, " ? \"true\" : \"false\")"); }
       else if (at == TY_SYMBOL) { buf_puts(b, "sp_sym_to_s("); emit_expr(c, av[0], b); buf_puts(b, ")"); }
       else if (at == TY_NIL || at == TY_UNKNOWN) { buf_puts(b, "sp_poly_to_s(sp_box_nil())"); }
+      /* Kernel#String asks for #to_str first, and only then #to_s (#3721) */
+      else if (ty_is_object(at) &&
+               comp_method_in_chain(c, ty_object_class(at), "to_str", NULL) >= 0) {
+        int tsc = ty_object_class(at), tsd = tsc;
+        (void)comp_method_in_chain(c, tsc, "to_str", &tsd);
+        buf_printf(b, "sp_%s_to_str((sp_%s *)(", c->classes[tsd].c_name, c->classes[tsd].c_name);
+        emit_expr(c, av[0], b); buf_puts(b, "))");
+      }
       else { buf_puts(b, "sp_poly_to_s("); emit_boxed(c, av[0], b); buf_puts(b, ")"); }  /* container/range/object: #to_s */
       return;
     }
@@ -12539,6 +12547,16 @@ else { memcpy(dir, sf, n); dir[n] = 0; } }
         else emit_expr(c, av[0], b);
         buf_printf(b, "); _t%d; })", t);
       }
+      /* Kernel#Array asks the object for #to_ary, then #to_a (#3721) */
+      else if (ty_is_object(at) &&
+               (comp_method_in_chain(c, ty_object_class(at), "to_ary", NULL) >= 0 ||
+                comp_method_in_chain(c, ty_object_class(at), "to_a", NULL) >= 0)) {
+        int acid = ty_object_class(at), adef = acid;
+        const char *anm = comp_method_in_chain(c, acid, "to_ary", NULL) >= 0 ? "to_ary" : "to_a";
+        (void)comp_method_in_chain(c, acid, anm, &adef);
+        buf_printf(b, "sp_%s_%s((sp_%s *)(", c->classes[adef].c_name, mc(anm), c->classes[adef].c_name);
+        emit_expr(c, av[0], b); buf_puts(b, "))");
+      }
       else { buf_puts(b, "sp_kernel_array("); emit_boxed(c, av[0], b); buf_puts(b, ")"); }
       return;
     }
@@ -12560,6 +12578,14 @@ else { memcpy(dir, sf, n); dir[n] = 0; } }
         if (_hn == 0) empty_arr_lit = 1;
       }
       if (ty_is_hash(at)) { emit_expr(c, av[0], b); }
+      /* an object answers through its own #to_hash (#3721) */
+      else if (ty_is_object(at) &&
+               comp_method_in_chain(c, ty_object_class(at), "to_hash", NULL) >= 0) {
+        int hci = ty_object_class(at), hdef = hci;
+        (void)comp_method_in_chain(c, hci, "to_hash", &hdef);
+        buf_printf(b, "sp_%s_to_hash((sp_%s *)(", c->classes[hdef].c_name, c->classes[hdef].c_name);
+        emit_expr(c, av[0], b); buf_puts(b, "))");
+      }
       else if (at == TY_NIL || empty_arr_lit) {
         /* result type is TY_POLY_POLY_HASH: emit the raw hash pointer */
         buf_puts(b, "((void)("); emit_expr(c, av[0], b);
