@@ -17226,6 +17226,17 @@ else { memcpy(dir, sf, n); dir[n] = 0; } }
     buf_puts(b, "((void *)("); emit_expr(c, recv, b); buf_puts(b, ") == (void *)(");
     emit_expr(c, argv[0], b); buf_puts(b, "))"); return;
   }
+  /* A Regexp is never equal to an operand of any other type: answer false
+     rather than rejecting the program (#3632). */
+  if (recv >= 0 && comp_ntype(c, recv) == TY_REGEX && argc == 1 &&
+      (sp_streq(name, "==") || sp_streq(name, "!=") || sp_streq(name, "eql?") ||
+       sp_streq(name, "equal?")) &&
+      comp_ntype(c, argv[0]) != TY_REGEX && comp_ntype(c, argv[0]) != TY_POLY) {
+    buf_puts(b, "((void)("); emit_expr(c, recv, b); buf_puts(b, "), (void)(");
+    emit_boxed(c, argv[0], b);
+    buf_printf(b, "), %d)", sp_streq(name, "!=") ? 1 : 0);
+    return;
+  }
   /* IO handles compare by pointer identity (f.flush.equal?(f), #2799) */
   if (recv >= 0 && comp_ntype(c, recv) == TY_IO && argc == 1 &&
       (sp_streq(name, "equal?") || sp_streq(name, "eql?") || sp_streq(name, "==")) &&
