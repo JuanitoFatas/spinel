@@ -7592,12 +7592,23 @@ int emit_object_call(Compiler *c, int id, Buf *b) {
             char fb[300]; snprintf(fb, sizeof fb, "_t%d->iv_%s", t, iv_c(sc->ivars[i] + 1));
             buf_printf(b, " lv_%s = ", vp); emit_boxed_text(c, sc->ivar_types[i], fb, b); buf_puts(b, ";");
           }
+          /* a composite key/value (an Array or Hash literal built from the
+             block parameters) hoists its construction into the prelude, which
+             runs BEFORE these per-member assignments -- so it read stale
+             parameters. Emit that setup here, after them (#3603). */
+          Buf kpre; memset(&kpre, 0, sizeof kpre);
+          Buf kbuf; memset(&kbuf, 0, sizeof kbuf);
+          Buf vbuf; memset(&vbuf, 0, sizeof vbuf);
+          Buf *sv_pre = g_pre; g_pre = &kpre;
+          if (ke >= 0) { if (kt == TY_POLY && comp_ntype(c, ke) != TY_POLY) emit_boxed(c, ke, &kbuf); else emit_expr(c, ke, &kbuf); }
+          if (ve >= 0) { if (vt == TY_POLY && comp_ntype(c, ve) != TY_POLY) emit_boxed(c, ve, &vbuf); else emit_expr(c, ve, &vbuf); }
+          g_pre = sv_pre;
+          if (kpre.p) { buf_puts(b, " "); buf_puts(b, kpre.p); }
+          free(kpre.p);
           buf_printf(b, " sp_%sHash_set(_t%d, ", hn, rh);
-          if (ke >= 0) { if (kt == TY_POLY && comp_ntype(c, ke) != TY_POLY) emit_boxed(c, ke, b); else emit_expr(c, ke, b); }
-          else buf_puts(b, "0");
+          buf_puts(b, kbuf.p ? kbuf.p : "0"); free(kbuf.p);
           buf_puts(b, ", ");
-          if (ve >= 0) { if (vt == TY_POLY && comp_ntype(c, ve) != TY_POLY) emit_boxed(c, ve, b); else emit_expr(c, ve, b); }
-          else buf_puts(b, "0");
+          buf_puts(b, vbuf.p ? vbuf.p : "0"); free(vbuf.p);
           buf_puts(b, ");");
         }
       }
