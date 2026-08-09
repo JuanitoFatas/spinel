@@ -2415,6 +2415,35 @@ static void synth_struct_each(Compiler *c) {
   }
 }
 
+/* Does `class <ci>`'s body say `include Enumerable`? A builtin module has no
+   class-table entry, so the AST is what records it (#3755). */
+static int an_class_includes_enumerable(Compiler *c, int ci) {
+  const NodeTable *nt = c->nt;
+  if (ci < 0 || ci >= c->nclasses) return 0;
+  const char *cn = c->classes[ci].name;
+  if (!cn) return 0;
+  for (int id = 0; id < nt->count; id++) {
+    if (nt_kind(nt, id) != NK_ClassNode) continue;
+    int cp = nt_ref(nt, id, "constant_path");
+    const char *n = cp >= 0 ? nt_str(nt, cp, "name") : nt_str(nt, id, "name");
+    if (!n || !sp_streq(n, cn)) continue;
+    int body = nt_ref(nt, id, "body");
+    int bn = 0; const int *bb = body >= 0 ? nt_arr(nt, body, "body", &bn) : NULL;
+    for (int k = 0; k < bn; k++) {
+      if (nt_kind(nt, bb[k]) != NK_CallNode) continue;
+      const char *nm = nt_str(nt, bb[k], "name");
+      if (!nm || !sp_streq(nm, "include") || nt_ref(nt, bb[k], "receiver") >= 0) continue;
+      int an = nt_ref(nt, bb[k], "arguments");
+      int n2 = 0; const int *av = an >= 0 ? nt_arr(nt, an, "arguments", &n2) : NULL;
+      for (int j = 0; j < n2; j++) {
+        const char *mn = nt_str(nt, av[j], "name");
+        if (mn && sp_streq(mn, "Enumerable")) return 1;
+      }
+    }
+  }
+  return 0;
+}
+
 static void synth_enum_to_a(Compiler *c) {
   NodeTable *nt = (NodeTable *)c->nt;
   if (c->nscopes == 0) return;
@@ -2434,7 +2463,10 @@ static void synth_enum_to_a(Compiler *c) {
        anonymous block through the synthesized materializer is not yet wired and
        would yield an empty result, so it stays a loud reject. */
     if (!sp_streq(m->name, "each") ||
-        !(m->yields || (m->blk_param && m->blk_param[0]))) continue;
+        !(m->yields || (m->blk_param && m->blk_param[0]) ||
+          /* a class that mixes Enumerable in still gets the materializer even
+             when its #each never yields: the mixin is simply empty (#3755) */
+          an_class_includes_enumerable(c, m->class_id))) continue;
     if (comp_method_in_class(c, m->class_id, "__enum_to_a") >= 0) continue;
     int dup = 0;
     for (int k = 0; k < ncls; k++) if (cls[k] == m->class_id) { dup = 1; break; }
