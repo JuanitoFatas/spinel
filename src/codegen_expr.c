@@ -2688,7 +2688,14 @@ else {
     buf_puts(b, " sp_exc_top--;\n}\nelse {\n  sp_exc_top--;\n  sp_gc_nroots = sp_exc_rootmark[sp_exc_top];\n  "
                 "sp_rescue_sp = sp_rescue_mark[sp_exc_top];\n  "
                 "if (sp_unwind_kind == SP_UNWIND_NONE) sp_proc_homes_unwind();\n  "
-                "if (sp_unwind_kind != SP_UNWIND_NONE) sp_unwind_resume();\n  ");
+                "if (sp_unwind_kind != SP_UNWIND_NONE) sp_unwind_resume();\n  "
+                /* a bare rescue catches StandardError and its descendants only:
+                   this arm caught everything, so a subclass of Exception was
+                   swallowed (#3725) */
+                "if (!sp_exc_is_standard_error((const char *)sp_last_exc_cls)) {\n    "
+                "  sp_pending_exc_obj = sp_exc_obj[sp_exc_top];\n    "
+                "  sp_raise_cls((const char *)sp_last_exc_cls, sp_exc_msg[sp_exc_top]);\n  "
+                "}\n  ");
     /* materialize the handled exception and push it so `$!` (and #cause
        threading for a nested raise) see it inside the fallback, exactly like
        a full rescue arm; popped when the arm value settles. */
