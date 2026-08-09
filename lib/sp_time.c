@@ -394,12 +394,24 @@ const char *sp_time_strftime(sp_Time t, const char *fmt) {SP_GC_ROOT_STR(fmt);
     while (*p == ':') { colon++; p++; }
     int width = -1;
     if (*p >= '0' && *p <= '9') { width = 0; while (*p >= '0' && *p <= '9') width = width * 10 + (*p++ - '0'); }
+    /* the E / O locale modifiers select an alternative representation the C
+       locale does not have, so the unmodified directive is what they mean (#3705) */
+    while ((*p == 'E' || *p == 'O') && p[1]) p++;
     char d = *p;
-    if (!d) { out[oi++] = '%'; break; }
+    /* a format ending in a bare `%` is invalid, not a literal one (#3705) */
+    if (!d) sp_raise_cls("ArgumentError", "invalid format");
     char val[128]; val[0] = 0;
     if (d == '%') { val[0] = '%'; val[1] = 0; }
     else if (d == 's') snprintf(val, sizeof val, "%lld", (long long)t.tv_sec);
-    else if (d == 'L') snprintf(val, sizeof val, "%03d", (int)(t.tv_nsec / 1000000));
+    else if (d == 'L') {
+      /* a width on %L asks for that many fractional digits, not left padding
+         of the millisecond count (#3705) */
+      int lw = width > 0 ? width : 3;
+      char nb[24]; snprintf(nb, sizeof nb, "%09ld", (long)t.tv_nsec);
+      if (lw <= 9) { memcpy(val, nb, (size_t)lw); val[lw] = 0; }
+      else { strcpy(val, nb); for (int i = 9; i < lw && i < 120; i++) val[i] = '0'; val[lw < 120 ? lw : 120] = 0; }
+      width = -1;
+    }
     else if (d == 'N') {
       int w = width > 0 ? width : 9;
       char nb[16]; snprintf(nb, sizeof nb, "%09ld", (long)t.tv_nsec);
@@ -462,6 +474,13 @@ const char *sp_time_strftime(sp_Time t, const char *fmt) {SP_GC_ROOT_STR(fmt);
     }
     /* the `-` (no-pad) and `_` (space-pad) modifiers rework the default zero
        padding that C strftime already applied to a numeric field (#3090) */
+    /* the space-padded fields (%e / %k / %l) take `-` (strip) and `0` (zero
+       pad) the same way the zero-padded ones take `-` and `_` (#3705) */
+    if ((nopad || pad0) && val[0] == ' ') {
+      size_t sp0 = 0; while (val[sp0] == ' ' && val[sp0 + 1] != 0) sp0++;
+      if (nopad) memmove(val, val + sp0, strlen(val) - sp0 + 1);
+      else for (size_t k = 0; k < sp0; k++) val[k] = '0';
+    }
     if ((nopad || padsp) && val[0]) {
       int all_digit = 1;
       for (char *q = val; *q; q++) if (!isdigit((unsigned char)*q)) { all_digit = 0; break; }
