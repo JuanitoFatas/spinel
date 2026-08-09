@@ -3447,6 +3447,9 @@ static const char *sp_str_format_polyarr(const char *fmt, sp_PolyArray *a) {
   char *buf = (char *)malloc(cap);
   if (!buf) { perror("malloc"); exit(1); }
   size_t out = 0; mrb_int idx = 0; const char *p = fmt;
+  /* CRuby refuses to mix numbered (%1$s), sequential (%s) and named (%<a>d)
+     references in one format string (#3723) */
+  mrb_bool used_numbered = FALSE, used_sequential = FALSE, used_named = FALSE;
   while (*p) {
     if (*p != '%') {
       if (out + 1 >= cap) { cap = cap * 2; buf = (char *)realloc(buf, cap); }
@@ -3457,6 +3460,7 @@ static const char *sp_str_format_polyarr(const char *fmt, sp_PolyArray *a) {
       buf[out++] = '%'; p += 2; continue;
     }
     char spec[64]; size_t sl = 0; spec[sl++] = *p++;
+    mrb_bool this_numbered = FALSE;
     /* positional argument reference: %N$conv selects the Nth (1-based) arg */
     {
       const char *q = p; mrb_int argnum = 0; mrb_bool overflow = FALSE;
@@ -3465,7 +3469,11 @@ static const char *sp_str_format_polyarr(const char *fmt, sp_PolyArray *a) {
             sp_int_add_overflow_p(argnum, *q - '0', &argnum)) { overflow = TRUE; break; }
         q++;
       }
-      if (!overflow && argnum > 0 && *q == '$') { idx = argnum - 1; p = q + 1; }
+      if (!overflow && argnum > 0 && *q == '$') {
+        idx = argnum - 1; p = q + 1;
+        if (used_sequential || used_named) { free(buf); sp_raise_cls("ArgumentError", "numbered(1) after unnumbered(1)"); }
+        used_numbered = TRUE; this_numbered = TRUE;
+      }
     }
     /* %<name>conv / %{name}: named reference into the format's hash argument.
        %{name} interpolates the value's to_s directly (no conversion spec);
@@ -3480,6 +3488,8 @@ static const char *sp_str_format_polyarr(const char *fmt, sp_PolyArray *a) {
         p = q + 1;
         named_v = sp_fmt_named_ref(a, nm);
         have_named = TRUE;
+        if (used_numbered || used_sequential) { free(buf); sp_raise_cls("ArgumentError", "named after unnumbered(1)"); }
+        used_named = TRUE;
         if (nclose == '}') {
           const char *sv2 = sp_poly_to_s(named_v);
           size_t svl = sv2 ? strlen(sv2) : 0;
@@ -3499,6 +3509,8 @@ static const char *sp_str_format_polyarr(const char *fmt, sp_PolyArray *a) {
         sp_RbVal wv = a->data[idx]; idx++;
         long long wnum = (wv.tag == SP_TAG_INT) ? (long long)wv.v.i
                        : (wv.tag == SP_TAG_FLT) ? (long long)wv.v.f : 0;
+        /* a negative PRECISION is ignored (a negative width left-justifies) */
+        if (wnum < 0 && sl > 0 && spec[sl - 1] == '.') { sl--; p++; continue; }
         char wbuf[24]; int wl = snprintf(wbuf, sizeof wbuf, "%lld", wnum);
         if (sl + (size_t)wl < sizeof(spec) - 8) { memcpy(spec + sl, wbuf, (size_t)wl); sl += (size_t)wl; }
         p++;
@@ -3506,7 +3518,8 @@ static const char *sp_str_format_polyarr(const char *fmt, sp_PolyArray *a) {
       else if (c == '-' || c == '+' || c == ' ' || c == '#' || c == '0' || c == '.' || (c >= '0' && c <= '9')) { spec[sl++] = c; p++; }
       else break;
     }
-    if (!*p) break;
+    /* a trailing bare `%` is a malformed format, not a literal (#3723) */
+    if (!*p) { free(buf); sp_raise_cls("ArgumentError", "incomplete format specifier; use %% (double %) instead"); }
     char conv = *p++; spec[sl++] = conv;
     /* Ruby's %u is %d: it prints a negative as -N rather than wrapping */
     if (conv == 'u') { conv = 'd'; spec[sl - 1] = 'd'; }
@@ -3524,6 +3537,11 @@ else {
     else {
       /* CRuby raises rather than padding a missing argument with nil/0 */
       if (idx >= a->len) { free(buf); sp_raise_cls("ArgumentError", "too few arguments"); }
+      if (!this_numbered) {
+        if (used_named) { free(buf); sp_raise_cls("ArgumentError", "unnumbered(1) mixed with named"); }
+        if (used_numbered) { free(buf); sp_raise_cls("ArgumentError", "unnumbered(1) mixed with numbered"); }
+        used_sequential = TRUE;
+      }
       v = a->data[idx]; idx++;
     }
     if (conv == 'd' || conv == 'i' || conv == 'x' || conv == 'X' || conv == 'o' ||
