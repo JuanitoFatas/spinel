@@ -802,8 +802,10 @@ sp_MatchData *sp_re_matchdata_at(mrb_regexp_pattern *pat, const char *str, mrb_i
 /* group i substring, or NULL for a non-participating / out-of-range group */
 const char *sp_MatchData_aref(sp_MatchData *m, mrb_int i) {SP_GC_ROOT(m);
   if (!m) return NULL;
-  if (i < 0) i += m->ncap;   /* MatchData#[-1] is the last group (#2531) */
-  if (i < 0 || i >= m->ncap) return NULL;
+  /* A negative index reaches the CAPTURE groups only: m[-1] is the last one and
+     m[-(ncap)] -- which would be the whole match -- is nil, as in CRuby (#3628). */
+  if (i < 0) { i += m->ncap; if (i < 1) return NULL; }
+  if (i >= m->ncap) return NULL;
   int s = m->caps[i * 2], e = m->caps[(i * 2) + 1];
   if (s < 0 || e < s) return NULL;
   int len = e - s;
@@ -878,6 +880,10 @@ sp_PolyArray *sp_MatchData_aref_range(sp_MatchData *m, mrb_int beg, mrb_int end,
   sp_PolyArray *a = sp_PolyArray_new();
   if (!m) return a;
   mrb_int n = m->ncap;
+  /* a beginless or endless bound carries the range sentinel, which the
+     negative-index fixup below turned into a wild offset (#3628) */
+  if (beg == INTPTR_MIN) beg = 0;
+  if (end == INTPTR_MAX) { end = n - 1; excl = 0; }
   if (beg < 0) beg += n;
   if (end < 0) end += n;
   mrb_int last = excl ? end - 1 : end;
