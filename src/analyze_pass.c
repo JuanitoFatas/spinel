@@ -7002,6 +7002,9 @@ int desugar_block_destructure_params(Compiler *c) {
       nt_node_set_str(nt, rd, "name", nm);
       if (!bdp_fill_targets(nt, reqs[k], mw)) { ok = 0; break; }
       nt_node_set_ref(nt, mw, "value", rd);
+      /* the assignment is ours, not the program's: a body that had no
+         statements still answers nil (#3679) */
+      nt_node_set_int(nt, mw, "destr_splice", 1);
       mws[nmw++] = mw;
     }
     if (!ok) { free(reqs); free(newreqs); free(mws); continue; }

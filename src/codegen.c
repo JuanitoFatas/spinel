@@ -2782,6 +2782,23 @@ static TyKind lambda_nonlocal_return_ty(Compiler *c, int id) {
   }
   return r;
 }
+/* The name a parameter shows in #parameters: a block parameter renamed to
+   avoid a scope collision carries a `__bp<N>` suffix that is ours, not the
+   program's (#3679). */
+static const char *param_public_name(const char *n) {
+  if (!n) return n;
+  const char *p = strstr(n, "__bp");
+  if (!p) return n;
+  { const char *q = p + 4;
+    if (!*q) return n;
+    while (*q >= '0' && *q <= '9') q++;
+    if (*q) return n; }
+  { size_t len = (size_t)(p - n);
+    static char buf[128];
+    if (len >= sizeof buf) len = sizeof buf - 1;
+    memcpy(buf, n, len); buf[len] = 0;
+    return buf; }
+}
 
 /* Lower a `proc {}` / `lambda {}` / `Proc.new {}` / `->(){}` literal: emit a
    standalone `static mrb_int _proc_N(void *cap, mrb_int argc, mrb_int *args)`
@@ -2983,6 +3000,10 @@ void emit_proc_literal(Compiler *c, int create, Buf *b) {
   int tail_is_return = 0;
   TyKind ret = TY_NIL;
   { int bn = 0; const int *bb = body >= 0 ? nt_arr(nt, body, "body", &bn) : NULL;
+    /* the destructuring assignments spliced in for a `|(a, b)|` parameter are
+       ours; a body that is only those had no statements, so it answers nil
+       rather than the array they read (#3679) */
+    while (bn > 0 && nt_int(nt, bb[bn - 1], "destr_splice", 0)) bn--;
     if (bn > 0) {
       const char *tty = nt_type(nt, bb[bn - 1]);
       if (tty && sp_streq(tty, "ReturnNode")) {
@@ -3123,12 +3144,18 @@ else if (orecv >= 0 && onm) {
       ids = nt_arr(nt, pn, "requireds", &n);
       for (int i = 0; i < n && meta_count < PMETA_MAX; i++) {
         pkind[meta_count] = pos_kind;
-        pname[meta_count++] = comp_sym_intern(c, nt_str(nt, ids[i], "name"));
+        /* a destructuring group has no name of its own; the synthesized one
+           must not leak, and neither must a renamed local's suffix (#3679) */
+        const char *rnm = nt_str(nt, ids[i], "name");
+        pname[meta_count++] = (rnm && strncmp(rnm, "__destr_", 8) == 0)
+                                ? -1 : comp_sym_intern(c, param_public_name(rnm));
       }
       ids = nt_arr(nt, pn, "optionals", &n);
       for (int i = 0; i < n && meta_count < PMETA_MAX; i++) {
         pkind[meta_count] = "opt";
-        pname[meta_count++] = comp_sym_intern(c, nt_str(nt, ids[i], "name"));
+        { const char *onm = nt_str(nt, ids[i], "name");
+          pname[meta_count++] = (onm && strncmp(onm, "__destr_", 8) == 0)
+                                  ? -1 : comp_sym_intern(c, param_public_name(onm)); }
       }
       int rest = nt_ref(nt, pn, "rest");
       const char *rty = rest >= 0 ? nt_type(nt, rest) : NULL;
