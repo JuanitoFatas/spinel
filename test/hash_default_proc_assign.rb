@@ -1,12 +1,13 @@
-# Hash#default_proc= with a lambda literal (KieranP #2371)
-h = {}
-h.default_proc = ->(hh, k) { k.to_s }
-p h[:x]
-h2 = { a: 1 }
-h2.default_proc = ->(hh, k) { 99 }
-p h2[:zzz]
-p h2[:a]
-h3 = { "a" => 1 }
-h3.default_proc = ->(hh, k) { "miss:" + k }
-p h3["q"]
-p h3["a"]
+h001 = {}
+h001.default_proc = proc { |hh001, k001| k001.to_s }
+p h001[:x]
+h002 = {}
+h002.default_proc = Proc.new { |hh002, k002| k002.to_s }
+p h002[:x]
+l003 = lambda { |hh003, k003| k003.to_s }
+h003 = {}
+h003.default_proc = l003
+p h003[:y]
+h004 = {}
+h004.default_proc = ->(hh, k) { "L#{k}" }
+p h004[:z]

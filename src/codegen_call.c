@@ -18482,6 +18482,33 @@ else { memcpy(dir, sf, n); dir[n] = 0; } }
     else { buf_puts(b, name[0] == '-' ? "(-" : "(+"); emit_expr(c, recv, b); buf_puts(b, ")"); }
     return;
   }
+  /* h.default_proc = <a Proc value>: install a trampoline that drives the
+     Proc, so any callable works and not just an inline lambda (#3563). */
+  if (recv >= 0 && sp_streq(name, "default_proc=") && argc == 1 &&
+      (comp_ntype(c, recv) == TY_STR_POLY_HASH || comp_ntype(c, recv) == TY_SYM_POLY_HASH ||
+       comp_ntype(c, recv) == TY_POLY_POLY_HASH) &&
+      comp_ntype(c, argv[0]) == TY_PROC &&
+      !(nt_type(nt, argv[0]) && sp_streq(nt_type(nt, argv[0]), "LambdaNode"))) {
+    TyKind hrt = comp_ntype(c, recv);
+    const char *hn2 = ty_hash_cname(hrt);
+    const char *keyct = hrt == TY_SYM_POLY_HASH ? "sp_sym"
+                      : hrt == TY_STR_POLY_HASH ? "const char *" : "sp_RbVal";
+    const char *kbox = hrt == TY_SYM_POLY_HASH ? "sp_box_sym(_key)"
+                     : hrt == TY_STR_POLY_HASH ? "sp_box_str(_key)" : "_key";
+    int dn2 = ++g_proc_counter;
+    buf_printf(&g_procs,
+      "static sp_RbVal _sp_hash_dproc_%d(sp_%sHash *_self_h, %s _key, void *_dproc_self) {\n"
+      "  return sp_penum_call2((sp_Proc *)_dproc_self,"
+      " sp_box_nullable_obj((void *)_self_h, %s), %s);\n}\n",
+      dn2, hn2, keyct, hash_box_cls(hrt), kbox);
+    int th2 = ++g_tmp, tp2 = ++g_tmp;
+    buf_printf(b, "({ sp_%sHash *_t%d = ", hn2, th2); emit_expr(c, recv, b);
+    buf_printf(b, "; sp_Proc *_t%d = ", tp2); emit_expr(c, argv[0], b);
+    buf_printf(b, "; _t%d->dproc = _sp_hash_dproc_%d; _t%d->dproc_self = (void *)_t%d;"
+                  " sp_gc_wb((void *)_t%d); _t%d; })",
+               th2, dn2, th2, tp2, th2, th2);
+    return;
+  }
   /* h.default_proc = ->(hh, k) { ... }: lower the lambda literal to the same
      dedicated dproc C function Hash.new{} uses and install it on the receiver
      (dproc + dproc_self slots exist on every poly-valued variant) (#2371). */
