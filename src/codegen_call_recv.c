@@ -8552,6 +8552,18 @@ int emit_value_recv_call(Compiler *c, int id, Buf *b) {
     else if (sp_streq(name, "inspect") && argc == 0) buf_printf(b, "sp_MatchData_inspect(%s)", r);   /* #2500 */
     /* MatchData#match(n) is the group substring, #match_length(n) its byte
        length (nil when the group did not participate) (#2501) */
+    /* a Symbol or String argument names a group; the integer slot read the
+       symbol's id as an index (#3630) */
+    else if ((sp_streq(name, "match") || sp_streq(name, "match_length")) && argc == 1 &&
+             (comp_ntype(c, argv[0]) == TY_SYMBOL || comp_ntype(c, argv[0]) == TY_STRING)) {
+      buf_printf(b, "sp_MatchData_%s(%s, ",
+                 sp_streq(name, "match") ? "aref_name" : "match_length_name", r);
+      if (comp_ntype(c, argv[0]) == TY_SYMBOL) {
+        buf_puts(b, "sp_sym_to_s("); emit_expr(c, argv[0], b); buf_puts(b, ")");
+      }
+      else emit_expr(c, argv[0], b);
+      buf_puts(b, ")");
+    }
     else if (sp_streq(name, "match") && argc == 1) { buf_printf(b, "sp_MatchData_aref(%s, ", r); emit_int_expr(c, argv[0], b); buf_puts(b, ")"); }
     else if (sp_streq(name, "match_length") && argc == 1) { buf_printf(b, "sp_MatchData_match_length(%s, ", r); emit_int_expr(c, argv[0], b); buf_puts(b, ")"); }
     /* #deconstruct is the captures array; #deconstruct_keys the named captures

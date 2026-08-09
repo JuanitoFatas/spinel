@@ -4286,6 +4286,14 @@ static sp_RbVal sp_MatchData_match_length(sp_MatchData *m, mrb_int i) {
   if (i < 0 || i >= m->ncap || m->caps[i * 2] < 0) return sp_box_nil();
   return sp_box_int(m->caps[i * 2 + 1] - m->caps[i * 2]);
 }
+/* #match / #match_length given a group NAME: resolve it through the pattern
+   rather than reading the symbol's id as an index (#3630). */
+static sp_RbVal sp_MatchData_match_length_name(sp_MatchData *m, const char *name) {
+  if (!m || !name) return sp_box_nil();
+  int g = re_named_group(m->pat, name);
+  if (g < 0) sp_raise_cls("IndexError", sp_sprintf("undefined group name reference: %s", name));
+  return sp_MatchData_match_length(m, g);
+}
 static sp_StrPolyHash*sp_StrPolyHash_from_str_int_hash(sp_StrIntHash*h){sp_StrPolyHash*r=sp_StrPolyHash_new();if(!h)return r;r->default_v=sp_box_int(h->default_v);for(mrb_int i=0;i<h->len;i++){const char*k=h->order[i];sp_StrPolyHash_set(r,k,sp_box_int(sp_StrIntHash_get(h,k)));}return r;}
 
 /* SymPolyHash: symbol keys, sp_RbVal values — same shape as SymStrHash but with poly values. */
