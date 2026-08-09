@@ -1117,6 +1117,7 @@ void emit_proc_ret_unbox(Compiler *c, TyKind rty, Buf *b) {
   if (rty == TY_STRING) { buf_puts(b, "_sp_proc_poly_ret.v.s"); return; }
   if (rty == TY_RANGE)  { buf_puts(b, "(*(sp_Range *)_sp_proc_poly_ret.v.p)"); return; }
   if (rty == TY_TIME)   { buf_puts(b, "(*(sp_Time *)_sp_proc_poly_ret.v.p)"); return; }
+  if (rty == TY_CLASS)  { buf_puts(b, "sp_unbox_class(_sp_proc_poly_ret)"); return; }
   buf_puts(b, "("); emit_ctype(c, rty, b); buf_puts(b, ")_sp_proc_poly_ret.v.p");  /* array/hash/object */
 }
 
