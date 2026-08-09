@@ -19842,6 +19842,18 @@ else { memcpy(dir, sf, n); dir[n] = 0; } }
     buf_puts(b, "sp_box_nil()");
     return;
   }
+  /* default_proc on a hash that never narrowed to a variant: a blockless
+     Hash.new (and the empty literal) has no default block, so nil (#3568) */
+  if (recv >= 0 && sp_streq(name, "default_proc") && argc == 0 && !ty_is_hash(rt) &&
+      hash_new_blockless(c, recv)) {
+    /* the hash itself has no C value here (it never narrowed), so evaluate
+       only a default argument the receiver may carry, for its effect */
+    int dn = hash_new_default_arg(c, recv);
+    buf_puts(b, "(");
+    if (dn >= 0) { buf_puts(b, "(void)("); emit_expr(c, dn, b); buf_puts(b, "), "); }
+    buf_puts(b, "(sp_Proc *)NULL)");
+    return;
+  }
   if (emit_hash_call(c, id, b)) return;
 
   /* `arr[i] = v` in expression position: do the store, evaluate to the rhs

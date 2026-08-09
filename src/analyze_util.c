@@ -586,6 +586,40 @@ static int hash_new_default_arg_compute(Compiler *c, int recv) {
   return av[0];
 }
 
+/* Does this receiver denote a Hash built by a blockless `Hash.new` (or an
+   empty Hash literal)? Such a hash carries no default block. Traces a local's
+   writes the way hash_new_default_arg does (#3568). */
+int hash_new_blockless(Compiler *c, int recv) {
+  const NodeTable *nt = c->nt;
+  if (recv < 0 || !nt_type(nt, recv)) return 0;
+  const char *ty = nt_type(nt, recv);
+  if (sp_streq(ty, "HashNode") || sp_streq(ty, "KeywordHashNode")) return 1;
+  if (sp_streq(ty, "LocalVariableReadNode")) {
+    const char *vn = nt_str(nt, recv, "name");
+    Scope *sc = vn ? comp_scope_of(c, recv) : NULL;
+    if (!sc) return 0;
+    int found = 0;
+    for (int r = lw_shared_first(c, vn, (int)(sc - c->scopes)); r >= 0; r = lw_shared_next(r)) {
+      int w = lw_shared_node(r);
+      if (nt_kind(nt, w) != NK_LocalVariableWriteNode) continue;
+      const char *wn = nt_str(nt, w, "name");
+      if (!wn || !sp_streq(wn, vn) || comp_scope_of(c, w) != sc) continue;
+      int val = nt_ref(nt, w, "value");
+      if (val < 0 || !hash_new_blockless(c, val)) return 0;
+      found = 1;
+    }
+    return found;
+  }
+  if (!sp_streq(ty, "CallNode")) return 0;
+  const char *nm = nt_str(nt, recv, "name");
+  if (!nm || !sp_streq(nm, "new")) return 0;
+  int cr = nt_ref(nt, recv, "receiver");
+  if (cr < 0 || !nt_type(nt, cr) || !sp_streq(nt_type(nt, cr), "ConstantReadNode")) return 0;
+  const char *cn = nt_str(nt, cr, "name");
+  if (!cn || !sp_streq(cn, "Hash")) return 0;
+  return nt_ref(nt, recv, "block") < 0;
+}
+
 int struct_member_idx(Compiler *c, ClassInfo *sc, int keynode) {
   const NodeTable *nt = c->nt;
   const char *kty = nt_type(nt, keynode);
