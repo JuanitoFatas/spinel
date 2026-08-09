@@ -13185,6 +13185,33 @@ else { memcpy(dir, sf, n); dir[n] = 0; } }
                  ti, ti, ti, ti, ti, ti, ti, ti, ti, ti);
       return;
     }
+    /* the accessors every exception carries: an instance of a user subclass is
+       still an sp_Exception, so read them off it (#3732) */
+    if (argc == 0 && (sp_streq(name, "cause") || sp_streq(name, "backtrace") ||
+                      sp_streq(name, "full_message") || sp_streq(name, "detailed_message") ||
+                      sp_streq(name, "exception")) &&
+        comp_method_in_chain(c, ty_object_class(comp_ntype(c, recv)), name, NULL) < 0) {
+      if (sp_streq(name, "exception")) { emit_expr(c, recv, b); return; }
+      if (sp_streq(name, "cause")) {
+        buf_puts(b, "((sp_Exception *)("); emit_expr(c, recv, b); buf_puts(b, "))->cause");
+        return;
+      }
+      if (sp_streq(name, "backtrace")) {
+        buf_puts(b, "((void)("); emit_expr(c, recv, b); buf_puts(b, "), (sp_StrArray *)0)");
+        return;
+      }
+      { int tfm = ++g_tmp;
+        Buf rbm = expr_buf(c, recv);
+        emit_indent(g_pre, g_indent);
+        buf_printf(g_pre, "sp_Exception *_t%d = (sp_Exception *)(%s);\n", tfm, rbm.p ? rbm.p : "");
+        free(rbm.p);
+        if (sp_streq(name, "full_message"))
+          buf_printf(b, "sp_sprintf(\"%%s: %%s\", sp_exc_class_name(_t%d), sp_exc_message(_t%d))", tfm, tfm);
+        else
+          buf_printf(b, "sp_sprintf(\"%%s (%%s)\", sp_exc_message(_t%d), sp_exc_class_name(_t%d))", tfm, tfm);
+      }
+      return;
+    }
     if (sp_streq(name, "message") || sp_streq(name, "to_s") || sp_streq(name, "to_str")) {
       /* the class's OWN to_s answers whatever it answers -- a Symbol, say --
          so it cannot go through the message helpers, whose result is a string

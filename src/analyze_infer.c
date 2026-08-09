@@ -779,6 +779,18 @@ TyKind infer_call(Compiler *c, int id) {
   if (args >= 0) argv = nt_arr(nt, args, "arguments", &argc);
   if (!name) return TY_UNKNOWN;
 
+  /* the accessors every exception carries, on an instance of a user subclass
+     (#3732): #exception is self, #cause another exception, #backtrace the
+     frames, and the two message renderings strings */
+  if (recv >= 0 && argc == 0 && ty_is_object(infer_type(c, recv)) &&
+      class_is_exc_subclass(c, ty_object_class(infer_type(c, recv))) &&
+      comp_method_in_chain(c, ty_object_class(infer_type(c, recv)), name, NULL) < 0) {
+    if (sp_streq(name, "exception")) return infer_type(c, recv);
+    if (sp_streq(name, "cause")) return TY_EXCEPTION;
+    if (sp_streq(name, "backtrace")) return TY_STR_ARRAY;
+    if (sp_streq(name, "full_message") || sp_streq(name, "detailed_message")) return TY_STRING;
+  }
+
   /* #dup drops the receiver's singleton methods, so the copy is an instance of
      the class Ruby sees rather than the synthesized singleton one (#3739) */
   if (recv >= 0 && sp_streq(name, "dup") && argc == 0) {
