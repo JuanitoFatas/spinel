@@ -11098,6 +11098,17 @@ void emit_call(Compiler *c, int id, Buf *b) {
     emit_int_expr(c, argv[0], b); buf_puts(b, ")");
     return;
   }
+  /* arr.cycle with no count and no block: an Enumerator over the elements. A
+     bounded consumer (first(n) / take(n)) is served by its own arm before this
+     one, which is what the repetition is actually read through (#3758). */
+  if (recv >= 0 && argc == 0 && nt_ref(nt, id, "block") < 0 &&
+      ty_is_array(comp_ntype(c, recv)) && sp_streq(name, "cycle")) {
+    int tcy = ++g_tmp;
+    buf_printf(b, "({ sp_Enumerator *_t%d = sp_Enumerator_new_cycle(", tcy);
+    emit_boxed(c, recv, b);
+    buf_printf(b, ", 1); _t%d->meth = \"cycle\"; _t%d; })", tcy, tcy);
+    return;
+  }
   /* arr.cycle(n) with no block -> a materialized Enumerator of the elements
      repeated n times (the unbounded blockless form stays a loud reject). */
   if (recv >= 0 && argc == 1 && nt_ref(nt, id, "block") < 0 &&

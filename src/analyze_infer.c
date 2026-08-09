@@ -4564,6 +4564,10 @@ else {
     if (sp_streq(name, "slice") && argc == 2) return rt;
     if ((sp_streq(name, "pop") || sp_streq(name, "shift")) && argc == 1)
       return rt;  /* pop(n)/shift(n): the removed subarray */
+    /* a countless blockless cycle is an Enumerator too (#3758) */
+    if (sp_streq(name, "cycle") && argc == 0 && nt_ref(nt, id, "block") < 0 &&
+        !call_is_chain_receiver_with_block(c, id))
+      return TY_ENUMERATOR;
     if (sp_streq(name, "cycle") && argc == 1 && nt_ref(nt, id, "block") < 0)
       return rt;  /* blockless cycle(n): the receiver repeated n times */
     if (sp_streq(name, "cycle") && nt_ref(nt, id, "block") >= 0)
