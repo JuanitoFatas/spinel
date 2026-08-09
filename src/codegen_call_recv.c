@@ -6294,7 +6294,14 @@ int emit_scalar_call(Compiler *c, int id, Buf *b) {
         int hv2 = kwh_lookup(nt, argv[argc - 1], "half");
         const char *hm = (hv2 >= 0 && nt_type(nt, hv2) && sp_streq(nt_type(nt, hv2), "SymbolNode"))
                            ? nt_str(nt, hv2, "value") : NULL;
-        if (argc == 1) buf_printf(b, "(%s)", r);   /* no digits: self */
+        /* any mode other than the three CRuby names is an ArgumentError */
+        if (hm && !sp_streq(hm, "even") && !sp_streq(hm, "down") && !sp_streq(hm, "up")) {
+          buf_printf(b, "({ (void)(%s); sp_raise_cls(\"ArgumentError\","
+                        " sp_sprintf(\"invalid rounding mode: %%s\", ", r);
+          emit_str_literal(b, hm);
+          buf_puts(b, ")); (mrb_int)0; })");
+        }
+        else if (argc == 1) buf_printf(b, "(%s)", r);   /* no digits: self */
         else {
           int md = hm && sp_streq(hm, "even") ? 0 : hm && sp_streq(hm, "down") ? 2 : 1;
           buf_printf(b, "sp_int_round_half(%s, ", r);
@@ -6710,7 +6717,15 @@ int emit_scalar_call(Compiler *c, int id, Buf *b) {
           const char *hm = nt_str(c->nt, hv, "value");
           if (hm && sp_streq(hm, "even")) half_fn = "sp_round_half_even";
           else if (hm && sp_streq(hm, "down")) half_fn = "sp_round_half_down";
-          else half_fn = "round";  /* :up is the default rounding */
+          else if (hm && sp_streq(hm, "up")) half_fn = "round";
+          else {
+            /* any other mode is CRuby's ArgumentError, not the default (#3647) */
+            buf_printf(b, "({ (void)(%s); sp_raise_cls(\"ArgumentError\","
+                          " sp_sprintf(\"invalid rounding mode: %%s\", ", r);
+            emit_str_literal(b, hm ? hm : "?");
+            buf_puts(b, ")); 0.0; })");
+            return 1;
+          }
           eff_argc = argc - 1;
         }
       }
@@ -6741,10 +6756,12 @@ int emit_scalar_call(Compiler *c, int id, Buf *b) {
           /* CRuby normalizes a nonzero value that rounds to zero to +0.0
              (a genuine -0.0 input keeps its sign) (#3235). */
           int tx = ++g_tmp;
+          /* the tie-break mode applies here too: this branch hard-coded the
+             default rounding, so `half:` was silently ignored (#3647) */
           buf_printf(b, "({ double _t%d = (%s); double _f = pow(10, %d);"
-                        " double _r = round(_t%d * _f) / _f;"
+                        " double _r = %s(_t%d * _f) / _f;"
                         " (_t%d != 0.0 && _r == 0.0) ? 0.0 : _r; })",
-                     tx, r, ndig, tx, tx);
+                     tx, r, ndig, cfn, tx, tx);
         }
         else if (ndig > 0)
           buf_printf(b, "({ double _f = pow(10, %d); %s((%s) * _f) / _f; })", ndig, cfn, r);
