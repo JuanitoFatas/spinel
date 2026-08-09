@@ -8153,6 +8153,21 @@ void emit_call(Compiler *c, int id, Buf *b) {
     return;
   }
   const NodeTable *nt = c->nt;
+  /* Object#initialize_copy: every object inherits it, and the default just
+     answers self. A class that defines its own keeps its dispatch (#3753). */
+  {
+    int ic_r = nt_ref(nt, id, "receiver");
+    const char *ic_n = nt_str(nt, id, "name");
+    int ic_a = nt_ref(nt, id, "arguments");
+    int ic_c = 0; const int *ic_v = ic_a >= 0 ? nt_arr(nt, ic_a, "arguments", &ic_c) : NULL;
+    if (ic_r >= 0 && ic_n && sp_streq(ic_n, "initialize_copy") && ic_c == 1 &&
+        ty_is_object(comp_ntype(c, ic_r)) &&
+        comp_method_in_chain(c, ty_object_class(comp_ntype(c, ic_r)), "initialize_copy", NULL) < 0) {
+      buf_puts(b, "((void)("); emit_expr(c, ic_v[0], b); buf_puts(b, "), ");
+      emit_expr(c, ic_r, b); buf_puts(b, ")");
+      return;
+    }
+  }
   /* Float#equal? is identity, and a NaN is not == to itself, so compare the
      bit patterns rather than the values (#3650). */
   {
@@ -17906,6 +17921,11 @@ else { memcpy(dir, sf, n); dir[n] = 0; } }
       /* a compiler-synthesized helper (__enum_to_a) is not a real method: CRuby
          answers false, so never let the class-chain lookup below report it */
       if (name_is_synth_method(qm)) { resolved = 1; yes = 0; }
+      /* every object inherits a PRIVATE Object#initialize_copy, so it answers
+         only when private methods are included (#3753) */
+      if (!resolved && sp_streq(qm, "initialize_copy") && foldable) {
+        resolved = 1; yes = include_all;
+      }
       for (int u = 0; !resolved && uni[u]; u++) if (sp_streq(qm, uni[u])) { yes = resolved = 1; break; }
       /* value-type receivers: their builtin surface is not in any class
          table; answer the well-known names directly (the probe below only
