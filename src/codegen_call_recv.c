@@ -2565,7 +2565,8 @@ else {
         buf_printf(b, " sp_PolyArray *_t%d = sp_PolyArray_new(); SP_GC_ROOT(_t%d);", tout, tout);
         buf_printf(b, " for (mrb_int _t%d = 0; _t%d < _t%d->len; _t%d++)", ti, ti, tc, ti);
         buf_printf(b, " sp_PolyArray_push(_t%d, sp_box_int_array(_t%d->data[_t%d]));", tout, tc, ti);
-        buf_printf(b, " _t%d; })", tout);
+        /* blockless: an Enumerator over those tuples (#3614) */
+        buf_printf(b, " sp_Enumerator_new_from(sp_box_poly_array(_t%d)); })", tout);
         return 1;
       }
       if ((sp_streq(name, "repeated_combination") || sp_streq(name, "combination") ||
@@ -2580,10 +2581,13 @@ else {
         int ta = ++g_tmp;
         buf_printf(b, "({ sp_PolyArray *_t%d = sp_poly_to_poly_array(", ta);
         emit_boxed(c, recv, b);
-        buf_printf(b, "); SP_GC_ROOT(_t%d); %s(_t%d, ", ta, combfn, ta);
+        buf_printf(b, "); SP_GC_ROOT(_t%d); ", ta);
+        buf_puts(b, "sp_Enumerator_new_from(sp_box_poly_array(");
+        buf_printf(b, "%s(_t%d, ", combfn, ta);
         if (argc == 1) emit_expr(c, argv[0], b);
         else buf_printf(b, "_t%d ? _t%d->len : 0", ta, ta);
-        buf_puts(b, "); })");
+        buf_puts(b, ")))");
+        buf_puts(b, "; })");
         return 1;
       }
       if (sp_streq(name, "rotate!") && argc <= 1) {
@@ -3833,6 +3837,8 @@ else {
                            : sp_streq(name, "permutation") ? "sp_PolyArray_permutation"
                            : "sp_PolyArray_repeated_combination";
         int ta = ++g_tmp;
+        /* a poly-array receiver keeps materializing the tuples: an Enumerator
+           here would reach chain sites that read the array directly */
         buf_printf(b, "({ sp_PolyArray *_t%d = ", ta); emit_expr(c, recv, b);
         buf_printf(b, "; SP_GC_ROOT(_t%d); %s(_t%d, ", ta, combfn, ta);
         if (argc == 1) emit_expr(c, argv[0], b);

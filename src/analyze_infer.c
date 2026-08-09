@@ -4571,10 +4571,14 @@ else {
     if (sp_streq(name, "product") && argc >= 1)
       return nt_ref(nt, id, "block") >= 0 ? rt : TY_POLY_ARRAY;  /* block form returns self */
     if (sp_streq(name, "product") && argc == 0 && nt_ref(nt, id, "block") < 0) return TY_POLY_ARRAY;
-    if (sp_streq(name, "combination") && argc == 1 && block < 0) return TY_POLY_ARRAY;
-    if (sp_streq(name, "permutation") && (argc == 1 || argc == 0) && block < 0) return TY_POLY_ARRAY;
-    if (sp_streq(name, "repeated_permutation") && argc == 1 && block < 0) return TY_POLY_ARRAY;
-    if (sp_streq(name, "repeated_combination") && argc == 1 && block < 0) return TY_POLY_ARRAY;
+    /* blockless: an Enumerator over the tuples, as CRuby answers. A poly-array
+       receiver keeps the materialized Array -- chains reached through a
+       container read it directly (#3614). */
+    { TyKind cmb = rt == TY_POLY_ARRAY ? TY_POLY_ARRAY : TY_ENUMERATOR;
+      if (sp_streq(name, "combination") && argc == 1 && block < 0) return cmb;
+      if (sp_streq(name, "permutation") && (argc == 1 || argc == 0) && block < 0) return cmb;
+      if (sp_streq(name, "repeated_permutation") && argc == 1 && block < 0) return cmb;
+      if (sp_streq(name, "repeated_combination") && argc == 1 && block < 0) return cmb; }
     /* block forms: combination family returns self, each_slice/cons nil */
     if (block >= 0 &&
         (sp_streq(name, "combination") || sp_streq(name, "permutation") ||
