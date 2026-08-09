@@ -1923,6 +1923,8 @@ int emit_iteration_stmt(Compiler *c, int id, Buf *b, int indent) {
       if (sargc >= 2) emit_int_expr(c, sargv[1], b); else buf_puts(b, "1");
       buf_puts(b, ";\n");
       emit_indent(b, indent);
+      buf_printf(b, "if (_t%d == 0) sp_raise_cls(\"ArgumentError\", \"step can't be 0\");\n", ts);
+      emit_indent(b, indent);
       buf_printf(b, "for (mrb_int _t%d = ", t); emit_int_expr(c, recv, b);
       buf_printf(b, "; ; _t%d += _t%d) {\n", t, ts);
       if (p0) { char ts2[32]; snprintf(ts2, sizeof ts2, "_t%d", t); emit_iter_param_assign(c, block, p0_orig, p0, TY_INT, ts2, b, indent + 1); }
@@ -1943,6 +1945,8 @@ int emit_iteration_stmt(Compiler *c, int id, Buf *b, int indent) {
       if (sargc >= 2) emit_expr(c, sargv[1], b); else buf_puts(b, "1");
       buf_puts(b, ";\n");
       emit_indent(b, indent);
+      buf_printf(b, "if (_t%d == 0) sp_raise_cls(\"ArgumentError\", \"step can't be 0\");\n", ts);
+      emit_indent(b, indent);
       buf_printf(b, "for (mrb_int _t%d = ", t); emit_expr(c, recv, b);
       buf_printf(b, "; _t%d >= 0 ? _t%d <= _t%d : _t%d >= _t%d; _t%d += _t%d) {\n",
                  ts, t, tl, t, tl, t, ts);
@@ -1960,6 +1964,9 @@ int emit_iteration_stmt(Compiler *c, int id, Buf *b, int indent) {
     emit_indent(b, indent); buf_printf(b, "mrb_float _t%d = ", ts);
     if (sargc >= 2) emit_expr(c, sargv[1], b); else buf_puts(b, "1.0");
     buf_puts(b, ";\n");
+    /* a zero step never advances, so CRuby rejects it outright (#3648) */
+    emit_indent(b, indent);
+    buf_printf(b, "if (_t%d == 0) sp_raise_cls(\"ArgumentError\", \"step can't be 0\");\n", ts);
     /* n = floor((limit-begin)/step + err); err bounds fp drift (CRuby) */
     emit_indent(b, indent);
     buf_printf(b, "mrb_float _t%d_e = (fabs(_t%d)+fabs(_t%d)+fabs(_t%d-_t%d))/fabs(_t%d)*DBL_EPSILON;\n",

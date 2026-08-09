@@ -2808,7 +2808,9 @@ int emit_step_array_expr(Compiler *c, int id, Buf *b) {
     buf_printf(b, "({ sp_IntArray *_t%d = sp_IntArray_new(); SP_GC_ROOT(_t%d); mrb_int _t%d = ", tr, tr, tl);
     emit_expr(c, sv[0], b); buf_printf(b, "; mrb_int _t%d = ", ts);
     if (sc >= 2) emit_expr(c, sv[1], b); else buf_puts(b, "1");
-    buf_printf(b, "; for (mrb_int _t%d = ", ti); emit_expr(c, recv, b);
+    /* a zero step never advances, so CRuby rejects it outright (#3648) */
+    buf_printf(b, "; if (_t%d == 0) sp_raise_cls(\"ArgumentError\", \"step can't be 0\");", ts);
+    buf_printf(b, " for (mrb_int _t%d = ", ti); emit_expr(c, recv, b);
     buf_printf(b, "; _t%d >= 0 ? _t%d <= _t%d : _t%d >= _t%d; _t%d += _t%d) sp_IntArray_push(_t%d, _t%d); _t%d; })",
                ts, ti, tl, ti, tl, ti, ts, tr, ti, tr);
     return 1;
@@ -2818,7 +2820,8 @@ int emit_step_array_expr(Compiler *c, int id, Buf *b) {
   emit_expr(c, recv, b); buf_printf(b, "; mrb_float _t%d = ", tl); emit_expr(c, sv[0], b);
   buf_printf(b, "; mrb_float _t%d = ", ts);
   if (sc >= 2) emit_expr(c, sv[1], b); else buf_puts(b, "1.0");
-  buf_printf(b, "; mrb_float _t%d_e = (fabs(_t%d)+fabs(_t%d)+fabs(_t%d-_t%d))/fabs(_t%d)*DBL_EPSILON;"
+  buf_printf(b, "; if (_t%d == 0) sp_raise_cls(\"ArgumentError\", \"step can't be 0\");", ts);
+  buf_printf(b, " mrb_float _t%d_e = (fabs(_t%d)+fabs(_t%d)+fabs(_t%d-_t%d))/fabs(_t%d)*DBL_EPSILON;"
                 " if (_t%d_e > 0.5) _t%d_e = 0.5;"
                 " mrb_int _t%d = (mrb_int)floor((_t%d-_t%d)/_t%d + _t%d_e);"
                 " for (mrb_int _t%d = 0; _t%d <= _t%d; _t%d++) sp_FloatArray_push(_t%d, _t%d + _t%d * _t%d); _t%d; })",
