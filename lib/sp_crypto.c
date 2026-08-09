@@ -369,6 +369,100 @@ const char *sp_crypto_hmac_sha256_hex(const char *key, const char *msg) {SP_GC_R
     return sp_crypto_hmac_hex_buf;
 }
 
+/* HMAC-SHA1 (RFC 2104). SHA-1 is here for the same reason
+ * sp_crypto_websocket_accept is: an existing protocol names it, and
+ * reproducing that protocol is not a new security design. Rails signs
+ * its cookies with HMAC-SHA1 unless the app overrides
+ * config.action_dispatch.cookies_digest, so a spinel program that reads
+ * one has no choice of digest. Same streaming structure as the SHA-256
+ * sibling above -- ipad/opad are compressed straight in rather than
+ * concatenated with the message. */
+static void sp_crypto_hmac_sha1(const uint8_t *key, size_t klen,
+                                const uint8_t *msg, size_t mlen,
+                                uint8_t out[20]) {
+    uint8_t kpad[64], ipad[64], opad[64], inner[20];
+    size_t i;
+    if (klen > 64) {
+        sp_crypto_sha1(key, klen, kpad);
+        for (i = 20; i < 64; i++) kpad[i] = 0;
+    }
+else {
+        for (i = 0; i < klen; i++) kpad[i] = key[i];
+        for (i = klen; i < 64; i++) kpad[i] = 0;
+    }
+    for (i = 0; i < 64; i++) {
+        ipad[i] = kpad[i] ^ 0x36;
+        opad[i] = kpad[i] ^ 0x5c;
+    }
+    /* inner = SHA1(ipad || msg) */
+    {
+        uint32_t H[5] = {
+            0x67452301,0xEFCDAB89,0x98BADCFE,0x10325476,0xC3D2E1F0
+        };
+        sp_crypto_sha1_block(H, ipad);
+        uint8_t buf[64];
+        size_t full = mlen & ~((size_t)63);
+        for (i = 0; i < full; i += 64) sp_crypto_sha1_block(H, msg + i);
+        size_t rem = mlen - full;
+        for (i = 0; i < rem; i++) buf[i] = msg[full + i];
+        buf[rem] = 0x80;
+        if (rem >= 56) {
+            for (i = rem + 1; i < 64; i++) buf[i] = 0;
+            sp_crypto_sha1_block(H, buf);
+            for (i = 0; i < 56; i++) buf[i] = 0;
+        }
+else {
+            for (i = rem + 1; i < 56; i++) buf[i] = 0;
+        }
+        uint64_t bits = (uint64_t)(64 + mlen) * 8;
+        for (i = 0; i < 8; i++) buf[56 + i] = (uint8_t)(bits >> (56 - 8*i));
+        sp_crypto_sha1_block(H, buf);
+        for (i = 0; i < 5; i++) {
+            inner[i*4]   = (uint8_t)(H[i] >> 24);
+            inner[i*4+1] = (uint8_t)(H[i] >> 16);
+            inner[i*4+2] = (uint8_t)(H[i] >> 8);
+            inner[i*4+3] = (uint8_t)(H[i]);
+        }
+    }
+    /* outer = SHA1(opad || inner) */
+    {
+        uint32_t H[5] = {
+            0x67452301,0xEFCDAB89,0x98BADCFE,0x10325476,0xC3D2E1F0
+        };
+        sp_crypto_sha1_block(H, opad);
+        uint8_t buf[64];
+        for (i = 0; i < 20; i++) buf[i] = inner[i];
+        buf[20] = 0x80;
+        for (i = 21; i < 56; i++) buf[i] = 0;
+        uint64_t bits = (uint64_t)(64 + 20) * 8;
+        for (i = 0; i < 8; i++) buf[56 + i] = (uint8_t)(bits >> (56 - 8*i));
+        sp_crypto_sha1_block(H, buf);
+        for (i = 0; i < 5; i++) {
+            out[i*4]   = (uint8_t)(H[i] >> 24);
+            out[i*4+1] = (uint8_t)(H[i] >> 16);
+            out[i*4+2] = (uint8_t)(H[i] >> 8);
+            out[i*4+3] = (uint8_t)(H[i]);
+        }
+    }
+}
+
+static char sp_crypto_hmac_sha1_hex_buf[41];
+
+const char *sp_crypto_hmac_sha1_hex(const char *key, const char *msg) {SP_GC_ROOT_STR(key);SP_GC_ROOT_STR(msg);
+    uint8_t out[20];
+    sp_crypto_hmac_sha1((const uint8_t *)key, sp_str_byte_len(key),
+                        (const uint8_t *)msg, sp_str_byte_len(msg),
+                        out);
+    static const char H[] = "0123456789abcdef";
+    int i;
+    for (i = 0; i < 20; i++) {
+        sp_crypto_hmac_sha1_hex_buf[i*2]   = H[(out[i] >> 4) & 0xf];
+        sp_crypto_hmac_sha1_hex_buf[i*2+1] = H[out[i] & 0xf];
+    }
+    sp_crypto_hmac_sha1_hex_buf[40] = '\0';
+    return sp_crypto_hmac_sha1_hex_buf;
+}
+
 /* ---------- Base64URL (RFC 4648 §5) ---------- */
 
 static const char SPC_B64U[64] =

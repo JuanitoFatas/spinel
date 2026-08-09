@@ -15,6 +15,7 @@
 module Crypto
   ffi_func :sp_crypto_hmac_sha256_hex,      [:str, :str],       :str
   ffi_func :sp_crypto_hmac_sha256_b64url,   [:str, :str],       :str
+  ffi_func :sp_crypto_hmac_sha1_hex,        [:str, :str],       :str
   ffi_func :sp_crypto_b64url_encode,        [:str],             :str
   ffi_func :sp_crypto_b64url_decode,        [:str],             :str
   ffi_func :sp_crypto_pbkdf2_sha256_b64url, [:str, :str, :int], :str
@@ -26,6 +27,8 @@ end
 key = "Jefe"
 msg = "what do ya want for nothing?"
 puts Crypto.sp_crypto_hmac_sha256_hex(key, msg)
+# RFC 2202 test case 2 -- the same key and message, HMAC-SHA1.
+puts Crypto.sp_crypto_hmac_sha1_hex(key, msg)
 
 # Base64URL round-trip on a 5-byte input (length 5 % 3 == 2 so the
 # tail emits 3 chars and no padding). Should print "hello" twice.

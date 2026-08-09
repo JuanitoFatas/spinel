@@ -67,6 +67,15 @@ const char *sp_crypto_hmac_sha256_hex(const char *key, const char *msg);
 /* HMAC-SHA256(key, msg) -> 43-char unpadded base64url. */
 const char *sp_crypto_hmac_sha256_b64url(const char *key, const char *msg);
 
+/* HMAC-SHA1(key, msg) -> 40-char lowercase hex. Here for the same
+ * reason sp_crypto_websocket_accept is -- an existing protocol names
+ * SHA-1 and reproducing it is not a new security design. Rails signs
+ * cookies with HMAC-SHA1 unless the app sets
+ * config.action_dispatch.cookies_digest, so a program reading one has
+ * no choice of digest. Do NOT reach for this when you do have a
+ * choice; sp_crypto_hmac_sha256_hex is the right primitive. */
+const char *sp_crypto_hmac_sha1_hex(const char *key, const char *msg);
+
 /* Base64URL (RFC 4648 §5, no padding) encode/decode. Max input
  * length ~12 KiB (encode) / ~16 KiB (decode), bump the buffer in
  * sp_crypto.c if your callers need more. */
