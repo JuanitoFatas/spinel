@@ -3238,6 +3238,11 @@ else if (orecv >= 0 && onm) {
   char home_acc[48] = "";
   if (ret_proc) { snprintf(home_acc, sizeof home_acc, "((_proc_cap_%d *)_cap)->_home", pid); g_proc_return_home = home_acc; }
   else g_proc_return_home = NULL;
+  /* a non-lambda proc written at TOP LEVEL: its `return` is a top-level
+     return, which ends the script rather than just leaving the proc (#3663) */
+  int sv_ptr = g_proc_toplevel_return;
+  g_proc_toplevel_return = (!is_lambda && !is_block_node && !ret_proc &&
+                            comp_scope_of(c, create) == &c->scopes[0]);
   g_pre = NULL; g_indent = 0; g_nren = 0; g_block_id = -1; g_block_nren = 0; g_block_param_name = NULL;
   g_self = "self"; g_result_var = NULL; g_ret_type = ret; g_ensure_depth = 0; g_result_poly = 0;
   /* The proc body reads its captured self by value for a value-type class
@@ -3555,7 +3560,13 @@ else if (orecv >= 0 && onm) {
        safe per-worker because no safepoint poll (the only migration /
        preemption point) lies between the store and the call-site read. */
     g_result_var = "_sp_proc_poly_ret"; g_result_poly = 1;
-    if (tail_ret_arg >= 0) {
+    if (tail_ret_arg >= 0 && g_proc_toplevel_return) {
+      /* a top-level proc's `return` ends the script, so the tail is a real
+         return statement rather than a value handed back (#3663) */
+      int bn = 0; const int *bb = body >= 0 ? nt_arr(nt, body, "body", &bn) : NULL;
+      for (int k = 0; k < bn; k++) emit_stmt(c, bb[k], pb, 1);
+    }
+    else if (tail_ret_arg >= 0) {
       /* explicit `return <expr>` tail: emit the leading statements, then box the
          returned value into the poly slot (emit_stmts_tail would route the
          ReturnNode to a raw `return`, bypassing the slot). */
@@ -3607,6 +3618,7 @@ else if (orecv >= 0 && onm) {
   g_proc_body_kind = sv_pbk; g_proc_brk_home = sv_pbh;
   g_result_poly = sv_rp;
   g_method_pr_label = sv_pr_label; g_method_pr_var = sv_pr_var; g_proc_return_home = sv_prh;
+  g_proc_toplevel_return = sv_ptr;
   g_exc_frame_depth = sv_excd; g_method_pr_exc_depth = sv_prexcd;
   g_rescue_save_depth = sv_rsd;
   g_fn_pr_label = sv_fn_prl; g_fn_pr_var = sv_fn_prv; g_fn_ret_type = sv_fn_rt;

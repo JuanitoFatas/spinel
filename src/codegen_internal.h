@@ -201,6 +201,7 @@ extern TyKind g_result_ty;
 extern const char *g_method_pr_label;
 extern const char *g_method_pr_var;
 extern const char *g_proc_return_home;
+extern int g_proc_toplevel_return;
 extern int g_exc_frame_depth;      /* live begin/rescue setjmp frames (see codegen_util.c) */
 extern int g_method_pr_exc_depth;
 extern int g_loop_exc_base;

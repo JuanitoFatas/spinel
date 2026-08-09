@@ -4555,6 +4555,16 @@ void emit_return(Compiler *c, int id, Buf *b, int indent) {
   int n = 0;
   const int *a = args >= 0 ? nt_arr(c->nt, args, "arguments", &n) : NULL;
 
+  /* A non-lambda proc written at top level: `return` is a TOP-LEVEL return,
+     which ends the script (#3663). */
+  if (g_proc_toplevel_return) {
+    emit_indent(b, indent);
+    buf_puts(b, "{ ");
+    for (int k = 0; k < n; k++) { buf_puts(b, "(void)("); emit_boxed(c, a[k], b); buf_puts(b, "); "); }
+    buf_puts(b, "exit(0); }\n");
+    return;
+  }
+
   /* Inside a non-lambda proc body: `return` is non-local -- longjmp to the
      creating method's frame with the boxed value (CRuby proc-return semantics). */
   if (g_proc_return_home) {

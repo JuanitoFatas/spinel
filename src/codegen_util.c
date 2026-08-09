@@ -207,6 +207,9 @@ TyKind g_result_ty = TY_UNKNOWN;
 const char *g_method_pr_label = NULL;
 const char *g_method_pr_var = NULL;
 const char *g_proc_return_home = NULL;
+/* Emitting the body of a non-lambda proc created at top level: a `return`
+   there is a TOP-LEVEL return, which ends the script (#3663). */
+int g_proc_toplevel_return = 0;
 /* Number of live setjmp exception frames (begin/rescue) enclosing the
    current emission point. A `return` from inside a try body must pop them
    (sp_exc_top -= N) before leaving -- a stale frame's jmp_buf points into
