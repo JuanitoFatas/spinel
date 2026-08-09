@@ -33,7 +33,14 @@ class Set
     @data = orig.to_a
   end
 
+  # A frozen Set refuses every mutation, as CRuby's does: the element array is
+  # a private ivar, so freezing the Set itself has to be what the check reads.
+  def check_frozen
+    raise FrozenError, "can't modify frozen Set: #{inspect}" if frozen?
+  end
+
   def add(x)
+    check_frozen
     @data.push(x) unless include?(x)
     self
   end
@@ -44,18 +51,21 @@ class Set
 
   # add? returns nil when the element was already present.
   def add?(x)
+    check_frozen
     return nil if include?(x)
     @data.push(x)
     self
   end
 
   def delete(x)
+    check_frozen
     @data.delete_if { |e| e.eql?(x) }
     self
   end
 
   # delete? returns nil when the element was absent.
   def delete?(x)
+    check_frozen
     return nil unless include?(x)
     @data.delete_if { |e| e.eql?(x) }
     self
@@ -87,6 +97,7 @@ class Set
   end
 
   def clear
+    check_frozen
     @data = []
     self
   end
@@ -111,6 +122,7 @@ class Set
   # keep_if/delete_if always return self; select!/reject! return self when
   # anything changed and nil otherwise (CRuby's Set contract).
   def map!
+    check_frozen
     r = []
     _i = 0
     while _i < @data.size
@@ -124,6 +136,7 @@ class Set
   alias collect! map!
 
   def keep_if
+    check_frozen
     r = []
     _i = 0
     while _i < @data.size
@@ -136,6 +149,7 @@ class Set
   end
 
   def delete_if
+    check_frozen
     r = []
     _i = 0
     while _i < @data.size
@@ -148,6 +162,7 @@ class Set
   end
 
   def select!
+    check_frozen
     n = @data.size
     r = []
     _i = 0
@@ -162,6 +177,7 @@ class Set
   alias filter! select!
 
   def reject!
+    check_frozen
     n = @data.size
     r = []
     _i = 0
@@ -175,12 +191,14 @@ class Set
   end
 
   def merge(enum)
+    check_frozen
     Set.check_enum(enum)
     enum.each { |x| add(x) }
     self
   end
 
   def replace(enum)
+    check_frozen
     Set.check_enum(enum)
     @data = []
     enum.each { |x| add(x) }
@@ -194,6 +212,7 @@ class Set
   end
 
   def subtract(enum)
+    check_frozen
     Set.check_enum(enum)
     enum.each { |x| @data.delete_if { |e| e.eql?(x) } }
     self
@@ -399,6 +418,7 @@ class Set
   # would make @data's inferred type depend on itself (to_a dups @data)
   # and widen the ivar to poly.
   def flatten!
+    check_frozen
     nested = false
     @data.each { |x| nested = true if x.is_a?(Set) }
     return nil unless nested
