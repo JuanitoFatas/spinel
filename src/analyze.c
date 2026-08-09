@@ -4816,9 +4816,16 @@ int desugar_enum_method_recv(Compiler *c) {
         continue;
       }
     }
+    /* the blockless grouping/cycling Enumerables answer an Enumerator of their
+       own; delegating through to_a gives the Array forms, which are wired
+       (#3604) */
+    int enum_regroup = nt_ref(nt, id, "block") < 0 &&
+        (sp_streq(nm, "each_slice") || sp_streq(nm, "each_cons") ||
+         sp_streq(nm, "each_entry") || sp_streq(nm, "cycle") ||
+         sp_streq(nm, "reverse_each"));
     if (rt == TY_ENUMERATOR && !recv_is_index_enum &&
         !sp_streq(nm, "to_a") && !sp_streq(nm, "entries") &&
-        (nt_ref(nt, id, "block") >= 0 || enum_terminal)) {
+        (nt_ref(nt, id, "block") >= 0 || enum_terminal || enum_regroup)) {
       /* the block forms of these answer the RECEIVING Enumerator, but the
          redirect makes the call read the materialized array, whose own
          each_cons/each_slice/each_entry answers that array (#3591) */

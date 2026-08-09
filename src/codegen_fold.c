@@ -2387,7 +2387,9 @@ int emit_cycle_bounded_expr(Compiler *c, int id, Buf *b) {
   int pr = nt_ref(nt, recv, "receiver");
   TyKind rt = pr >= 0 ? comp_ntype(c, pr) : TY_UNKNOWN;
   if (!ty_is_array(rt)) return 0;
-  const char *k = array_kind(rt);
+  /* a poly array has no array_kind; name it like every other Poly emit (#3604) */
+  const char *k = (rt == TY_POLY_ARRAY) ? "Poly" : array_kind(rt);
+  if (!k) return 0;
   int ta = ++g_tmp, tn = ++g_tmp, tr = ++g_tmp, tlen = ++g_tmp, ti = ++g_tmp;
   Buf rb; memset(&rb, 0, sizeof rb); emit_expr(c, pr, &rb);
   Buf nb; memset(&nb, 0, sizeof nb);
