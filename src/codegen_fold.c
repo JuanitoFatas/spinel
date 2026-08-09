@@ -6990,6 +6990,34 @@ void emit_dispatch(Compiler *c, int cid, const char *name,
 
   int argc = 0;
   const int *argv = argsNode >= 0 ? nt_arr(nt, argsNode, "arguments", &argc) : NULL;
+  /* Arity check, the same one the free-function path already made: an over- or
+     under-supplied instance call went through with the extra arguments simply
+     dropped (#3677). Static shapes only -- any splat, keyword hash, rest or
+     kwrest parameter, or synthesized parameter, skips. */
+  if (m && m->rest_idx < 0 && m->kwrest_idx < 0 && (argv || argc == 0)) {
+    int skip = 0;
+    for (int k = 0; k < argc && argv && !skip; k++) {
+      const char *at = nt_type(nt, argv[k]);
+      if (at && (sp_streq(at, "SplatNode") || sp_streq(at, "KeywordHashNode") ||
+                 sp_streq(at, "ForwardingArgumentsNode") || sp_streq(at, "BlockArgumentNode")))
+        skip = 1;
+    }
+    for (int i = 0; i < m->nparams && !skip; i++)
+      if (m->pnames[i] && m->pnames[i][0] == '_' && m->pnames[i][1] == '_') skip = 1;
+    /* count the undefaulted parameters rather than trusting a position: with a
+       leading optional (`def m(x = 1, y)`) the required ones are funded first */
+    int nreq_d = 0;
+    for (int i = 0; i < m->nparams; i++)
+      if (!(m->pdefault && m->pdefault[i] >= 0)) nreq_d++;
+    if (!skip && m->nparams >= 0 && (argc > m->nparams || argc < nreq_d)) {
+      char expb[48];
+      if (nreq_d == m->nparams) snprintf(expb, sizeof expb, "expected %d", m->nparams);
+      else snprintf(expb, sizeof expb, "expected %d..%d", nreq_d, m->nparams);
+      emit_indent(g_pre, g_indent);
+      buf_printf(g_pre, "sp_raise_cls(\"ArgumentError\", \"wrong number of arguments (given %d, %s)\");\n",
+                 argc, expb);
+    }
+  }
   /* `callee(...)`: forward the enclosing `def foo(...)` method's synthesized
      __fwd_* params positionally (#1288), same as the emit_args_filled path. */
   Scope *fwd_encl = NULL;
