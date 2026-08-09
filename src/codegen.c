@@ -2953,8 +2953,12 @@ void emit_proc_literal(Compiler *c, int create, Buf *b) {
          count (`lambda { |a,| }.arity == 1`). */
       const char *rest_ty = rest >= 0 ? nt_type(nt, rest) : NULL;
       if (rest_ty && sp_streq(rest_ty, "ImplicitRestNode")) rest = -1;
+      /* Only a rest parameter makes a PROC's arity negative: optional
+         keywords and a keyword rest leave it at the required count, where a
+         LAMBDA reports them as negative -- unless a required keyword is there
+         too, which pins the count for both (#3652). */
       int neg = rest >= 0 || (nopt > 0 && is_lambda) ||
-                ((has_opt_kw || has_kwrest) && !has_req_kw);
+                (is_lambda && (has_opt_kw || has_kwrest) && !has_req_kw);
       meta_arity = neg ? -(mandatory + 1) : mandatory;
       /* the trailing parameter synthesized for a `|x,|` rest is not one the
          signature has -- CRuby reports `proc { |x,| }.arity` as 1 */
