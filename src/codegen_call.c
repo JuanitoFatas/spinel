@@ -13498,6 +13498,24 @@ else { memcpy(dir, sf, n); dir[n] = 0; } }
       buf_puts(b, "NULL");
       return;
     }
+    /* a name selects a named group of the pattern that last matched; it was
+       read through the integer slot, where the pointer became a wild index
+       (#3653) */
+    TyKind lmat = comp_ntype(c, argv[0]);
+    if (aty && (sp_streq(aty, "StringNode") || sp_streq(aty, "SymbolNode"))) {
+      buf_puts(b, "sp_re_named_capture(sp_re_last_pat, ");
+      if (sp_streq(aty, "SymbolNode")) emit_str_literal(b, nt_str(nt, argv[0], "value"));
+      else emit_expr(c, argv[0], b);
+      buf_puts(b, ")");
+      return;
+    }
+    if (lmat == TY_STRING || lmat == TY_SYMBOL) {
+      buf_puts(b, "sp_re_named_capture(sp_re_last_pat, ");
+      if (lmat == TY_SYMBOL) { buf_puts(b, "sp_sym_to_s("); emit_expr(c, argv[0], b); buf_puts(b, ")"); }
+      else emit_expr(c, argv[0], b);
+      buf_puts(b, ")");
+      return;
+    }
     int tv = ++g_tmp;
     emit_indent(g_pre, g_indent);
     buf_printf(g_pre, "mrb_int _t%d = ", tv); emit_int_expr(c, argv[0], g_pre); buf_puts(g_pre, ";\n");
