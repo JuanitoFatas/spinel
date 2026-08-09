@@ -2681,6 +2681,14 @@ void emit_case_match(Compiler *c, int id, Buf *b, int indent, int tail, int valu
       arm_t = emit_md_deconstruct_keys(b, indent + 1, md);
       arm_pt = TY_SYM_POLY_HASH;
     }
+    /* an array pattern asks a MatchData for #deconstruct: its captures (#3675) */
+    else if (pt == TY_MATCHDATA && sp_streq(pty, "ArrayPatternNode")) {
+      arm_t = ++g_tmp;
+      emit_indent(b, indent + 1);
+      buf_printf(b, "sp_PolyArray *_t%d = sp_MatchData_captures(_t%d); SP_GC_ROOT(_t%d);\n",
+                 arm_t, t, arm_t);
+      arm_pt = TY_POLY_ARRAY;
+    }
     /* A user object scrutinee is asked to deconstruct itself: #deconstruct for an
        array pattern, #deconstruct_keys for a hash pattern. Materialize the result
        into a temp and match/bind against that (mirrors the MatchData path). A
