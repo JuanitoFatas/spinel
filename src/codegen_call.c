@@ -12930,6 +12930,21 @@ else { memcpy(dir, sf, n); dir[n] = 0; } }
       return;
     }
     if (sp_streq(name, "message") || sp_streq(name, "to_s") || sp_streq(name, "to_str")) {
+      /* the class's OWN to_s answers whatever it answers -- a Symbol, say --
+         so it cannot go through the message helpers, whose result is a string
+         (#3714) */
+      int xcm = ty_object_class(comp_ntype(c, recv));
+      /* only for the name the class itself defines: #message keeps the helper,
+         whose result type the call site is typed for */
+      int own = sp_streq(name, "message") ? -1 : comp_method_in_chain(c, xcm, name, NULL);
+      if (own >= 0) {
+        int defc = xcm;
+        (void)comp_method_in_chain(c, xcm, c->scopes[own].name, &defc);
+        buf_printf(b, "sp_%s_%s((sp_%s *)(", c->classes[defc].c_name,
+                   mc(c->scopes[own].name), c->classes[defc].c_name);
+        emit_expr(c, recv, b); buf_puts(b, "))");
+        return;
+      }
       const char *fn = exc_has_user_msg_override(c)
         ? (sp_streq(name, "message") ? "sp_user_exc_message" : "sp_user_exc_to_s")
         : "sp_exc_message";
