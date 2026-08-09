@@ -20103,8 +20103,19 @@ else { memcpy(dir, sf, n); dir[n] = 0; } }
         int cv = struct_kwarg_value(c, argv[0], "chomp");
         eline_chomp = (cv >= 0 && nt_type(nt, cv) && sp_streq(nt_type(nt, cv), "TrueNode"));
       }
-      buf_printf(b, "sp_StrArray *_t%d = %s(_t%d); for (mrb_int _t%d = 0; _t%d < sp_StrArray_length(_t%d); _t%d++) { ",
-                 tl, eline_chomp ? "sp_str_lines_chomp" : "sp_str_lines", ts, ti, ti, tl, ti);
+      /* a separator argument splits on it, the way the blockless enumerator
+         form already does (#3594) */
+      int eline_sep = (argc == 1 && argv && comp_ntype(c, argv[0]) == TY_STRING) ? argv[0] : -1;
+      if (eline_sep >= 0) {
+        buf_printf(b, "sp_StrArray *_t%d = sp_str_lines_sep(_t%d, ", tl, ts);
+        emit_expr(c, eline_sep, b);
+        buf_puts(b, "); ");
+      }
+      else
+        buf_printf(b, "sp_StrArray *_t%d = %s(_t%d); ",
+                   tl, eline_chomp ? "sp_str_lines_chomp" : "sp_str_lines", ts);
+      buf_printf(b, "for (mrb_int _t%d = 0; _t%d < sp_StrArray_length(_t%d); _t%d++) { ",
+                 ti, ti, tl, ti);
       if (p0) {
         if (p0_box_poly_ech) buf_printf(b, "lv_%s = sp_box_str(sp_StrArray_get(_t%d, _t%d)); ", p0, tl, ti);
         else buf_printf(b, "lv_%s = sp_StrArray_get(_t%d, _t%d); ", p0, tl, ti);
