@@ -743,6 +743,17 @@ TyKind infer_call(Compiler *c, int id) {
   if (args >= 0) argv = nt_arr(nt, args, "arguments", &argc);
   if (!name) return TY_UNKNOWN;
 
+  /* #dup drops the receiver's singleton methods, so the copy is an instance of
+     the class Ruby sees rather than the synthesized singleton one (#3739) */
+  if (recv >= 0 && sp_streq(name, "dup") && argc == 0) {
+    TyKind drt0 = infer_type(c, recv);
+    if (ty_is_object(drt0)) {
+      int dci0 = ty_object_class(drt0);
+      int vis = singleton_visible_ci(c, dci0);
+      if (vis != dci0) return ty_object(vis);
+    }
+  }
+
   /* `!` and `!=` are ordinary methods a class may override, so the result is
      whatever its definition answers, not a bool (#3740) */
   if (recv >= 0 && (sp_streq(name, "!") || sp_streq(name, "!=")) &&

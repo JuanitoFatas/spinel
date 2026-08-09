@@ -14591,6 +14591,11 @@ else { memcpy(dir, sf, n); dir[n] = 0; } }
       /* native-bound classes have no generated pool/struct copy; their dup
          dispatches to a declared native_method instead */
       if (!class_is_exc_subclass(c, cid) && !c->classes[cid].is_native_class) {
+        /* #dup drops the singleton methods, so the copy is an instance of the
+           class Ruby sees; the singleton struct is a layout superset of it,
+           so the parent's prefix is what carries over (#3739) */
+        int dup_desingleton = sp_streq(name, "dup") && c->classes[cid].is_singleton_of;
+        if (dup_desingleton) cid = singleton_visible_ci(c, cid);
         ClassInfo *dci = &c->classes[cid];
         const char *cn = dci->c_name;
         int defcls = -1;
@@ -14599,7 +14604,9 @@ else { memcpy(dir, sf, n); dir[n] = 0; } }
           ? scope_local(&c->scopes[ic], c->scopes[ic].pnames[0]) : NULL;
         TyKind ictp = icp ? icp->type : TY_UNKNOWN;
         int to = ++g_tmp, td = ++g_tmp;
-        buf_printf(b, "({ sp_%s *_t%d = ", cn, to); emit_expr(c, recv, b);
+        buf_printf(b, "({ sp_%s *_t%d = ", cn, to);
+        if (dup_desingleton) buf_printf(b, "(sp_%s *)", cn);
+        emit_expr(c, recv, b);
         buf_printf(b, "; SP_GC_ROOT(_t%d); sp_%s *_t%d = SP_POOL_NEW(%s, %s%s%s);"
                       " *_t%d = *_t%d; SP_GC_ROOT(_t%d); ",
                    to, cn, td, cn,
