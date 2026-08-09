@@ -1684,6 +1684,30 @@ static int alias_pred_const(const NodeTable *nt, int pred) {
 
 /* Collect `alias new old` (AliasMethodNode) and `alias_method :new, :old`
    (CallNode) statements in class bodies into the class alias table. */
+/* An alias captures the definition in effect where it appears. When the target
+   is redefined LATER in the same body, a name mapping would resolve to the new
+   definition, so the earlier one is renamed to the alias instead -- which is
+   what the alias actually names (#3737). Returns 1 when it did that. */
+static int alias_capture_earlier_def(Compiler *c, ClassInfo *cls,
+                                     const char *nw, const char *od, int alias_node) {
+  if (!nw || !od || !cls->name) return 0;
+  int cid = comp_class_index(c, cls->name);
+  if (cid < 0) return 0;
+  int before = -1, after = 0;
+  for (int si = 1; si < c->nscopes; si++) {
+    Scope *sc = &c->scopes[si];
+    if (sc->class_id != cid || sc->is_cmethod || !sc->name || !sp_streq(sc->name, od)) continue;
+    if (sc->def_node >= 0 && sc->def_node < alias_node) {
+      if (before < 0 || sc->def_node > c->scopes[before].def_node) before = si;
+    }
+    else after = 1;
+  }
+  if (before < 0 || !after) return 0;
+  free(c->scopes[before].name);
+  c->scopes[before].name = strdup(nw);
+  return 1;
+}
+
 void register_aliases_body(Compiler *c, ClassInfo *cls, int body) {
   const NodeTable *nt = c->nt;
   int n = 0;
@@ -1697,7 +1721,7 @@ void register_aliases_body(Compiler *c, ClassInfo *cls, int body) {
       int on = nt_ref(nt, s, "old_name");
       const char *nw = nn >= 0 ? nt_str(nt, nn, "value") : NULL;
       const char *od = on >= 0 ? nt_str(nt, on, "value") : NULL;
-      comp_add_alias(cls, nw, od);
+      if (!alias_capture_earlier_def(c, cls, nw, od, s)) comp_add_alias(cls, nw, od);
     }
     else if (sp_streq(sty, "CallNode")) {
       const char *nm = nt_str(nt, s, "name");
@@ -1707,7 +1731,8 @@ void register_aliases_body(Compiler *c, ClassInfo *cls, int body) {
       const int *argv = args >= 0 ? nt_arr(nt, args, "arguments", &an) : NULL;
       if (an >= 2 && nt_type(nt, argv[0]) && sp_streq(nt_type(nt, argv[0]), "SymbolNode") &&
           nt_type(nt, argv[1]) && sp_streq(nt_type(nt, argv[1]), "SymbolNode"))
-        comp_add_alias(cls, nt_str(nt, argv[0], "value"), nt_str(nt, argv[1], "value"));
+      { const char *anw = nt_str(nt, argv[0], "value"), *aod = nt_str(nt, argv[1], "value");
+        if (!alias_capture_earlier_def(c, cls, anw, aod, s)) comp_add_alias(cls, anw, aod); }
     }
     else if (sp_streq(sty, "IfNode") || sp_streq(sty, "UnlessNode")) {
       /* A statement modifier (`alias a b if cond`) wraps the alias in an IfNode;
