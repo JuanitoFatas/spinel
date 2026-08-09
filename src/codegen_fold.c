@@ -5409,6 +5409,16 @@ int emit_grep_pred(Compiler *c, int pat, const char *ev, TyKind et, Buf *b) {
     else buf_printf(b, "; sp_range_include(&_t%d, %s); })", tr, ev);
     return 1;
   }
+  /* a Proc pattern: Proc#=== calls it, so the element drives the proc (#3661) */
+  if (patt == TY_PROC) {
+    buf_puts(b, "sp_poly_truthy(sp_penum_call1(");
+    emit_expr(c, pat, b);
+    buf_puts(b, ", ");
+    if (et == TY_POLY) buf_puts(b, ev);
+    else emit_boxed_text(c, et, ev, b);
+    buf_puts(b, "))");
+    return 1;
+  }
   return 0;
 }
 
