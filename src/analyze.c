@@ -6422,7 +6422,9 @@ static int empty_arr_iter_ok(const char *nm) {
     "each", "map", "collect", "select", "filter", "reject", "filter_map",
     "find", "detect", "each_with_object",
     "group_by", "sort_by", "min_by", "max_by", "flat_map",
-    "reduce", "inject", NULL };
+    "reduce", "inject",
+    /* the block forms that were still refusing an empty literal receiver */
+    "partition", "take_while", "drop_while", "each_with_index", NULL };
   for (int i = 0; ok[i]; i++) if (sp_streq(nm, ok[i])) return 1;
   return 0;
 }
@@ -6449,8 +6451,16 @@ static void mark_empty_array_receivers(Compiler *c) {
        untyped empty literal receiver had no array kind, so the call fell
        through to the set-op arm and emitted sp_<T>Array_difference (#3332) */
     int zip_form = nm && sp_streq(nm, "zip") && !has_block;
-    if (!has_block && !(nm && sp_streq(nm, "product")) && !count_form && !zip_form) continue;
-    if (!nm || (!empty_arr_iter_ok(nm) && !sp_streq(nm, "product") && !count_form && !zip_form)) continue;
+    /* blockless forms that answer an Enumerator (or a plain value) over the
+       elements: with no array kind on the receiver, no arm claimed them and
+       the call was refused outright (#3618) */
+    int enum_form = nm && !has_block &&
+                    (sp_streq(nm, "each_with_index") ||
+                     sp_streq(nm, "each_entry") || sp_streq(nm, "frozen?"));
+    if (!has_block && !(nm && sp_streq(nm, "product")) && !count_form && !zip_form &&
+        !enum_form) continue;
+    if (!nm || (!empty_arr_iter_ok(nm) && !sp_streq(nm, "product") && !count_form &&
+                !zip_form && !enum_form)) continue;
     int recv = nt_ref(nt, id, "receiver");
     if (recv < 0 || recv >= c->node_cap) continue;
     const char *rty = nt_type(nt, recv);
