@@ -2271,11 +2271,30 @@ static void desugar_enumerator_produce(Compiler *c) {
     int pv_w = te_lvwrite(nt, "__pv", init);
     /* loop body: __py << __pv ; <pname> = __pv ; __pv = begin <body> end */
     int yshl = te_call(nt, te_lvread(nt, "__py"), "<<", te_args1(nt, te_lvread(nt, "__pv")), -1);
-    int bind_p = te_lvwrite(nt, pname, te_lvread(nt, "__pv"));
+    /* Several block params autosplat the state: `produce([0, 1]) { |a, b| }`
+       binds a = state[0], b = state[1] (#3582). */
+    int bpn2 = nt_ref(nt, blk, "parameters");
+    int preqn = 0;
+    if (bpn2 >= 0) {
+      int pp2 = nt_ref(nt, bpn2, "parameters");
+      if (pp2 >= 0) nt_arr(nt, pp2, "requireds", &preqn);
+    }
+    int loopbodyarr[10];
+    int nlb = 0;
+    loopbodyarr[nlb++] = yshl;
+    if (preqn > 1 && preqn <= 8) {
+      for (int k = 0; k < preqn; k++) {
+        const char *pk = block_param_name(c, blk, k);
+        if (!pk) break;
+        int idxc = te_call(nt, te_lvread(nt, "__pv"), "[]", te_args1(nt, te_int(nt, k)), -1);
+        loopbodyarr[nlb++] = te_lvwrite(nt, pk, idxc);
+      }
+    }
+    else loopbodyarr[nlb++] = te_lvwrite(nt, pname, te_lvread(nt, "__pv"));
     int beginn = nt_new_node(nt, "BeginNode"); nt_node_set_ref(nt, beginn, "statements", bbody);
     int pv_w2 = te_lvwrite(nt, "__pv", beginn);
-    int loopbodyarr[3] = { yshl, bind_p, pv_w2 };
-    int loopbody = nt_new_node(nt, "StatementsNode"); nt_node_set_arr(nt, loopbody, "body", loopbodyarr, 3);
+    loopbodyarr[nlb++] = pv_w2;
+    int loopbody = nt_new_node(nt, "StatementsNode"); nt_node_set_arr(nt, loopbody, "body", loopbodyarr, nlb);
     int loopblk = nt_new_node(nt, "BlockNode"); nt_node_set_ref(nt, loopblk, "body", loopbody);
     int loopcall = te_call(nt, -1, "loop", -1, loopblk);
     /* generator block: |__py| __pv=...; loop {...} */
