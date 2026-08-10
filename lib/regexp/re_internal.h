@@ -44,6 +44,8 @@ enum re_opcode {
   RE_NEG_LOOKAHEAD, /* negative lookahead: offset = end of sub-pattern */
   RE_LOOKBEHIND,     /* positive lookbehind: a = byte length, offset = end */
   RE_NEG_LOOKBEHIND, /* negative lookbehind: a = byte length, offset = end */
+  RE_ATOMIC,     /* atomic group (?>...) / possessive quantifier: match the
+                    sub-pattern once and commit, offset = end of sub-pattern */
 };
 
 /* Bytecode instruction (4 bytes each for alignment) */

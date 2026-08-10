@@ -806,6 +806,20 @@ compile_atom(re_compiler *c)
           c->flags = saved_flags;
           break;  /* done with this atom */
         }
+        else if (c->p[1] == '>') {
+          /* atomic group (?>...): match the sub-pattern once and keep no
+             backtracking point inside it (#3636) */
+          next_char(c); next_char(c);  /* skip ?> */
+          uint32_t at_pos = emit(c, RE_ATOMIC, 0, 0);
+          compile_alt(c);
+          emit(c, RE_MATCH, 0, 0);     /* end of the committed sub-pattern */
+          c->code[at_pos].offset = (uint16_t)c->code_len;
+          if (peek(c) != ')') compile_error(c, "unmatched '('");
+          next_char(c);
+          c->needs_backtrack = TRUE;
+          c->flags = saved_flags;
+          break;
+        }
         else if (c->p[1] == '<' && c->p + 2 < c->src_end && (c->p[2] == '=' || c->p[2] == '!')) {
           /* lookbehind (?<=...) or (?<!...) */
           mrb_bool negative = (c->p[2] == '!');
@@ -1114,6 +1128,17 @@ emit_atom_copy(re_compiler *c, uint32_t start, uint32_t size)
   }
 }
 
+/* Wrap the code from `start` to the end in an atomic group: the possessive
+   quantifiers (a++, a*+, a?+, a{n,m}+) are exactly `(?>a+)` and friends. */
+static void
+wrap_atomic(re_compiler *c, uint32_t start)
+{
+  insert_inst(c, start, RE_ATOMIC, 0, 0);
+  emit(c, RE_MATCH, 0, 0);
+  c->code[start].offset = (uint16_t)c->code_len;
+  c->needs_backtrack = TRUE;
+}
+
 /* Compile atom with quantifiers (*, +, ?, {n,m}) */
 static void
 compile_quantified(re_compiler *c)
@@ -1141,6 +1166,10 @@ compile_quantified(re_compiler *c)
       next_char(c);
       c->needs_backtrack = TRUE;
     }
+    /* possessive (a++ / a*+ / a?+): the quantifier keeps no backtracking
+       point, i.e. the whole repetition is an atomic group (#3636) */
+    mrb_bool possessive = FALSE;
+    if (!nongreedy && peek(c) == '+') { next_char(c); possessive = TRUE; }
 
 
     if (ch == '*') {
@@ -1161,6 +1190,7 @@ compile_quantified(re_compiler *c)
       insert_inst(c, start, nongreedy ? RE_SPLITNG : RE_SPLIT, 0, 0);
       c->code[start].offset = (uint16_t)c->code_len;  /* patch: skip to end */
     }
+    if (possessive) wrap_atomic(c, start);
   }
   else if (ch == '{') {
     const char *save = c->p;
