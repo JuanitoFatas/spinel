@@ -875,8 +875,10 @@ void register_module_functions(Compiler *c) {
             if (!aval) continue;
             for (int mi = 0; mi < c->nscopes; mi++) {
               if (c->scopes[mi].class_id == ci && !c->scopes[mi].is_cmethod &&
-                  c->scopes[mi].name && sp_streq(c->scopes[mi].name, aval))
+                  c->scopes[mi].name && sp_streq(c->scopes[mi].name, aval)) {
                 c->scopes[mi].is_cmethod = 1;
+                c->scopes[mi].is_module_function = 1;
+              }
             }
           }
           continue;
@@ -886,7 +888,11 @@ void register_module_functions(Compiler *c) {
         const char *mname = nt_str(nt, s, "name");
         if (!mname) continue;
         for (int mi = 0; mi < c->nscopes; mi++) {
-          if (c->scopes[mi].def_node == s) { c->scopes[mi].is_cmethod = 1; break; }
+          if (c->scopes[mi].def_node == s) {
+            c->scopes[mi].is_cmethod = 1;
+            c->scopes[mi].is_module_function = 1;
+            break;
+          }
         }
       }
     }

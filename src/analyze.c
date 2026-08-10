@@ -5329,6 +5329,54 @@ static int desugar_method_block_arg(Compiler *c) {
    answers, and spinel carries a stat as the File handle itself: rewrite the
    constructor to the class method rather than resolving a Stat class that has
    no definition (#3766). */
+/* `module_function` makes each method BOTH a module method and a private
+   instance method of every includer. Spinel models it as the module method
+   alone -- and that is enough: such a body cannot depend on the receiver (its
+   self is the module in one spelling and the instance in the other), so the
+   one emitted function serves both. A receiverless call inside a class that
+   includes the module is therefore rewritten onto the module call the emitter
+   already serves, rather than cloning the method into the includer (#3734). */
+static int desugar_module_function_call(Compiler *c) {
+  NodeTable *nt = (NodeTable *)c->nt;
+  int changed = 0;
+  int n0 = nt->count;
+  for (int id = 0; id < n0; id++) {
+    if (nt_kind(nt, id) != NK_CallNode) continue;
+    if (nt_ref(nt, id, "receiver") >= 0) continue;
+    const char *nm = nt_str(nt, id, "name");
+    if (!nm) continue;
+    Scope *sc = comp_scope_of(c, id);
+    if (!sc || sc->class_id < 0 || sc->class_id >= c->nclasses) continue;
+    /* the enclosing class's own (or inherited) method wins over the mixin */
+    if (comp_method_in_chain(c, sc->class_id, nm, NULL) >= 0) continue;
+    if (comp_cmethod_in_chain(c, sc->class_id, nm, NULL) >= 0) continue;
+    /* a local of this name is a variable read, not a call */
+    if (scope_local(sc, nm)) continue;
+    int mod = -1;
+    for (int k = sc->class_id; k >= 0 && mod < 0; k = c->classes[k].parent) {
+      ClassInfo *cl = &c->classes[k];
+      for (int j = 0; j < cl->nincluded_mods && mod < 0; j++) {
+        int mi2 = cl->included_mods[j];
+        if (mi2 < 0 || mi2 >= c->nclasses) continue;
+        for (int si = 1; si < c->nscopes; si++) {
+          Scope *ms = &c->scopes[si];
+          if (ms->class_id != mi2 || !ms->is_module_function) continue;
+          if (ms->name && sp_streq(ms->name, nm)) { mod = mi2; break; }
+        }
+      }
+    }
+    if (mod < 0) continue;
+    int mc = nt_new_node(nt, "ConstantReadNode");
+    if (mc < 0) continue;
+    nt_node_set_str(nt, mc, "name", c->classes[mod].name);
+    nt_node_set_ref(nt, id, "receiver", mc);
+    comp_grow_node_arrays(c);
+    c->nscope[mc] = c->nscope[id];
+    changed = 1;
+  }
+  return changed;
+}
+
 static int desugar_file_stat_new(Compiler *c) {
   NodeTable *nt = (NodeTable *)c->nt;
   int changed = 0;
@@ -10542,6 +10590,7 @@ void analyze_program(Compiler *c) {
     ch |= desugar_lazy_terminal(c);            /* lz.sum -> lz.to_a.sum */
     ch |= desugar_string_upto(c);              /* "a".upto("c") -> ("a".."c").each */
     ch |= desugar_file_stat_new(c);            /* File::Stat.new(p) -> File.stat(p) */
+    ch |= desugar_module_function_call(c);     /* helper(x) in an includer -> M.helper(x) */
     ch |= desugar_method_block_arg(c);         /* m(&method(:x)) -> m(&method(:x).to_proc) */
     ch |= desugar_curry_block_arg(c);          /* iter(&curried) -> iter { |e| curried[e] } */
     ch |= desugar_yielder_block_arg(c);        /* src.each(&y) -> src.each { |e| y << e } */

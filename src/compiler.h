@@ -112,6 +112,12 @@ typedef struct {
   int yields;       /* body contains a YieldNode (inlined at call sites) */
   int reachable;    /* method name is referenced somewhere (else dead code) */
   int is_cmethod;   /* `def self.foo`: a class (singleton) method, no instance self */
+  int is_module_function; /* `module_function`: ALSO a private instance method of
+                             every includer. The body cannot depend on the
+                             receiver (its self differs per call form), so the
+                             one emitted function serves both spellings and a
+                             receiverless call in an includer is rewritten onto
+                             it rather than cloned (#3734). */
   int is_transplanted_source; /* method was copied into another class via include/prepend */
   int origin_module_ci;      /* +1-based module this copy came from (0 = none):
                                 Method#owner names the module, not the includer */
