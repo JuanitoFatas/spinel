@@ -105,6 +105,26 @@ char g_ren_from[MAX_RENAME][96];
 char g_ren_to[MAX_RENAME][112];
 int  g_nren = 0;
 int  g_block_id = -1;
+/* comp_ntype's yield hook: while a literal block is spliced, a YieldNode's
+   value is THAT block's tail, not the union the node cache holds over every
+   call site -- a second site whose block answers another class was compiled
+   as the first one's (#3784). Installed by codegen_main; NULL elsewhere. */
+int (*sp_yield_site_type_hook)(const Compiler *c, int id, TyKind *out) = NULL;
+int sp_yield_site_type(const Compiler *c, int id, TyKind *out) {
+  if (g_block_id < 0 || id < 0) return 0;
+  const char *ty = nt_type(c->nt, id);
+  if (!ty || !sp_streq(ty, "YieldNode")) return 0;
+  int bbody = nt_ref(c->nt, g_block_id, "body");
+  int bn = 0;
+  const int *bb = bbody >= 0 ? nt_arr(c->nt, bbody, "body", &bn) : NULL;
+  if (bn <= 0 || !bb) return 0;
+  TyKind bt = c->ntype[bb[bn - 1]];
+  /* only a CONCRETE per-site answer overrides the cache; an unresolved tail
+     leaves the node's own (unified) type in place */
+  if (bt == TY_UNKNOWN || bt == TY_VOID) return 0;
+  *out = bt;
+  return 1;
+}
 int  g_yield_block_fallback = -1;
 /* rename-table depth at g_block_id's DEFINITION site: the spliced block body
    and its param names resolve against the entries below this mark only; the

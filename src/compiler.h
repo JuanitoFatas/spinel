@@ -677,9 +677,19 @@ const char *comp_prep_user_name(const char *name);
    underlying method/attr name. Returns `name` unchanged if not aliased. */
 const char *comp_resolve_alias(Compiler *c, int class_id, const char *name);
 
+/* Set by codegen while a block is spliced: answers the type the block being
+   inlined RIGHT HERE gives a yield, which the node cache cannot hold (one
+   YieldNode, one entry, many call sites -- #3784). Returns 0 when the node is
+   not a yield in a spliced context. */
+extern int (*sp_yield_site_type_hook)(const Compiler *c, int id, TyKind *out);
+
 /* Node type cache. */
 static inline TyKind comp_ntype(const Compiler *c, int id) {
   if (id < 0 || id >= c->nt->count) return TY_UNKNOWN;
+  if (sp_yield_site_type_hook) {
+    TyKind yt;
+    if (sp_yield_site_type_hook(c, id, &yt)) return yt;
+  }
   /* TY_STRBUF is a codegen-only storage refinement (mutable sp_String for a
      `<<`-appended local). All type-directed logic treats it as a string;
      codegen consults the raw scope-local type where the distinction matters.

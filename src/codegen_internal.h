@@ -111,6 +111,7 @@ extern int g_block_nren;
 extern int g_yield_block_fallback_nren;
 extern int  g_nren;
 extern int  g_block_id;
+int sp_yield_site_type(const Compiler *c, int id, TyKind *out);
 /* Argument-hoist overrides (see emit_args_filled): node id -> rooted temp
    name substituted by emit_expr. */
 #define MAX_ARG_OVERRIDE 64

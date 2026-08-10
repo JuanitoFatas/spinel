@@ -6220,6 +6220,10 @@ static void reject_runtime_send(Compiler *c) {
 char *codegen_program(const NodeTable *nt) {
   Compiler *c = comp_new(nt);
   analyze_program(c);
+  /* From here on a yield reads the type of the block spliced at THIS site,
+     not the union the node cache holds across sites (#3784). Installed after
+     analysis so the fixpoint keeps seeing the cache unchanged. */
+  sp_yield_site_type_hook = sp_yield_site_type;
 
   /* `#line` directives are emitted only when the parser stamped per-node
      source lines (SPINEL_LINE_MAP / SPINEL_DEBUG); the same env gates both
