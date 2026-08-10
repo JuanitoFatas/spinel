@@ -1672,7 +1672,8 @@ int emit_lazy_pipeline_expr(Compiler *c, int id, Buf *b) {
   int thi = -1, tsrc = -1;
   if (src_is_range && !endless) {
     thi = ++g_tmp; emit_indent(g_pre, g_indent);
-    if (src_range_literal) { Buf hb = expr_buf(c, right); buf_printf(g_pre, "mrb_int _t%d = %s;\n", thi, hb.p ? hb.p : "0"); free(hb.p); }
+    if (src_range_literal) { Buf hb; memset(&hb, 0, sizeof hb); emit_int_expr(c, right, &hb);
+      buf_printf(g_pre, "mrb_int _t%d = %s;\n", thi, hb.p ? hb.p : "0"); free(hb.p); }
     else buf_printf(g_pre, "mrb_int _t%d = _t%d.last;\n", thi, trange);
   }
   if (src_is_intarr) {
@@ -1690,7 +1691,8 @@ int emit_lazy_pipeline_expr(Compiler *c, int id, Buf *b) {
 
   int tloop = ++g_tmp, tv = ++g_tmp;
   Buf lo_b; memset(&lo_b, 0, sizeof lo_b);
-  if (src_is_range) { if (src_range_literal) emit_expr(c, left_n, &lo_b); else buf_printf(&lo_b, "_t%d.first", trange); }
+  /* the bounds are C ints: a poly endpoint (a lazy block param) unboxes (#3583) */
+  if (src_is_range) { if (src_range_literal) emit_int_expr(c, left_n, &lo_b); else buf_printf(&lo_b, "_t%d.first", trange); }
   char cbuf[64]; cbuf[0] = 0;
   if (has_count) snprintf(cbuf, sizeof cbuf, " && sp_PolyArray_length(_t%d) < _t%d", tres, tn);
   if (src_is_range) {
@@ -1847,11 +1849,15 @@ int emit_lazy_pipeline_expr(Compiler *c, int id, Buf *b) {
       Scope *bs = comp_scope_of(c, blk);
       LocalVar *plv = (bs && bp0) ? scope_local(bs, bp0) : NULL;
       TyKind pt = (plv && plv->type != TY_UNKNOWN) ? plv->type : TY_POLY;
-      emit_indent(g_pre, g_indent + 1);
-      buf_printf(g_pre, "lv_%s = ", bp);
-      if (pt == TY_POLY) buf_puts(g_pre, vbuf);
-      else { Buf ub; memset(&ub, 0, sizeof ub); emit_unbox_text(c, pt, vbuf, &ub); buf_puts(g_pre, ub.p ? ub.p : vbuf); free(ub.p); }
-      buf_puts(g_pre, ";\n");
+      /* A param the body never reads has no local at all: binding it would
+         name an undeclared C variable, and there is nothing to bind (#3583) */
+      if (plv) {
+        emit_indent(g_pre, g_indent + 1);
+        buf_printf(g_pre, "lv_%s = ", bp);
+        if (pt == TY_POLY) buf_puts(g_pre, vbuf);
+        else { Buf ub; memset(&ub, 0, sizeof ub); emit_unbox_text(c, pt, vbuf, &ub); buf_puts(g_pre, ub.p ? ub.p : vbuf); free(ub.p); }
+        buf_puts(g_pre, ";\n");
+      }
     }
     int bbody = nt_ref(nt, blk, "body");
     int bn = 0; const int *bb = bbody >= 0 ? nt_arr(nt, bbody, "body", &bn) : NULL;
