@@ -18639,7 +18639,7 @@ else { memcpy(dir, sf, n); dir[n] = 0; } }
       char base[256];
       base[0] = '\0';
       if (is_setter && ln - 1 < sizeof base) { memcpy(base, qm, ln - 1); base[ln - 1] = '\0'; }
-      if (name_is_synth_method(qm)) { buf_puts(b, "FALSE"); return 1; }
+      if (name_is_synth_method(qm)) { buf_puts(b, "FALSE"); return; }
       int parent = c->classes[ci].parent;
       int mc = -1;
       int mi = comp_method_in_chain(c, ci, qm, &mc);
