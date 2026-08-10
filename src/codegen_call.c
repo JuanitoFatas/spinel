@@ -2711,6 +2711,16 @@ static int emit_complex_rational_call(Compiler *c, int id, Buf *b) {
                  tcl, tcl, tcl);
       return 1;
     }
+    /* A zero-argument application is legal: it applies nothing, and on a
+       zero-arity base it is the call that realizes the curry (#3654). */
+    if (crt == TY_CURRY && (sp_streq(name, "[]") || sp_streq(name, "call") || sp_streq(name, "()")) && argc == 0) {
+      int complete0 = 0; TyKind cret0 = TY_UNKNOWN;
+      int realize0 = curry_apply_info(c, id, &complete0, &cret0) && complete0;
+      if (realize0) buf_puts(b, cret0 == TY_INT ? "sp_curry_to_int(" : "sp_curry_realize_poly(");
+      emit_expr(c, recv, b);
+      if (realize0) buf_puts(b, ")");
+      return 1;
+    }
     if (crt == TY_CURRY && (sp_streq(name, "[]") || sp_streq(name, "call") || sp_streq(name, "()")) && argc >= 1) {
       /* The application that reaches the proc's arity realizes the curry to its
          (int) result; earlier applications return another curry. curry[a, b]

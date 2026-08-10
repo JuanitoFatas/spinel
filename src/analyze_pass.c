@@ -6184,7 +6184,13 @@ static int curry_chain(Compiler *c, int node, int *applied, int *arity, TyKind *
       int cac = 0; const int *cav = ca >= 0 ? nt_arr(nt, ca, "arguments", &cac) : NULL;
       if (cac == 1 && cav && nt_kind(nt, cav[0]) == NK_IntegerNode)
         *arity = (int)nt_int(nt, cav[0], "value", *arity);
-      else if (*arity == 0) *arity = 1;   /* variadic with no count: first apply calls */
+      else if (*arity == 0) {
+        /* a VARIADIC base with no count takes its arity from the first
+           application; a genuinely zero-arity base realizes with none */
+        int vr = 0;
+        curry_base_info(c, recv, NULL, &vr, NULL);
+        if (vr) *arity = 1;
+      }
       *applied = 0;
       return 1;
     }
@@ -6220,7 +6226,9 @@ static int curry_chain(Compiler *c, int node, int *applied, int *arity, TyKind *
 int curry_apply_info(Compiler *c, int node, int *out_complete, TyKind *out_ret) {
   int applied = 0, arity = 0; TyKind ret = TY_UNKNOWN;
   if (!curry_chain(c, node, &applied, &arity, &ret, 0)) return 0;
-  *out_complete = (arity > 0 && applied >= arity);
+  /* A zero-arity base realizes on its first application, which carries no
+     argument at all (`->() { 5 }.curry.call`) -- #3654 */
+  *out_complete = (arity > 0 ? applied >= arity : applied >= 0);
   *out_ret = ret;
   return 1;
 }

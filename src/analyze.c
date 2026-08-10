@@ -5141,6 +5141,53 @@ int desugar_enum_method_recv(Compiler *c) {
 /* `a.upto(b)` over Strings is the String range `(a..b)`: the succ-based walk
    the range's own iteration already does. There was no arm for it at all
    (#3600). The Integer form has its own emitter and is left alone. */
+/* `iter(&curried)`: a curried Proc has no proc object to hand a block slot,
+   so drive it through a literal block that applies one element -- exactly what
+   CRuby's Proc#curry answers to `&` (#3654). */
+static int desugar_curry_block_arg(Compiler *c) {
+  NodeTable *nt = (NodeTable *)c->nt;
+  int changed = 0;
+  int n0 = nt->count;
+  for (int id = 0; id < n0; id++) {
+    if (nt_kind(nt, id) != NK_CallNode) continue;
+    int blk = nt_ref(nt, id, "block");
+    if (blk < 0 || nt_kind(nt, blk) != NK_BlockArgumentNode) continue;
+    int e = nt_ref(nt, blk, "expression");
+    if (e < 0 || infer_type(c, e) != TY_CURRY) continue;
+    char pnm[48];
+    snprintf(pnm, sizeof pnm, "__curry_e_%d", id);
+    int preq = nt_new_node(nt, "RequiredParameterNode");
+    if (preq < 0) continue;
+    nt_node_set_str(nt, preq, "name", pnm);
+    int params = nt_new_node(nt, "ParametersNode");
+    nt_node_set_arr(nt, params, "requireds", &preq, 1);
+    int bparams = nt_new_node(nt, "BlockParametersNode");
+    nt_node_set_ref(nt, bparams, "parameters", params);
+    int pread = nt_new_node(nt, "LocalVariableReadNode");
+    nt_node_set_str(nt, pread, "name", pnm);
+    int cargs = nt_new_node(nt, "ArgumentsNode");
+    nt_node_set_arr(nt, cargs, "arguments", &pread, 1);
+    int capply = nt_new_node(nt, "CallNode");
+    nt_node_set_str(nt, capply, "name", "[]");
+    nt_node_set_ref(nt, capply, "receiver", e);
+    nt_node_set_ref(nt, capply, "arguments", cargs);
+    nt_node_set_ref(nt, capply, "block", -1);
+    int body = nt_new_node(nt, "StatementsNode");
+    nt_node_set_arr(nt, body, "body", &capply, 1);
+    int bn = nt_new_node(nt, "BlockNode");
+    if (bn < 0) continue;
+    nt_node_set_ref(nt, bn, "parameters", bparams);
+    nt_node_set_ref(nt, bn, "body", body);
+    nt_node_set_ref(nt, id, "block", bn);
+    comp_grow_node_arrays(c);
+    for (int j = preq; j <= bn && j < nt->count; j++) c->nscope[j] = c->nscope[id];
+    Scope *sc = comp_scope_of(c, id);
+    if (sc) { LocalVar *lv = scope_local_intern(sc, pnm); if (lv) lv->is_block_param = 1; }
+    changed = 1;
+  }
+  return changed;
+}
+
 /* `m(&method(:x))`: a Method passed as a block is its #to_proc, which spinel
    already synthesizes -- interposing it lets the callable reach the block slot
    instead of failing the conversion at run time (#3688). */
@@ -10402,6 +10449,7 @@ void analyze_program(Compiler *c) {
     ch |= desugar_string_upto(c);              /* "a".upto("c") -> ("a".."c").each */
     ch |= desugar_file_stat_new(c);            /* File::Stat.new(p) -> File.stat(p) */
     ch |= desugar_method_block_arg(c);         /* m(&method(:x)) -> m(&method(:x).to_proc) */
+    ch |= desugar_curry_block_arg(c);          /* iter(&curried) -> iter { |e| curried[e] } */
     ch |= desugar_to_enum(c);                  /* recv.to_enum(:m) -> generator/blockless */
     ch |= type_block_rest_params(c);           /* |*rest| locals are poly arrays */
     ch |= desugar_public_method(c);            /* recv.public_method(:m) -> recv.method(:m) */
