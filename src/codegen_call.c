@@ -2681,9 +2681,19 @@ static int emit_complex_rational_call(Compiler *c, int id, Buf *b) {
     /* Proc#curry and curry application. */
     if (crt == TY_PROC && sp_streq(name, "curry") &&
         (argc == 0 || (argc == 1 && comp_ntype(c, argv[0]) == TY_INT))) {
-      /* curry(n) fixes the arity explicitly; when it matches the proc's own
-         arity (the common case) it behaves like the no-arg form, so the count
-         is accepted and ignored. #2669 */
+      /* curry(n) fixes the arity the chain completes at (#3680). A LAMBDA has
+         a fixed arity, so a count that disagrees with it is an ArgumentError
+         -- CRuby raises at the curry call, before anything is applied. */
+      if (argc == 1 && nt_kind(nt, argv[0]) == NK_IntegerNode) {
+        int nreq = 0, variadic = 0, is_lambda = 0;
+        if (curry_base_info(c, recv, &nreq, &variadic, &is_lambda) && is_lambda && !variadic &&
+            (int)nt_int(nt, argv[0], "value", nreq) != nreq) {
+          buf_puts(b, "({ (void)("); emit_expr(c, recv, b);
+          buf_puts(b, "); sp_raise_cls(\"ArgumentError\", \"wrong number of arguments\");"
+                      " (sp_Curry *)NULL; })");
+          return 1;
+        }
+      }
       buf_puts(b, "sp_curry_new("); emit_expr(c, recv, b); buf_puts(b, ")");
       return 1;
     }

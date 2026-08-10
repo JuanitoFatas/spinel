@@ -6128,6 +6128,29 @@ TyKind ewo_memo_elem_type(Compiler *c, int callid) {
 }
 
 /* The arity and body-return type of the proc a curry was built from. */
+/* The base proc of a curry: its required-parameter count, whether it takes a
+   rest param (`*a`, so any arity is acceptable), and whether it is a lambda.
+   Answers 0 when `recv` is not a recognizable proc/lambda definition. */
+int curry_base_info(Compiler *c, int recv, int *nreq, int *variadic, int *is_lambda) {
+  NodeTable *nt = (NodeTable *)c->nt;
+  int body = -1, pn = -1;
+  if (!fwd_callable_def(c, recv, &body, &pn)) return 0;
+  int rn = 0; if (pn >= 0) nt_arr(nt, pn, "requireds", &rn);
+  if (nreq) *nreq = rn;
+  if (variadic) *variadic = pn >= 0 && nt_ref(nt, pn, "rest") >= 0;
+  if (is_lambda) {
+    const char *bt = nt_type(nt, body);
+    (void)bt;
+    *is_lambda = 0;
+    /* a LambdaNode's body is owned by the lambda node itself */
+    for (int k = 0; k < nt->count; k++) {
+      if (nt_kind(nt, k) != NK_LambdaNode) continue;
+      if (nt_ref(nt, k, "body") == body) { *is_lambda = 1; break; }
+    }
+  }
+  return 1;
+}
+
 static int curry_proc_base(Compiler *c, int recv, int *arity, TyKind *ret) {
   NodeTable *nt = (NodeTable *)c->nt;
   int body = -1, pn = -1;
@@ -6153,6 +6176,15 @@ static int curry_chain(Compiler *c, int node, int *applied, int *arity, TyKind *
     if (!nm || recv < 0) return 0;
     if (sp_streq(nm, "curry")) {
       if (!curry_proc_base(c, recv, arity, ret)) return 0;
+      /* `curry(n)` fixes the arity the chain completes at, whatever the base
+         proc declares -- a `proc { |a, b, c| }` curried at 2 realizes after
+         two applications, and a variadic lambda takes its arity from n only
+         (#3680) */
+      int ca = nt_ref(nt, node, "arguments");
+      int cac = 0; const int *cav = ca >= 0 ? nt_arr(nt, ca, "arguments", &cac) : NULL;
+      if (cac == 1 && cav && nt_kind(nt, cav[0]) == NK_IntegerNode)
+        *arity = (int)nt_int(nt, cav[0], "value", *arity);
+      else if (*arity == 0) *arity = 1;   /* variadic with no count: first apply calls */
       *applied = 0;
       return 1;
     }

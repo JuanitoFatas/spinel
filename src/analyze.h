@@ -114,6 +114,7 @@ TyKind ewo_memo_elem_type(Compiler *c, int callid);
 /* For a curry-application node, whether it completes the curry (reaches the base
    proc's arity) and the proc's return type. Returns 1 for a recognized chain. */
 int curry_apply_info(Compiler *c, int node, int *out_complete, TyKind *out_ret);
+int curry_base_info(Compiler *c, int recv, int *nreq, int *variadic, int *is_lambda);
 
 /* Class index when a receiverless instance_eval/exec resolves to self, else -1. */
 int ie_implicit_self_class(Compiler *c, int id);
