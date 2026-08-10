@@ -1237,6 +1237,14 @@ TyKind infer_call(Compiler *c, int id) {
       !an_user_defines_or_reads(c, name))
     return (sp_streq(name, "each_cons") || sp_streq(name, "each_slice"))
              ? TY_ENUMERATOR : TY_POLY_ARRAY;   /* as the typed array answers */
+  /* A blockless `each` / `each_entry` / `each_with_index` on a boxed receiver
+     (an Array read out of a container, a block parameter) is an external
+     Enumerator, exactly as it is for a typed receiver. Without a type it
+     stayed unresolved and every chained method reported "for unknown" (#3584). */
+  if (recv >= 0 && rt == TY_POLY && argc == 0 && nt_ref(nt, id, "block") < 0 &&
+      (sp_streq(name, "each") || sp_streq(name, "each_entry")) &&
+      !an_user_defines_or_reads(c, name))
+    return TY_ENUMERATOR;
   /* A blockless each_char / each_line / each_byte / each_codepoint on the same
      boxed String is CRuby's Enumerator; spinel materializes the elements, so
      it answers exactly what chars / lines / bytes do. Without this the
