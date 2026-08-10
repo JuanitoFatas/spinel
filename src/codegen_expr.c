@@ -853,16 +853,26 @@ void emit_expr(Compiler *c, int id, Buf *b) {
         unsupported_feature(c, id, rbuf);
       }
     }
+    /* An explicitly written `nil` bound is the same range as the omitted one
+       (`nil..5` == `..5`), and an infinite Float bound cannot be converted to
+       mrb_int at all -- passing the emitted (1.0/0.0) through the mrb_int
+       parameter is UB, which is where the arbitrary integer came from. Both
+       spellings take the unbounded sentinel (#3670). */
+    int left_unbounded = left < 0 ||
+        (nt_type(nt, left) && sp_streq(nt_type(nt, left), "NilNode")) ||
+        lazy_endpoint_is_infinite(c, left);
+    /* `-Float::INFINITY` is the negation call around the constant */
+    if (!left_unbounded && left >= 0 && nt_kind(nt, left) == NK_CallNode &&
+        nt_str(nt, left, "name") && sp_streq(nt_str(nt, left, "name"), "-@") &&
+        lazy_endpoint_is_infinite(c, nt_ref(nt, left, "receiver")))
+      left_unbounded = 1;
+    int right_unbounded = right < 0 ||
+        (nt_type(nt, right) && sp_streq(nt_type(nt, right), "NilNode")) ||
+        lazy_endpoint_is_infinite(c, right);
     buf_puts(b, "sp_range_new(");
-    if (left >= 0) emit_int_expr(c, left, b); else buf_puts(b, "INTPTR_MIN");  /* beginless */
+    if (!left_unbounded) emit_int_expr(c, left, b); else buf_puts(b, "INTPTR_MIN");  /* beginless */
     buf_puts(b, ", ");
-    /* a Float::INFINITY end materializes like an endless range: passing the
-       emitted (1.0/0.0) through the mrb_int parameter is UB (the converted
-       value is unspecified -- a stale register in practice) */
-    if (right >= 0 && !lazy_endpoint_is_infinite(c, right))
-      emit_int_expr(c, right, b);
-    else
-      buf_puts(b, "INTPTR_MAX");  /* endless */
+    if (!right_unbounded) emit_int_expr(c, right, b); else buf_puts(b, "INTPTR_MAX");  /* endless */
     buf_printf(b, ", %d)", excl);
     return;
   }

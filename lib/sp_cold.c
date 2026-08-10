@@ -2349,6 +2349,13 @@ mrb_bool sp_range_include(sp_Range *r, mrb_int x){SP_GC_ROOT(r);
   return sp_range_count(*r)>0 && lo<=x && x<=hi;
 }
 /* Render a Range for a RangeError message ("-10..1", "1...3", "-10..", "..2"). */
+/* Range#inspect: as #to_s, except that a range with NO bound at either end
+   names them -- CRuby prints "nil..nil", not ".." (#3670). */
+const char *sp_range_inspect(sp_Range r) {
+  if (r.first == INTPTR_MIN && r.last == INTPTR_MAX)
+    return r.excl ? (&("\xff" "nil...nil")[1]) : (&("\xff" "nil..nil")[1]);
+  return sp_range_str(r);
+}
 const char *sp_range_str(sp_Range r) {
   const char *dots = r.excl ? "..." : "..";
   if (r.first == INTPTR_MIN && r.last == INTPTR_MAX) return dots;

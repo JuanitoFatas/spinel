@@ -9201,7 +9201,10 @@ int emit_range_call(Compiler *c, int id, Buf *b) {
         int tq = ++g_tmp;
         buf_printf(b, "({ sp_Range _t%d = ", tq);
         emit_expr(c, recv, b);
-        buf_printf(b, "; sp_range_str(_t%d); })", tq);
+        /* #inspect names the absent bounds of a fully-unbounded range
+           ("nil..nil"), where #to_s prints only the dots (#3670) */
+        buf_printf(b, "; %s(_t%d); })",
+                   sp_streq(name, "inspect") ? "sp_range_inspect" : "sp_range_str", tq);
         return 1;
       }
     }
@@ -9336,6 +9339,12 @@ int emit_range_call(Compiler *c, int id, Buf *b) {
                nt_ref(nt, _rr, "right") < 0; })) {
         /* an ENDLESS literal range: #end is nil (#2413) */
         buf_puts(b, "sp_box_nil()"); (void)t;
+      }
+      else if (argc == 0 && sp_streq(name, "end")) {
+        /* #end is nil for ANY endless range, however it was spelled: `1..nil`
+           and a range held in a variable read the sentinel, where the
+           literal-shape arm above sees no syntax to key on (#3670) */
+        buf_printf(b, "(_t%d.last == INTPTR_MAX ? SP_INT_NIL : _t%d.last)", t, t);
       }
       else if (sp_streq(name, "last") || sp_streq(name, "end")) {
         /* #last enumerates, so an endless range has none (#3668) */

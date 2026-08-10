@@ -64,6 +64,7 @@ static inline mrb_bool sp_range_eq(sp_Range a,sp_Range b){return a.first==b.firs
 
 mrb_bool sp_range_include(sp_Range *r, mrb_int x);
 const char *sp_range_str(sp_Range r);
+const char *sp_range_inspect(sp_Range r);
 
 /* Float/String Range value-type ops -- 0 optcarrot uses, bodies in
    lib/sp_cold.c (see sp_types.h for sp_FloatRange/sp_StrRange). */
