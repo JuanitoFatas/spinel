@@ -2476,6 +2476,11 @@ static sp_RbVal sp_poly_mod(sp_RbVal a, sp_RbVal b) { if (a.tag == SP_TAG_STR ||
    divmod's remainder is a Rational. */
 static sp_PolyArray *sp_PolyArray_new(void);                     /* fwd */
 static void sp_PolyArray_push(sp_PolyArray *a, sp_RbVal v);      /* fwd */
+/* Numeric#fdiv: both operands as Floats, always a Float result (#3767). */
+static mrb_float sp_poly_fdiv(sp_RbVal a, sp_RbVal b) {
+  if (!sp_poly_numeric_p(a)) sp_raise_poly_nomethod("fdiv", a);
+  return sp_poly_to_f_with_rational(a) / sp_poly_to_f_with_rational(b);
+}
 static sp_RbVal sp_poly_divmod(sp_RbVal a, sp_RbVal b) {
   sp_PolyArray *out = sp_PolyArray_new();
   SP_GC_ROOT(out);

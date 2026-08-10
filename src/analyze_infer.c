@@ -1147,6 +1147,11 @@ TyKind infer_call(Compiler *c, int id) {
     if (an_program_builds_methods(c)) return TY_POLY;
     return TY_STRING;
   }
+  /* Numeric#fdiv on a boxed receiver is a Float whatever the operands are
+     (#3767); without a type the boxed result was dropped and read as nil. */
+  if (recv >= 0 && rt == TY_POLY && argc == 1 && nt_ref(nt, id, "block") < 0 &&
+      sp_streq(name, "fdiv") && !an_user_defines_or_reads(c, name))
+    return TY_FLOAT;
   /* Complex#real / #imaginary on a poly value (a Complex read out of a
      container): the component is int- or float-classed at runtime, so the
      static result is poly. Without this the call typed nil and the boxed

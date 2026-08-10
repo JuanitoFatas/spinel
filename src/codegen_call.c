@@ -18962,6 +18962,14 @@ else { memcpy(dir, sf, n); dir[n] = 0; } }
     return;
   }
 
+  /* Numeric#fdiv on a boxed receiver: both operands as Floats, a Float out
+     (#3767). Ahead of the poly arithmetic below, whose ops all answer boxed. */
+  if (recv >= 0 && argc == 1 && rt == TY_POLY && sp_streq(name, "fdiv") &&
+      comp_ntype(c, id) == TY_FLOAT) {
+    buf_puts(b, "sp_poly_fdiv("); emit_boxed(c, recv, b); buf_puts(b, ", ");
+    emit_boxed(c, argv[0], b); buf_puts(b, ")");
+    return;
+  }
   /* poly arithmetic: sp_poly_<op>(boxed, boxed) -> a (poly) result.
      `str + poly` / `str * poly` are string concat/repeat (handled below as
      sp_str_concat/sp_str_repeat with the poly operand coerced), not poly
@@ -18982,6 +18990,7 @@ else { memcpy(dir, sf, n); dir[n] = 0; } }
     else if (sp_streq(name, "/")) pfn = "sp_poly_div";
     else if (sp_streq(name, "%")) pfn = "sp_poly_mod";
     else if (sp_streq(name, "**")) pfn = "sp_poly_pow";
+
     if (pfn) {
       /* The receiver's value is a C temporary until the call runs, and the
          ARGUMENT is evaluated in between. When that argument can allocate, a
