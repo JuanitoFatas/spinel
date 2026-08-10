@@ -34,7 +34,7 @@ endif
 # sized for real identifiers; the warning fires independently of -Wall under
 # _FORTIFY_SOURCE, so -Wno-all does not cover it). clang lacks the flag and
 # ignores it via -Wno-unknown-warning-option above.
-OPT     ?= -O2
+OPT     ?= $(COPT)
 # String#crypt is libc crypt(3): glibc keeps it in libcrypt (macOS has it in
 # libSystem). --as-needed drops the DSO when a program never calls it.
 ifeq ($(shell uname -s),Linux)
