@@ -10516,6 +10516,18 @@ void emit_call(Compiler *c, int id, Buf *b) {
         emit_expr(c, mrecv, b); buf_puts(b, ")");
         return;
       }
+      /* An expression receiver (`Calc.new(3).method(:add)`) must not be
+         evaluated a second time -- and need not be: the Method object carries
+         the self it bound (#3693). */
+      TyKind mrt2 = comp_ntype(c, mrecv);
+      if (ty_is_object(mrt2) && !comp_ty_value_obj(c, mrt2)) {
+        int trv = ++g_tmp;
+        buf_printf(b, "({ sp_BoundMethod *_t%d = ", trv);
+        emit_expr(c, recv, b);
+        buf_printf(b, "; (sp_%s *)_t%d->self; })",
+                   c->classes[ty_object_class(mrt2)].c_name, trv);
+        return;
+      }
     }
   }
   /* <method>.arity -> a compile-time constant from the target method's param
