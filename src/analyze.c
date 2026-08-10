@@ -2597,6 +2597,20 @@ static void synth_to_enum_generators(Compiler *c) {
   char **names = malloc(sizeof(char *) * (size_t)cnames);
   if (!names) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
   int n0 = nt->count;
+  /* A short-circuiting Enumerable call is served by the same generator: the
+     redirect below routes `obj.first`/`take`/`find`/`take_while`/`include?`/
+     `lazy` through `__to_enum_each` so a class whose #each never ends still
+     answers (#3756). Seed "each" whenever such a call is in the program; an
+     unused helper prunes by reachability like every other. */
+  for (int id = 0; id < n0 && nnames == 0; id++) {
+    if (nt_kind(nt, id) != NK_CallNode) continue;
+    const char *cn = nt_str(nt, id, "name");
+    if (!cn) continue;
+    if (sp_streq(cn, "first") || sp_streq(cn, "take") || sp_streq(cn, "find") ||
+        sp_streq(cn, "detect") || sp_streq(cn, "take_while") || sp_streq(cn, "lazy") ||
+        sp_streq(cn, "include?") || sp_streq(cn, "member?"))
+      names[nnames++] = strdup("each");
+  }
   for (int id = 0; id < n0; id++) {
     char buf[128];
     if (!to_enum_target(c, id, buf, sizeof buf, NULL, NULL)) continue;
@@ -4879,10 +4893,35 @@ int desugar_enum_method_recv(Compiler *c) {
       /* bare `first` returns the single first element, which the materialized
          enumerator does not lower natively (only the counted first(n) does),
          so it delegates through the element array too (#2994) */
+      /* bare `first` is `take(1)[0]`: the counted take lowers natively and
+         stops after one element, so an infinite enumerator answers (#3756) */
       if (sp_streq(nm, "first")) {
         int fa = nt_ref(nt, id, "arguments"); int fac = 0;
         if (fa >= 0) nt_arr(nt, fa, "arguments", &fac);
-        if (fac == 0) enum_terminal = 1;
+        if (fac == 0 && rt == TY_ENUMERATOR) {
+          int one = nt_new_node(nt, "IntegerNode");
+          nt_node_set_int(nt, one, "value", 1);
+          int targs = nt_new_node(nt, "ArgumentsNode");
+          nt_node_set_arr(nt, targs, "arguments", &one, 1);
+          int tk = nt_new_node(nt, "CallNode");
+          nt_node_set_str(nt, tk, "name", "take");
+          nt_node_set_ref(nt, tk, "receiver", recv);
+          nt_node_set_ref(nt, tk, "arguments", targs);
+          nt_node_set_ref(nt, tk, "block", -1);
+          int zero = nt_new_node(nt, "IntegerNode");
+          nt_node_set_int(nt, zero, "value", 0);
+          int zargs = nt_new_node(nt, "ArgumentsNode");
+          nt_node_set_arr(nt, zargs, "arguments", &zero, 1);
+          nt_node_set_str(nt, id, "name", "[]");
+          nt_node_set_ref(nt, id, "receiver", tk);
+          nt_node_set_ref(nt, id, "arguments", zargs);
+          comp_grow_node_arrays(c);
+          c->nscope[one] = c->nscope[id]; c->nscope[targs] = c->nscope[id];
+          c->nscope[tk] = c->nscope[id];
+          c->nscope[zero] = c->nscope[id]; c->nscope[zargs] = c->nscope[id];
+          changed = 1;
+          continue;
+        }
       }
     }
     /* A blockless TERMINAL on an index/slice enumerator delegates through
@@ -4937,6 +4976,13 @@ int desugar_enum_method_recv(Compiler *c) {
        the elements first would loop forever (#3590) */
     int enum_lazy_driven = nt_ref(nt, id, "block") >= 0 &&
         (sp_streq(nm, "find") || sp_streq(nm, "detect") || sp_streq(nm, "take_while"));
+    /* include?/member? stop at the first hit through the same driver (#3756) */
+    if (!enum_lazy_driven && nt_ref(nt, id, "block") < 0 &&
+        (sp_streq(nm, "include?") || sp_streq(nm, "member?"))) {
+      int ia = nt_ref(nt, id, "arguments"); int iac = 0;
+      if (ia >= 0) nt_arr(nt, ia, "arguments", &iac);
+      if (iac == 1) enum_lazy_driven = 1;
+    }
     if (rt == TY_ENUMERATOR && !recv_is_index_enum && !enum_lazy_driven &&
         !sp_streq(nm, "to_a") && !sp_streq(nm, "entries") &&
         (nt_ref(nt, id, "block") >= 0 || enum_terminal || enum_regroup)) {
@@ -5037,8 +5083,19 @@ int desugar_enum_method_recv(Compiler *c) {
     if (nt_ref(nt, id, "block") >= 0 &&
         (sp_streq(nm, "each_slice") || sp_streq(nm, "each_cons")))
       nt_node_set_int(nt, id, "enum_self_result", recv);
+    /* The short-circuiting Enumerables stop before the source runs out, so
+       they ride the fiber-backed generator rather than the eager element
+       array: a class whose #each never ends materializes forever (#3756). */
+    const char *matn = "__enum_to_a";
+    if (comp_method_in_chain(c, cid, "__to_enum_each", NULL) >= 0 &&
+        (sp_streq(nm, "first") || sp_streq(nm, "take") || sp_streq(nm, "lazy") ||
+         ((sp_streq(nm, "find") || sp_streq(nm, "detect") || sp_streq(nm, "take_while")) &&
+          nt_ref(nt, id, "block") >= 0) ||
+         ((sp_streq(nm, "include?") || sp_streq(nm, "member?")) &&
+          nt_ref(nt, id, "block") < 0)))
+      matn = "__to_enum_each";
     int wrap = nt_new_node(nt, "CallNode");
-    nt_node_set_str(nt, wrap, "name", "__enum_to_a");
+    nt_node_set_str(nt, wrap, "name", matn);
     nt_node_set_ref(nt, wrap, "receiver", recv);
     nt_node_set_ref(nt, id, "receiver", wrap);
     comp_grow_node_arrays(c);

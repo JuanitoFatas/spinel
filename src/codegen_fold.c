@@ -4927,18 +4927,36 @@ int emit_enum_find_expr(Compiler *c, int id, Buf *b) {
   const NodeTable *nt = c->nt;
   const char *name = nt_str(nt, id, "name");
   int take = name && sp_streq(name, "take_while");
-  if (!name || (!take && !sp_streq(name, "find") && !sp_streq(name, "detect"))) return 0;
+  int inc = name && (sp_streq(name, "include?") || sp_streq(name, "member?"));
+  if (!name || (!take && !inc && !sp_streq(name, "find") && !sp_streq(name, "detect"))) return 0;
   int block = nt_ref(nt, id, "block");
-  if (block < 0 || !nt_type(nt, block) || !sp_streq(nt_type(nt, block), "BlockNode")) return 0;
+  int iargs = nt_ref(nt, id, "arguments");
+  int iargc = 0;
+  const int *iargv = iargs >= 0 ? nt_arr(nt, iargs, "arguments", &iargc) : NULL;
+  if (inc) {
+    /* include?/member? scan for one value: no block, exactly one argument */
+    if (block >= 0 || iargc != 1 || !iargv) return 0;
+  }
+  else if (block < 0 || !nt_type(nt, block) || !sp_streq(nt_type(nt, block), "BlockNode")) return 0;
   int recv = nt_ref(nt, id, "receiver");
   if (recv < 0 || comp_ntype(c, recv) != TY_ENUMERATOR) return 0;
-  const char *p0_orig = block_param_name(c, block, 0);
+  const char *p0_orig = inc ? NULL : block_param_name(c, block, 0);
   const char *p0 = p0_orig ? rename_local(p0_orig) : NULL;
-  const char *p1_orig = block_param_name(c, block, 1);
+  const char *p1_orig = inc ? NULL : block_param_name(c, block, 1);
   const char *p1 = p1_orig ? rename_local(p1_orig) : NULL;
-  int body = nt_ref(nt, block, "body");
+  int body = inc ? -1 : nt_ref(nt, block, "body");
   int bn = 0; const int *bb = body >= 0 ? nt_arr(nt, body, "body", &bn) : NULL;
-  Scope *bsc = comp_scope_of(c, block);
+  Scope *bsc = inc ? NULL : comp_scope_of(c, block);
+  /* the sought value is evaluated once, before the pull loop */
+  int tneedle = 0;
+  if (inc) {
+    tneedle = ++g_tmp;
+    Buf nb; memset(&nb, 0, sizeof nb); emit_boxed(c, iargv[0], &nb);
+    emit_indent(g_pre, g_indent);
+    buf_printf(g_pre, "sp_RbVal _t%d = %s; SP_GC_ROOT_RBVAL(_t%d);\n",
+               tneedle, nb.p ? nb.p : "sp_box_nil()", tneedle);
+    free(nb.p);
+  }
 
   int te = ++g_tmp, tres = ++g_tmp, tv = ++g_tmp, tg = ++g_tmp;
   Buf rb; memset(&rb, 0, sizeof rb); emit_expr(c, recv, &rb);
@@ -4946,8 +4964,11 @@ int emit_enum_find_expr(Compiler *c, int id, Buf *b) {
   buf_printf(g_pre, "sp_Enumerator *_t%d = %s; SP_GC_ROOT(_t%d);\n", te, rb.p ? rb.p : "", te);
   free(rb.p);
   emit_indent(g_pre, g_indent);
-  /* take_while collects the passing prefix; find/detect keep one element */
-  if (take)
+  /* take_while collects the passing prefix; find/detect keep one element;
+     include?/member? answer whether the scan ever hit the sought value */
+  if (inc)
+    buf_printf(g_pre, "int _t%d = FALSE;\n", tres);
+  else if (take)
     buf_printf(g_pre, "sp_PolyArray *_t%d = sp_PolyArray_new(); SP_GC_ROOT(_t%d);\n", tres, tres);
   else
     buf_printf(g_pre, "sp_RbVal _t%d = sp_box_nil(); SP_GC_ROOT_RBVAL(_t%d);\n", tres, tres);
@@ -4964,6 +4985,10 @@ int emit_enum_find_expr(Compiler *c, int id, Buf *b) {
   int din = g_indent + 2;
   emit_indent(g_pre, din);
   buf_printf(g_pre, "_t%d = sp_Enumerator_next(_t%d);\n", tv, te);
+  if (inc) {
+    emit_indent(g_pre, din);
+    buf_printf(g_pre, "if (sp_poly_eq(_t%d, _t%d)) { _t%d = TRUE; break; }\n", tv, tneedle, tres);
+  }
   /* bind block params: two params autosplat an array element; one binds it */
   LocalVar *lv0f = p0_orig && bsc ? scope_local(bsc, p0_orig) : NULL;
   if (p0 && lv0f) {   /* a discard param (`_`) has no declared local: skip */
