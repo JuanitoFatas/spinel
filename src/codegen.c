@@ -376,6 +376,11 @@ static int call_returns_nullable_int(Compiler *c, int node) {
     return lv && lv->nullable_int;
   }
   if (!nty || !sp_streq(nty, "CallNode")) return 0;
+  /* a safe-navigation call answers the scalar's nil sentinel when the receiver
+     is nil, so boxing it plainly published a NaN (or a sentinel int) where the
+     value has to read as nil (#3771) */
+  { const char *sop = nt_str(nt, node, "call_operator");
+    if (sop && sp_streq(sop, "&.")) return 1; }
   const char *nm = nt_str(nt, node, "name");
   if (!nm) return 0;
   int blk = nt_ref(nt, node, "block");
