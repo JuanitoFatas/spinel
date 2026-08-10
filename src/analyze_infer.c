@@ -881,6 +881,10 @@ TyKind infer_call(Compiler *c, int id) {
         sp_streq(name, "kind_of?") || sp_streq(name, "instance_of?") ||
         sp_streq(name, "equal?"))
       return TY_BOOL;
+    /* step(n) / %(n): an Enumerator over every nth member (#3671) */
+    if ((sp_streq(name, "step") || sp_streq(name, "%")) && argc == 1 &&
+        nt_ref(nt, id, "block") < 0)
+      return TY_ENUMERATOR;
     if (sp_streq(name, "class")) return TY_CLASS;
     if (sp_streq(name, "hash")) return TY_INT;
     /* Range#size counts INTEGER elements, so a string range has none: nil

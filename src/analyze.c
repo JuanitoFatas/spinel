@@ -3437,7 +3437,10 @@ static int desugar_str_range_methods(Compiler *c) {
     /* to_a IS the materializer: interposing it would recurse */
     "to_a", "entries",
     /* Range#size counts integer elements: nil for a string range */
-    "size", NULL };
+    "size",
+    /* step / % walk the members by stride: their own arm answers. The block
+       form has no arm, so it keeps riding the materialized array (#3671). */
+    "step", "%", NULL };
   for (int id = 0; id < n0; id++) {
     const char *ty = nt_type(nt, id);
     if (!ty || !sp_streq(ty, "CallNode")) continue;
@@ -3445,12 +3448,32 @@ static int desugar_str_range_methods(Compiler *c) {
     int recv = nt_ref(nt, id, "receiver");
     if (!nm || recv < 0) continue;
     if (infer_type(c, recv) != TY_STR_RANGE) continue;
+    /* `range % n` is `range.step(n)`; the arithmetic emitter has no arm for a
+       string range, so name it what it is (#3671) */
+    if (sp_streq(nm, "%")) { nt_node_set_str(nt, id, "name", "step"); changed = 1; continue; }
     int argn = nt_ref(nt, id, "arguments");
     int an = 0;
     if (argn >= 0) nt_arr(nt, argn, "arguments", &an);
     int native = 0;
     for (int j = 0; range_native[j]; j++)
       if (sp_streq(nm, range_native[j])) { native = 1; break; }
+    /* a block-driven step is `step(n).each { }`: the blockless arm answers the
+       Enumerator, whose each the array path already drives (#3671) */
+    if (native && sp_streq(nm, "step") && nt_ref(nt, id, "block") >= 0) {
+      int inner = nt_new_node(nt, "CallNode");
+      if (inner < 0) continue;
+      nt_node_set_str(nt, inner, "name", "step");
+      nt_node_set_ref(nt, inner, "receiver", recv);
+      nt_node_set_ref(nt, inner, "arguments", argn);
+      nt_node_set_ref(nt, inner, "block", -1);
+      nt_node_set_ref(nt, id, "receiver", inner);
+      nt_node_set_str(nt, id, "name", "each");
+      nt_node_set_ref(nt, id, "arguments", -1);
+      comp_grow_node_arrays(c);
+      c->nscope[inner] = c->nscope[id];
+      changed = 1;
+      continue;
+    }
     /* first/last are the endpoints bare, a prefix/suffix ARRAY with a count */
     if (!native && an == 0 && (sp_streq(nm, "first") || sp_streq(nm, "last"))) native = 1;
     if (native) continue;

@@ -8782,6 +8782,21 @@ int emit_range_call(Compiler *c, int id, Buf *b) {
       buf_printf(b, "({ sp_StrRange _t%d = ", tr); emit_expr(c, recv, b);
       buf_printf(b, "; _t%d.last; })", tr); return 1;
     }
+    /* step(n) / %(n): every nth member, as an Enumerator (#3671) */
+    if (argc == 1 && (sp_streq(name, "step") || sp_streq(name, "%")) &&
+        nt_ref(nt, id, "block") < 0) {
+      int ta = ++g_tmp, tn = ++g_tmp, to = ++g_tmp, ti = ++g_tmp;
+      buf_printf(b, "({ sp_StrRange _t%d = ", tr); emit_expr(c, recv, b);
+      buf_printf(b, "; sp_StrArray *_t%d = sp_srange_to_a(_t%d); SP_GC_ROOT(_t%d);", ta, tr, ta);
+      buf_printf(b, " mrb_int _t%d = ", tn); emit_int_expr(c, argv[0], b);
+      buf_printf(b, "; if (_t%d <= 0) sp_raise_cls(\"ArgumentError\", \"step can't be 0\");", tn);
+      buf_printf(b, " sp_StrArray *_t%d = sp_StrArray_new(); SP_GC_ROOT(_t%d);", to, to);
+      buf_printf(b, " for (mrb_int _t%d = 0; _t%d < sp_StrArray_length(_t%d); _t%d += _t%d)"
+                    " sp_StrArray_push(_t%d, sp_StrArray_get(_t%d, _t%d));",
+                 ti, ti, ta, ti, tn, to, ta, ti);
+      buf_printf(b, " sp_Enumerator_new_from(sp_box_str_array(_t%d)); })", to);
+      return 1;
+    }
     /* min(n) / max(n): the n smallest or largest members (#3665) */
     if (argc == 1 && (sp_streq(name, "min") || sp_streq(name, "max")) &&
         nt_ref(nt, id, "block") < 0) {
