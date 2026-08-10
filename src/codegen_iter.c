@@ -1312,6 +1312,17 @@ int emit_inline_expr(Compiler *c, int id, Buf *b) {
   /* only when a value is actually produced (scalar return) */
   TyKind rt = comp_ntype(c, id);
   if (!is_scalar_ret(rt)) {
+    /* A block that always raises leaves the call with no value type at all,
+       but the call itself still inlines: hold the (dead) result boxed so the
+       yielding method needs no standalone function (#3716). */
+    if ((rt == TY_VOID || rt == TY_UNKNOWN || rt == TY_NIL) &&
+        nt_ref(c->nt, id, "block") >= 0 && call_targets_yielding_method(c, id)) {
+      TyKind sv = c->ntype[id];
+      c->ntype[id] = TY_POLY;
+      int ok = emit_inline_call_x(c, id, b, g_indent + 1, 1);
+      c->ntype[id] = sv;
+      if (ok) return 1;
+    }
     /* a block-driving call to a yielding method that can't be inlined here (a
        non-scalar result) has no standalone function to fall back to: the plain
        call would emit an undefined symbol (invalid C). Fail loud (#2948). */
