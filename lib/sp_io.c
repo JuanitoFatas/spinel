@@ -300,6 +300,77 @@ mrb_int sp_sock_const(const char *n) {
     { "SO_REUSEPORT", SO_REUSEPORT },
 #endif
     { "TCP_NODELAY", TCP_NODELAY },
+    /* keepalive tuning and the timeout/credential options a client needs to
+       configure a long-lived connection (#3541). Each is guarded: the names
+       differ across platforms (macOS spells the idle timer TCP_KEEPALIVE). */
+#ifdef TCP_KEEPIDLE
+    { "TCP_KEEPIDLE", TCP_KEEPIDLE },
+#elif defined(TCP_KEEPALIVE)
+    { "TCP_KEEPIDLE", TCP_KEEPALIVE },
+#endif
+#ifdef TCP_KEEPALIVE
+    { "TCP_KEEPALIVE", TCP_KEEPALIVE },
+#endif
+#ifdef TCP_KEEPINTVL
+    { "TCP_KEEPINTVL", TCP_KEEPINTVL },
+#endif
+#ifdef TCP_KEEPCNT
+    { "TCP_KEEPCNT", TCP_KEEPCNT },
+#endif
+#ifdef TCP_MAXSEG
+    { "TCP_MAXSEG", TCP_MAXSEG },
+#endif
+#ifdef SO_RCVTIMEO
+    { "SO_RCVTIMEO", SO_RCVTIMEO },
+#endif
+#ifdef SO_SNDTIMEO
+    { "SO_SNDTIMEO", SO_SNDTIMEO },
+#endif
+#ifdef SO_RCVLOWAT
+    { "SO_RCVLOWAT", SO_RCVLOWAT },
+#endif
+#ifdef SO_SNDLOWAT
+    { "SO_SNDLOWAT", SO_SNDLOWAT },
+#endif
+#ifdef SO_OOBINLINE
+    { "SO_OOBINLINE", SO_OOBINLINE },
+#endif
+#ifdef SO_DONTROUTE
+    { "SO_DONTROUTE", SO_DONTROUTE },
+#endif
+#ifdef SO_ACCEPTCONN
+    { "SO_ACCEPTCONN", SO_ACCEPTCONN },
+#endif
+#ifdef IPPROTO_IPV6
+    { "IPPROTO_IPV6", IPPROTO_IPV6 },
+#endif
+#ifdef IPV6_V6ONLY
+    { "IPV6_V6ONLY", IPV6_V6ONLY },
+#endif
+#ifdef IP_TTL
+    { "IP_TTL", IP_TTL },
+#endif
+#ifdef SOCK_RAW
+    { "SOCK_RAW", SOCK_RAW },
+#endif
+#ifdef SOCK_SEQPACKET
+    { "SOCK_SEQPACKET", SOCK_SEQPACKET },
+#endif
+#ifdef AF_UNSPEC
+    { "AF_UNSPEC", AF_UNSPEC }, { "PF_UNSPEC", PF_UNSPEC },
+#endif
+#ifdef MSG_PEEK
+    { "MSG_PEEK", MSG_PEEK },
+#endif
+#ifdef MSG_WAITALL
+    { "MSG_WAITALL", MSG_WAITALL },
+#endif
+#ifdef MSG_DONTROUTE
+    { "MSG_DONTROUTE", MSG_DONTROUTE },
+#endif
+#ifdef MSG_OOB
+    { "MSG_OOB", MSG_OOB },
+#endif
     { "AF_INET", AF_INET }, { "AF_INET6", AF_INET6 }, { "AF_UNIX", AF_UNIX },
     { "PF_INET", PF_INET }, { "PF_INET6", PF_INET6 }, { "PF_UNIX", PF_UNIX },
     { "SOCK_STREAM", SOCK_STREAM }, { "SOCK_DGRAM", SOCK_DGRAM },
