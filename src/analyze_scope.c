@@ -3237,6 +3237,35 @@ void register_include_attrs(Compiler *c) {
   }
 }
 
+/* A module method named by `Mod.instance_method(:m)` / `Mod.method(:m)` is
+   referenced directly, so its own function must be emitted even though an
+   include copied it into a class (which marks the source transplanted and
+   skips it -- the Method object then named an undeclared symbol, #3659). */
+void unmark_referenced_module_sources(Compiler *c) {
+  const NodeTable *nt = c->nt;
+  NT_FOREACH_KIND(nt, NK_CallNode, id) {
+    const char *nm = nt_str(nt, id, "name");
+    if (!nm || (!sp_streq(nm, "instance_method") && !sp_streq(nm, "method"))) continue;
+    int recv = nt_ref(nt, id, "receiver");
+    if (recv < 0) continue;
+    if (nt_kind(nt, recv) != NK_ConstantReadNode && nt_kind(nt, recv) != NK_ConstantPathNode) continue;
+    const char *cn = nt_str(nt, recv, "name");
+    int ci = cn ? comp_class_index(c, cn) : -1;
+    if (ci < 0) continue;
+    int args = nt_ref(nt, id, "arguments");
+    int an = 0; const int *av = args >= 0 ? nt_arr(nt, args, "arguments", &an) : NULL;
+    if (an != 1 || !av || nt_kind(nt, av[0]) != NK_SymbolNode) continue;
+    const char *mn = nt_str(nt, av[0], "value");
+    if (!mn) continue;
+    for (int si = 1; si < c->nscopes; si++) {
+      Scope *sc = &c->scopes[si];
+      if (sc->class_id != ci || sc->is_cmethod || !sc->name || !sp_streq(sc->name, mn)) continue;
+      sc->is_transplanted_source = 0;
+      sc->reachable = 1;
+    }
+  }
+}
+
 /* For each class, find `extend M` declarations and transplant M's instance
    methods as class methods (is_cmethod=1) so they are callable as C.m. */
 void register_extends(Compiler *c) {

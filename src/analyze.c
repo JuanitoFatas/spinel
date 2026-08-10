@@ -11205,6 +11205,8 @@ void analyze_program(Compiler *c) {
      are dead code; skipping them avoids type-checking uninvoked methods
      (e.g. a never-called method with an uninferrable param). */
   compute_reachable(c);
+  /* a module method named by Mod.instance_method(:m) is referenced directly */
+  unmark_referenced_module_sources(c);
   /* Which exact cls_ids can appear at runtime -- lets the poly-dispatch switch
      drop `case` arms for classes that are never instantiated (the referenced
      method then DCEs as an unreferenced static). */

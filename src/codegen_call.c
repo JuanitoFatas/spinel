@@ -10742,6 +10742,41 @@ void emit_call(Compiler *c, int id, Buf *b) {
       if (eargc < splat_at2) eargc = splat_at2;
     }
     else splat_at2 = -1;   /* mid-list splat / unknown target: old path */
+    /* Bind the call arguments to the target's PARAMETERS, so a keyword
+       argument lands in its own slot and an omitted optional keeps its
+       default -- positionally, the keyword hash went into the next scalar
+       slot and the C compile failed (#3660). Every parameter gets a source
+       node, or -1 for "use the declared default". */
+    int *psrc = NULL;
+    if (tm && splat_at2 < 0 && tm->rest_idx < 0 && tm->nparams > shift) {
+      int np = tm->nparams - shift;
+      psrc = (int *)malloc(sizeof(int) * (size_t)np);
+      for (int k = 0; k < np; k++) psrc[k] = -1;
+      int pos = 0, ok = 1;
+      for (int k = 0; k < argc && ok; k++) {
+        const char *akt = nt_type(nt, argv[k]);
+        if (akt && (sp_streq(akt, "KeywordHashNode") || sp_streq(akt, "HashNode")) && k == argc - 1) {
+          int kn = 0; const int *kv = nt_arr(nt, argv[k], "elements", &kn);
+          for (int e = 0; e < kn && ok; e++) {
+            if (nt_kind(nt, kv[e]) != NK_AssocNode) { ok = 0; break; }
+            int keyn = nt_ref(nt, kv[e], "key");
+            const char *kname = keyn >= 0 && nt_kind(nt, keyn) == NK_SymbolNode
+                                  ? nt_str(nt, keyn, "value") : NULL;
+            if (!kname) { ok = 0; break; }
+            int slot = -1;
+            for (int pi = shift; pi < tm->nparams; pi++)
+              if (tm->pnames[pi] && sp_streq(tm->pnames[pi], kname)) { slot = pi - shift; break; }
+            if (slot < 0) { ok = 0; break; }
+            psrc[slot] = nt_ref(nt, kv[e], "value");
+          }
+          continue;
+        }
+        if (pos >= np) { ok = 0; break; }
+        psrc[pos++] = argv[k];
+      }
+      if (ok) eargc = np;
+      else { free(psrc); psrc = NULL; }
+    }
     buf_printf(b, "({ sp_BoundMethod *_t%d = ", tr); emit_expr(c, recv, b); buf_puts(b, "; ");
     if (splat_at2 >= 0) {
       tsplat = ++g_tmp;
@@ -10795,7 +10830,8 @@ void emit_call(Compiler *c, int id, Buf *b) {
       else if (tm && k + shift < tm->nparams) {
         LocalVar *pp = scope_local(tm, tm->pnames[k + shift]);
         emit_ctype(c, pp ? pp->type : TY_INT, b);
-        buf_printf(b, " _t%d = ", atmp[k]); emit_arg_or_default(c, tm, k + shift, argv[k], b);
+        buf_printf(b, " _t%d = ", atmp[k]);
+        emit_arg_or_default(c, tm, k + shift, psrc ? psrc[k] : argv[k], b);
       }
       else if (poly_abi) { buf_printf(b, "sp_RbVal _t%d = ", atmp[k]); emit_boxed(c, argv[k], b); }
       else if (proc_slot_is_ptr(comp_ntype(c, argv[k]))) {
@@ -10832,6 +10868,7 @@ void emit_call(Compiler *c, int id, Buf *b) {
     }
     buf_puts(b, "; })");
     free(atmp);
+    free(psrc);
     return;
   }
 

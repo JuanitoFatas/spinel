@@ -1543,7 +1543,11 @@ int method_recv_node(Compiler *c, int recv) {
   if (nt_kind(nt, recv) == NK_CallNode && nt_str(nt, recv, "name") &&
       (sp_streq(nt_str(nt, recv, "name"), "bind") ||
        sp_streq(nt_str(nt, recv, "name"), "dup") ||
-       sp_streq(nt_str(nt, recv, "name"), "clone")))
+       sp_streq(nt_str(nt, recv, "name"), "clone") ||
+       /* #unbind names the same target with the receiver dropped, so the
+          UnboundMethod it answers resolves like the Method it came from
+          (#3658) */
+       sp_streq(nt_str(nt, recv, "name"), "unbind")))
     return method_recv_node(c, nt_ref(nt, recv, "receiver"));
   /* a super_method call IS a method node: method_obj_target_mi resolves it
      through the parent chain, so hand it back as-is (#3247) */
