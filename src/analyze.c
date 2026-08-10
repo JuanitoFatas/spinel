@@ -1998,6 +1998,30 @@ static void seed_method(Compiler *c, Scope *s, const char *ret_tok, char *ptypes
   if (rt != TY_UNKNOWN) {
     s->ret = rt; s->ret_rbs_seeded = 1;
     s->ret_rbs_nilable = g_seed_nilable && (rt == TY_INT || rt == TY_FLOAT);
+    /* A memoized CONTAINER reader (`def self.table; @table ||= {}; end`) IS
+       its ivar: pinning only the return left the slot poly, and the seeded
+       narrowing then cast a PolyPolyHash payload to the declared hash -- a
+       segfault on the first read (#3779). Pin the ivar the body answers too.
+       Containers only: a scalar slot pinned this way loses the nil a boxed
+       reader legitimately answers. */
+    if ((ty_is_hash(rt) || ty_is_array(rt)) && !g_seed_nilable &&
+        s->class_id >= 0 && s->class_id < c->nclasses && s->body >= 0) {
+      const NodeTable *nt = c->nt;
+      int bn = 0; const int *bb = nt_arr(nt, s->body, "body", &bn);
+      if (bb && bn > 0) {
+        int last = bb[bn - 1];
+        NodeKind lk = nt_kind(nt, last);
+        if (lk == NK_InstanceVariableOrWriteNode || lk == NK_InstanceVariableReadNode) {
+          const char *ivn = nt_str(nt, last, "name");
+          if (ivn && ivn[0] == '@') {
+            ClassInfo *ci = &c->classes[s->class_id];
+            int idx = comp_ivar_intern(ci, ivn);
+            ci->ivar_types[idx] = rt;
+            class_pin_ivar(ci, ivn);
+          }
+        }
+      }
+    }
   }
   if (!ptypes) return;
   char *p = ptypes;

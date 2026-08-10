@@ -1,0 +1,7 @@
+module M
+  def self.table: () -> Hash[String, String]
+end
+
+module N
+  def self.table: () -> Hash[String, String]
+end
