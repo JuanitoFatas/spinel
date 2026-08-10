@@ -3166,14 +3166,19 @@ int emit_reduce_block_expr(Compiler *c, int id, Buf *b) {
   int start;
   if (init_empty_arr) {
     /* the empty [] would emit as an IntArray without the poly context; the
-       heap accumulator is rooted since block-body pushes may collect */
-    buf_printf(b, "sp_PolyArray_new(); SP_GC_ROOT(_t%d); ", tacc);
+       heap accumulator is rooted since block-body pushes may collect. A slot
+       that widened to poly (the block hands the accumulator to a callable,
+       whose result is boxed) takes the boxed form (#3657). */
+    if (acc_ty == TY_POLY) buf_printf(b, "sp_box_poly_array(sp_PolyArray_new()); SP_GC_ROOT_RBVAL(_t%d); ", tacc);
+    else buf_printf(b, "sp_PolyArray_new(); SP_GC_ROOT(_t%d); ", tacc);
     start = 0;
   }
   else if (init_empty_hash) {
     /* the empty {} would emit as its default variant; force the general
        boxed-key/value hash so any key type fits, and root it (#2958) */
-    buf_printf(b, "sp_PolyPolyHash_new(); SP_GC_ROOT(_t%d); ", tacc);
+    if (acc_ty == TY_POLY)
+      buf_printf(b, "sp_box_obj(sp_PolyPolyHash_new(), SP_BUILTIN_POLY_POLY_HASH); SP_GC_ROOT_RBVAL(_t%d); ", tacc);
+    else buf_printf(b, "sp_PolyPolyHash_new(); SP_GC_ROOT(_t%d); ", tacc);
     start = 0;
   }
   else if (init >= 0) {
@@ -7762,7 +7767,11 @@ int emit_each_with_object_expr(Compiler *c, int id, Buf *b) {
     if (a0ty && sp_streq(a0ty, "ArrayNode") && an0 == 0) {
       empty_seed = 1;
       TyKind me = ewo_memo_elem_type(c, id);
-      accT = (me != TY_UNKNOWN) ? ty_array_of(me) : TY_INT_ARRAY;
+      /* the memo handed to a callable has no visible fill to type it from; the
+         analyzer types the parameter as the general boxed array, so build one
+         (an int array would reach the callable as the wrong shape, #3657) */
+      accT = (me != TY_UNKNOWN) ? ty_array_of(me)
+           : ewo_memo_passed_to_callable(c, id) ? TY_POLY_ARRAY : TY_INT_ARRAY;
     }
     else if (a0ty && sp_streq(a0ty, "HashNode") &&
              (nt_arr(nt, argv[0], "elements", &an0), an0 == 0)) {

@@ -4575,9 +4575,12 @@ else {
         int an0 = 0;
         if (a0ty && sp_streq(a0ty, "ArrayNode")) nt_arr(nt, argv[0], "elements", &an0);
         if (a0ty && sp_streq(a0ty, "ArrayNode") && an0 == 0) {
-          /* empty `[]`: element type from how the memo is filled, else int. */
+          /* empty `[]`: element type from how the memo is filled; a memo the
+             block only hands to a callable is the general boxed array (#3657),
+             else int. */
           TyKind me = ewo_memo_elem_type(c, id);
-          return (me != TY_UNKNOWN) ? ty_array_of(me) : TY_INT_ARRAY;
+          if (me != TY_UNKNOWN) return ty_array_of(me);
+          return ewo_memo_passed_to_callable(c, id) ? TY_POLY_ARRAY : TY_INT_ARRAY;
         }
         /* empty `{}` memo: a general (boxed key/value) hash builder. */
         if (a0ty && sp_streq(a0ty, "HashNode") &&

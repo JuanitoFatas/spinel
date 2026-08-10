@@ -6056,6 +6056,44 @@ static int fwd_callable_def(Compiler *c, int ref, int *out_body, int *out_pn) {
   return *out_body >= 0;
 }
 
+/* Does the block of this each_with_object hand its memo parameter to a
+   callable (`f.call(memo, ...)`) rather than filling it inline? Then no push
+   is visible to type it from. */
+static int ewo_memo_arg_scan(const NodeTable *nt, int id, const char *memo, int depth) {
+  if (id < 0 || depth > 64) return 0;
+  if (nt_kind(nt, id) == NK_CallNode) {
+    int a = nt_ref(nt, id, "arguments");
+    int an = 0; const int *av = a >= 0 ? nt_arr(nt, a, "arguments", &an) : NULL;
+    for (int k = 0; k < an && av; k++) {
+      if (nt_kind(nt, av[k]) != NK_LocalVariableReadNode) continue;
+      const char *vn = nt_str(nt, av[k], "name");
+      if (vn && sp_streq(vn, memo)) return 1;
+    }
+  }
+  int nr = nt_num_refs(nt, id);
+  for (int i = 0; i < nr; i++)
+    if (ewo_memo_arg_scan(nt, nt_ref_at(nt, id, i), memo, depth + 1)) return 1;
+  int na = nt_num_arrs(nt, id);
+  for (int i = 0; i < na; i++) {
+    int n = 0; const int *ids = nt_arr_at(nt, id, i, &n);
+    for (int k = 0; k < n; k++)
+      if (ewo_memo_arg_scan(nt, ids[k], memo, depth + 1)) return 1;
+  }
+  return 0;
+}
+int ewo_memo_passed_to_callable_at(Compiler *c, int callid, int pidx) {
+  const NodeTable *nt = c->nt;
+  int blk = nt_ref(nt, callid, "block");
+  if (blk < 0) return 0;
+  const char *memo = block_param_name(c, blk, pidx);
+  int body = nt_ref(nt, blk, "body");
+  if (!memo || body < 0) return 0;
+  return ewo_memo_arg_scan(nt, body, memo, 0);
+}
+int ewo_memo_passed_to_callable(Compiler *c, int callid) {
+  return ewo_memo_passed_to_callable_at(c, callid, 1);
+}
+
 /* Unify into *acc the element type pushed onto a local named `memo` (`memo << e`
    / `memo.push(e)`) anywhere in the subtree rooted at `id`. */
 static void ewo_scan_pushes(Compiler *c, int id, const char *memo, TyKind *acc) {
@@ -6587,6 +6625,13 @@ int desugar_value_callable_forwards(Compiler *c) {
         if (seedty && sp_streq(seedty, "HashNode") &&
             (nt_arr(nt, ewo_av[0], "elements", &seed_n), seed_n == 0))
           pty[1] = TY_POLY_POLY_HASH;
+        /* An empty `[]` memo the block never fills directly -- it hands it to a
+           callable instead -- has no element evidence to recover, so type it as
+           the general boxed array rather than leaving it unresolved (#3657). */
+        if (seedty && sp_streq(seedty, "ArrayNode") &&
+            (nt_arr(nt, ewo_av[0], "elements", &seed_n), seed_n == 0) &&
+            ewo_memo_elem_type(c, id) == TY_UNKNOWN)
+          pty[1] = TY_POLY_ARRAY;
       }
     }
     else {
@@ -8477,6 +8522,20 @@ int infer_block_params(Compiler *c) {
       int rargc = 0;
       const int *rargv = rargs >= 0 ? nt_arr(nt, rargs, "arguments", &rargc) : NULL;
       TyKind acc_t = (rargc > 0 && rargv) ? infer_type(c, rargv[0]) : et2;
+      /* An empty `[]` / `{}` seed the block only hands to a callable has no
+         fill to type it from; the element type of the RECEIVER is not what it
+         holds, so answer the general boxed container (#3657). */
+      if (rargc > 0 && rargv && acc_t == TY_UNKNOWN) {
+        const char *s0 = nt_type(nt, rargv[0]);
+        int sn0 = 0;
+        if (s0 && sp_streq(s0, "ArrayNode") &&
+            (nt_arr(nt, rargv[0], "elements", &sn0), sn0 == 0) &&
+            ewo_memo_passed_to_callable_at(c, id, 0))
+          acc_t = TY_POLY_ARRAY;
+        else if (s0 && sp_streq(s0, "HashNode") &&
+                 (nt_arr(nt, rargv[0], "elements", &sn0), sn0 == 0))
+          acc_t = TY_POLY_POLY_HASH;
+      }
       if (acc_t == TY_UNKNOWN) acc_t = et2;
       /* the accumulator is reassigned to the block's value each step, so a
          boxed block result widens it rather than truncating -- whatever the
@@ -8585,7 +8644,17 @@ int infer_block_params(Compiler *c) {
                  is filled (`memo << e`), following a forwarded callable's body. */
               TyKind me = ewo_memo_elem_type(c, id);
               if (me != TY_UNKNOWN) { at = ty_array_of(me); from_usage = 1; }
+              /* No fill anywhere: the block hands the memo to a callable
+                 instead. The bare int-array guess then mistypes every use of
+                 it, so answer the general boxed array (#3657). */
+              else if (ewo_memo_passed_to_callable(c, id)) { at = TY_POLY_ARRAY; from_usage = 1; }
               else at = TY_INT_ARRAY;
+            }
+            /* an empty `{}` memo is the general boxed hash, for a literal
+               block exactly as for a forwarded callable (#3657) */
+            else if (a0ty && sp_streq(a0ty, "HashNode") &&
+                     (nt_arr(nt, ewobj_argv[0], "elements", &an0), an0 == 0)) {
+              at = TY_POLY_POLY_HASH; from_usage = 1;
             }
           }
           if (at != TY_UNKNOWN) {
