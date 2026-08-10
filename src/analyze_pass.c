@@ -6816,7 +6816,16 @@ int desugar_sort_by_with_index(Compiler *c) {
     if (nt_kind(nt, id) != NK_CallNode) continue;
     const char *nm = nt_str(nt, id, "name");
     if (!nm || !sp_streq(nm, "with_index")) continue;
-    if (nt_ref(nt, id, "arguments") >= 0) continue;         /* with_index(offset) */
+    /* with_index(offset) shifts every index; the pair map below applies it */
+    int wi_off = -1;
+    {
+      int wa = nt_ref(nt, id, "arguments");
+      if (wa >= 0) {
+        int wn = 0; const int *wv = nt_arr(nt, wa, "arguments", &wn);
+        if (wn != 1 || !wv) continue;
+        wi_off = wv[0];
+      }
+    }
     int blk = nt_ref(nt, id, "block");
     if (blk < 0 || !nt_type(nt, blk) || !sp_streq(nt_type(nt, blk), "BlockNode")) continue;
     int recv = nt_ref(nt, id, "receiver");
@@ -6834,9 +6843,51 @@ int desugar_sort_by_with_index(Compiler *c) {
     nt_node_set_str(nt, ewi, "name", "each_with_index");
     nt_node_set_ref(nt, ewi, "arguments", -1);
     nt_node_set_ref(nt, ewi, "block", -1);
+    /* with_index(off): shift the pair indexes before the key block reads them,
+       `ewi.map { |v, i| [v, i + off] }` (#3763) */
+    int pairs = ewi;
+    if (wi_off >= 0) {
+      char vn[48], inm[48];
+      snprintf(vn, sizeof vn, "__wi_v_%d", id);
+      snprintf(inm, sizeof inm, "__wi_i_%d", id);
+      int vreq = nt_new_node(nt, "RequiredParameterNode");
+      nt_node_set_str(nt, vreq, "name", vn);
+      int ireq = nt_new_node(nt, "RequiredParameterNode");
+      nt_node_set_str(nt, ireq, "name", inm);
+      int oreqs[2] = { vreq, ireq };
+      int oparams = nt_new_node(nt, "ParametersNode");
+      nt_node_set_arr(nt, oparams, "requireds", oreqs, 2);
+      int obp = nt_new_node(nt, "BlockParametersNode");
+      nt_node_set_ref(nt, obp, "parameters", oparams);
+      int vread = nt_new_node(nt, "LocalVariableReadNode");
+      nt_node_set_str(nt, vread, "name", vn);
+      int iread = nt_new_node(nt, "LocalVariableReadNode");
+      nt_node_set_str(nt, iread, "name", inm);
+      int offargs = nt_new_node(nt, "ArgumentsNode");
+      nt_node_set_arr(nt, offargs, "arguments", &wi_off, 1);
+      int shifted = nt_new_node(nt, "CallNode");
+      nt_node_set_ref(nt, shifted, "receiver", iread);
+      nt_node_set_str(nt, shifted, "name", "+");
+      nt_node_set_ref(nt, shifted, "arguments", offargs);
+      nt_node_set_ref(nt, shifted, "block", -1);
+      int pair[2] = { vread, shifted };
+      int parr = nt_new_node(nt, "ArrayNode");
+      nt_node_set_arr(nt, parr, "elements", pair, 2);
+      int obody = nt_new_node(nt, "StatementsNode");
+      nt_node_set_arr(nt, obody, "body", &parr, 1);
+      int oblk = nt_new_node(nt, "BlockNode");
+      nt_node_set_ref(nt, oblk, "parameters", obp);
+      nt_node_set_ref(nt, oblk, "body", obody);
+      pairs = nt_new_node(nt, "CallNode");
+      nt_node_set_ref(nt, pairs, "receiver", ewi);
+      nt_node_set_str(nt, pairs, "name", "map");
+      nt_node_set_ref(nt, pairs, "arguments", -1);
+      nt_node_set_ref(nt, pairs, "block", oblk);
+      if (pairs < 0) continue;
+    }
     /* .sort_by { |v, i| key } -- the with_index block, moved across */
     int sb = nt_new_node(nt, "CallNode");
-    nt_node_set_ref(nt, sb, "receiver", ewi);
+    nt_node_set_ref(nt, sb, "receiver", pairs);
     nt_node_set_str(nt, sb, "name", "sort_by");
     nt_node_set_ref(nt, sb, "arguments", -1);
     nt_node_set_ref(nt, sb, "block", blk);
