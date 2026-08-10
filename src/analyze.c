@@ -4203,6 +4203,34 @@ int desugar_enum_method_recv(Compiler *c) {
         }
       }
     }
+    /* Enumerator.product(a, b) { blk } iterates the pairs and answers nil; the
+       constructor arm builds the Enumerator, so drive it with #each (#3589) */
+    if (nm && sp_streq(nm, "product") && nt_ref(nt, id, "block") >= 0) {
+      int prv = nt_ref(nt, id, "receiver");
+      if (prv >= 0 && nt_type(nt, prv) && sp_streq(nt_type(nt, prv), "ConstantReadNode") &&
+          nt_str(nt, prv, "name") && sp_streq(nt_str(nt, prv, "name"), "Enumerator")) {
+        int pargs = nt_ref(nt, id, "arguments");
+        int pn2 = 0; if (pargs >= 0) nt_arr(nt, pargs, "arguments", &pn2);
+        if (pn2 == 2 || pn2 == 3) {
+          int inner = nt_new_node(nt, "CallNode");
+          if (inner >= 0) {
+            nt_node_set_str(nt, inner, "name", "product");
+            nt_node_set_ref(nt, inner, "receiver", prv);
+            nt_node_set_ref(nt, inner, "arguments", pargs);
+            nt_node_set_ref(nt, inner, "block", -1);
+            nt_node_set_ref(nt, id, "receiver", inner);
+            nt_node_set_str(nt, id, "name", "each");
+            nt_node_set_ref(nt, id, "arguments", -1);
+            /* the block form answers nil, not the enumerator #each hands back */
+            nt_node_set_int(nt, id, "nil_result", 1);
+            comp_grow_node_arrays(c);
+            c->nscope[inner] = c->nscope[id];
+            changed = 1;
+            continue;
+          }
+        }
+      }
+    }
     /* enum.to_set == Set.new(enum.to_a) whenever the set package's Set class
        is in the program (an in-place rewrite; Set's initialize adds each
        element, deduplicating).

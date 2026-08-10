@@ -762,6 +762,8 @@ int poly_builtin_zero_arg_name(const char *m) {
 }
 TyKind infer_call(Compiler *c, int id) {
 
+  /* the rewrite recorded that this call answers nil whatever it drives (#3589) */
+  if (nt_int(c->nt, id, "nil_result", 0)) return TY_NIL;
   /* the redirect recorded that this call yields its original receiver (#2981) */
   {
     int sr = nt_int(c->nt, id, "enum_self_result", -1);
