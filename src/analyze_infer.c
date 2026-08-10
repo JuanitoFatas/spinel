@@ -722,7 +722,7 @@ int reduce_tail_from_acc(Compiler *c, int tail, const char *accp) {
 
 /* Does the program build Method objects (`method(:x)` / `instance_method(:x)`)?
    Only then can a boxed value answering #name be a Method (#3692). */
-static int an_program_builds_methods(Compiler *c) {
+int an_program_builds_methods(Compiler *c) {
   static const NodeTable *memo_nt = NULL; static int memo = 0;
   if (memo_nt == c->nt) return memo;
   memo_nt = c->nt; memo = 0;
@@ -1177,6 +1177,15 @@ TyKind infer_call(Compiler *c, int id) {
     if (an_program_builds_methods(c)) return TY_POLY;
     return TY_STRING;
   }
+  /* The rest of the Method surface on a BOXED receiver: #unbind answers another
+     Method-carrying value, #receiver the bound object and #to_proc a Proc --
+     each boxed. Without a type the boxed result was dropped and read as nil
+     (#3692). Guarded on the program building Method objects at all, since
+     these names also belong to exceptions and procs. */
+  if (recv >= 0 && rt == TY_POLY && argc == 0 && nt_ref(nt, id, "block") < 0 &&
+      (sp_streq(name, "unbind") || sp_streq(name, "receiver")) &&
+      an_program_builds_methods(c) && !an_user_defines_method(c, name))
+    return TY_POLY;
   /* Numeric#fdiv on a boxed receiver is a Float whatever the operands are
      (#3767); without a type the boxed result was dropped and read as nil. */
   if (recv >= 0 && rt == TY_POLY && argc == 1 && nt_ref(nt, id, "block") < 0 &&

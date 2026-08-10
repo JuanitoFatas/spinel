@@ -3474,7 +3474,23 @@ static int emit_poly_builtin_method(Compiler *c, int id, Buf *b) {
     int tv = ++g_tmp;
     buf_printf(b, "({ sp_RbVal _t%d = ", tv); emit_expr(c, recv, b);
     buf_printf(b, "; _t%d.tag == SP_TAG_OBJ && _t%d.cls_id == SP_BUILTIN_PROC"
-                  " ? _t%d : (sp_raise_nomethod(sp_nomethod_msg(\"to_proc\", _t%d)), sp_box_nil()); })",
+                  " ? _t%d"
+                  /* a Method read out of a container wraps into a Proc, as the
+                     typed receiver's #to_proc does (#3692) */
+                  " : _t%d.tag == SP_TAG_OBJ && _t%d.cls_id == SP_BUILTIN_METHOD"
+                  " ? sp_box_obj(sp_method_to_proc((sp_BoundMethod *)_t%d.v.p), SP_BUILTIN_PROC)"
+                  " : (sp_raise_nomethod(sp_nomethod_msg(\"to_proc\", _t%d)), sp_box_nil()); })",
+               tv, tv, tv, tv, tv, tv, tv);
+    return 1;
+  }
+  /* Method#unbind on a value read out of a container: the same target with the
+     receiver dropped, marked so #class reports UnboundMethod (#3692). */
+  if (sp_streq(name, "unbind") && argc == 0) {
+    int tv = ++g_tmp;
+    buf_printf(b, "({ sp_RbVal _t%d = ", tv); emit_expr(c, recv, b);
+    buf_printf(b, "; _t%d.tag == SP_TAG_OBJ && _t%d.cls_id == SP_BUILTIN_METHOD"
+                  " ? sp_box_obj(sp_bm_unbind((sp_BoundMethod *)_t%d.v.p), SP_BUILTIN_METHOD)"
+                  " : (sp_raise_nomethod(sp_nomethod_msg(\"unbind\", _t%d)), sp_box_nil()); })",
                tv, tv, tv, tv);
     return 1;
   }
@@ -9699,7 +9715,11 @@ void emit_call(Compiler *c, int id, Buf *b) {
      sp_BoundMethod itself, which carries everything the compile-time arms
      read off the AST (#3692). */
   if (recv >= 0 && comp_ntype(c, recv) == TY_POLY && argc == 0 &&
-      (sp_streq(name, "name") || sp_streq(name, "owner")) &&
+      (sp_streq(name, "name") || sp_streq(name, "owner") ||
+       /* #receiver is also an exception's, so take this arm only when the
+          program builds Method objects at all and no user class owns the
+          name (#3692) */
+       (sp_streq(name, "receiver") && an_program_builds_methods(c))) &&
       /* #name also names a Class and an Encoding, #receiver an exception's:
          take this arm only where the result slot is the boxed one those other
          readings do not use */
@@ -9721,6 +9741,14 @@ void emit_call(Compiler *c, int id, Buf *b) {
                       " _o ? sp_box_class_name(_o) : sp_box_nil(); })", t);
 
 
+      else if (sp_streq(name, "unbind"))
+        buf_printf(b, "sp_box_obj(sp_bm_unbind((sp_BoundMethod *)_t%d.v.p), SP_BUILTIN_METHOD)", t);
+      else if (sp_streq(name, "receiver"))
+        /* the object the Method bound: a reference self carries its own class
+           id in its first field, which is how any boxed object names its class */
+        buf_printf(b, "({ sp_BoundMethod *_m = (sp_BoundMethod *)_t%d.v.p;"
+                      " (_m->self && _m->self_kind == SP_BM_SELF_OBJ)"
+                      " ? sp_box_nullable_obj_dyn(_m->self, 0) : sp_box_nil(); })", t);
       else
         buf_printf(b, "sp_box_obj(sp_method_to_proc((sp_BoundMethod *)_t%d.v.p), SP_BUILTIN_PROC)", t);
       buf_printf(b, " : (sp_raise_nomethod(sp_nomethod_msg(\"%s\", _t%d)), sp_box_nil()); })", name, t);

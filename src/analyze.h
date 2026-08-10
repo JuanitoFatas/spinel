@@ -116,6 +116,7 @@ TyKind ewo_memo_elem_type(Compiler *c, int callid);
 int curry_apply_info(Compiler *c, int node, int *out_complete, TyKind *out_ret);
 int curry_base_info(Compiler *c, int recv, int *nreq, int *variadic, int *is_lambda);
 int ewo_memo_passed_to_callable(Compiler *c, int callid);
+int an_program_builds_methods(Compiler *c);   /* the program builds Method objects at all */
 int ewo_memo_passed_to_callable_at(Compiler *c, int callid, int pidx);
 
 /* Class index when a receiverless instance_eval/exec resolves to self, else -1. */

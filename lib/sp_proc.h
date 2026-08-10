@@ -64,13 +64,24 @@ void sp_curry_publish_args(sp_Curry *c);
 typedef struct sp_BoundMethod { void *self; mrb_int fn; const char *name; mrb_int arity;
   const char *desc;   /* compile-time #inspect rendering ("#<Method: Owner#name(params)>"), or NULL */
   mrb_int self_kind;  /* SP_BM_SELF_* */
+  mrb_int unbound;    /* built by #unbind on a boxed Method: reports UnboundMethod */
 } sp_BoundMethod;
 void sp_bm_cap_scan(void *p);
 mrb_int sp_method_proc_tramp(void *cap, mrb_int argc, mrb_int *args);
 sp_Proc *sp_method_to_proc(sp_BoundMethod *m);
 void sp_BoundMethod_scan(void *p);
 
-static inline sp_BoundMethod *sp_bound_method_new(void *self, mrb_int self_kind, mrb_int fn, const char *name, mrb_int arity) { sp_BoundMethod *m = (sp_BoundMethod *)sp_gc_alloc(sizeof(sp_BoundMethod), NULL, sp_BoundMethod_scan); m->self = self; m->self_kind = self_kind; m->fn = fn; m->name = name; m->arity = arity; m->desc = NULL; return m; }
+static inline sp_BoundMethod *sp_bound_method_new(void *self, mrb_int self_kind, mrb_int fn, const char *name, mrb_int arity) { sp_BoundMethod *m = (sp_BoundMethod *)sp_gc_alloc(sizeof(sp_BoundMethod), NULL, sp_BoundMethod_scan); m->self = self; m->self_kind = self_kind; m->fn = fn; m->name = name; m->arity = arity; m->desc = NULL; m->unbound = 0; return m; }
 static inline sp_BoundMethod *sp_bound_method_new_d(void *self, mrb_int self_kind, mrb_int fn, const char *name, mrb_int arity, const char *desc) { sp_BoundMethod *m = sp_bound_method_new(self, self_kind, fn, name, arity); m->desc = desc; return m; }
+/* Method#unbind on a BOXED method: the same target with the receiver dropped.
+   A boxed value carries no syntax for the compile-time unbound rendering, so
+   the copy records it (the #class arm reads `unbound`) (#3692). */
+static inline sp_BoundMethod *sp_bm_unbind(sp_BoundMethod *m) {
+  if (!m) return NULL;
+  sp_BoundMethod *u = sp_bound_method_new(NULL, SP_BM_SELF_NONE, m->fn, m->name, m->arity);
+  u->desc = m->desc;
+  u->unbound = 1;
+  return u;
+}
 
 #endif

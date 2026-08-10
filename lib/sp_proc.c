@@ -87,13 +87,19 @@ void sp_bm_cap_scan(void *p) { sp_gc_mark(p); }
 mrb_int sp_method_proc_tramp(void *cap, mrb_int argc, mrb_int *args) {
   sp_BoundMethod *m = (sp_BoundMethod *)cap;
   if (!m || !m->fn) return 0;
+  /* A proc publishes its result through the boxed side-channel, which every
+     generated proc body writes; this trampoline only returned it, so a caller
+     reading the slot saw a stale value (#3692). The casts below already assume
+     the target's mrb_int ABI, so box the same answer. */
+  #define SP_BM_TRAMP_RET(EXPR) do { mrb_int _r = (EXPR); _sp_proc_poly_ret = sp_box_int(_r); return _r; } while (0)
   switch (argc) {
-    case 0: return ((mrb_int (*)(void *))(uintptr_t)m->fn)(m->self);
-    case 1: return ((mrb_int (*)(void *, mrb_int))(uintptr_t)m->fn)(m->self, args[0]);
-    case 2: return ((mrb_int (*)(void *, mrb_int, mrb_int))(uintptr_t)m->fn)(m->self, args[0], args[1]);
-    case 3: return ((mrb_int (*)(void *, mrb_int, mrb_int, mrb_int))(uintptr_t)m->fn)(m->self, args[0], args[1], args[2]);
-    default: return ((mrb_int (*)(void *, mrb_int, mrb_int, mrb_int, mrb_int))(uintptr_t)m->fn)(m->self, args[0], args[1], args[2], args[3]);
+    case 0: SP_BM_TRAMP_RET(((mrb_int (*)(void *))(uintptr_t)m->fn)(m->self));
+    case 1: SP_BM_TRAMP_RET(((mrb_int (*)(void *, mrb_int))(uintptr_t)m->fn)(m->self, args[0]));
+    case 2: SP_BM_TRAMP_RET(((mrb_int (*)(void *, mrb_int, mrb_int))(uintptr_t)m->fn)(m->self, args[0], args[1]));
+    case 3: SP_BM_TRAMP_RET(((mrb_int (*)(void *, mrb_int, mrb_int, mrb_int))(uintptr_t)m->fn)(m->self, args[0], args[1], args[2]));
+    default: SP_BM_TRAMP_RET(((mrb_int (*)(void *, mrb_int, mrb_int, mrb_int, mrb_int))(uintptr_t)m->fn)(m->self, args[0], args[1], args[2], args[3]));
   }
+  #undef SP_BM_TRAMP_RET
 }
 sp_Proc *sp_method_to_proc(sp_BoundMethod *m) {
   return sp_proc_new_meta((void *)sp_method_proc_tramp, m, sp_bm_cap_scan, 1, TRUE, 0, NULL, NULL);

@@ -1675,7 +1675,8 @@ static const char *sp_poly_class_name(sp_RbVal v) {
         case SP_BUILTIN_OBJECT: return SPL("Object");   /* a bare Object.new instance */
         case SP_BUILTIN_BASIC_OBJECT: return SPL("BasicObject");
         case SP_BUILTIN_PROC: return SPL("Proc");
-        case SP_BUILTIN_METHOD: return SPL("Method");   /* (#3692) */
+        case SP_BUILTIN_METHOD:
+          return ((sp_BoundMethod *)v.v.p)->unbound ? SPL("UnboundMethod") : SPL("Method");   /* (#3692) */
         case SP_BUILTIN_ENUMERATOR: return SPL("Enumerator");
         case SP_BUILTIN_IO: {
           /* the handle kind names the class, through the same authority the
