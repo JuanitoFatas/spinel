@@ -532,10 +532,19 @@ void emit_boxed(Compiler *c, int node, Buf *b) {
        NULL v.p (which passes `unless x` then segfaults on the first field
        read). A value-type object is never NULL and is not a pointer. */
     int is_val = comp_ty_value_obj(c, t);
-    if (is_val) buf_printf(b, "sp_box_vobj_%s(", c->classes[ty_object_class(t)].c_name);
+    int ocid = ty_object_class(t);
+    /* A class with subclasses is only the STATIC type here: an inherited
+       method boxing `self` would stamp the defining class, and the boxed value
+       then dispatched as the parent (#3773). Read the id the object carries. */
+    int subclassed = 0;
+    if (!is_val)
+      for (int k = 0; k < c->nclasses && !subclassed; k++)
+        if (k != ocid && c->classes[k].parent == ocid) subclassed = 1;
+    if (is_val) buf_printf(b, "sp_box_vobj_%s(", c->classes[ocid].c_name);
+    else if (subclassed) buf_puts(b, "sp_box_nullable_obj_dyn((void *)(");
     else buf_puts(b, "sp_box_nullable_obj((void *)(");
     emit_expr(c, node, b);
-    buf_printf(b, is_val ? ")" : "), %d)", ty_object_class(t));
+    buf_printf(b, is_val ? ")" : "), %d)", ocid);
     return;
   }
   if (ty_is_hash(t)) {

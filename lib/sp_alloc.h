@@ -628,6 +628,13 @@ static inline sp_RbVal sp_box_class(sp_Class c) { if (sp_class_nil_p(c)) return 
    The whitespace covered: ' ' \t \n \r \f \v
    Everything else copies byte-for-byte. */
 static inline sp_RbVal sp_box_nullable_obj(void *p, int cls_id) { return p ? sp_box_obj(p, cls_id) : sp_box_nil(); }
+/* Same, for a class that has subclasses: the id the object itself carries (its
+   first field) beats the static one, so an inherited method boxing `self`
+   publishes the actual class rather than the one that defined the method. */
+static inline sp_RbVal sp_box_nullable_obj_dyn(void *p, int cls_id) {
+  (void)cls_id;
+  return p ? sp_box_obj(p, (int)*(mrb_int *)p) : sp_box_nil();
+}
 /* Built-in pointer boxes — share SP_TAG_OBJ with a reserved negative
    cls_id so the dispatch path is uniform. */
 static inline sp_RbVal sp_box_int_array(void *p)   { return sp_box_obj(p, SP_BUILTIN_INT_ARRAY); }
