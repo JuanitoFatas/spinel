@@ -229,6 +229,15 @@ void emit_interp(Compiler *c, int id, Buf *b) {
         buf_puts(&conv, "sp_class_to_s(");
         EMIT_IV(); buf_puts(&conv, ")");
       }
+      else if (ty_nullable_builtin_id(t)) {
+        /* a reference-backed builtin handle (IO, Proc, Fiber, Thread, ...):
+           renders as `#<IO:fd 3>` and friends rather than refusing the
+           interpolation. CRuby's #to_s for these prints the object address,
+           which nothing here can reproduce; its #inspect form is the same
+           shape and actually informative (#3539). */
+        buf_puts(&conv, "sp_poly_inspect(sp_box_nullable_obj((void *)(");
+        EMIT_IV(); buf_printf(&conv, "), %s))", ty_nullable_builtin_id(t));
+      }
       else if (ty_is_object(t)) {
         /* user object without to_s: fall back to poly_to_s of boxed value */
         int cid2 = ty_object_class(t);
