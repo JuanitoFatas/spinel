@@ -1413,8 +1413,14 @@ void emit_expr(Compiler *c, int id, Buf *b) {
          view -- `yield(1) + yield(2)` compiled its operands as mrb_int -- so
          unbox to this node's own type. A tail/boxed position goes through the
          boxing helper instead, which asks for the poly form. */
-      emit_yield_proc_call(c, nt_ref(nt, id, "arguments"),
-                           g_pf_emitting ? comp_ntype(c, id) : g_yield_slot_ty, b, 0, 1);
+      { /* the node's OWN type is what this expression position wants -- the
+           inline's return slot is only the right answer when the yield IS the
+           tail (a yield nested in a literal wants the element type, #3688) */
+        TyKind _ynt = comp_ntype(c, id);
+        emit_yield_proc_call(c, nt_ref(nt, id, "arguments"),
+                             (g_pf_emitting || (_ynt != TY_UNKNOWN && _ynt != TY_POLY))
+                               ? _ynt : g_yield_slot_ty,
+                             b, 0, 1); }
       return;
     }
     if (g_block_id < 0) {
@@ -1442,8 +1448,14 @@ void emit_expr(Compiler *c, int id, Buf *b) {
          view -- `yield(1) + yield(2)` compiled its operands as mrb_int -- so
          unbox to this node's own type. A tail/boxed position goes through the
          boxing helper instead, which asks for the poly form. */
-      emit_yield_proc_call(c, nt_ref(nt, id, "arguments"),
-                           g_pf_emitting ? comp_ntype(c, id) : g_yield_slot_ty, b, 0, 1);
+      { /* the node's OWN type is what this expression position wants -- the
+           inline's return slot is only the right answer when the yield IS the
+           tail (a yield nested in a literal wants the element type, #3688) */
+        TyKind _ynt = comp_ntype(c, id);
+        emit_yield_proc_call(c, nt_ref(nt, id, "arguments"),
+                             (g_pf_emitting || (_ynt != TY_UNKNOWN && _ynt != TY_POLY))
+                               ? _ynt : g_yield_slot_ty,
+                             b, 0, 1); }
     else
       buf_puts(b, default_value(comp_ntype(c, id)));
     return;

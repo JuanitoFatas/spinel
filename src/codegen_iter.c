@@ -141,6 +141,7 @@ int emit_inline_call_x(Compiler *c, int id, Buf *b, int indent, int as_expr) {
   int block = nt_ref(nt, id, "block");   /* may be -1: no block passed */
   char yprocbuf[128];  /* holds "lv_" + a rename_local result (g_ren_to width 112) */
   const char *fwd_yield_proc = NULL;
+  int fwd_proc_expr = -1, fwd_proc_tmp = 0;
   /* `inner(&)` / `inner(&block)`: a BlockArgumentNode forwards the block
      active at this (already-inlined) site, not a fresh literal. */
   if (block >= 0 && nt_type(nt, block) && sp_streq(nt_type(nt, block), "BlockArgumentNode")) {
@@ -157,6 +158,19 @@ int emit_inline_call_x(Compiler *c, int id, Buf *b, int indent, int as_expr) {
     if (g_block_id < 0 && plv && plv->type == TY_PROC) {
       snprintf(yprocbuf, sizeof yprocbuf, "lv_%s", rename_local(pn));
       fwd_yield_proc = yprocbuf;
+    }
+    /* Any other first-class callable passed with `&` -- a lambda literal, a
+       `method(:m)`, a Proc read out of a container -- is hoisted into a temp
+       and driven the same way; without this the splice found no block at all
+       and the call answered nil (#3688). */
+    else if (g_block_id < 0 && fexpr >= 0 && !fwd_yield_proc) {
+      TyKind fkt = comp_ntype(c, fexpr);
+      if (fkt == TY_PROC || fkt == TY_METHOD || fkt == TY_POLY) {
+        fwd_proc_expr = fexpr;
+        fwd_proc_tmp = ++g_tmp;
+        snprintf(yprocbuf, sizeof yprocbuf, "_t%d", fwd_proc_tmp);
+        fwd_yield_proc = yprocbuf;
+      }
     }
     block = g_block_id;
   }
@@ -239,6 +253,14 @@ int emit_inline_call_x(Compiler *c, int id, Buf *b, int indent, int as_expr) {
 
   if (as_expr) buf_puts(b, "({\n");
   else { emit_indent(b, indent); buf_puts(b, "{\n"); }
+  /* the `&callable` argument, evaluated once for the whole inlined body */
+  if (fwd_proc_expr >= 0) {
+    emit_indent(b, indent + 1);
+    buf_printf(b, "sp_Proc *_t%d = ", fwd_proc_tmp);
+    if (comp_ntype(c, fwd_proc_expr) == TY_PROC) emit_expr(c, fwd_proc_expr, b);
+    else { buf_puts(b, "sp_poly_to_proc("); emit_boxed(c, fwd_proc_expr, b); buf_puts(b, ")"); }
+    buf_printf(b, "; SP_GC_ROOT(_t%d);\n", fwd_proc_tmp);
+  }
   /* instance method: bind self to the receiver. A heap object is a pointer; a
      value-type receiver is a by-value struct, so copy it and dereference its
      ivars with `.` (value types are immutable, so the copy is transparent). */

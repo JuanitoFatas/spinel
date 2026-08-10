@@ -5141,6 +5141,49 @@ int desugar_enum_method_recv(Compiler *c) {
 /* `a.upto(b)` over Strings is the String range `(a..b)`: the succ-based walk
    the range's own iteration already does. There was no arm for it at all
    (#3600). The Integer form has its own emitter and is left alone. */
+/* `m(&method(:x))`: a Method passed as a block is its #to_proc, which spinel
+   already synthesizes -- interposing it lets the callable reach the block slot
+   instead of failing the conversion at run time (#3688). */
+static int desugar_method_block_arg(Compiler *c) {
+  NodeTable *nt = (NodeTable *)c->nt;
+  int changed = 0;
+  int n0 = nt->count;
+  for (int cid = 0; cid < n0; cid++) {
+    if (nt_kind(nt, cid) != NK_CallNode) continue;
+    int id = nt_ref(nt, cid, "block");
+    if (id < 0 || nt_kind(nt, id) != NK_BlockArgumentNode) continue;
+    /* Only where the callee is a USER method that keeps a real &block: the
+       builtin iterators have their own arm for a Method operand, and a local
+       that merely types TY_METHOD may be a forwarded block param. */
+    {
+      const char *cn = nt_str(nt, cid, "name");
+      if (!cn || nt_ref(nt, cid, "receiver") >= 0) continue;
+      int mi = comp_method_index(c, cn);
+      if (mi < 0) {
+        Scope *sc = comp_scope_of(c, cid);
+        if (sc && sc->class_id >= 0) mi = comp_method_in_chain(c, sc->class_id, cn, NULL);
+      }
+      if (mi < 0 || !c->scopes[mi].blk_param || !c->scopes[mi].blk_param[0]) continue;
+    }
+    int e = nt_ref(nt, id, "expression");
+    if (e < 0 || nt_kind(nt, e) != NK_CallNode) continue;
+    { const char *en = nt_str(nt, e, "name");
+      if (!en || !sp_streq(en, "method")) continue; }
+    if (infer_type(c, e) != TY_METHOD) continue;
+    int tp = nt_new_node(nt, "CallNode");
+    if (tp < 0) continue;
+    nt_node_set_str(nt, tp, "name", "to_proc");
+    nt_node_set_ref(nt, tp, "receiver", e);
+    nt_node_set_ref(nt, tp, "arguments", -1);
+    nt_node_set_ref(nt, tp, "block", -1);
+    nt_node_set_ref(nt, id, "expression", tp);
+    comp_grow_node_arrays(c);
+    c->nscope[tp] = c->nscope[id];
+    changed = 1;
+  }
+  return changed;
+}
+
 /* `File::Stat.new(path)` is CRuby's direct constructor for what `File.stat`
    answers, and spinel carries a stat as the File handle itself: rewrite the
    constructor to the class method rather than resolving a Stat class that has
@@ -10358,6 +10401,7 @@ void analyze_program(Compiler *c) {
     ch |= desugar_lazy_terminal(c);            /* lz.sum -> lz.to_a.sum */
     ch |= desugar_string_upto(c);              /* "a".upto("c") -> ("a".."c").each */
     ch |= desugar_file_stat_new(c);            /* File::Stat.new(p) -> File.stat(p) */
+    ch |= desugar_method_block_arg(c);         /* m(&method(:x)) -> m(&method(:x).to_proc) */
     ch |= desugar_to_enum(c);                  /* recv.to_enum(:m) -> generator/blockless */
     ch |= type_block_rest_params(c);           /* |*rest| locals are poly arrays */
     ch |= desugar_public_method(c);            /* recv.public_method(:m) -> recv.method(:m) */

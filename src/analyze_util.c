@@ -868,6 +868,41 @@ TyKind yield_value_type(Compiler *c, int mi) {
     if (fwd_args || (blkty && sp_streq(blkty, "BlockArgumentNode"))) {
       Scope *encl = comp_scope_of(c, cid);
       int emi = encl ? (int)(encl - c->scopes) : -1;
+      /* `mi(&some_proc)`: a first-class Proc / lambda / Method value, not the
+         enclosing method's own block forwarded on. Its result is whatever the
+         proc answers at run time, i.e. poly -- typing it from the (absent)
+         enclosing block made the whole call answer nil (#3688). */
+      if (!fwd_args && blk >= 0) {
+        int bexpr = nt_ref(nt, blk, "expression");
+        const char *bpn = (encl && encl->blk_param && encl->blk_param[0]) ? encl->blk_param : NULL;
+        const char *ben = (bexpr >= 0 && nt_kind(nt, bexpr) == NK_LocalVariableReadNode)
+                            ? nt_str(nt, bexpr, "name") : NULL;
+        if (!(bpn && ben && sp_streq(bpn, ben))) {
+          /* A lambda/proc LITERAL right there types like an ordinary literal
+             block -- its tail expression is the value the call yields. Any
+             other callable (a proc read from a local, a Method) is only known
+             at run time, so poly. */
+          TyKind pt = TY_POLY;
+          int pbody = -1;
+          if (nt_kind(nt, bexpr) == NK_LambdaNode) pbody = nt_ref(nt, bexpr, "body");
+          else if (nt_kind(nt, bexpr) == NK_CallNode) {
+            const char *pnm = nt_str(nt, bexpr, "name");
+            int pblk = nt_ref(nt, bexpr, "block");
+            if (pnm && pblk >= 0 && (sp_streq(pnm, "proc") || sp_streq(pnm, "lambda")) &&
+                nt_kind(nt, pblk) == NK_BlockNode)
+              pbody = nt_ref(nt, pblk, "body");
+          }
+          if (pbody >= 0) {
+            int pn2 = 0; const int *pd = nt_arr(nt, pbody, "body", &pn2);
+            if (pn2 == 0) pt = TY_NIL;
+            else { pt = infer_type(c, pd[pn2 - 1]); if (pt == TY_VOID) pt = TY_NIL; }
+            if (pt == TY_UNKNOWN) pt = TY_POLY;
+          }
+          if (c->scopes[mi].yields || c->scopes[mi].is_lowered_yield) { result = pt; break; }
+          result = ty_unify(result, pt);
+          continue;
+        }
+      }
       TyKind ft = (emi >= 0 && emi != mi) ? yield_value_type(c, emi) : TY_UNKNOWN;
       if (ft == TY_VOID) ft = TY_NIL;
       if (c->scopes[mi].yields || c->scopes[mi].is_lowered_yield) {
