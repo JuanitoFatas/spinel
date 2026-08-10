@@ -3434,6 +3434,9 @@ static int desugar_str_range_methods(Compiler *c) {
     "begin", "end", "min", "max", "include?", "member?", "cover?", "===",
     "exclude_end?", "==", "!=", "eql?", "inspect", "to_s", "class",
     "frozen?", "freeze", "itself", "dup", "clone", "hash",
+    /* the identity predicates answer about the RANGE, not its members: routing
+       them through to_a made `("a".."e").is_a?(Range)` false (#3619) */
+    "is_a?", "kind_of?", "instance_of?", "nil?", "equal?", "respond_to?",
     /* to_a IS the materializer: interposing it would recurse */
     "to_a", "entries",
     /* Range#size counts integer elements: nil for a string range */

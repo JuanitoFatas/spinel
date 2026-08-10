@@ -879,7 +879,7 @@ TyKind infer_call(Compiler *c, int id) {
         sp_streq(name, "exclude_end?") || sp_streq(name, "frozen?") ||
         sp_streq(name, "nil?") || sp_streq(name, "is_a?") ||
         sp_streq(name, "kind_of?") || sp_streq(name, "instance_of?") ||
-        sp_streq(name, "equal?"))
+        sp_streq(name, "equal?") || sp_streq(name, "respond_to?"))
       return TY_BOOL;
     /* step(n) / %(n): an Enumerator over every nth member (#3671) */
     if ((sp_streq(name, "step") || sp_streq(name, "%")) && argc == 1 &&

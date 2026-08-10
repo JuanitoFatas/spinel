@@ -5790,6 +5790,14 @@ void emit_arg_or_default(Compiler *c, Scope *m, int idx, int provided, Buf *out)
         }
         else if (at == TY_POLY && pt == TY_FLOAT) { buf_puts(out, "sp_poly_to_f_or_nil("); emit_expr(c, provided, out); buf_puts(out, ")"); }
         else if (at == TY_POLY && pt == TY_SYMBOL) { buf_puts(out, "(sp_sym)sp_poly_to_i("); emit_expr(c, provided, out); buf_puts(out, ")"); }
+        /* the Range value types are boxed behind a pointer: dereference rather
+           than assigning the box to the struct slot (#3619) */
+        else if (at == TY_POLY && (pt == TY_RANGE || pt == TY_FLOAT_RANGE || pt == TY_STR_RANGE)) {
+          Buf rbx; memset(&rbx, 0, sizeof rbx);
+          emit_expr(c, provided, &rbx);
+          emit_unbox_text(c, pt, rbx.p ? rbx.p : "sp_box_nil()", out);
+          free(rbx.p);
+        }
         /* A poly argument narrowing into a declared int/float/String parameter keeps
            nil distinguishable: the plain conversions answer the type's zero, which
            in those slots is a real value. A LITERAL nil already lands on the

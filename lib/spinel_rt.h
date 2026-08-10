@@ -1659,7 +1659,7 @@ static const char *sp_poly_class_name(sp_RbVal v) {
         case SP_BUILTIN_SYM_STR_HASH: case SP_BUILTIN_STR_POLY_HASH:
         case SP_BUILTIN_SYM_POLY_HASH: case SP_BUILTIN_POLY_POLY_HASH: return SPL("Hash");
         case SP_BUILTIN_RANGE: return SPL("Range");
-        case SP_BUILTIN_FLOAT_RANGE: return SPL("Range");
+        case SP_BUILTIN_FLOAT_RANGE: case SP_BUILTIN_STR_RANGE: return SPL("Range");
         case SP_BUILTIN_TIME: return SPL("Time");
     case SP_BUILTIN_STRBUF: return SPL("String");   /* (#3227) */
         case SP_BUILTIN_COMPLEX: return SPL("Complex");
@@ -5658,7 +5658,9 @@ static mrb_bool sp_poly_kind_of_builtin(sp_RbVal v, const char *cn) {
   int is_rat = (v.tag == SP_TAG_OBJ && v.cls_id == SP_BUILTIN_RATIONAL);
   int is_cpx = (v.tag == SP_TAG_OBJ && v.cls_id == SP_BUILTIN_COMPLEX);
   int is_arr = (v.tag == SP_TAG_OBJ && sp_poly_is_array_kind(v.cls_id));
-  int is_range = (v.tag == SP_TAG_OBJ && (v.cls_id == SP_BUILTIN_RANGE || v.cls_id == SP_BUILTIN_FLOAT_RANGE));
+  int is_range = (v.tag == SP_TAG_OBJ && (v.cls_id == SP_BUILTIN_RANGE ||
+                                          v.cls_id == SP_BUILTIN_FLOAT_RANGE ||
+                                          v.cls_id == SP_BUILTIN_STR_RANGE));
   int is_hash = (v.tag == SP_TAG_OBJ &&
                  (v.cls_id == SP_BUILTIN_POLY_POLY_HASH || v.cls_id == SP_BUILTIN_SYM_POLY_HASH ||
                   v.cls_id == SP_BUILTIN_STR_POLY_HASH || v.cls_id == SP_BUILTIN_STR_STR_HASH ||
@@ -7548,6 +7550,8 @@ static sp_PolyArray *sp_enum_items_from(sp_RbVal v) {
       /* an int range iterates its members; keeps the range itself printable
          as the enumerator's #inspect source */
       case SP_BUILTIN_RANGE: { sp_Range *rg = (sp_Range *)p; sp_IntArray *ia = sp_range_to_ia(*rg); SP_GC_ROOT(ia); return sp_IntArray_to_poly(ia); }
+      /* a string range iterates its members too (#3619) */
+      case SP_BUILTIN_STR_RANGE: { sp_StrRange *sr = (sp_StrRange *)p; sp_StrArray *sa = sp_srange_to_a(*sr); SP_GC_ROOT(sa); return sp_StrArray_to_poly_fmt(sa); }
       /* A hash iterates as its [key, value] pairs, in insertion order --
          sp_poly_each_elem builds the i-th pair for any of the variants. Each
          freshly built pair is rooted across the push, whose array-grow may
@@ -7580,7 +7584,7 @@ static sp_PolyArray *sp_poly_to_a_arr(sp_RbVal v) {
     return (sp_PolyArray *)v.v.p;
   if (v.tag == SP_TAG_OBJ &&
       (sp_poly_is_array_kind(v.cls_id) || sp_poly_is_hash_kind(v.cls_id) ||
-       v.cls_id == SP_BUILTIN_RANGE))
+       v.cls_id == SP_BUILTIN_RANGE || v.cls_id == SP_BUILTIN_STR_RANGE))
     return sp_enum_items_from(v);   /* Range#to_a -> its element array (#3162) */
   /* a Struct/Data read out of a container: Struct#to_a is its member values in
      order, which the symbol-keyed to_h (via the generated hook) preserves. */

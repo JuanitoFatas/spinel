@@ -3838,8 +3838,9 @@ static int emit_poly_method_dispatch(Compiler *c, int id, Buf *b) {
       if (is_poly_to_a) {
         buf_printf(b, "if (_t%d.tag == SP_TAG_OBJ && (sp_poly_is_hash_kind(_t%d.cls_id)"
                       " || sp_poly_is_array_kind(_t%d.cls_id)"
-                      " || _t%d.cls_id == SP_BUILTIN_RANGE)) { _t%d = ",
-                   tv, tv, tv, tv, tr);
+                      " || _t%d.cls_id == SP_BUILTIN_RANGE"
+                      " || _t%d.cls_id == SP_BUILTIN_STR_RANGE)) { _t%d = ",
+                   tv, tv, tv, tv, tv, tr);
         if (ret == TY_POLY) buf_printf(b, "sp_box_poly_array(sp_poly_to_a_arr(_t%d))", tv);
         else buf_printf(b, "sp_poly_to_a_arr(_t%d)", tv);
         buf_puts(b, "; }\nelse ");
@@ -18231,6 +18232,17 @@ else { memcpy(dir, sf, n); dir[n] = 0; } }
           "empty?", "start_with?", "end_with?", "<=>", "[]", NULL };
         for (int u = 0; symm[u]; u++) if (sp_streq(qm, symm[u])) { yes = resolved = 1; break; }
       }
+      /* the Range value types answer from the same builtin surface a boxed
+         range does; the probe below has no reading for them (#3619) */
+      if (!resolved && recv >= 0 &&
+          (rt == TY_RANGE || rt == TY_FLOAT_RANGE || rt == TY_STR_RANGE)) {
+        buf_puts(b, "sp_poly_responds_builtin(");
+        emit_boxed(c, recv, b);
+        buf_puts(b, ", \"");
+        emit_c_escaped(b, qm);
+        buf_puts(b, "\")");
+        return;
+      }
       if (!resolved && recv >= 0 && rt == TY_PROC) {
         static const char *const procm[] = {
           "call", "()", "[]", "yield", "arity", "lambda?", "curry",
@@ -18359,6 +18371,17 @@ else { memcpy(dir, sf, n); dir[n] = 0; } }
               }
             }
           }
+        }
+        /* a poly receiver with no user class owning the name still has the
+           builtin surface of whatever it holds: ask the runtime rather than
+           folding a flat false (#3619) */
+        else if ((rt == TY_POLY || rt == TY_UNKNOWN) && !any_class_defines(c, qm)) {
+          buf_puts(b, "sp_poly_responds_builtin(");
+          emit_boxed(c, recv, b);
+          buf_puts(b, ", \"");
+          emit_c_escaped(b, qm);
+          buf_puts(b, "\")");
+          return;
         }
         else if ((rt == TY_POLY || rt == TY_UNKNOWN) && any_class_defines(c, qm)) {
           /* poly receiver + a user protocol method (some user class defines qm):

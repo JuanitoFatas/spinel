@@ -199,7 +199,9 @@ class Set
   def merge(enum)
     check_frozen
     Set.check_enum(enum)
-    enum.each { |x| add(x) }
+    # materialize first: a Range (or any other Enumerable) reaching this poly
+    # slot does not dispatch #each through it (#3619)
+    enum.to_a.each { |x| add(x) }
     self
   end
 
@@ -207,7 +209,7 @@ class Set
     check_frozen
     Set.check_enum(enum)
     @data = []
-    enum.each { |x| add(x) }
+    enum.to_a.each { |x| add(x) }
     self
   end
 
@@ -220,14 +222,16 @@ class Set
   def subtract(enum)
     check_frozen
     Set.check_enum(enum)
-    enum.each { |x| @data.delete_if { |e| e.eql?(x) } }
+    enum.to_a.each { |x| @data.delete_if { |e| e.eql?(x) } }
     self
   end
 
   # The combining ops reject a non-enumerable operand with ArgumentError rather
   # than letting the #each/#include? call fail as NoMethodError, matching CRuby.
   def self.check_enum(x)
-    raise ArgumentError, "value must be enumerable" unless x.respond_to?(:each)
+    # a Range reaching this poly slot answers respond_to?(:each) with false,
+    # though its members are exactly what every caller here iterates (#3619)
+    raise ArgumentError, "value must be enumerable" unless x.respond_to?(:each) || x.is_a?(Range)
     x
   end
 
@@ -239,7 +243,7 @@ class Set
   def &(other)
     Set.check_enum(other)
     r = Set.new
-    other.each { |x| r.add(x) if include?(x) }
+    other.to_a.each { |x| r.add(x) if include?(x) }
     r
   end
   alias intersection &
@@ -247,7 +251,7 @@ class Set
   def |(other)
     Set.check_enum(other)
     r = Set.new(@data)
-    other.each { |x| r.add(x) }
+    other.to_a.each { |x| r.add(x) }
     r
   end
   alias union |
@@ -257,7 +261,7 @@ class Set
   def -(other)
     Set.check_enum(other)
     r = Set.new(@data)
-    other.each { |x| r.delete(x) }
+    other.to_a.each { |x| r.delete(x) }
     r
   end
   alias difference -

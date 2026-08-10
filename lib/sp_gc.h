@@ -45,7 +45,12 @@
 /* A Float range (1.0..3.0): a boxed sp_FloatRange, distinct from the int-backed
    by-value Range so its endpoints are not truncated. */
 #define SP_BUILTIN_FLOAT_RANGE (-36)
-#define SP_BUILTIN_STR_RANGE   (-40)  /* ("a".."e"): sp_StrRange */
+#define SP_BUILTIN_STR_RANGE   (-42)  /* ("a".."e"): sp_StrRange. Distinct from
+                                         STRBUF/ADDRINFO, which -40 already
+                                         names: a boxed string range answered
+                                         String from every tag-keyed switch,
+                                         so it was neither a Range nor
+                                         enumerable through a poly slot (#3619) */
 #define SP_BUILTIN_OPENSTRUCT  (-41)  /* OpenStruct: dynamic symbol->value members */
 typedef struct { int tag; int cls_id; union { mrb_int i; const char *s; mrb_float f; mrb_bool b; void *p; } v; } sp_RbVal;
 
