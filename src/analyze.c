@@ -1465,6 +1465,11 @@ void qualify_colliding_classes(Compiler *c) {
       if (ws[i].depth != ws[j].depth) { collide = 1; break; }
       for (int k = 0; k < ws[i].depth; k++) if (!sp_streq(ws[i].path[k], ws[j].path[k])) { collide = 1; break; }
     }
+    /* A class defined INSIDE a module whose leaf name is a builtin's --
+       `module M; class Array < Bench` -- collides with the BUILTIN rather than
+       with another user class, and every builtin-name test (Array.new, the
+       reopen checks) would take it for the builtin. Qualify it too (#3781). */
+    if (!collide && ws[i].depth > 0 && builtin_class_id(ws[i].name) != 0) collide = 1;
     if (!collide) { ws[i] = ws[--wn]; i--; continue; }
     any = 1;
   }

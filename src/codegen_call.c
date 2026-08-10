@@ -7264,6 +7264,16 @@ static int emit_case_eq_call(Compiler *c, int id, Buf *b) {
       }
       return 1;
     }
+    /* An operand with no static type at all (a value read through a slot the
+       fixpoint could not settle) still has a boxed form: compare at run time
+       rather than refusing the whole program (#3781). */
+    if (recv >= 0 && rt == TY_UNKNOWN) {
+      int tu = ++g_tmp;
+      buf_printf(b, "({ sp_RbVal _t%d = ", tu); emit_boxed(c, recv, b);
+      buf_printf(b, "; (mrb_bool)%ssp_poly_eq(_t%d, ", eq ? "" : "!", tu);
+      emit_boxed(c, argv[0], b); buf_puts(b, "); })");
+      return 1;
+    }
     unsupported(c, id, "equality");
   }
   return 0;
@@ -7834,6 +7844,25 @@ static int emit_array_arith_call(Compiler *c, int id, Buf *b) {
           buf_printf(b, "; sp_time_sub_i(_t%d, _t%d); })", tt, tu);
       }
       return 1;
+    }
+    /* An operand with no static type (a reader through a slot the fixpoint
+       could not settle) still has a boxed form: do the arithmetic at run time,
+       where the value's real class decides, rather than refusing the whole
+       program (#3781). */
+    if (recv >= 0 && (rt == TY_UNKNOWN || a0 == TY_UNKNOWN)) {
+      const char *pf = sp_streq(name, "+") ? "sp_poly_add"
+                     : sp_streq(name, "-") ? "sp_poly_sub"
+                     : sp_streq(name, "*") ? "sp_poly_mul"
+                     : sp_streq(name, "/") ? "sp_poly_div"
+                     : sp_streq(name, "%") ? "sp_poly_mod"
+                     : sp_streq(name, "**") ? "sp_poly_pow" : NULL;
+      if (pf) {
+        int tp2 = ++g_tmp;
+        buf_printf(b, "({ sp_RbVal _t%d = ", tp2); emit_boxed(c, recv, b);
+        buf_printf(b, "; SP_GC_ROOT_RBVAL(_t%d); %s(_t%d, ", tp2, pf, tp2);
+        emit_boxed(c, argv[0], b); buf_puts(b, "); })");
+        return 1;
+      }
     }
     unsupported(c, id, "arithmetic");
   }
