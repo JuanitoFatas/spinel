@@ -2079,11 +2079,26 @@ int emit_iteration_stmt(Compiler *c, int id, Buf *b, int indent) {
     int key_is_int = (ty_hash_key(rt) == TY_SYMBOL || ty_hash_key(rt) == TY_INT);
     emit_indent(b, indent);
     buf_printf(b, "mrb_int _t%d = %s->len;\n", tn0, rb.p);
+    if (key_is_int) {
+      emit_indent(b, indent);
+      buf_printf(b, "mrb_int _t%d = 0;\n", tk0);
+    }
     emit_indent(b, indent);
-    buf_printf(b, "for (mrb_int _t%d = 0; _t%d < %s->len; ) {\n", t, t, rb.p);
+    /* The advance is the loop's own third clause, not a statement at the end of
+       the body: `next` in the block is a C `continue`, which runs the third
+       clause and skips whatever the body ends with -- as a trailing statement
+       it was skipped and the same entry ran forever (#3782). */
+    buf_printf(b, "for (mrb_int _t%d = 0; _t%d < %s->len; ", t, t, rb.p);
+    buf_printf(b, "({ if (%s->len > _t%d) sp_raise_cls(\"RuntimeError\","
+                  " \"can't add a new key into hash during iteration\"); ", rb.p, tn0);
+    if (key_is_int)
+      buf_printf(b, "if (_t%d < %s->len && (mrb_int)%s->order[_t%d] == _t%d) _t%d++;"
+                    " else _t%d = %s->len; })) {\n",
+                 t, rb.p, rb.p, t, tk0, t, tn0, rb.p);
+    else buf_printf(b, "_t%d++; })) {\n", t);
     if (key_is_int) {
       emit_indent(b, indent + 1);
-      buf_printf(b, "mrb_int _t%d = (mrb_int)%s->order[_t%d];\n", tk0, rb.p, t);
+      buf_printf(b, "_t%d = (mrb_int)%s->order[_t%d];\n", tk0, rb.p, t);
     }
     if (p0 && !p1) {
       /* a SOLO block param receives the boxed [k, v] PAIR (CRuby yields the
@@ -2142,15 +2157,6 @@ int emit_iteration_stmt(Compiler *c, int id, Buf *b, int indent) {
       buf_puts(b, ";\n");
     }
     emit_loop_body(c, body, b, indent + 1);
-    emit_indent(b, indent + 1);
-    buf_printf(b, "if (%s->len > _t%d) sp_raise_cls(\"RuntimeError\","
-                  " \"can't add a new key into hash during iteration\");\n", rb.p, tn0);
-    emit_indent(b, indent + 1);
-    if (key_is_int)
-      buf_printf(b, "if (_t%d < %s->len && (mrb_int)%s->order[_t%d] == _t%d) _t%d++;"
-                    " else _t%d = %s->len;\n",
-                 t, rb.p, rb.p, t, tk0, t, tn0, rb.p);
-    else buf_printf(b, "_t%d++;\n", t);
     emit_indent(b, indent); buf_puts(b, "}\n");
     free(rb.p);
     return 1;
