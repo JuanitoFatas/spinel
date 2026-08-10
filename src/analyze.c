@@ -10349,12 +10349,38 @@ void analyze_program(Compiler *c) {
       const char *fn = nt_str(c->nt, p, "name");
       if (!fn) continue;
       int fmi = -1;
-      if (nt_ref(c->nt, p, "receiver") < 0) {
+      int frecv = nt_ref(c->nt, p, "receiver");
+      if (frecv < 0) {
         fmi = comp_method_index(c, fn);
         Scope *fs = comp_scope_of(c, p);
         if (fmi < 0 && fs && fs->class_id >= 0)
           fmi = fs->is_cmethod ? comp_cmethod_in_chain(c, fs->class_id, fn, NULL)
                                : comp_method_in_chain(c, fs->class_id, fn, NULL);
+      }
+      else {
+        /* `h.store(&b)`: an object receiver resolves through its class, and a
+           constant one through its class methods. Without this the callee was
+           unknown and a forward into a method that STORES the block counted as
+           harmless -- the block was inlined and its captures never celled
+           (#3783). */
+        TyKind frt = infer_type(c, frecv);
+        if (ty_is_object(frt)) fmi = comp_method_in_chain(c, ty_object_class(frt), fn, NULL);
+        else if (nt_kind(c->nt, frecv) == NK_ConstantReadNode ||
+                 nt_kind(c->nt, frecv) == NK_ConstantPathNode) {
+          int fci = comp_class_index(c, nt_str(c->nt, frecv, "name"));
+          if (fci >= 0) fmi = comp_cmethod_in_chain(c, fci, fn, NULL);
+        }
+        /* This pass runs before the receiver's type settles, so an unresolved
+           receiver falls back to the name: any block-taking method that could
+           be the callee decides, which at worst leaves a forwarder uninlined. */
+        if (fmi < 0) {
+          for (int si = 1; si < c->nscopes; si++) {
+            Scope *cs3 = &c->scopes[si];
+            if (cs3->is_cmethod || !cs3->name || !sp_streq(cs3->name, fn)) continue;
+            if (!cs3->blk_param || !cs3->blk_param[0]) continue;
+            fmi = si; break;
+          }
+        }
       }
       blk_fwd_callee[fe] = fmi;
     }
