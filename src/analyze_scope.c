@@ -3187,6 +3187,35 @@ static int scope_has_receiverless_call(Compiler *c, int mi) {
   return 0;
 }
 
+/* attr_reader/attr_accessor/attr_writer and alias_method in a MODULE body
+   belong to every class that includes it, just like a plain def. The transplant
+   copies method scopes only, so carry the declarative surface across too: the
+   reader/writer names (with their backing ivars) and the alias table (#3774). */
+void register_include_attrs(Compiler *c) {
+  for (int ci = 0; ci < c->nclasses; ci++) {
+    ClassInfo *cls = &c->classes[ci];
+    for (int k = 0; k < cls->nincluded_mods; k++) {
+      int mi = cls->included_mods[k];
+      if (mi < 0 || mi >= c->nclasses || mi == ci) continue;
+      ClassInfo *mod = &c->classes[mi];
+      for (int r = 0; r < mod->nreaders; r++) {
+        char ivname[256];
+        snprintf(ivname, sizeof ivname, "@%s", mod->readers[r]);
+        comp_ivar_intern(cls, ivname);
+        comp_add_reader(cls, mod->readers[r]);
+      }
+      for (int w = 0; w < mod->nwriters; w++) {
+        char ivname[256];
+        snprintf(ivname, sizeof ivname, "@%s", mod->writers[w]);
+        comp_ivar_intern(cls, ivname);
+        comp_add_writer(cls, mod->writers[w]);
+      }
+      for (int a = 0; a < mod->naliases; a++)
+        comp_add_alias(cls, mod->alias_new[a], mod->alias_old[a]);
+    }
+  }
+}
+
 /* For each class, find `extend M` declarations and transplant M's instance
    methods as class methods (is_cmethod=1) so they are callable as C.m. */
 void register_extends(Compiler *c) {

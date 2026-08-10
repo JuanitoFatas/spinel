@@ -9774,6 +9774,7 @@ void analyze_program(Compiler *c) {
   resolve_parents(c);
   inherit_members(c);
   register_includes(c);
+  register_include_attrs(c);
   register_extends(c);
   register_prepends(c);
   specialize_inherited_cls_new(c);
