@@ -1710,6 +1710,9 @@ static int emit_pm_subcond_expr(Compiler *c, int spat, const char *elem, Buf *b)
    sub-pattern matcher checks). */
 static void emit_pm_array_cond(Compiler *c, int pat, const char *arr, Buf *b) {
   const NodeTable *nt = c->nt;
+  /* the deconstructed temp's name is read by every element accessor below, so
+     it lives as long as this call -- and per call, since this recurses */
+  char pm_arr_name[24];
   int apn = 0;
   const int *reqs = nt_arr(nt, pat, "requireds", &apn);
   int rest_nid = nt_ref(nt, pat, "rest");
@@ -1739,9 +1742,10 @@ static void emit_pm_array_cond(Compiler *c, int pat, const char *arr, Buf *b) {
   int tda = ++g_tmp;
   buf_printf(b, "({ sp_RbVal _t%d = %s; ", tda, dbuf.p ? dbuf.p : arr);
   free(dbuf.p);
-  { char nb[24]; snprintf(nb, sizeof nb, "_t%d", tda); arr = nb;
+  snprintf(pm_arr_name, sizeof pm_arr_name, "_t%d", tda);
+  arr = pm_arr_name;
   buf_printf(b, "((%s).tag == SP_TAG_OBJ && sp_poly_is_array_kind((%s).cls_id) && sp_poly_length(%s) %s %dLL",
-             arr, arr, arr, has_rest ? ">=" : "==", apn + npost); }
+             arr, arr, arr, has_rest ? ">=" : "==", apn + npost);
   for (int i = 0; i < apn; i++) {
     /* the element accessor nests one level per recursion (arr grows), so build
        it in a Buf rather than a fixed buffer that would truncate. */
