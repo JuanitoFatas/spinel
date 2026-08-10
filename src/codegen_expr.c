@@ -2493,6 +2493,39 @@ else {
     int is_and = sp_streq(ty, "AndNode");
     int left = nt_ref(nt, id, "left"), right = nt_ref(nt, id, "right");
     TyKind lt = comp_ntype(c, left), res = comp_ntype(c, id);
+    /* `v = lookup or return`: the right operand diverges, so it has no value
+       for an arm to assign. Run it as a statement inside the short-circuit and
+       answer the left, which is the only value the chain can produce (#3777). */
+    if (right >= 0 && nt_type(nt, right) &&
+        (sp_streq(nt_type(nt, right), "ReturnNode") ||
+         sp_streq(nt_type(nt, right), "BreakNode") ||
+         sp_streq(nt_type(nt, right), "NextNode"))) {
+      TyKind vt = lt;
+      if (vt == TY_VOID || vt == TY_UNKNOWN || vt == TY_NIL) vt = TY_POLY;
+      int t2 = ++g_tmp;
+      Buf lb; memset(&lb, 0, sizeof lb);
+      if (vt == TY_POLY && lt != TY_POLY) emit_boxed(c, left, &lb);
+      else emit_expr(c, left, &lb);
+      Buf tc2; memset(&tc2, 0, sizeof tc2);
+      if (vt == TY_POLY)       buf_printf(&tc2, "sp_poly_truthy(_t%d)", t2);
+      else if (vt == TY_BOOL)  buf_printf(&tc2, "_t%d", t2);
+      else if (vt == TY_INT)   buf_printf(&tc2, "(_t%d != SP_INT_NIL)", t2);
+      else if (vt == TY_FLOAT) buf_printf(&tc2, "(!sp_float_is_nil(_t%d))", t2);
+      else if (vt == TY_SYMBOL) buf_printf(&tc2, "(_t%d != (sp_sym)-1)", t2);
+      else if (vt == TY_STRING || ty_is_array(vt) || ty_is_hash(vt) || ty_is_object(vt) ||
+               vt == TY_PROC || vt == TY_MATCHDATA || vt == TY_EXCEPTION ||
+               ty_nullable_builtin_id(vt))
+        buf_printf(&tc2, "(_t%d != 0)", t2);
+      else buf_puts(&tc2, "1");
+      buf_puts(b, "({ ");
+      emit_ctype(c, vt, b);
+      buf_printf(b, " _t%d = %s; if (%s%s) {\n", t2, lb.p ? lb.p : "0",
+                 is_and ? "" : "!", tc2.p ? tc2.p : "1");
+      emit_stmt(c, right, b, g_indent + 1);
+      buf_printf(b, "}\n _t%d; })", t2);
+      free(lb.p); free(tc2.p);
+      return;
+    }
     if (lt == TY_BOOL && comp_ntype(c, right) == TY_BOOL) {
       /* Capture the right operand's prelude: an object subexpression there
          (`a && b.c == x`) hoists a GC-rooted temp that must run inside the
