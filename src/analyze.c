@@ -5117,6 +5117,41 @@ int desugar_enum_method_recv(Compiler *c) {
 /* `a.upto(b)` over Strings is the String range `(a..b)`: the succ-based walk
    the range's own iteration already does. There was no arm for it at all
    (#3600). The Integer form has its own emitter and is left alone. */
+/* `File::Stat.new(path)` is CRuby's direct constructor for what `File.stat`
+   answers, and spinel carries a stat as the File handle itself: rewrite the
+   constructor to the class method rather than resolving a Stat class that has
+   no definition (#3766). */
+static int desugar_file_stat_new(Compiler *c) {
+  NodeTable *nt = (NodeTable *)c->nt;
+  int changed = 0;
+  int n0 = nt->count;
+  for (int id = 0; id < n0; id++) {
+    if (nt_kind(nt, id) != NK_CallNode) continue;
+    const char *nm = nt_str(nt, id, "name");
+    if (!nm || !sp_streq(nm, "new")) continue;
+    int recv = nt_ref(nt, id, "receiver");
+    if (recv < 0 || nt_kind(nt, recv) != NK_ConstantPathNode) continue;
+    const char *cn = nt_str(nt, recv, "name");
+    if (!cn || !sp_streq(cn, "Stat")) continue;
+    int par = nt_ref(nt, recv, "parent");
+    const char *pn = par >= 0 ? nt_str(nt, par, "name") : NULL;
+    if (!pn || !sp_streq(pn, "File")) continue;
+    int args = nt_ref(nt, id, "arguments");
+    int an = 0;
+    if (args >= 0) nt_arr(nt, args, "arguments", &an);
+    if (an != 1) continue;
+    int fc = nt_new_node(nt, "ConstantReadNode");
+    if (fc < 0) continue;
+    nt_node_set_str(nt, fc, "name", "File");
+    nt_node_set_ref(nt, id, "receiver", fc);
+    nt_node_set_str(nt, id, "name", "stat");
+    comp_grow_node_arrays(c);
+    c->nscope[fc] = c->nscope[id];
+    changed = 1;
+  }
+  return changed;
+}
+
 static int desugar_string_upto(Compiler *c) {
   NodeTable *nt = (NodeTable *)c->nt;
   int changed = 0;
@@ -10298,6 +10333,7 @@ void analyze_program(Compiler *c) {
     ch |= desugar_for_enumerable(c);           /* for x in obj -> for x in obj.__enum_to_a */
     ch |= desugar_lazy_terminal(c);            /* lz.sum -> lz.to_a.sum */
     ch |= desugar_string_upto(c);              /* "a".upto("c") -> ("a".."c").each */
+    ch |= desugar_file_stat_new(c);            /* File::Stat.new(p) -> File.stat(p) */
     ch |= desugar_to_enum(c);                  /* recv.to_enum(:m) -> generator/blockless */
     ch |= type_block_rest_params(c);           /* |*rest| locals are poly arrays */
     ch |= desugar_public_method(c);            /* recv.public_method(:m) -> recv.method(:m) */
