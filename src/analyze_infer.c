@@ -2991,6 +2991,8 @@ else {
        generator enums like blockless Kernel#loop); nil on no match (#3236) */
     if ((sp_streq(name, "find") || sp_streq(name, "detect")) &&
         nt_ref(nt, id, "block") >= 0) return TY_POLY;
+    /* take_while rides the same lazy driver and collects the prefix (#3590) */
+    if (sp_streq(name, "take_while") && nt_ref(nt, id, "block") >= 0) return TY_POLY_ARRAY;
     if (sp_streq(name, "next_values") || sp_streq(name, "peek_values")) return TY_POLY_ARRAY;   /* #2482 */
     if (sp_streq(name, "+") && argc == 1 && infer_type(c, argv[0]) == TY_ENUMERATOR) return TY_ENUMERATOR;  /* #2481 */
     if (sp_streq(name, "rewind")) return TY_ENUMERATOR;

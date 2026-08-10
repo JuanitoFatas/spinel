@@ -4932,7 +4932,12 @@ int desugar_enum_method_recv(Compiler *c) {
         (sp_streq(nm, "each_slice") || sp_streq(nm, "each_cons") ||
          sp_streq(nm, "each_entry") || sp_streq(nm, "cycle") ||
          sp_streq(nm, "reverse_each"));
-    if (rt == TY_ENUMERATOR && !recv_is_index_enum &&
+    /* find/detect/take_while are driven lazily through #next by their own
+       emitter, so they terminate over an INFINITE enumerator; materializing
+       the elements first would loop forever (#3590) */
+    int enum_lazy_driven = nt_ref(nt, id, "block") >= 0 &&
+        (sp_streq(nm, "find") || sp_streq(nm, "detect") || sp_streq(nm, "take_while"));
+    if (rt == TY_ENUMERATOR && !recv_is_index_enum && !enum_lazy_driven &&
         !sp_streq(nm, "to_a") && !sp_streq(nm, "entries") &&
         (nt_ref(nt, id, "block") >= 0 || enum_terminal || enum_regroup)) {
       /* the block forms of these answer the RECEIVING Enumerator, but the

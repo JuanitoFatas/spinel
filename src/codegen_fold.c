@@ -4918,7 +4918,7 @@ int emit_with_index_expr(Compiler *c, int id, Buf *b) {
    collector enumerator, whose result we cannot rebuild here). The statement
    form is served by the iter emitter; immediate array chains by
    emit_with_index_expr above. Returns 1 if handled. */
-/* enum.find/detect { |v| pred } driven lazily via #next inside a
+/* enum.find/detect/take_while { |v| pred } driven lazily via #next inside a
    StopIteration setjmp frame (the Kernel#loop pattern), so an infinite
    generator enum (blockless `loop`, possibly .with_index-chained) works and
    a finite enum without a match yields nil (#3236). A user `break val` in
@@ -4926,7 +4926,8 @@ int emit_with_index_expr(Compiler *c, int id, Buf *b) {
 int emit_enum_find_expr(Compiler *c, int id, Buf *b) {
   const NodeTable *nt = c->nt;
   const char *name = nt_str(nt, id, "name");
-  if (!name || (!sp_streq(name, "find") && !sp_streq(name, "detect"))) return 0;
+  int take = name && sp_streq(name, "take_while");
+  if (!name || (!take && !sp_streq(name, "find") && !sp_streq(name, "detect"))) return 0;
   int block = nt_ref(nt, id, "block");
   if (block < 0 || !nt_type(nt, block) || !sp_streq(nt_type(nt, block), "BlockNode")) return 0;
   int recv = nt_ref(nt, id, "receiver");
@@ -4945,7 +4946,11 @@ int emit_enum_find_expr(Compiler *c, int id, Buf *b) {
   buf_printf(g_pre, "sp_Enumerator *_t%d = %s; SP_GC_ROOT(_t%d);\n", te, rb.p ? rb.p : "", te);
   free(rb.p);
   emit_indent(g_pre, g_indent);
-  buf_printf(g_pre, "sp_RbVal _t%d = sp_box_nil(); SP_GC_ROOT_RBVAL(_t%d);\n", tres, tres);
+  /* take_while collects the passing prefix; find/detect keep one element */
+  if (take)
+    buf_printf(g_pre, "sp_PolyArray *_t%d = sp_PolyArray_new(); SP_GC_ROOT(_t%d);\n", tres, tres);
+  else
+    buf_printf(g_pre, "sp_RbVal _t%d = sp_box_nil(); SP_GC_ROOT_RBVAL(_t%d);\n", tres, tres);
   emit_indent(g_pre, g_indent);
   buf_printf(g_pre, "sp_RbVal _t%d = sp_box_nil(); SP_GC_ROOT_RBVAL(_t%d);\n", tv, tv);
   emit_indent(g_pre, g_indent);
@@ -4990,7 +4995,11 @@ int emit_enum_find_expr(Compiler *c, int id, Buf *b) {
       buf_printf(g_pre, "sp_RbVal _t%d = %s;\n", tt, tb.p ? tb.p : "sp_box_nil()");
       free(tb.p);
       emit_indent(g_pre, din);
-      buf_printf(g_pre, "if (sp_poly_truthy(_t%d)) { _t%d = _t%d; break; }\n", tt, tres, tv);
+      if (take)
+        buf_printf(g_pre, "if (!sp_poly_truthy(_t%d)) break;\n"
+                          "        sp_PolyArray_push(_t%d, _t%d);\n", tt, tres, tv);
+      else
+        buf_printf(g_pre, "if (sp_poly_truthy(_t%d)) { _t%d = _t%d; break; }\n", tt, tres, tv);
     }
     g_indent = sv_in; }
   emit_indent(g_pre, g_indent + 1);
