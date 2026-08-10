@@ -12,7 +12,10 @@
 #include <string.h>
 
 /* Compiler state */
-typedef struct {
+typedef struct re_compiler_s re_compiler;
+static void emit_atom_copy(re_compiler *c, uint32_t start, uint32_t size);
+
+struct re_compiler_s {
   const char *src;     /* pattern source */
   const char *src_end;
   const char *p;       /* current position */
@@ -32,7 +35,11 @@ typedef struct {
      the whole source is scanned for a name before compiling (#3678). */
   mrb_bool has_named_group;
   char *stripped;           /* allocated buffer for x-mode preprocessing */
-} re_compiler;
+  /* Code range of each capture group, so `\g<name>` can re-emit a copy of the
+     group it calls (#3637). Indexed by group number; len 0 = not (yet) known. */
+  uint32_t grp_start[RE_MAX_CAPTURES];
+  uint32_t grp_len[RE_MAX_CAPTURES];
+};
 
 /* Does the pattern source declare a named group -- `(?<name>` or `(?'name'`,
    as opposed to the lookbehinds `(?<=` / `(?<!`? Character classes are skipped
@@ -928,6 +935,7 @@ compile_atom(re_compiler *c)
         }
       }
 
+      uint32_t grp_body = c->code_len;
       compile_alt(c);
 
       if (peek(c) != ')') compile_error(c, "unmatched '('");
@@ -935,6 +943,11 @@ compile_atom(re_compiler *c)
 
       if (capturing) {
         emit(c, RE_SAVE, 0, group * 2 + 1);
+        /* remember the body's code range so `\g<name>` can re-emit it */
+        if (group < RE_MAX_CAPTURES) {
+          c->grp_start[group] = grp_body;
+          c->grp_len[group] = c->code_len - 1 - grp_body;
+        }
       }
       c->flags = saved_flags;  /* inline toggles inside the group end here */
     }
@@ -993,6 +1006,51 @@ compile_atom(re_compiler *c)
     else if (ch == 'A') {
       next_char(c);
       emit(c, RE_BOT, 0, 0);
+    }
+    else if (ch == 'G') {
+      /* \G: the position the search started from -- for a plain #match that
+         is the string start, and for a scan/gsub step the point the previous
+         match ended (#3637) */
+      next_char(c);
+      emit(c, RE_GPOS, 0, 0);
+      c->needs_backtrack = TRUE;
+    }
+    else if (ch == 'g' && c->p + 1 < c->src_end &&
+             (c->p[1] == '<' || c->p[1] == '\'')) {
+      /* \g<name> / \g<n>: a subexpression CALL -- match what that group
+         matches, here. A group already compiled is re-emitted as a copy, so
+         its own captures update like CRuby's; a self- or forward reference
+         would need real recursion and is refused rather than mismatched. */
+      next_char(c);  /* skip g */
+      int close = (peek(c) == '<') ? '>' : '\'';
+      next_char(c);
+      const char *gname = c->p;
+      while (peek(c) != close && peek(c) >= 0) next_char(c);
+      if (peek(c) != close) compile_error(c, "unterminated group reference");
+      uint16_t gname_len = (uint16_t)(c->p - gname);
+      next_char(c);
+      int gnum = -1;
+      if (gname_len > 0 && (gname[0] == '-' || (gname[0] >= '0' && gname[0] <= '9'))) {
+        mrb_bool relative = (gname[0] == '-');
+        int n = 0;
+        for (uint16_t i = (relative ? 1 : 0); i < gname_len; i++) {
+          if (gname[i] < '0' || gname[i] > '9') compile_error(c, "invalid group reference");
+          n = n * 10 + (gname[i] - '0');
+        }
+        gnum = relative ? (int)c->num_captures - n : n;
+      }
+      else {
+        for (uint16_t i = 0; i < c->num_named; i++) {
+          if (c->named_captures[i].name_len == gname_len &&
+              memcmp(c->named_captures[i].name, gname, gname_len) == 0) {
+            gnum = c->named_captures[i].group;
+            break;
+          }
+        }
+      }
+      if (gnum < 1 || gnum >= RE_MAX_CAPTURES || c->grp_len[gnum] == 0)
+        compile_error(c, "undefined group reference");
+      emit_atom_copy(c, c->grp_start[gnum], c->grp_len[gnum]);
     }
     else if (ch == 'z') {
       next_char(c);
@@ -1117,6 +1175,10 @@ emit_atom_copy(re_compiler *c, uint32_t start, uint32_t size)
     re_inst in = c->code[start + j];
     switch (in.op) {
     case RE_JMP: case RE_SPLIT: case RE_SPLITNG:
+    /* the lookarounds and the atomic group carry an end-of-sub-pattern
+       target, which relocates exactly like a jump */
+    case RE_LOOKAHEAD: case RE_NEG_LOOKAHEAD:
+    case RE_LOOKBEHIND: case RE_NEG_LOOKBEHIND: case RE_ATOMIC:
       if (in.offset >= start && in.offset <= atom_end) {
         in.offset = (uint16_t)((int32_t)in.offset + delta);
       }
