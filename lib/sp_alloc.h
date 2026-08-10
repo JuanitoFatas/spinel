@@ -391,6 +391,8 @@ const char *sp_float_to_s(mrb_float f);
 #define SP_BUILTIN_TMS           (-39)  /* Process.times -> Process::Tms */
 #define SP_BUILTIN_ADDRINFO      (-40)  /* Addrinfo (sp_Addrinfo *) */
 #define SP_BUILTIN_SOCKOPT       (-41)  /* Socket::Option (sp_SockOpt *) */
+#define SP_BUILTIN_MATCHDATA     (-43)  /* MatchData (sp_MatchData *): boxed so
+                                           a match can live in a container */
 
 static inline sp_RbVal sp_box_int(mrb_int v)    { sp_RbVal r; r.tag = SP_TAG_INT;  r.cls_id = 0; r.v.i = v; return r; }
 /* A NULL char* IS Ruby nil throughout the string paths (the nullable-string

@@ -1617,6 +1617,8 @@ static inline const char *sp_poly_to_s(sp_RbVal v) {
         case SP_BUILTIN_RATIONAL: return sp_rational_to_s(*(sp_Rational *)v.v.p);
         case SP_BUILTIN_BIG_RATIONAL: return sp_brat_to_s((sp_BigRational *)v.v.p);
         case SP_BUILTIN_REGEX: return sp_re_to_s_str(v.v.p);
+        /* MatchData#to_s is the whole match (#3641) */
+        case SP_BUILTIN_MATCHDATA: { const char *_m0 = sp_MatchData_aref((sp_MatchData *)v.v.p, 0); return _m0 ? _m0 : sp_str_empty; }
         case SP_BUILTIN_EXCEPTION: return sp_exc_message((volatile struct sp_Exception_s *)v.v.p);
         default:
           if ((v.cls_id >= 0 || v.cls_id == SP_BUILTIN_OBJECT) && v.v.p) {
@@ -1669,6 +1671,7 @@ static const char *sp_poly_class_name(sp_RbVal v) {
         case SP_BUILTIN_RATIONAL: return SPL("Rational");
         case SP_BUILTIN_BIG_RATIONAL: return SPL("Rational");
         case SP_BUILTIN_REGEX: return SPL("Regexp");
+        case SP_BUILTIN_MATCHDATA: return SPL("MatchData");   /* (#3641) */
         case SP_BUILTIN_OBJECT: return SPL("Object");   /* a bare Object.new instance */
         case SP_BUILTIN_BASIC_OBJECT: return SPL("BasicObject");
         case SP_BUILTIN_PROC: return SPL("Proc");
@@ -4098,6 +4101,7 @@ static inline const char *sp_poly_inspect(sp_RbVal v) {
         case SP_BUILTIN_RATIONAL:  return sp_rational_inspect(*(sp_Rational *)v.v.p);
         case SP_BUILTIN_BIG_RATIONAL:  return sp_brat_inspect((sp_BigRational *)v.v.p);
         case SP_BUILTIN_REGEX:     return sp_re_inspect_str(v.v.p);
+        case SP_BUILTIN_MATCHDATA: return sp_MatchData_inspect((sp_MatchData *)v.v.p);
         case SP_BUILTIN_EXCEPTION: return sp_sprintf("#<%s: %s>", sp_exc_class_name((volatile struct sp_Exception_s *)v.v.p), sp_exc_message((volatile struct sp_Exception_s *)v.v.p));
         case SP_BUILTIN_STR_INT_HASH:  return sp_StrIntHash_inspect((sp_StrIntHash *)v.v.p);
         case SP_BUILTIN_STR_STR_HASH:  return sp_StrStrHash_inspect((sp_StrStrHash *)v.v.p);
@@ -5247,6 +5251,10 @@ static SP_INLINE sp_RbVal sp_poly_arr_get_hash(sp_RbVal a, mrb_int i) {
 }
 
 static SP_NOINLINE sp_RbVal sp_poly_arr_get_hash_cold(sp_RbVal a, mrb_int i) {
+  /* MatchData#[n] is the nth group, and a match stored in a container reaches
+     the generic index path (#3641) */
+  if (a.tag == SP_TAG_OBJ && a.cls_id == SP_BUILTIN_MATCHDATA)
+    return sp_box_nullable_str(sp_MatchData_aref((sp_MatchData *)a.v.p, i));
   /* Struct#[n] is the nth MEMBER in declaration order, not an array index --
      a Struct read out of a poly container reaches here (#3369). */
   if (a.tag == SP_TAG_OBJ && a.cls_id >= 0 && sp_obj_to_h_fn) {
