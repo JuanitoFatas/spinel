@@ -6546,7 +6546,16 @@ else {
         emit_indent(g_pre, g_indent);
         emit_ctype(c, paramt, g_pre);
         buf_printf(g_pre, " _t%d = ", iatmp);
-        emit_expr(c, ival, g_pre);
+        /* the temp is declared with the OPERATOR's parameter type, so the
+           call-site value has to be converted into it (a raw mrb_int landed
+           in an sp_RbVal slot, #3733) */
+        if (paramt == TY_POLY && rhst != TY_POLY) emit_boxed(c, ival, g_pre);
+        else if (paramt != TY_POLY && rhst == TY_POLY) {
+          Buf rvb; memset(&rvb, 0, sizeof rvb); emit_expr(c, ival, &rvb);
+          emit_unbox_text(c, paramt, rvb.p ? rvb.p : "sp_box_nil()", g_pre);
+          free(rvb.p);
+        }
+        else emit_expr(c, ival, g_pre);
         buf_puts(g_pre, ";\n");
         /* The operator method can `return nil` (a NULL reference); box a
            reference-type result via sp_box_nullable_obj so NULL becomes nil, not
@@ -6554,10 +6563,25 @@ else {
         const char *pbox = c->classes[poly_defcls].is_value_type
                              ? "sp_box_obj(" : "sp_box_nullable_obj((void *)(";
         const char *pboxc = c->classes[poly_defcls].is_value_type ? ", %d)" : "), %d)";
-        buf_printf(b, "%s = %ssp_%s_%s((sp_%s *)(%s).v.p, _t%d)", ref, pbox,
+        /* The slot is POLY: the user operator is only the right answer when the
+           value really is an instance of that class. An Integer in the same
+           slot takes the numeric path, as it does everywhere else a poly
+           receiver dispatches to a user arm (#3733). */
+        const char *pnum = sp_streq(op, "+") ? "sp_poly_add" : sp_streq(op, "-") ? "sp_poly_sub"
+                         : sp_streq(op, "*") ? "sp_poly_mul" : sp_streq(op, "/") ? "sp_poly_div"
+                         : sp_streq(op, "%") ? "sp_poly_mod" : NULL;
+        if (pnum) buf_printf(b, "%s = ((%s).tag == SP_TAG_OBJ && (%s).cls_id == %d) ? ",
+                             ref, ref, ref, poly_defcls);
+        else buf_printf(b, "%s = ", ref);
+        buf_printf(b, "%ssp_%s_%s((sp_%s *)(%s).v.p, _t%d)", pbox,
                    c->classes[poly_defcls].c_name, mc(pms->name),
                    c->classes[poly_defcls].c_name, ref, iatmp);
         buf_printf(b, pboxc, poly_defcls);
+        if (pnum) {
+          buf_printf(b, " : %s(%s, ", pnum, ref);
+          emit_boxed(c, ival, b);
+          buf_puts(b, ")");
+        }
         buf_puts(b, ";\n");
       }
       else if ((sp_streq(op, "+") || sp_streq(op, "-") || sp_streq(op, "*") || sp_streq(op, "/"))) {
