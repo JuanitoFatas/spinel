@@ -1640,6 +1640,21 @@ void register_attrs_body(Compiler *c, ClassInfo *cls, int body) {
         if (ssty && sp_streq(ssty, "CallNode"))
           register_attr_call(c, cls, ss, 1);
       }
+      /* An accessor whose name the CLASS BODY also assigns as `@x` names the
+         class-level ivar, which is where `def self.m; @x; end` reads too: mark
+         it so both spellings share civ_<Class>_<x> (#3776). */
+      for (int j = 0; j < cls->nsg_readers + cls->nsg_writers; j++) {
+        const char *base = j < cls->nsg_readers ? cls->sg_readers[j]
+                                                : cls->sg_writers[j - cls->nsg_readers];
+        char ivname[256];
+        snprintf(ivname, sizeof ivname, "@%s", base);
+        for (int k2 = 0; k2 < n; k2++) {
+          const char *wty = nt_type(nt, stmts[k2]);
+          if (!wty || !sp_streq(wty, "InstanceVariableWriteNode")) continue;
+          const char *wnm = nt_str(nt, stmts[k2], "name");
+          if (wnm && sp_streq(wnm, ivname)) { comp_add_sg_civ(cls, base); break; }
+        }
+      }
     }
   }
 }
@@ -1745,6 +1760,12 @@ void register_aliases_body(Compiler *c, ClassInfo *cls, int body) {
           nt_type(nt, argv[1]) && sp_streq(nt_type(nt, argv[1]), "SymbolNode"))
       { const char *anw = nt_str(nt, argv[0], "value"), *aod = nt_str(nt, argv[1], "value");
         if (!alias_capture_earlier_def(c, cls, anw, aod, s)) comp_add_alias(cls, anw, aod); }
+    }
+    else if (sp_streq(sty, "SingletonClassNode")) {
+      /* `class << self; alias_method :a, :b; end` names a CLASS method; the
+         alias table is consulted by the class-method lookup too, so register
+         it the same way rather than leaving the name undefined (#3776) */
+      register_aliases_body(c, cls, nt_ref(nt, s, "body"));
     }
     else if (sp_streq(sty, "IfNode") || sp_streq(sty, "UnlessNode")) {
       /* A statement modifier (`alias a b if cond`) wraps the alias in an IfNode;

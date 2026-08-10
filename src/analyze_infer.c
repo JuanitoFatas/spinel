@@ -2366,7 +2366,18 @@ TyKind infer_call(Compiler *c, int id) {
         }
       }
 else {
-        if (comp_is_sg_reader(cls, name)) return TY_POLY;
+        /* an accessor backed by the class-level ivar reads that slot's type;
+           the alias table maps a renamed accessor onto it (#3776) */
+        const char *rn = comp_resolve_alias(c, ci, name);
+        const char *base2 = rn ? rn : name;
+        if (comp_is_sg_reader(cls, base2)) {
+          if (comp_is_sg_civ(cls, base2)) {
+            char ivn[256]; snprintf(ivn, sizeof ivn, "@%s", base2);
+            int ivi = comp_ivar_index(cls, ivn);
+            if (ivi >= 0 && cls->ivar_types[ivi] != TY_UNKNOWN) return cls->ivar_types[ivi];
+          }
+          return TY_POLY;
+        }
       }
     }
   }
