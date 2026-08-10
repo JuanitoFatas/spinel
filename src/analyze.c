@@ -4212,13 +4212,23 @@ int desugar_enum_method_recv(Compiler *c) {
        lines later (#3378). While the receiver's type is still unresolved,
        wait rather than guess: g_infer_optimistic says the fixpoint has more
        to say. */
-    if (nm && sp_streq(nm, "to_set") && nt_ref(nt, id, "block") < 0 &&
+    if (nm && sp_streq(nm, "to_set") &&
         nt_ref(nt, id, "arguments") < 0 && comp_class_index(c, "Set") >= 0) {
       int recv = nt_ref(nt, id, "receiver");
       if (recv >= 0) {
         TyKind rt = infer_type(c, recv);
         int decline = 0;
         if (rt == TY_UNKNOWN && g_infer_optimistic) decline = 1;   /* not yet known */
+        /* Set#to_set is the receiver itself, which is also what keeps a
+           `to_set.to_set` chain from nesting one Set.new inside another (#3623) */
+        else if (ty_is_object(rt) && ty_object_class(rt) == comp_class_index(c, "Set") &&
+                 nt_ref(nt, id, "block") < 0) {
+          nt_node_set_int(nt, id, "enum_self_result", recv);
+          nt_node_set_str(nt, id, "name", "itself");
+          nt_node_set_ref(nt, id, "arguments", -1);
+          changed = 1;
+          continue;
+        }
         else if (ty_is_object(rt) &&
                  comp_method_in_chain(c, ty_object_class(rt), "to_set", NULL) >= 0)
           decline = 1;                                             /* the class owns the name */
@@ -4239,6 +4249,8 @@ int desugar_enum_method_recv(Compiler *c) {
             nt_node_set_str(nt, id, "name", "new");
             nt_node_set_ref(nt, id, "receiver", cst);
             nt_node_set_ref(nt, id, "arguments", one);
+            /* a block maps each element on the way in: Set.new's own block
+               parameter does exactly that (#3623) */
             comp_grow_node_arrays(c);
             c->nscope[toa] = c->nscope[id];
             c->nscope[cst] = c->nscope[id];
