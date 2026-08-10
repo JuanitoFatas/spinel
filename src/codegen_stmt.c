@@ -5569,9 +5569,36 @@ void emit_stmt_inner(Compiler *c, int id, Buf *b, int indent) {
   if (g_yielder_name && sp_streq(ty, "CallNode")) {
     int yrcv = nt_ref(nt, id, "receiver");
     const char *ynm = nt_str(nt, id, "name");
-    if (yrcv >= 0 && ynm && (sp_streq(ynm, "<<") || sp_streq(ynm, "yield")) &&
+    /* `y << a << b` chains: `y << a` answers the yielder, so the second push
+       has the first as its receiver. Emit the receiver's push first and then
+       this one, rather than reading the yield's value as a container (#3581).
+       Parentheses around the inner push are transparent. */
+    int ychain = 0;
+    if (yrcv >= 0 && ynm && sp_streq(ynm, "<<")) {
+      int r2 = yrcv;
+      while (r2 >= 0 && nt_type(nt, r2) && sp_streq(nt_type(nt, r2), "ParenthesesNode")) {
+        int pb = nt_ref(nt, r2, "body"); int pn2 = 0;
+        const int *pd = pb >= 0 ? nt_arr(nt, pb, "body", &pn2) : NULL;
+        r2 = (pn2 == 1 && pd) ? pd[0] : -1;
+      }
+      if (r2 >= 0 && nt_type(nt, r2) && sp_streq(nt_type(nt, r2), "CallNode") &&
+          nt_str(nt, r2, "name") && sp_streq(nt_str(nt, r2, "name"), "<<")) {
+        int r3 = nt_ref(nt, r2, "receiver");
+        while (r3 >= 0 && nt_type(nt, r3) && sp_streq(nt_type(nt, r3), "CallNode") &&
+               nt_str(nt, r3, "name") && sp_streq(nt_str(nt, r3, "name"), "<<"))
+          r3 = nt_ref(nt, r3, "receiver");
+        if (r3 >= 0 && nt_type(nt, r3) && sp_streq(nt_type(nt, r3), "LocalVariableReadNode") &&
+            nt_str(nt, r3, "name") && sp_streq(nt_str(nt, r3, "name"), g_yielder_name)) {
+          emit_stmt(c, r2, b, indent);   /* the earlier push(es) in the chain */
+          ychain = 1;
+          yrcv = r3;
+        }
+      }
+    }
+    if (ychain ||
+        (yrcv >= 0 && ynm && (sp_streq(ynm, "<<") || sp_streq(ynm, "yield")) &&
         nt_type(nt, yrcv) && sp_streq(nt_type(nt, yrcv), "LocalVariableReadNode") &&
-        nt_str(nt, yrcv, "name") && sp_streq(nt_str(nt, yrcv, "name"), g_yielder_name)) {
+        nt_str(nt, yrcv, "name") && sp_streq(nt_str(nt, yrcv, "name"), g_yielder_name))) {
       /* Emit the Fiber.yield directly: re-dispatching `y.yield(v)` through
          emit_expr would let the yield-keyword inlining intercept it. */
       int yar = nt_ref(nt, id, "arguments");

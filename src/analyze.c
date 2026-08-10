@@ -5141,6 +5141,76 @@ int desugar_enum_method_recv(Compiler *c) {
 /* `a.upto(b)` over Strings is the String range `(a..b)`: the succ-based walk
    the range's own iteration already does. There was no arm for it at all
    (#3600). The Integer form has its own emitter and is left alone. */
+/* `Enumerator.new { |y| src.each(&y) }`: the yielder passed as a block. It has
+   no proc object -- `y << v` lowers to a Fiber.yield -- so drive the iterator
+   with a literal block that pushes each element instead (#3587). */
+static int desugar_yielder_block_arg(Compiler *c) {
+  NodeTable *nt = (NodeTable *)c->nt;
+  int changed = 0;
+  int n0 = nt->count;
+  for (int en = 0; en < n0; en++) {
+    if (nt_kind(nt, en) != NK_CallNode) continue;
+    const char *enm = nt_str(nt, en, "name");
+    int erecv = nt_ref(nt, en, "receiver");
+    if (!enm || !sp_streq(enm, "new") || erecv < 0) continue;
+    if (nt_kind(nt, erecv) != NK_ConstantReadNode && nt_kind(nt, erecv) != NK_ConstantPathNode) continue;
+    const char *ecn = nt_str(nt, erecv, "name");
+    if (!ecn || !sp_streq(ecn, "Enumerator")) continue;
+    int eblk = nt_ref(nt, en, "block");
+    if (eblk < 0 || nt_kind(nt, eblk) != NK_BlockNode) continue;
+    const char *yname = block_param_name(c, eblk, 0);
+    int ebody = nt_ref(nt, eblk, "body");
+    if (!yname || ebody < 0) continue;
+    /* every `&y` inside this generator body */
+    for (int id = 0; id < n0; id++) {
+      if (nt_kind(nt, id) != NK_CallNode) continue;
+      int blk = nt_ref(nt, id, "block");
+      if (blk < 0 || nt_kind(nt, blk) != NK_BlockArgumentNode) continue;
+      int e = nt_ref(nt, blk, "expression");
+      if (e < 0 || nt_kind(nt, e) != NK_LocalVariableReadNode) continue;
+      const char *vn = nt_str(nt, e, "name");
+      if (!vn || !sp_streq(vn, yname)) continue;
+      if (!a_subtree_contains(nt, ebody, id, 0)) continue;
+      char pnm[48];
+      snprintf(pnm, sizeof pnm, "__yb_e_%d", id);
+      int preq = nt_new_node(nt, "RequiredParameterNode");
+      if (preq < 0) continue;
+      nt_node_set_str(nt, preq, "name", pnm);
+      int params = nt_new_node(nt, "ParametersNode");
+      nt_node_set_arr(nt, params, "requireds", &preq, 1);
+      int bparams = nt_new_node(nt, "BlockParametersNode");
+      nt_node_set_ref(nt, bparams, "parameters", params);
+      int yread = nt_new_node(nt, "LocalVariableReadNode");
+      nt_node_set_str(nt, yread, "name", yname);
+      int pread = nt_new_node(nt, "LocalVariableReadNode");
+      nt_node_set_str(nt, pread, "name", pnm);
+      int pargs = nt_new_node(nt, "ArgumentsNode");
+      nt_node_set_arr(nt, pargs, "arguments", &pread, 1);
+      int push = nt_new_node(nt, "CallNode");
+      nt_node_set_str(nt, push, "name", "<<");
+      nt_node_set_ref(nt, push, "receiver", yread);
+      nt_node_set_ref(nt, push, "arguments", pargs);
+      nt_node_set_ref(nt, push, "block", -1);
+      /* the push is a Fiber.yield, not an array append: its value is whatever
+         the consumer feeds back, so type it boxed rather than as a container */
+      nt_node_set_int(nt, push, "yielder_push", 1);
+      int pbody = nt_new_node(nt, "StatementsNode");
+      nt_node_set_arr(nt, pbody, "body", &push, 1);
+      int nb = nt_new_node(nt, "BlockNode");
+      if (nb < 0) continue;
+      nt_node_set_ref(nt, nb, "parameters", bparams);
+      nt_node_set_ref(nt, nb, "body", pbody);
+      nt_node_set_ref(nt, id, "block", nb);
+      comp_grow_node_arrays(c);
+      for (int j = preq; j <= nb && j < nt->count; j++) c->nscope[j] = c->nscope[id];
+      Scope *sc = comp_scope_of(c, id);
+      if (sc) { LocalVar *lv = scope_local_intern(sc, pnm); if (lv) lv->is_block_param = 1; }
+      changed = 1;
+    }
+  }
+  return changed;
+}
+
 /* `iter(&curried)`: a curried Proc has no proc object to hand a block slot,
    so drive it through a literal block that applies one element -- exactly what
    CRuby's Proc#curry answers to `&` (#3654). */
@@ -10450,6 +10520,7 @@ void analyze_program(Compiler *c) {
     ch |= desugar_file_stat_new(c);            /* File::Stat.new(p) -> File.stat(p) */
     ch |= desugar_method_block_arg(c);         /* m(&method(:x)) -> m(&method(:x).to_proc) */
     ch |= desugar_curry_block_arg(c);          /* iter(&curried) -> iter { |e| curried[e] } */
+    ch |= desugar_yielder_block_arg(c);        /* src.each(&y) -> src.each { |e| y << e } */
     ch |= desugar_to_enum(c);                  /* recv.to_enum(:m) -> generator/blockless */
     ch |= type_block_rest_params(c);           /* |*rest| locals are poly arrays */
     ch |= desugar_public_method(c);            /* recv.public_method(:m) -> recv.method(:m) */

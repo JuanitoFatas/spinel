@@ -2308,6 +2308,22 @@ static int stmt_is_yielder_push(Compiler *c, int id, const char *yname) {
   const char *nm = nt_str(nt, id, "name");
   if (!nm || !sp_streq(nm, "<<")) return 0;
   int rcv = nt_ref(nt, id, "receiver");
+  /* `y << a << b` chains through the yielder each push answers, and a
+     parenthesised inner push is transparent (#3581) */
+  while (rcv >= 0 && nt_type(nt, rcv)) {
+    if (sp_streq(nt_type(nt, rcv), "ParenthesesNode")) {
+      int pb = nt_ref(nt, rcv, "body"); int pn = 0;
+      const int *pd = pb >= 0 ? nt_arr(nt, pb, "body", &pn) : NULL;
+      rcv = (pn == 1 && pd) ? pd[0] : -1;
+      continue;
+    }
+    if (sp_streq(nt_type(nt, rcv), "CallNode") && nt_str(nt, rcv, "name") &&
+        sp_streq(nt_str(nt, rcv, "name"), "<<")) {
+      rcv = nt_ref(nt, rcv, "receiver");
+      continue;
+    }
+    break;
+  }
   if (rcv < 0 || !nt_type(nt, rcv) || !sp_streq(nt_type(nt, rcv), "LocalVariableReadNode")) return 0;
   const char *rn = nt_str(nt, rcv, "name");
   return rn && sp_streq(rn, yname);
@@ -2615,6 +2631,15 @@ void emit_fiber_new(Compiler *c, int id, Buf *b, int as_gen, int size_node) {
         buf_printf(pb, "    _fb->yielded_value = ");
         if (lty == TY_POLY) {
           buf_puts(pb, vb.p ? vb.p : "sp_box_nil()");
+        }
+        else if (lty == TY_RANGE || lty == TY_FLOAT_RANGE || lty == TY_STR_RANGE ||
+                 lty == TY_TIME || lty == TY_TMS) {
+          /* a by-value struct tail (`(1..3).each { }` answers its Range) has no
+             box_open form; box it through the generic boxer (#3587) */
+          Buf rb2 = {0};
+          emit_boxed_text(c, lty, vb.p ? vb.p : "", &rb2);
+          buf_puts(pb, rb2.p ? rb2.p : "sp_box_nil()");
+          free(rb2.p);
         }
         else {
           emit_box_open(c, lty, pb); buf_puts(pb, vb.p ? vb.p : ""); emit_box_close(c, lty, pb);

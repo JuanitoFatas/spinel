@@ -762,6 +762,9 @@ int poly_builtin_zero_arg_name(const char *m) {
 }
 TyKind infer_call(Compiler *c, int id) {
 
+  /* a yielder push (`y << v` inside an Enumerator.new generator) lowers to a
+     Fiber.yield, whose value is boxed -- never the array append it looks like */
+  if (nt_int(c->nt, id, "yielder_push", 0)) return TY_POLY;
   /* the rewrite recorded that this call answers nil whatever it drives (#3589) */
   if (nt_int(c->nt, id, "nil_result", 0)) return TY_NIL;
   /* the redirect recorded that this call yields its original receiver (#2981) */
