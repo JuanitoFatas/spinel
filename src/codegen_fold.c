@@ -3782,7 +3782,12 @@ int emit_sort_cmp_expr(Compiler *c, int id, Buf *b) {
   p0 = rename_local(p0); p1 = rename_local(p1);
   int body = nt_ref(nt, block, "body");
   int bn = 0; const int *bb = body >= 0 ? nt_arr(nt, body, "body", &bn) : NULL;
-  if (bn < 1 || infer_type(c, bb[bn - 1]) != TY_INT) return 0;
+  /* the comparator answers the <=> sign; a boxed answer -- a poly element, or
+     a user <=> anywhere in the program -- is unwrapped (#3622) */
+  if (bn < 1) return 0;
+  TyKind cmp_ty = infer_type(c, bb[bn - 1]);
+  if (cmp_ty != TY_INT && cmp_ty != TY_POLY) return 0;
+  const char *cmp_o = cmp_ty == TY_POLY ? "sp_poly_to_i(" : "(";
   int trv = ++g_tmp, tr = ++g_tmp, tn = ++g_tmp, ti = ++g_tmp, tj = ++g_tmp, ta = ++g_tmp, tb = ++g_tmp;
   Buf rb; memset(&rb, 0, sizeof rb);
   if (hash_sort) emit_hash_pairs_expr(c, recv, rt, hn, &rb); else emit_expr(c, recv, &rb);
@@ -3818,7 +3823,7 @@ else {
   for (int j = 0; j < bn - 1; j++) emit_stmt(c, bb[j], g_pre, g_indent);
   Buf cb; memset(&cb, 0, sizeof cb); emit_expr(c, bb[bn - 1], &cb);
   emit_indent(g_pre, g_indent);
-  buf_printf(g_pre, "if ((%s) > 0) { sp_%sArray_set(_t%d, _t%d, _t%d); sp_%sArray_set(_t%d, _t%d + 1, _t%d); }\n",
+  buf_printf(g_pre, "if (%s%s) > 0) { sp_%sArray_set(_t%d, _t%d, _t%d); sp_%sArray_set(_t%d, _t%d + 1, _t%d); }\n", cmp_o,
              cb.p ? cb.p : "0", k, tr, tj, tb, k, tr, tj, ta); free(cb.p);
   g_indent--; g_indent = save;
   emit_indent(g_pre, g_indent + 2); buf_puts(g_pre, "}\n");
@@ -3913,7 +3918,12 @@ int emit_minmax_cmp_expr(Compiler *c, int id, Buf *b) {
   p0 = rename_local(p0); p1 = rename_local(p1);
   int body = nt_ref(nt, block, "body");
   int bn = 0; const int *bb = body >= 0 ? nt_arr(nt, body, "body", &bn) : NULL;
-  if (bn < 1 || infer_type(c, bb[bn - 1]) != TY_INT) return 0;
+  /* the comparator answers the <=> sign; a boxed answer -- a poly element, or
+     a user <=> anywhere in the program -- is unwrapped (#3622) */
+  if (bn < 1) return 0;
+  TyKind cmp_ty = infer_type(c, bb[bn - 1]);
+  if (cmp_ty != TY_INT && cmp_ty != TY_POLY) return 0;
+  const char *cmp_o = cmp_ty == TY_POLY ? "sp_poly_to_i(" : "(";
   int trv = ++g_tmp, tn = ++g_tmp, tmin = ++g_tmp, tmax = ++g_tmp, ti = ++g_tmp, te = ++g_tmp, tres = ++g_tmp;
   Buf rb; memset(&rb, 0, sizeof rb); emit_expr(c, recv, &rb);
   emit_indent(g_pre, g_indent); emit_ctype(c, rt, g_pre); buf_printf(g_pre, " _t%d = ", trv); buf_puts(g_pre, rb.p ? rb.p : ""); buf_puts(g_pre, ";\n"); free(rb.p);
@@ -3945,7 +3955,7 @@ int emit_minmax_cmp_expr(Compiler *c, int id, Buf *b) {
     for (int j = 0; j < bn - 1; j++) emit_stmt(c, bb[j], g_pre, g_indent);
     Buf cm; memset(&cm, 0, sizeof cm); emit_expr(c, bb[bn - 1], &cm);
     g_indent--;
-    emit_indent(g_pre, g_indent); buf_printf(g_pre, "if ((%s) < 0) _t%d = _t%d;\n", cm.p ? cm.p : "0", tmin, te); free(cm.p);
+    emit_indent(g_pre, g_indent); buf_printf(g_pre, "if (%s%s) < 0) _t%d = _t%d;\n", cmp_o, cm.p ? cm.p : "0", tmin, te); free(cm.p);
     emit_indent(g_pre, g_indent); buf_puts(g_pre, "}\n");
   }
   if (is_max || is_mm) {
@@ -3955,7 +3965,7 @@ int emit_minmax_cmp_expr(Compiler *c, int id, Buf *b) {
     for (int j = 0; j < bn - 1; j++) emit_stmt(c, bb[j], g_pre, g_indent);
     Buf cx; memset(&cx, 0, sizeof cx); emit_expr(c, bb[bn - 1], &cx);
     g_indent--;
-    emit_indent(g_pre, g_indent); buf_printf(g_pre, "if ((%s) > 0) _t%d = _t%d;\n", cx.p ? cx.p : "0", tmax, te); free(cx.p);
+    emit_indent(g_pre, g_indent); buf_printf(g_pre, "if (%s%s) > 0) _t%d = _t%d;\n", cmp_o, cx.p ? cx.p : "0", tmax, te); free(cx.p);
     emit_indent(g_pre, g_indent); buf_puts(g_pre, "}\n");
   }
   if (lv_p0) lv_p0->type = saved_p0;
