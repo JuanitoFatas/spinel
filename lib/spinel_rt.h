@@ -1053,10 +1053,13 @@ static inline const char *sp_File_read_n(sp_File *f, mrb_int n) {
   char *r = sp_str_alloc((size_t)n);
   size_t got = fread(r, 1, (size_t)n, f->fp);
   if (got == 0) return NULL;
-  if ((mrb_int)got == n) { r[got] = 0; return r; }
+  /* record the byte count read: without it an embedded NUL truncated every
+     later length/slice, which read the bytes back through strlen (#3540) */
+  if ((mrb_int)got == n) { r[got] = 0; sp_str_set_len(r, got); return r; }
   char *s = sp_str_alloc(got);
   memcpy(s, r, got);
   s[got] = 0;
+  sp_str_set_len(s, got);
   return s;
 }
 static inline const char *sp_File_path(sp_File *f) { return f && f->path ? f->path : sp_str_empty; }
@@ -5923,7 +5926,7 @@ static mrb_int sp_poly_count_val(sp_RbVal v, sp_RbVal x) {
   for (mrb_int i = 0; i < n; i++) if (sp_poly_eq(sp_poly_arr_get(v, i), x)) cnt++;
   return cnt;
 }
-static mrb_int sp_poly_length(sp_RbVal v){if(v.tag==SP_TAG_STR)return v.v.s?(mrb_int)strlen(v.v.s):0;if(v.tag==SP_TAG_SYM)return sp_sym_name_fn?(mrb_int)strlen(sp_sym_name_fn((sp_sym)v.v.i)):0;if(v.tag!=SP_TAG_OBJ)return 0;switch(v.cls_id){case SP_BUILTIN_INT_ARRAY:return sp_IntArray_length((sp_IntArray*)v.v.p);case SP_BUILTIN_FLT_ARRAY:return sp_FloatArray_length((sp_FloatArray*)v.v.p);case SP_BUILTIN_STR_ARRAY:return sp_StrArray_length((sp_StrArray*)v.v.p);case SP_BUILTIN_SYM_ARRAY:return sp_IntArray_length((sp_IntArray*)v.v.p);case SP_BUILTIN_POLY_ARRAY:return sp_PolyArray_length((sp_PolyArray*)v.v.p);case SP_BUILTIN_STR_INT_HASH:return sp_StrIntHash_length((sp_StrIntHash*)v.v.p);case SP_BUILTIN_STR_STR_HASH:return sp_StrStrHash_length((sp_StrStrHash*)v.v.p);case SP_BUILTIN_INT_STR_HASH:return sp_IntStrHash_length((sp_IntStrHash*)v.v.p);case SP_BUILTIN_INT_INT_HASH:return sp_IntIntHash_length((sp_IntIntHash*)v.v.p);case SP_BUILTIN_STR_POLY_HASH:return sp_StrPolyHash_length((sp_StrPolyHash*)v.v.p);case SP_BUILTIN_SYM_POLY_HASH:return sp_SymPolyHash_length((sp_SymPolyHash*)v.v.p);case SP_BUILTIN_POLY_POLY_HASH:return sp_PolyPolyHash_length((sp_PolyPolyHash*)v.v.p);
+static mrb_int sp_poly_length(sp_RbVal v){if(v.tag==SP_TAG_STR)return v.v.s?(mrb_int)sp_str_byte_len(v.v.s):0;   /* the header length, so an embedded NUL counts (#3540) */if(v.tag==SP_TAG_SYM)return sp_sym_name_fn?(mrb_int)strlen(sp_sym_name_fn((sp_sym)v.v.i)):0;if(v.tag!=SP_TAG_OBJ)return 0;switch(v.cls_id){case SP_BUILTIN_INT_ARRAY:return sp_IntArray_length((sp_IntArray*)v.v.p);case SP_BUILTIN_FLT_ARRAY:return sp_FloatArray_length((sp_FloatArray*)v.v.p);case SP_BUILTIN_STR_ARRAY:return sp_StrArray_length((sp_StrArray*)v.v.p);case SP_BUILTIN_SYM_ARRAY:return sp_IntArray_length((sp_IntArray*)v.v.p);case SP_BUILTIN_POLY_ARRAY:return sp_PolyArray_length((sp_PolyArray*)v.v.p);case SP_BUILTIN_STR_INT_HASH:return sp_StrIntHash_length((sp_StrIntHash*)v.v.p);case SP_BUILTIN_STR_STR_HASH:return sp_StrStrHash_length((sp_StrStrHash*)v.v.p);case SP_BUILTIN_INT_STR_HASH:return sp_IntStrHash_length((sp_IntStrHash*)v.v.p);case SP_BUILTIN_INT_INT_HASH:return sp_IntIntHash_length((sp_IntIntHash*)v.v.p);case SP_BUILTIN_STR_POLY_HASH:return sp_StrPolyHash_length((sp_StrPolyHash*)v.v.p);case SP_BUILTIN_SYM_POLY_HASH:return sp_SymPolyHash_length((sp_SymPolyHash*)v.v.p);case SP_BUILTIN_POLY_POLY_HASH:return sp_PolyPolyHash_length((sp_PolyPolyHash*)v.v.p);
 /* File#size / File::Stat#size on a boxed handle: the file's byte size via its
    path (a poly-held stat handle's .size read this as container length 0) (#3041) */
 case SP_BUILTIN_IO:{mrb_int sp_file_size(const char*);sp_File*_f=(sp_File*)v.v.p;if(_f&&sp_File_path(_f)[0]&&sp_File_path(_f)[0]!='<')return sp_file_size(sp_File_path(_f));return 0;}
