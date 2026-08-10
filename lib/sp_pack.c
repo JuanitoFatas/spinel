@@ -391,6 +391,20 @@ const char *sp_IntArray_pack(sp_IntArray *arr, const char *fmt) {SP_GC_ROOT(arr)
     if (spec == ' ' || spec == '\t' || spec == '\n') continue;
     int big = 0;
     int64_t count = pk_parse_count_mods(&p, &big);
+    /* X backs the output up; @ pads with NUL to (or truncates to) an absolute
+       length. Both were dropped, so the packed bytes came out shifted (#3553). */
+    if (spec == 'X') {
+      size_t back = count < 0 ? 1 : (size_t)count;
+      if (back > len) sp_raise_cls("ArgumentError", "X outside of string");
+      len -= back;
+      continue;
+    }
+    if (spec == '@') {
+      size_t abs = count < 0 ? len : (size_t)count;
+      if (abs <= len) len = abs;
+      else { char _z = 0; while (len < abs) pk_append(&buf, &len, &cap, &_z, 1); }
+      continue;
+    }
     /* w: BER-compressed integers (base-128, high bit = continuation). */
     if (spec == 'w') {
       int64_t wc = count < 0 ? arr->len - idx : count;
@@ -475,6 +489,7 @@ const char *sp_IntArray_pack(sp_IntArray *arr, const char *fmt) {SP_GC_ROOT(arr)
   char *r = sp_str_alloc(len);
   memcpy(r, buf, len);
   sp_str_set_len(r, len);
+  sp_str_mark_binary(r);   /* pack answers ASCII-8BIT bytes: inspect them \xNN */
   free(buf);
   return r;
 }
@@ -498,6 +513,20 @@ const char *sp_FloatArray_pack(sp_FloatArray *arr, const char *fmt) {
     if (spec == ' ' || spec == '\t' || spec == '\n') continue;
     int big = 0;
     int64_t count = pk_parse_count_mods(&p, &big);
+    /* X backs the output up; @ pads with NUL to (or truncates to) an absolute
+       length. Both were dropped, so the packed bytes came out shifted (#3553). */
+    if (spec == 'X') {
+      size_t back = count < 0 ? 1 : (size_t)count;
+      if (back > len) sp_raise_cls("ArgumentError", "X outside of string");
+      len -= back;
+      continue;
+    }
+    if (spec == '@') {
+      size_t abs = count < 0 ? len : (size_t)count;
+      if (abs <= len) len = abs;
+      else { char _z = 0; while (len < abs) pk_append(&buf, &len, &cap, &_z, 1); }
+      continue;
+    }
     if (count < 0) count = arr->len - idx;
     if (count < 0) count = 0;
     if (pk_is_flt_spec(spec)) {
@@ -566,6 +595,7 @@ const char *sp_FloatArray_pack(sp_FloatArray *arr, const char *fmt) {
   char *r = sp_str_alloc(len);
   memcpy(r, buf, len);
   sp_str_set_len(r, len);
+  sp_str_mark_binary(r);   /* pack answers ASCII-8BIT bytes: inspect them \xNN */
   free(buf);
   return r;
 }
@@ -583,6 +613,20 @@ const char *sp_PolyArray_pack(sp_PolyArray *arr, const char *fmt) {SP_GC_ROOT(ar
     if (spec == ' ' || spec == '\t' || spec == '\n') continue;
     int big = 0;
     int64_t count = pk_parse_count_mods(&p, &big);
+    /* X backs the output up; @ pads with NUL to (or truncates to) an absolute
+       length. Both were dropped, so the packed bytes came out shifted (#3553). */
+    if (spec == 'X') {
+      size_t back = count < 0 ? 1 : (size_t)count;
+      if (back > len) sp_raise_cls("ArgumentError", "X outside of string");
+      len -= back;
+      continue;
+    }
+    if (spec == '@') {
+      size_t abs = count < 0 ? len : (size_t)count;
+      if (abs <= len) len = abs;
+      else { char _z = 0; while (len < abs) pk_append(&buf, &len, &cap, &_z, 1); }
+      continue;
+    }
     if (spec == 'a' || spec == 'A' || spec == 'Z') {
       const char *s = (idx < arr->len) ? pk_poly_to_str(arr->data[idx]) : "";
       idx++;
@@ -695,6 +739,7 @@ const char *sp_PolyArray_pack(sp_PolyArray *arr, const char *fmt) {SP_GC_ROOT(ar
   char *r = sp_str_alloc(len);
   memcpy(r, buf, len);
   sp_str_set_len(r, len);
+  sp_str_mark_binary(r);   /* pack answers ASCII-8BIT bytes: inspect them \xNN */
   free(buf);
   return r;
 }
@@ -716,6 +761,20 @@ const char *sp_StrArray_pack(sp_StrArray *arr, const char *fmt) {
     if (spec == ' ' || spec == '\t' || spec == '\n') continue;
     int big = 0;
     int64_t count = pk_parse_count_mods(&p, &big);
+    /* X backs the output up; @ pads with NUL to (or truncates to) an absolute
+       length. Both were dropped, so the packed bytes came out shifted (#3553). */
+    if (spec == 'X') {
+      size_t back = count < 0 ? 1 : (size_t)count;
+      if (back > len) sp_raise_cls("ArgumentError", "X outside of string");
+      len -= back;
+      continue;
+    }
+    if (spec == '@') {
+      size_t abs = count < 0 ? len : (size_t)count;
+      if (abs <= len) len = abs;
+      else { char _z = 0; while (len < abs) pk_append(&buf, &len, &cap, &_z, 1); }
+      continue;
+    }
     const char *s = (idx < arr->len) ? sp_StrArray_get(arr, idx) : NULL;
     size_t sl = s ? sp_str_byte_len(s) : 0;
     if (!s) s = "";
@@ -740,6 +799,7 @@ const char *sp_StrArray_pack(sp_StrArray *arr, const char *fmt) {
   char *r = sp_str_alloc(len);
   memcpy(r, buf, len);
   sp_str_set_len(r, len);
+  sp_str_mark_binary(r);   /* pack answers ASCII-8BIT bytes: inspect them \xNN */
   free(buf);
   return r;
 }
@@ -838,8 +898,24 @@ sp_PolyArray *sp_str_unpack_off(const char *str, const char *fmt, mrb_int byteof
   while (*p) {
     char spec = *p++;
     if (spec == ' ' || spec == '\t' || spec == '\n') continue;
+    /* `%` prefixes a checksum request, which CRuby 4 no longer accepts (#3553) */
+    if (spec == '%') sp_raise_cls("ArgumentError", "% is not supported");
     int big = 0;
     int64_t count = pk_parse_count_mods(&p, &big);
+    /* X moves the read position back, @ moves it to an absolute offset; both
+       were dropped, so every following directive read from the wrong place */
+    if (spec == 'X') {
+      size_t back = count < 0 ? off : (size_t)count;
+      if (back > off) sp_raise_cls("ArgumentError", "X outside of string");
+      off -= back;
+      continue;
+    }
+    if (spec == '@') {
+      size_t abs = count < 0 ? slen : (size_t)count;
+      if (abs > slen) sp_raise_cls("ArgumentError", "@ outside of string");
+      off = abs;
+      continue;
+    }
     size_t fsize = 0;
     switch (spec) {
       case 'C': case 'c': case 'x': fsize = 1; break;

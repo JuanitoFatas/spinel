@@ -111,7 +111,7 @@ else if(c=='\v'){r[o++]='\\';r[o++]='v';}
 else if(c=='\f'){r[o++]='\\';r[o++]='f';}
 else if(c=='\r'){r[o++]='\\';r[o++]='r';}
 else if(c==0x1b){r[o++]='\\';r[o++]='e';}
-else if(c<0x20||c==0x7f){/* other control bytes render as \uNNNN (UTF-8 default, matching CRuby source-literal strings) */snprintf(r+o,7,"\\u%04X",c);o+=6;}
+else if(c<0x20||c==0x7f){/* other control bytes render as \uNNNN (UTF-8 default, matching CRuby source-literal strings); a BINARY string -- what pack and Random#bytes answer -- renders \xNN as CRuby does for ASCII-8BIT (#3553) */if(sp_str_is_binary(s)){snprintf(r+o,5,"\\x%02X",c);o+=4;}else{snprintf(r+o,7,"\\u%04X",c);o+=6;}}
 else{r[o++]=(char)c;}}r[o++]='"';r[o]=0;sp_str_set_len(r,o);return r;}
 /* A symbol prints without quotes when its name is a plain identifier (an
    @ivar / @@cvar / $gvar, or a bare name optionally ending in ? ! =) or a
