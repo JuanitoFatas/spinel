@@ -10042,6 +10042,36 @@ void analyze_program(Compiler *c) {
       if (e >= 0 && e < c->nt->count) blk_arg_expr[e] = 1;
     }
   }
+  /* For each forwarded `&blk` argument, the user method it is handed to: a
+     forward is only harmless when the CALLEE lets the block go no further.
+     One that stores it (`$p = b`) keeps it past the call, so the forwarder
+     cannot be inlined either -- its captures need cells (#3772). */
+  int *blk_fwd_callee = (int *)malloc(sizeof(int) * (size_t)(c->nt->count > 0 ? c->nt->count : 1));
+  if (blk_fwd_callee) {
+    for (int p = 0; p < c->nt->count; p++) blk_fwd_callee[p] = -1;
+    for (int p = 0; p < c->nt->count; p++) {
+      if (nt_kind(c->nt, p) != NK_CallNode) continue;
+      int fb = nt_ref(c->nt, p, "block");
+      if (fb < 0 || !nt_type(c->nt, fb) || !sp_streq(nt_type(c->nt, fb), "BlockArgumentNode")) continue;
+      int fe = nt_ref(c->nt, fb, "expression");
+      if (fe < 0 || fe >= c->nt->count) continue;
+      const char *fn = nt_str(c->nt, p, "name");
+      if (!fn) continue;
+      int fmi = -1;
+      if (nt_ref(c->nt, p, "receiver") < 0) {
+        fmi = comp_method_index(c, fn);
+        Scope *fs = comp_scope_of(c, p);
+        if (fmi < 0 && fs && fs->class_id >= 0)
+          fmi = fs->is_cmethod ? comp_cmethod_in_chain(c, fs->class_id, fn, NULL)
+                               : comp_method_in_chain(c, fs->class_id, fn, NULL);
+      }
+      blk_fwd_callee[fe] = fmi;
+    }
+  }
+  char *inline_cand = (char *)calloc((size_t)(c->nscopes > 0 ? c->nscopes : 1), 1);
+  int cfwd = 64, nfwd = 0;
+  int *fwd_from = (int *)malloc(sizeof(int) * (size_t)cfwd);
+  int *fwd_to = (int *)malloc(sizeof(int) * (size_t)cfwd);
   for (int mi = 0; mi < c->nscopes; mi++) {
     Scope *m = &c->scopes[mi];
     if (!m->blk_param) continue;
@@ -10084,6 +10114,17 @@ void analyze_program(Compiler *c) {
       /* approved: receiver of a `.call`, or expression of a `&block` arg */
       int ok = (blk_call_recv && blk_call_recv[id]) || (blk_arg_expr && blk_arg_expr[id]);
       if (!ok) escapes = 1;
+      /* ... but a forward into a user method that keeps the block is an
+         escape all the same, one call deeper (#3772) */
+      else if (blk_arg_expr && blk_arg_expr[id] && blk_fwd_callee) {
+        int callee = blk_fwd_callee[id];
+        if (callee >= 0 && callee < c->nscopes) {
+          Scope *cs2 = &c->scopes[callee];
+          if (cs2->blk_param && cs2->blk_param[0] && nfwd < cfwd) {
+            fwd_from[nfwd] = mi; fwd_to[nfwd] = callee; nfwd++;
+          }
+        }
+      }
     }
     free(inproc_m);
     if (!escapes && uses > 0) {
@@ -10100,11 +10141,27 @@ void analyze_program(Compiler *c) {
          (yields=0) function form -- &blk as a materialized sp_Proc * param, the
          self-call forwarding it -- compiles to plain C recursion and already
          works for the explicit-return shape above. */
-      if (!has_ret && !scope_calls_itself(c, mi)) m->yields = 1;
+      if (!has_ret && !scope_calls_itself(c, mi)) inline_cand[mi] = 1;
     }
   }
+  /* A forwarder may only be inlined when every method it hands the block to is
+     inlined too: an un-inlined callee keeps the block as a real proc past the
+     call, so the forwarder's captures must live in cells (#3772). */
+  for (int round = 0; round < 8; round++) {
+    int changed2 = 0;
+    for (int e = 0; e < nfwd; e++)
+      if (inline_cand[fwd_from[e]] && !inline_cand[fwd_to[e]] &&
+          !c->scopes[fwd_to[e]].yields) {
+        inline_cand[fwd_from[e]] = 0; changed2 = 1;
+      }
+    if (!changed2) break;
+  }
+  for (int mi = 0; mi < c->nscopes; mi++)
+    if (inline_cand[mi]) c->scopes[mi].yields = 1;
+  free(inline_cand); free(fwd_from); free(fwd_to);
   free(blk_call_recv);
   free(blk_arg_expr);
+  free(blk_fwd_callee);
 
   /* intern every symbol literal so codegen can emit the id table */
   for (int id = 0; id < c->nt->count; id++) {
