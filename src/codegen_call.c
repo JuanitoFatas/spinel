@@ -13663,9 +13663,33 @@ else { memcpy(dir, sf, n); dir[n] = 0; } }
     int imi = comp_included_method_index(c, name);
     if (imi >= 0) {
       Scope *ms = &c->scopes[imi];
+      /* An INSTANCE method reached this way runs with self bound to main, which
+         carries none of the module's state, so it takes a null receiver -- the
+         emitted function still declares one (#3775). A body that reads an ivar
+         would want main's slots, which no module instance owns: refuse that
+         with a spinel diagnostic rather than emitting a wrong receiver. */
+      const char *lead = "";
+      if (!ms->is_cmethod) {
+        const NodeTable *nt2 = c->nt;
+        for (int nid = 0; nid < nt2->count; nid++) {
+          if (c->nscope[nid] != imi) continue;
+          NodeKind k2 = nt_kind(nt2, nid);
+          if (k2 == NK_InstanceVariableReadNode || k2 == NK_InstanceVariableWriteNode ||
+              k2 == NK_InstanceVariableOperatorWriteNode || k2 == NK_InstanceVariableOrWriteNode) {
+            unsupported(c, id, "top-level include of a module method that uses instance variables");
+            return;
+          }
+        }
+        lead = ms->nparams > 0 ? ", " : "";
+        emit_method_cname(c, ms, b);
+        buf_puts(b, "(NULL");
+        emit_args_filled(c, imi, nt_ref(nt, id, "arguments"), lead, b);
+        buf_puts(b, ")");
+        return;
+      }
       emit_method_cname(c, ms, b);
       buf_puts(b, "(");
-      emit_args_filled(c, imi, nt_ref(nt, id, "arguments"), "", b);
+      emit_args_filled(c, imi, nt_ref(nt, id, "arguments"), lead, b);
       buf_puts(b, ")");
       return;
     }
@@ -17252,6 +17276,23 @@ else { memcpy(dir, sf, n); dir[n] = 0; } }
           char base[256]; int blen = nlen - 1;
           memcpy(base, name, (size_t)blen); base[blen] = '\0';
           if (comp_is_sg_writer(_sgcls, base)) {
+            if (comp_is_sg_civ(_sgcls, base)) {
+              char ivn[256]; snprintf(ivn, sizeof ivn, "@%s", base);
+              int ivi = comp_ivar_index(_sgcls, ivn);
+              TyKind ivt = ivi >= 0 ? _sgcls->ivar_types[ivi] : TY_POLY;
+              buf_printf(b, "(civ_%s_%s = ", cn, iv_c(base));
+              if (argc < 1) buf_puts(b, ivt == TY_POLY ? "sp_box_nil()" : "0");
+              else if (ivt == TY_POLY) emit_boxed(c, argv[0], b);
+              else if (comp_ntype(c, argv[0]) == ivt) emit_expr(c, argv[0], b);
+              else {
+                Buf ab2; memset(&ab2, 0, sizeof ab2);
+                emit_boxed(c, argv[0], &ab2);
+                emit_unbox_text(c, ivt, ab2.p ? ab2.p : "sp_box_nil()", b);
+                free(ab2.p);
+              }
+              buf_puts(b, ")");
+              return;
+            }
             buf_printf(b, "(sg_%s_%s = ", cn, base);
             if (argc >= 1) {
               TyKind _at = comp_ntype(c, argv[0]);
@@ -17263,9 +17304,13 @@ else { memcpy(dir, sf, n); dir[n] = 0; } }
           }
         }
         else {
-          /* getter */
-          if (comp_is_sg_reader(_sgcls, name)) {
-            buf_printf(b, "sg_%s_%s", cn, name);
+          /* getter -- through the alias table, so `class << self; alias_method
+             :shown?, :shown; end` reaches the reader it renames (#3776) */
+          const char *_sgnm = comp_resolve_alias(c, ci, name);
+          if (!_sgnm) _sgnm = name;
+          if (comp_is_sg_reader(_sgcls, _sgnm)) {
+            if (comp_is_sg_civ(_sgcls, _sgnm)) buf_printf(b, "civ_%s_%s", cn, iv_c(_sgnm));
+            else buf_printf(b, "sg_%s_%s", cn, _sgnm);
             return;
           }
         }
@@ -17296,9 +17341,12 @@ else { memcpy(dir, sf, n); dir[n] = 0; } }
           return;
         }
       }
-      else if (comp_is_sg_reader(_sgcls, name)) {
-        buf_printf(b, "sg_%s_%s", _sgcn, name);
-        return;
+      else {
+        const char *_sgnm2 = comp_resolve_alias(c, _sg_cid, name);
+        if (comp_is_sg_reader(_sgcls, _sgnm2 ? _sgnm2 : name)) {
+          buf_printf(b, "sg_%s_%s", _sgcn, _sgnm2 ? _sgnm2 : name);
+          return;
+        }
       }
     }
   }
