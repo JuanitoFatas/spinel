@@ -369,6 +369,100 @@ const char *sp_crypto_hmac_sha256_hex(const char *key, const char *msg) {SP_GC_R
     return sp_crypto_hmac_hex_buf;
 }
 
+/* HMAC-SHA1 (RFC 2104). SHA-1 is here for the same reason
+ * sp_crypto_websocket_accept is: an existing protocol names it, and
+ * reproducing that protocol is not a new security design. Rails signs
+ * its cookies with HMAC-SHA1 unless the app overrides
+ * config.action_dispatch.cookies_digest, so a spinel program that reads
+ * one has no choice of digest. Same streaming structure as the SHA-256
+ * sibling above -- ipad/opad are compressed straight in rather than
+ * concatenated with the message. */
+static void sp_crypto_hmac_sha1(const uint8_t *key, size_t klen,
+                                const uint8_t *msg, size_t mlen,
+                                uint8_t out[20]) {
+    uint8_t kpad[64], ipad[64], opad[64], inner[20];
+    size_t i;
+    if (klen > 64) {
+        sp_crypto_sha1(key, klen, kpad);
+        for (i = 20; i < 64; i++) kpad[i] = 0;
+    }
+else {
+        for (i = 0; i < klen; i++) kpad[i] = key[i];
+        for (i = klen; i < 64; i++) kpad[i] = 0;
+    }
+    for (i = 0; i < 64; i++) {
+        ipad[i] = kpad[i] ^ 0x36;
+        opad[i] = kpad[i] ^ 0x5c;
+    }
+    /* inner = SHA1(ipad || msg) */
+    {
+        uint32_t H[5] = {
+            0x67452301,0xEFCDAB89,0x98BADCFE,0x10325476,0xC3D2E1F0
+        };
+        sp_crypto_sha1_block(H, ipad);
+        uint8_t buf[64];
+        size_t full = mlen & ~((size_t)63);
+        for (i = 0; i < full; i += 64) sp_crypto_sha1_block(H, msg + i);
+        size_t rem = mlen - full;
+        for (i = 0; i < rem; i++) buf[i] = msg[full + i];
+        buf[rem] = 0x80;
+        if (rem >= 56) {
+            for (i = rem + 1; i < 64; i++) buf[i] = 0;
+            sp_crypto_sha1_block(H, buf);
+            for (i = 0; i < 56; i++) buf[i] = 0;
+        }
+else {
+            for (i = rem + 1; i < 56; i++) buf[i] = 0;
+        }
+        uint64_t bits = (uint64_t)(64 + mlen) * 8;
+        for (i = 0; i < 8; i++) buf[56 + i] = (uint8_t)(bits >> (56 - 8*i));
+        sp_crypto_sha1_block(H, buf);
+        for (i = 0; i < 5; i++) {
+            inner[i*4]   = (uint8_t)(H[i] >> 24);
+            inner[i*4+1] = (uint8_t)(H[i] >> 16);
+            inner[i*4+2] = (uint8_t)(H[i] >> 8);
+            inner[i*4+3] = (uint8_t)(H[i]);
+        }
+    }
+    /* outer = SHA1(opad || inner) */
+    {
+        uint32_t H[5] = {
+            0x67452301,0xEFCDAB89,0x98BADCFE,0x10325476,0xC3D2E1F0
+        };
+        sp_crypto_sha1_block(H, opad);
+        uint8_t buf[64];
+        for (i = 0; i < 20; i++) buf[i] = inner[i];
+        buf[20] = 0x80;
+        for (i = 21; i < 56; i++) buf[i] = 0;
+        uint64_t bits = (uint64_t)(64 + 20) * 8;
+        for (i = 0; i < 8; i++) buf[56 + i] = (uint8_t)(bits >> (56 - 8*i));
+        sp_crypto_sha1_block(H, buf);
+        for (i = 0; i < 5; i++) {
+            out[i*4]   = (uint8_t)(H[i] >> 24);
+            out[i*4+1] = (uint8_t)(H[i] >> 16);
+            out[i*4+2] = (uint8_t)(H[i] >> 8);
+            out[i*4+3] = (uint8_t)(H[i]);
+        }
+    }
+}
+
+static char sp_crypto_hmac_sha1_hex_buf[41];
+
+const char *sp_crypto_hmac_sha1_hex(const char *key, const char *msg) {SP_GC_ROOT_STR(key);SP_GC_ROOT_STR(msg);
+    uint8_t out[20];
+    sp_crypto_hmac_sha1((const uint8_t *)key, sp_str_byte_len(key),
+                        (const uint8_t *)msg, sp_str_byte_len(msg),
+                        out);
+    static const char H[] = "0123456789abcdef";
+    int i;
+    for (i = 0; i < 20; i++) {
+        sp_crypto_hmac_sha1_hex_buf[i*2]   = H[(out[i] >> 4) & 0xf];
+        sp_crypto_hmac_sha1_hex_buf[i*2+1] = H[out[i] & 0xf];
+    }
+    sp_crypto_hmac_sha1_hex_buf[40] = '\0';
+    return sp_crypto_hmac_sha1_hex_buf;
+}
+
 /* ---------- Base64URL (RFC 4648 §5) ---------- */
 
 static const char SPC_B64U[64] =
@@ -496,13 +590,41 @@ else if (rem == 3) {
 }
 
 /* ---------- PBKDF2-HMAC-SHA256 (RFC 8018) ----------
- * dkLen fixed at 32 bytes (one HMAC-SHA256 output block).
+ * dkLen up to 64 bytes (two HMAC-SHA256 output blocks).
  */
 
-static char sp_crypto_pbkdf2_b64url_buf[44];
+/* 64 derived bytes -> 86 unpadded b64url chars + NUL. */
+static char sp_crypto_pbkdf2_b64url_buf[88];
 
-const char *sp_crypto_pbkdf2_sha256_b64url(const char *password, const char *salt, int iters) {SP_GC_ROOT_STR(password);
+/* Unpadded base64url of `n` bytes into `out` (NUL-terminated). */
+static void sp_crypto_b64url_bytes(const uint8_t *src, int n, char *out) {
+    int i, j = 0;
+    for (i = 0; i + 3 <= n; i += 3) {
+        uint32_t v = ((uint32_t)src[i] << 16)
+                   | ((uint32_t)src[i+1] << 8)
+                   | (uint32_t)src[i+2];
+        out[j++] = SPC_B64U[(v >> 18) & 0x3f];
+        out[j++] = SPC_B64U[(v >> 12) & 0x3f];
+        out[j++] = SPC_B64U[(v >> 6)  & 0x3f];
+        out[j++] = SPC_B64U[v & 0x3f];
+    }
+    if (i < n) {
+        uint32_t v = ((uint32_t)src[i] << 16)
+                   | (i + 1 < n ? ((uint32_t)src[i+1] << 8) : 0);
+        out[j++] = SPC_B64U[(v >> 18) & 0x3f];
+        out[j++] = SPC_B64U[(v >> 12) & 0x3f];
+        if (i + 1 < n) {
+            out[j++] = SPC_B64U[(v >> 6) & 0x3f];
+        }
+    }
+    out[j] = '\0';
+}
+
+const char *sp_crypto_pbkdf2_sha256_b64url_len(const char *password, const char *salt,
+                                               int iters, int dklen) {SP_GC_ROOT_STR(password);
     if (iters < 1) iters = 1;
+    if (dklen < 1) dklen = 32;
+    if (dklen > 64) dklen = 64;
     size_t plen = sp_str_byte_len(password);
     size_t slen = sp_str_byte_len(salt);
     uint8_t salted[256];
@@ -511,40 +633,35 @@ const char *sp_crypto_pbkdf2_sha256_b64url(const char *password, const char *sal
         return sp_crypto_pbkdf2_b64url_buf;
     }
     memcpy(salted, salt, slen);
-    salted[slen+0] = 0;
-    salted[slen+1] = 0;
-    salted[slen+2] = 0;
-    salted[slen+3] = 1;  /* INT(1) -- single dkLen=32 block */
-    uint8_t U[32], T[32];
-    sp_crypto_hmac_sha256((const uint8_t *)password, plen, salted, slen + 4, U);
-    memcpy(T, U, 32);
-    int it;
-    for (it = 1; it < iters; it++) {
-        sp_crypto_hmac_sha256((const uint8_t *)password, plen, U, 32, U);
-        int b;
-        for (b = 0; b < 32; b++) T[b] ^= U[b];
-    }
-    int i, j = 0;
-    for (i = 0; i + 3 <= 32; i += 3) {
-        uint32_t v = ((uint32_t)T[i] << 16)
-                   | ((uint32_t)T[i+1] << 8)
-                   | (uint32_t)T[i+2];
-        sp_crypto_pbkdf2_b64url_buf[j++] = SPC_B64U[(v >> 18) & 0x3f];
-        sp_crypto_pbkdf2_b64url_buf[j++] = SPC_B64U[(v >> 12) & 0x3f];
-        sp_crypto_pbkdf2_b64url_buf[j++] = SPC_B64U[(v >> 6)  & 0x3f];
-        sp_crypto_pbkdf2_b64url_buf[j++] = SPC_B64U[v & 0x3f];
-    }
-    if (i < 32) {
-        uint32_t v = ((uint32_t)T[i] << 16)
-                   | (i + 1 < 32 ? ((uint32_t)T[i+1] << 8) : 0);
-        sp_crypto_pbkdf2_b64url_buf[j++] = SPC_B64U[(v >> 18) & 0x3f];
-        sp_crypto_pbkdf2_b64url_buf[j++] = SPC_B64U[(v >> 12) & 0x3f];
-        if (i + 1 < 32) {
-            sp_crypto_pbkdf2_b64url_buf[j++] = SPC_B64U[(v >> 6) & 0x3f];
+    /* PBKDF2 (RFC 8018 sec 5.2): DK = T(1) || T(2) || ... , each block
+       T(i) = F(password, salt, iters, i) and 32 bytes wide for SHA-256.
+       Blocks are independent -- only the INT(i) suffix on the salt
+       changes -- so one loop covers any dkLen. */
+    uint8_t dk[64];
+    int block, done = 0;
+    for (block = 1; done < dklen; block++) {
+        uint8_t U[32], T[32];
+        int b, it, take;
+        salted[slen+0] = (uint8_t)((block >> 24) & 0xff);
+        salted[slen+1] = (uint8_t)((block >> 16) & 0xff);
+        salted[slen+2] = (uint8_t)((block >> 8) & 0xff);
+        salted[slen+3] = (uint8_t)(block & 0xff);
+        sp_crypto_hmac_sha256((const uint8_t *)password, plen, salted, slen + 4, U);
+        memcpy(T, U, 32);
+        for (it = 1; it < iters; it++) {
+            sp_crypto_hmac_sha256((const uint8_t *)password, plen, U, 32, U);
+            for (b = 0; b < 32; b++) T[b] ^= U[b];
         }
+        take = (dklen - done < 32) ? (dklen - done) : 32;
+        memcpy(dk + done, T, take);
+        done += take;
     }
-    sp_crypto_pbkdf2_b64url_buf[j] = '\0';
+    sp_crypto_b64url_bytes(dk, dklen, sp_crypto_pbkdf2_b64url_buf);
     return sp_crypto_pbkdf2_b64url_buf;
+}
+
+const char *sp_crypto_pbkdf2_sha256_b64url(const char *password, const char *salt, int iters) {
+    return sp_crypto_pbkdf2_sha256_b64url_len(password, salt, iters, 32);
 }
 
 /* ---------- CSPRNG ---------- */

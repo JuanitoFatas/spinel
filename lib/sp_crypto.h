@@ -67,6 +67,15 @@ const char *sp_crypto_hmac_sha256_hex(const char *key, const char *msg);
 /* HMAC-SHA256(key, msg) -> 43-char unpadded base64url. */
 const char *sp_crypto_hmac_sha256_b64url(const char *key, const char *msg);
 
+/* HMAC-SHA1(key, msg) -> 40-char lowercase hex. Here for the same
+ * reason sp_crypto_websocket_accept is -- an existing protocol names
+ * SHA-1 and reproducing it is not a new security design. Rails signs
+ * cookies with HMAC-SHA1 unless the app sets
+ * config.action_dispatch.cookies_digest, so a program reading one has
+ * no choice of digest. Do NOT reach for this when you do have a
+ * choice; sp_crypto_hmac_sha256_hex is the right primitive. */
+const char *sp_crypto_hmac_sha1_hex(const char *key, const char *msg);
+
 /* Base64URL (RFC 4648 §5, no padding) encode/decode. Max input
  * length ~12 KiB (encode) / ~16 KiB (decode), bump the buffer in
  * sp_crypto.c if your callers need more. */
@@ -74,8 +83,16 @@ const char *sp_crypto_b64url_encode(const char *src);
 const char *sp_crypto_b64url_decode(const char *src);
 
 /* PBKDF2-HMAC-SHA256(password, salt, iters) -> 43-char unpadded
- * base64url (32 bytes derived; dkLen > 32 not supported). */
+ * base64url (32 bytes derived -- the one-block case). */
 const char *sp_crypto_pbkdf2_sha256_b64url(const char *password, const char *salt, int iters);
+
+/* Same, with an explicit derived length in BYTES (clamped to [1, 64]);
+ * 64 bytes -> 86 unpadded b64url chars. Rails derives its signed-cookie
+ * and signed-id keys at dkLen 64 (ActiveSupport::KeyGenerator#
+ * generate_key's default key_size), so a spinel program that reads or
+ * mints one needs the two-block form. */
+const char *sp_crypto_pbkdf2_sha256_b64url_len(const char *password, const char *salt,
+                                               int iters, int dklen);
 
 /* CSPRNG: nbytes random bytes (clamped to [1, 64]) as unpadded
  * base64url. Uses arc4random_buf on BSD/macOS; on Linux/POSIX

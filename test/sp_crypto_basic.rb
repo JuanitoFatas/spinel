@@ -15,9 +15,11 @@
 module Crypto
   ffi_func :sp_crypto_hmac_sha256_hex,      [:str, :str],       :str
   ffi_func :sp_crypto_hmac_sha256_b64url,   [:str, :str],       :str
+  ffi_func :sp_crypto_hmac_sha1_hex,        [:str, :str],       :str
   ffi_func :sp_crypto_b64url_encode,        [:str],             :str
   ffi_func :sp_crypto_b64url_decode,        [:str],             :str
   ffi_func :sp_crypto_pbkdf2_sha256_b64url, [:str, :str, :int], :str
+  ffi_func :sp_crypto_pbkdf2_sha256_b64url_len, [:str, :str, :int, :int], :str
   ffi_func :sp_crypto_random_b64url,        [:int],             :str
 end
 
@@ -25,6 +27,8 @@ end
 key = "Jefe"
 msg = "what do ya want for nothing?"
 puts Crypto.sp_crypto_hmac_sha256_hex(key, msg)
+# RFC 2202 test case 2 -- the same key and message, HMAC-SHA1.
+puts Crypto.sp_crypto_hmac_sha1_hex(key, msg)
 
 # Base64URL round-trip on a 5-byte input (length 5 % 3 == 2 so the
 # tail emits 3 chars and no padding). Should print "hello" twice.
@@ -35,6 +39,14 @@ puts Crypto.sp_crypto_b64url_decode(enc)
 # PBKDF2 with iters=1 is HMAC(key, salt||0x00000001). The expected
 # 43-char b64url is a stable property of the salt+password+1 input.
 puts Crypto.sp_crypto_pbkdf2_sha256_b64url("password", "salt", 1)
+
+# The two-block form: dkLen 64 is what Rails' KeyGenerator derives for
+# a signed cookie. T(1) is the same 32 bytes as above, so the 64-byte
+# value starts with the same digest and continues into T(2).
+puts Crypto.sp_crypto_pbkdf2_sha256_b64url_len("password", "salt", 1, 64)
+# Clamps: 0 falls back to 32 bytes, over-64 saturates at 64.
+puts Crypto.sp_crypto_pbkdf2_sha256_b64url_len("password", "salt", 1, 0).length
+puts Crypto.sp_crypto_pbkdf2_sha256_b64url_len("password", "salt", 1, 999).length
 
 # Random: two calls of the same size must differ (probability of
 # collision on 16 bytes is 2^-128). Print the length and the
