@@ -7348,6 +7348,8 @@ sp_File *sp_io_stat_handle(sp_File *f);   /* IO#stat: by path, or fstat(2) for a
 sp_File *sp_file_lstat_handle(const char *path);
 mrb_bool sp_stat_nofollow(sp_File *f);
 mrb_int sp_stat_size(sp_File *f);
+mrb_int sp_stat_field(sp_File *f, mrb_int which);   /* uid/gid/nlink/dev/ino/blksize/blocks/rdev */
+mrb_int sp_stat_pred(sp_File *f, mrb_int kind);     /* pipe?/zero?/readable?/... /size? */
 mrb_int sp_stat_mode(sp_File *f);
 const char *sp_stat_ftype(sp_File *f);
 mrb_int sp_file_stat_mode(const char *path);

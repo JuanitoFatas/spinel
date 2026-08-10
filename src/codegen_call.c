@@ -11692,6 +11692,24 @@ void emit_call(Compiler *c, int id, Buf *b) {
       buf_printf(b, "sp_stat_mode(%s)", r);
       free(rb.p); return;
     }
+    /* the rest of File::Stat's numeric fields and mode predicates (#3765) */
+    if (argc == 0) {
+      static const char *const sfield[] = { "uid", "gid", "nlink", "dev", "ino",
+                                            "blksize", "blocks", "rdev", NULL };
+      for (int k = 0; sfield[k]; k++)
+        if (sp_streq(name, sfield[k])) {
+          buf_printf(b, "sp_stat_field(%s, %d)", r, k);
+          free(rb.p); return;
+        }
+      static const char *const spred[] = { "pipe?", "zero?", "readable?", "writable?",
+                                           "executable?", "blockdev?", "chardev?",
+                                           "size?", NULL };
+      for (int k = 0; spred[k]; k++)
+        if (sp_streq(name, spred[k])) {
+          buf_printf(b, "sp_stat_pred(%s, %d)", r, k);
+          free(rb.p); return;
+        }
+    }
     if (argc == 0 && (sp_streq(name, "file?") || sp_streq(name, "directory?") ||
                       sp_streq(name, "symlink?") || sp_streq(name, "owned?") ||
                       sp_streq(name, "grpowned?") || sp_streq(name, "setuid?") ||

@@ -1618,6 +1618,52 @@ sp_File *sp_io_stat_handle(sp_File *f) {SP_GC_ROOT(f);
   h->lineno = 0;
   return h;
 }
+/* One stat(2) field by index, so File::Stat's numeric accessors need one
+   runtime entry rather than a dozen. 0=uid 1=gid 2=nlink 3=dev 4=ino
+   5=blksize 6=blocks 7=rdev. SP_INT_NIL when the stat itself fails. */
+mrb_int sp_stat_field(sp_File *f, mrb_int which) {SP_GC_ROOT(f);
+  struct stat st;
+  int r;
+  if (sp_stat_pathless(f)) r = fstat(fileno(f->fp), &st);
+  else {
+    const char *p = (f && f->path) ? f->path : "";
+    r = sp_stat_nofollow(f) ? lstat(p, &st) : stat(p, &st);
+  }
+  if (r != 0) return SP_INT_NIL;
+  switch (which) {
+    case 0: return (mrb_int)st.st_uid;
+    case 1: return (mrb_int)st.st_gid;
+    case 2: return (mrb_int)st.st_nlink;
+    case 3: return (mrb_int)st.st_dev;
+    case 4: return (mrb_int)st.st_ino;
+    case 5: return (mrb_int)st.st_blksize;
+    case 6: return (mrb_int)st.st_blocks;
+    default: return (mrb_int)st.st_rdev;
+  }
+}
+/* The mode-derived predicates of File::Stat that no path helper covers. Kinds:
+   0=pipe? 1=zero? 2=readable? 3=writable? 4=executable? 5=blockdev?
+   6=chardev? 7=size? (non-zero size, else nil). */
+mrb_int sp_stat_pred(sp_File *f, mrb_int kind) {SP_GC_ROOT(f);
+  struct stat st;
+  int r;
+  if (sp_stat_pathless(f)) r = fstat(fileno(f->fp), &st);
+  else {
+    const char *p = (f && f->path) ? f->path : "";
+    r = sp_stat_nofollow(f) ? lstat(p, &st) : stat(p, &st);
+  }
+  if (r != 0) return kind == 7 ? SP_INT_NIL : 0;
+  switch (kind) {
+    case 0: return S_ISFIFO(st.st_mode) ? 1 : 0;
+    case 1: return st.st_size == 0 ? 1 : 0;
+    case 2: return (st.st_mode & (S_IRUSR | S_IRGRP | S_IROTH)) ? 1 : 0;
+    case 3: return (st.st_mode & (S_IWUSR | S_IWGRP | S_IWOTH)) ? 1 : 0;
+    case 4: return (st.st_mode & (S_IXUSR | S_IXGRP | S_IXOTH)) ? 1 : 0;
+    case 5: return S_ISBLK(st.st_mode) ? 1 : 0;
+    case 6: return S_ISCHR(st.st_mode) ? 1 : 0;
+    default: return st.st_size == 0 ? SP_INT_NIL : (mrb_int)st.st_size;
+  }
+}
 mrb_int sp_stat_size(sp_File *f) {SP_GC_ROOT(f);
   struct stat st;
   if (sp_stat_pathless(f))

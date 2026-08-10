@@ -3208,6 +3208,18 @@ else {
         sp_streq(name, "sysseek") || sp_streq(name, "size") || sp_streq(name, "chmod") ||
         sp_streq(name, "mode"))
       return TY_INT;
+    /* File::Stat's numeric fields and its mode predicates (#3765). size? is an
+       int-or-nil (the sentinel), so it stays TY_INT like the other counts. */
+    if (argc == 0 &&
+        (sp_streq(name, "uid") || sp_streq(name, "gid") || sp_streq(name, "nlink") ||
+         sp_streq(name, "dev") || sp_streq(name, "ino") || sp_streq(name, "blksize") ||
+         sp_streq(name, "blocks") || sp_streq(name, "rdev") || sp_streq(name, "size?")))
+      return TY_INT;
+    if (argc == 0 &&
+        (sp_streq(name, "pipe?") || sp_streq(name, "zero?") || sp_streq(name, "readable?") ||
+         sp_streq(name, "writable?") || sp_streq(name, "executable?") ||
+         sp_streq(name, "blockdev?") || sp_streq(name, "chardev?")))
+      return TY_BOOL;
     if (sp_streq(name, "getc") || sp_streq(name, "readchar") || sp_streq(name, "readpartial") ||
         sp_streq(name, "sysread") || sp_streq(name, "ftype")) return TY_STRING;
     if (sp_streq(name, "inspect") && argc == 0) return TY_STRING;
