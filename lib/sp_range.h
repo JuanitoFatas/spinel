@@ -69,6 +69,7 @@ const char *sp_range_inspect(sp_Range r);
 /* Float/String Range value-type ops -- 0 optcarrot uses, bodies in
    lib/sp_cold.c (see sp_types.h for sp_FloatRange/sp_StrRange). */
 sp_FloatRange sp_frange_new(mrb_float f, mrb_float l, mrb_int e);
+sp_FloatRange sp_frange_new_o(mrb_float f, mrb_float l, mrb_int e, mrb_int om);
 mrb_bool sp_frange_cover(sp_FloatRange r, mrb_float x);
 mrb_bool sp_frange_eq(sp_FloatRange a, sp_FloatRange b);
 const char *sp_frange_inspect(sp_FloatRange r);

@@ -802,11 +802,16 @@ void emit_expr(Compiler *c, int id, Buf *b) {
     /* (1.0..3.0): the distinct float range, endpoints kept as mrb_float.
        A missing bound uses -/+HUGE_VAL as the beginless/endless sentinel. */
     if (comp_ntype(c, id) == TY_FLOAT_RANGE) {
-      buf_puts(b, "sp_frange_new(");
+      /* A bound written as absent and one written as Float::INFINITY are the
+         same value; record which it was so #inspect can tell them apart. */
+      int om = (left < 0 ? 1 : 0) | (right < 0 ? 2 : 0);
+      buf_printf(b, "sp_frange_new%s(", om ? "_o" : "");
       if (left >= 0) emit_float_expr(c, left, b); else buf_puts(b, "(-HUGE_VAL)");
       buf_puts(b, ", ");
       if (right >= 0) emit_float_expr(c, right, b); else buf_puts(b, "HUGE_VAL");
-      buf_printf(b, ", %d)", excl);
+      buf_printf(b, ", %d", excl);
+      if (om) buf_printf(b, ", %d", om);
+      buf_puts(b, ")");
       return;
     }
     /* ("a".."e"): the distinct string range, endpoints kept as strings (#3064) */

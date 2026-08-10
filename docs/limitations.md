@@ -300,6 +300,43 @@ rng = (lo..hi)      # compile error: a Range of Ver objects cannot be built
 rng = (0..2**70)    # compile error: a Bignum bound does not fit mrb_int
 ```
 
+#### A `Float::INFINITY` bound reports the other bound as a `Float`
+
+An integer `Range` is a value with `mrb_int` bounds, which have no
+representation for an infinity: the value can only record "unbounded". Where
+that loses information CRuby keeps, Spinel resolves it as follows.
+
+A range whose **begin** is infinite (`-Float::INFINITY..5`) takes the `Float`
+representation, so `#begin` answers `-Infinity` as CRuby does. Its finite end
+then reports as a `Float`:
+
+```ruby
+(-Float::INFINITY..5).begin    # => -Infinity   (as CRuby)
+(-Float::INFINITY..5).cover?(0) # => true       (as CRuby)
+(-Float::INFINITY..5).end      # => 5.0         (CRuby: 5)
+(-Float::INFINITY..5).to_s     # => "-Infinity..5.0"  (CRuby: "-Infinity..5")
+```
+
+A range whose **end** is infinite (`1..Float::INFINITY`) keeps the integer
+representation -- it is the canonical lazy source, and its integer enumeration
+is what a fused `.lazy` pipeline walks. `#end`, `#size` and `#to_s` read the
+bound off the literal, so they answer as CRuby does; a range of that shape held
+in a variable and asked for `#end` answers `nil` (the value records only that
+it is unbounded):
+
+```ruby
+(1..Float::INFINITY).end     # => Infinity      (as CRuby)
+(1..Float::INFINITY).size    # => Infinity      (as CRuby)
+(1..Float::INFINITY).to_s    # => "1..Infinity" (as CRuby)
+r = (1..Float::INFINITY); r.end   # => nil      (CRuby: Infinity)
+```
+
+A finite mixed range (`1..5.0`) keeps the integer representation, where its
+`#to_a`, `#sum` and `#cover?` are all right and its iteration is the integer
+one CRuby performs; only `#end` reports `5` where CRuby reports `5.0`. A
+one-sided float range (`(..5.0)`, `(1.0..)`) likewise keeps it, so `#to_s`
+renders the bound as an integer (`"..5"`).
+
 A `String`-bounded range (`("a".."e")`) is its own value type, so it keeps its
 class, `#to_s` and `#inspect` whether it is used inline or held in a variable.
 Its endpoint and membership methods (`begin`/`end`/`min`/`max`/`cover?`/`===`)

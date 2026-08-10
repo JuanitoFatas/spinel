@@ -8945,6 +8945,23 @@ int emit_range_call(Compiler *c, int id, Buf *b) {
       buf_puts(b, "; sp_frange_step(_t"); buf_printf(b, "%d, ", tr);
       emit_float_expr(c, argv[0], b); buf_puts(b, "); })"); return 1;
     }
+    /* Range#size counts the integers a range enumerates, so it answers only
+       for an Integer begin -- and Infinity when the end is unbounded, which is
+       exactly the shape an infinite bound puts on the float representation
+       (#3670). A Float begin has no enumeration, as CRuby's TypeError says. */
+    if ((sp_streq(name, "size") || sp_streq(name, "count")) && argc == 0 &&
+        nt_ref(nt, id, "block") < 0) {
+      int rq2 = unwrap_parens(c, recv);
+      int lo2 = (rq2 >= 0 && nt_type(nt, rq2) && sp_streq(nt_type(nt, rq2), "RangeNode"))
+                  ? nt_ref(nt, rq2, "left") : -1;
+      if (lo2 >= 0 && comp_ntype(c, lo2) == TY_INT) {
+        buf_printf(b, "({ sp_FloatRange _t%d = ", tr); emit_expr(c, recv, b);
+        buf_printf(b, "; _t%d.last == HUGE_VAL ? HUGE_VAL"
+                      " : (mrb_float)((mrb_int)_t%d.last - (mrb_int)_t%d.first"
+                      " + (_t%d.excl ? 0 : 1)); })", tr, tr, tr, tr);
+        return 1;
+      }
+    }
     if (sp_streq(name, "class") && argc == 0) {
       buf_puts(b, "((void)("); emit_expr(c, recv, b);
       buf_puts(b, "), ((sp_Class){0, SPL(\"Range\")}))"); return 1;
@@ -9197,6 +9214,18 @@ int emit_range_call(Compiler *c, int id, Buf *b) {
       }
       /* string endpoints without a static rendering: leave to other arms
          (the int-backed sp_Range cannot render them) */
+      /* `x..Float::INFINITY`: the int range records only "unbounded", so the
+         rendering comes from the literal that named the bound (#3670) */
+      int hi_is_inf = hi_q >= 0 && nt_kind(nt, hi_q) == NK_ConstantPathNode &&
+                      nt_str(nt, hi_q, "name") && sp_streq(nt_str(nt, hi_q, "name"), "INFINITY");
+      if (!str_ends && lo_q >= 0 && hi_is_inf) {
+        int tq2 = ++g_tmp;
+        buf_printf(b, "({ sp_Range _t%d = ", tq2);
+        emit_expr(c, recv, b);
+        buf_printf(b, "; sp_sprintf(\"%%lld%%sInfinity\", (long long)_t%d.first,"
+                      " _t%d.excl ? \"...\" : \"..\"); })", tq2, tq2);
+        return 1;
+      }
       if (!str_ends) {
         int tq = ++g_tmp;
         buf_printf(b, "({ sp_Range _t%d = ", tq);
@@ -9334,6 +9363,11 @@ int emit_range_call(Compiler *c, int id, Buf *b) {
       }
       else if (sp_streq(name, "max"))  /* largest enumerated element (direction-aware) */
         buf_printf(b, "sp_range_max_v(_t%d)", t);
+      else if (sp_streq(name, "end") && argc == 0 && comp_ntype(c, id) == TY_FLOAT) {
+        /* `x..Float::INFINITY`: the literal named the bound the int range can
+           only record as "unbounded" -- answer the Float itself (#3670) */
+        buf_puts(b, "HUGE_VAL"); (void)t;
+      }
       else if (sp_streq(name, "end") && ({ int _rr = unwrap_parens(c, recv);
                nt_type(nt, _rr) && sp_streq(nt_type(nt, _rr), "RangeNode") &&
                nt_ref(nt, _rr, "right") < 0; })) {

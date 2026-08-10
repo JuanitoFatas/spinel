@@ -20,3 +20,11 @@ nil
 5
 [1, 2, 3, 4, 5]
 true
+-Infinity
+Infinity
+Infinity
+true
+-Infinity
+Infinity
+1.0
+"1.0..Infinity"

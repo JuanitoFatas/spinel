@@ -2514,7 +2514,11 @@ mrb_bool sp_argf_eof(void) { return !sp_argf_ensure(); }
 /* Float range (1.0..3.0). Endpoints stay mrb_float, so cover?/include?/begin/end
    are exact. -HUGE_VAL / +HUGE_VAL are the beginless / endless sentinels. */
 sp_FloatRange sp_frange_new(mrb_float f, mrb_float l, mrb_int e) {
-  sp_FloatRange r; r.first = f; r.last = l; r.excl = e; return r;
+  sp_FloatRange r; r.first = f; r.last = l; r.excl = e; r.omitted = 0; return r;
+}
+/* Same, recording which bound was written as absent rather than infinite. */
+sp_FloatRange sp_frange_new_o(mrb_float f, mrb_float l, mrb_int e, mrb_int om) {
+  sp_FloatRange r; r.first = f; r.last = l; r.excl = e; r.omitted = om; return r;
 }
 mrb_bool sp_frange_cover(sp_FloatRange r, mrb_float x) {
   if (r.first != -HUGE_VAL && x < r.first) return 0;
@@ -2525,8 +2529,9 @@ mrb_bool sp_frange_eq(sp_FloatRange a, sp_FloatRange b) {
   return a.first == b.first && a.last == b.last && a.excl == b.excl;
 }
 const char *sp_frange_inspect(sp_FloatRange r) {
-  const char *lo = r.first == -HUGE_VAL ? "" : sp_float_to_s(r.first);
-  const char *hi = r.last == HUGE_VAL ? "" : sp_float_to_s(r.last);
+  /* an OMITTED bound prints as nothing; an explicit infinity prints itself */
+  const char *lo = (r.omitted & SP_FRANGE_NO_BEGIN) ? "" : sp_float_to_s(r.first);
+  const char *hi = (r.omitted & SP_FRANGE_NO_END) ? "" : sp_float_to_s(r.last);
   return sp_sprintf("%s%s%s", lo, r.excl ? "..." : "..", hi);
 }
 sp_RbVal sp_box_frange(sp_FloatRange v) {

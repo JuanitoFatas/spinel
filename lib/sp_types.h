@@ -150,7 +150,14 @@ typedef struct{mrb_int first;mrb_int last;mrb_int excl;mrb_int step;}sp_Range;
    end are exact (an int-backed sp_Range truncated them). Iteration is a TypeError
    in Ruby (only #step traverses a Float range), so no step/iteration state here.
    beginless/endless ends use -HUGE_VAL / +HUGE_VAL. */
-typedef struct{mrb_float first;mrb_float last;mrb_int excl;}sp_FloatRange;
+/* `omitted` records which bound was WRITTEN as absent (`(..5.0)`, `(1.0..)`),
+   as opposed to an explicit infinity (`1..Float::INFINITY`): both are +/-HUGE_VAL
+   in the value, and only #inspect / #to_s tell them apart -- CRuby prints
+   "1.0.." for the first and "1.0..Infinity" for the second (#3670).
+   bit 1 = begin omitted, bit 2 = end omitted. */
+typedef struct{mrb_float first;mrb_float last;mrb_int excl;mrb_int omitted;}sp_FloatRange;
+#define SP_FRANGE_NO_BEGIN 1
+#define SP_FRANGE_NO_END   2
 /* A String range ("a".."e"): endpoints kept as GC-managed strings so #begin,
    #end, #to_s and #inspect answer as Ruby does. Every traversal (each/to_a/
    include?/...) materializes the element array through

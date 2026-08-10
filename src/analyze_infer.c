@@ -539,6 +539,18 @@ static int infer_end_is_float_inf(Compiler *c, int right) {
   return parnm && sp_streq(parnm, "Float");
 }
 
+/* A range endpoint that is an infinite Float: the `Float::INFINITY` constant
+   or its negation. Such a bound has no mrb_int value at all (#3670). */
+static int infer_endpoint_is_infinite(Compiler *c, int ep) {
+  const NodeTable *nt = c->nt;
+  if (ep < 0) return 0;
+  if (infer_end_is_float_inf(c, ep)) return 1;
+  if (nt_kind(nt, ep) == NK_CallNode && nt_str(nt, ep, "name") &&
+      sp_streq(nt_str(nt, ep, "name"), "-@"))
+    return infer_end_is_float_inf(c, nt_ref(nt, ep, "receiver"));
+  return 0;
+}
+
 /* True when `id` is the receiver of an enclosing call that carries a block:
    the chain emitters own that shape (arr.map.with_index { }), so the inner
    blockless call must keep its legacy typing. */
@@ -904,6 +916,21 @@ TyKind infer_call(Compiler *c, int id) {
     return TY_UNKNOWN;
   }
   if (rt == TY_FLOAT_RANGE) {
+    /* #size counts the integers the range enumerates: a Float answer, since an
+       unbounded end makes it Infinity (#3670). Only an Integer begin has an
+       enumeration at all; the emitter checks that and leaves the rest to the
+       TypeError CRuby raises. */
+    if ((sp_streq(name, "size") || sp_streq(name, "count")) && argc == 0 &&
+        nt_ref(nt, id, "block") < 0) {
+      int rq3 = nt_ref(nt, id, "receiver");
+      while (rq3 >= 0 && nt_kind(nt, rq3) == NK_ParenthesesNode) {
+        int pb3 = nt_ref(nt, rq3, "body"); int pn3 = 0;
+        const int *pd3 = pb3 >= 0 ? nt_arr(nt, pb3, "body", &pn3) : NULL;
+        rq3 = (pn3 == 1 && pd3) ? pd3[0] : -1;
+      }
+      int lo3 = (rq3 >= 0 && nt_kind(nt, rq3) == NK_RangeNode) ? nt_ref(nt, rq3, "left") : -1;
+      if (lo3 >= 0 && infer_type(c, lo3) == TY_INT) return TY_FLOAT;
+    }
     if (sp_streq(name, "begin") || sp_streq(name, "end") ||
         sp_streq(name, "first") || sp_streq(name, "last") ||
         sp_streq(name, "min") || sp_streq(name, "max"))
@@ -5234,6 +5261,20 @@ else {
     }
     if (sp_streq(name, "to_a") || sp_streq(name, "entries")) return TY_INT_ARRAY;  /* (#2414) */
     if (sp_streq(name, "minmax")) return TY_POLY_ARRAY;   /* [nil, nil] when empty (#2412) */
+    /* `x..Float::INFINITY`: the int range records only "unbounded", but the
+       literal says what the bound was, so #end answers the Float (#3670) */
+    if (sp_streq(name, "end") && argc == 0) {
+      int _ri = recv;
+      while (_ri >= 0 && nt_kind(nt, _ri) == NK_ParenthesesNode) {
+        int _bd = nt_ref(nt, _ri, "body"); int _bn = 0;
+        const int *_bb = _bd >= 0 ? nt_arr(nt, _bd, "body", &_bn) : NULL;
+        _ri = _bn == 1 ? _bb[0] : -1;
+      }
+      if (_ri >= 0 && nt_kind(nt, _ri) == NK_RangeNode &&
+          infer_endpoint_is_infinite(c, nt_ref(nt, _ri, "right")) &&
+          nt_ref(nt, _ri, "right") >= 0)
+        return TY_FLOAT;
+    }
     /* an ENDLESS literal range: #end is nil (#2413) */
     if (sp_streq(name, "end") && ({ int _rn = recv;
         while (_rn >= 0 && nt_type(nt, _rn) && sp_streq(nt_type(nt, _rn), "ParenthesesNode")) {
@@ -6531,10 +6572,24 @@ TyKind infer_uncached(Compiler *c, int id) {
     TyKind lt = lo >= 0 ? infer_type(c, lo) : TY_UNKNOWN;
     TyKind ht = hi >= 0 ? infer_type(c, hi) : TY_UNKNOWN;
     /* (1.0..3.0): a BOUNDED range with both endpoints float lowers to the
-       distinct sp_FloatRange type. A mixed int/float range (1..3.0) and any
-       beginless/endless float range stay on the ordinary int TY_RANGE path,
-       which already serves their (narrow, mostly-raising) method surface. */
+       distinct sp_FloatRange type. A finite mixed int/float range (1..3.0)
+       stays on the ordinary int TY_RANGE path, which serves it well (its
+       #to_a, #sum and #cover? are all right there and its iteration is the
+       integer one CRuby performs).
+       An INFINITE bound is the exception: mrb_int has no value for it, so the
+       int range can only record "unbounded" and #begin / #end then answer nil
+       where CRuby answers +/-Infinity. Such a range takes the float
+       representation, which holds the infinity -- at the cost of reporting the
+       other (finite) bound as a Float (see docs/limitations.md). #3670 */
     if (lo >= 0 && hi >= 0 && lt == TY_FLOAT && ht == TY_FLOAT)
+      return TY_FLOAT_RANGE;
+    /* Only when the BEGIN is the infinite one: `(2..Float::INFINITY)` is the
+       canonical lazy source and its integer enumeration is what the fused
+       pipeline walks, so that shape keeps the int representation and reports
+       its end through the literal arm instead. */
+    if (lo >= 0 && hi >= 0 &&
+        (lt == TY_FLOAT || lt == TY_INT) && (ht == TY_FLOAT || ht == TY_INT) &&
+        infer_endpoint_is_infinite(c, lo))
       return TY_FLOAT_RANGE;
     /* ("a".."e"): both endpoints strings -> the distinct sp_StrRange, so a
        range held in a variable stays a Range rather than materializing into
