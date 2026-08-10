@@ -2048,6 +2048,13 @@ TyKind infer_call(Compiler *c, int id) {
   if (recv >= 0 && argc == 0 && infer_type(c, recv) == TY_POLY &&
       sp_streq(name, "owner") && !an_user_defines_or_reads(c, name))
     return TY_POLY;
+  /* proc << / >> a Proc read out of a container: a composed Proc (#3655) */
+  if (recv >= 0 && argc == 1 && (sp_streq(name, "<<") || sp_streq(name, ">>"))) {
+    TyKind crt = infer_type(c, recv), cat = infer_type(c, argv[0]);
+    if ((crt == TY_PROC && (cat == TY_PROC || cat == TY_POLY)) ||
+        (cat == TY_PROC && crt == TY_POLY && sp_streq(name, ">>")))
+      return TY_PROC;
+  }
   /* Proc#to_proc is self (#3687) */
   if (recv >= 0 && rt == TY_PROC && argc == 0 && sp_streq(name, "to_proc")) return TY_PROC;
   /* Method/UnboundMethod reflection (#3247) */

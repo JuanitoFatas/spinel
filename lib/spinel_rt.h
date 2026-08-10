@@ -6606,6 +6606,13 @@ SP_NORETURN SP_COLD void sp_raise_cls(const char *cls, const char *msg) {
   fprintf(stderr, "%s (%s)\n", (msg && *msg) ? msg : cls, cls); exit(1); }
 static void sp_raise(const char *msg) { sp_raise_cls("RuntimeError", msg); }
 
+/* Unwrap a boxed Proc -- one read out of a container (#3655). */
+static sp_Proc *sp_poly_to_proc(sp_RbVal v) {
+  if (v.tag == SP_TAG_OBJ && v.cls_id == SP_BUILTIN_PROC) return (sp_Proc *)v.v.p;
+  sp_raise_cls("TypeError", "callable object is expected");
+  return NULL;
+}
+
 /* A Method read back out of a container has only its sp_BoundMethod: #owner
    comes from the compile-time rendering it carries ("#<Method: Owner#name>"),
    and #receiver from the object's own class id (#3692). */
