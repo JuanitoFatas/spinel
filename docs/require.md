@@ -46,6 +46,7 @@ These are provided by Spinel but, like CRuby, only after their `require`:
 | `require "stringio"` | `StringIO` | uninitialized constant |
 | `require "strscan"` | `StringScanner` | uninitialized constant |
 | `require "json"` | `JSON.generate`, `JSON.dump` | uninitialized constant |
+| `require "csv"` | `CSV` (with `CSV::Row` / `CSV::Table`) | uninitialized constant |
 | `require "monitor"` | `Monitor` (`#synchronize`) | `NameError` (uninitialized constant) |
 | `require "socket"` | `TCPServer`, `TCPSocket`, `UDPSocket`, `UNIXServer`, `UNIXSocket`, `Socket`, `Addrinfo` | `NameError` (uninitialized constant) |
 | `require "pathname"` | `Pathname` | uninitialized constant |
@@ -57,6 +58,12 @@ gate **off**, because CRuby itself only defines `TCPServer` / `TCPSocket` after
 the require, and growing the constants unconditionally would diverge from
 CRuby's `NameError`. What the two classes actually cover is in
 [limitations.md](limitations.md#sockets).
+
+A library loads itself and nothing else. CRuby's stdlib files often require
+others as an implementation detail (`csv` pulls in `stringio` there, so a
+program that requires csv can name `StringIO` without saying so), and Spinel's
+version of the same library has no reason to make the same internal choice.
+Require what the program actually uses.
 
 Two shapes, which set what the failure looks like:
 
@@ -103,8 +110,9 @@ A few `require`s name a capability Spinel already provides as core, and are
 ### Pre-installed packages (the carved-out stdlib)
 
 Some stdlib ships with Spinel as Ruby source and is spliced when required —
-`set`, `forwardable`, `optparse`, `erb` (plus the `stringio`/`strscan`
-marker shims for their C-backed features). Each lives as an ordinary
+`set`, `forwardable`, `optparse`, `erb`, `csv`, `pathname`, `digest`, `base64`
+(plus the `stringio`/`strscan`/`json` marker shims for their C-backed
+features). Each lives as an ordinary
 spinelgem under `packages/<name>/` beside the compiler (`packages/set/set.rb` with
 its `spin.toml`); `lib/` holds only the C runtime. The `require` pulls in
 the package's file like any other package — pre-installed just means no fetch.

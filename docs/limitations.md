@@ -43,7 +43,7 @@ registry, or stack reification — none of which exist in a flat compiled binary
 | User-defined `#hash` / `#eql?` for hash *keys* | not dispatched (identity probe) | the hash machinery can't call back into a user method per key |
 | A method that **uses its block** (`yield` or `block.call`) **and recurses into itself** (`def rec(n, &b); ...; rec(n-1, &b); yield n; end`) | compile error (loud, was a hang / undefined-symbol) | a block-using method is inlined at each call site (there is no standalone function that takes the block), so a self-call inlines its own body unboundedly — the runtime base case is invisible at compile time. Recursion *through a yielded block* (`with_state { with_state { } }`, finite source nesting) does work |
 | `Monitor#class` | reports `Thread::Mutex` | a Monitor IS a mutex here, with reentrancy switched on per object, and the class name for a `TY_MUTEX` value is decided at compile time from the type rather than read off the object. `#synchronize` (including reentrant use), `#try_enter` and mutual exclusion across threads all behave as CRuby's do; only the name differs. `Monitor#new_cond` / the `MonitorMixin` module are not modelled. |
-| `require` of stdlib `.rb` that leans on metaprogramming / C extensions (e.g. `json/pure`, the `require "time"` parsing extensions like `Time.parse` / `Time.strptime`) | unsupported | such stdlib code runs off the AOT path. A `require` is resolved at parse time by splicing a bundled `lib/X.rb`; the libraries that ship this way — `set`, `forwardable`, `optparse`, `erb`, `pathname`, `stringio`, `strscan` — do work. The built-in `Time` class (`Time.now` / `at` / `local` / `utc`, plus `strftime` / `zone`) works *without* any `require`; only the `require "time"` string-parsing additions are missing. |
+| `require` of stdlib `.rb` that leans on metaprogramming / C extensions (e.g. `json/pure`, the `require "time"` parsing extensions like `Time.parse` / `Time.strptime`) | unsupported | such stdlib code runs off the AOT path. A `require` is resolved at parse time by splicing a bundled `lib/X.rb`; the libraries that ship this way — `set`, `forwardable`, `optparse`, `erb`, `csv`, `pathname`, `stringio`, `strscan` — do work. The built-in `Time` class (`Time.now` / `at` / `local` / `utc`, plus `strftime` / `zone`) works *without* any `require`; only the `require "time"` string-parsing additions are missing. |
 
 The require-gated stdlib Spinel *does* provide (`StringIO`, `IO#winsize`,
 `Time#iso8601`, ...) requires its `require`, matching CRuby; an unsatisfiable
@@ -171,6 +171,14 @@ still works.
   `Hash.ruby2_keywords_hash` / `Hash.ruby2_keywords_hash?` are the same shim
   from the hash side (marking / reading the flag) and are rejected the same
   way.
+- **A bundled library carries only what it uses.** A `require` loads that
+  library and nothing else. CRuby's own stdlib files often pull in others as an
+  implementation detail -- `require "csv"` loads `stringio` there, so a program
+  that requires csv can name `StringIO` without requiring it -- and Spinel's
+  version of the same library has no reason to make the same internal choice.
+  A program must `require` what it actually uses; the transitive requires of
+  CRuby's implementation are not part of a library's interface. (Spinel's
+  bundled libraries are listed in [require.md](require.md).)
 - **`slice_before` / `slice_after` with a `Proc` pattern** — rejected at
   compile time (a stored-proc `===` call per element); use the block form.
   Range, Class, Regexp, and value patterns are supported.
