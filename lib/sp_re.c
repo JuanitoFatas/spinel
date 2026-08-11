@@ -21,8 +21,13 @@ SP_TLS const char *sp_re_captures[10] = {0};   /* per-worker (SP_TLS); see sp_re
 SP_TLS int sp_re_caps[64];
 SP_TLS const char *sp_re_last_str = NULL;
 SP_TLS const char *sp_re_match_str = NULL;
+/* $` and $' are built only when read: a gsub over a large subject matches
+   thousands of times, and copying the whole prefix and suffix at every match
+   made the scan quadratic. sp_re_pp_span holds the last match's span in
+   sp_re_last_str so the accessors below can build them on demand. */
 SP_TLS const char *sp_re_match_pre = NULL;
 SP_TLS const char *sp_re_match_post = NULL;
+static SP_TLS int sp_re_pp_span[2] = {-1, -1};
 const char *sp_re_startup_err = NULL;
 
 /* Stop-the-world support: push this worker's live match-register strings onto its
@@ -111,24 +116,42 @@ void sp_re_set_captures(const char *str, int *caps, int ncaps) {SP_GC_ROOT_STR(s
   sp_re_match_str = NULL;
   sp_re_match_pre = NULL;
   sp_re_match_post = NULL;
+  sp_re_pp_span[0] = sp_re_pp_span[1] = -1;
   if (ncaps >= 1 && caps[0] >= 0 && caps[1] >= 0) {
-    int slen = (int)strlen(str);
     int mlen = caps[1] - caps[0];
     char *m = sp_str_alloc_raw(mlen + 1);
     memcpy(m, str + caps[0], mlen); m[mlen] = 0;
+    sp_str_set_len(m, (size_t)mlen);
     sp_re_match_str = m;
-    char *pre = sp_str_alloc_raw(caps[0] + 1);
-    memcpy(pre, str, caps[0]); pre[caps[0]] = 0;
-    sp_re_match_pre = pre;
-    int post_len = slen - caps[1];
-    char *post = sp_str_alloc_raw(post_len + 1);
-    memcpy(post, str + caps[1], post_len); post[post_len] = 0;
-    sp_re_match_post = post;
+    sp_re_pp_span[0] = caps[0]; sp_re_pp_span[1] = caps[1];
   }
+}
+
+/* $` -- everything before the last match. */
+const char *sp_re_pre_match(void) {
+  if (sp_re_match_pre || sp_re_pp_span[0] < 0 || !sp_re_last_str) return sp_re_match_pre;
+  int n = sp_re_pp_span[0];
+  char *pre = sp_str_alloc_raw(n + 1);
+  memcpy(pre, sp_re_last_str, n); pre[n] = 0;
+  sp_str_set_len(pre, (size_t)n);
+  sp_re_match_pre = pre;
+  return pre;
+}
+
+/* $\' -- everything after the last match. */
+const char *sp_re_post_match(void) {
+  if (sp_re_match_post || sp_re_pp_span[1] < 0 || !sp_re_last_str) return sp_re_match_post;
+  int n = (int)sp_str_byte_len(sp_re_last_str) - sp_re_pp_span[1];
+  if (n < 0) n = 0;
+  char *post = sp_str_alloc_raw(n + 1);
+  memcpy(post, sp_re_last_str + sp_re_pp_span[1], n); post[n] = 0;
+  sp_str_set_len(post, (size_t)n);
+  sp_re_match_post = post;
+  return post;
 }
 mrb_int sp_re_match(mrb_regexp_pattern *pat, const char *str) {SP_GC_ROOT_STR(str);
   if (!str) return -1;
-  int64_t slen = (int64_t)strlen(str);
+  int64_t slen = (int64_t)sp_str_byte_len(str);
   int ncaps = 32;
   int n = re_exec(pat, str, slen, 0, sp_re_caps, ncaps, 0);
   if (n > 0) { sp_re_last_pat = pat; sp_re_set_captures(str, sp_re_caps, n/2); return sp_re_caps[0]; }
@@ -139,6 +162,7 @@ mrb_int sp_re_match(mrb_regexp_pattern *pat, const char *str) {SP_GC_ROOT_STR(st
   sp_re_match_str = NULL;
   sp_re_match_pre = NULL;
   sp_re_match_post = NULL;
+  sp_re_pp_span[0] = sp_re_pp_span[1] = -1;
   return -1;
 }
 /* Like sp_re_match, but search from byte offset `pos` in the FULL string so a
@@ -149,7 +173,7 @@ mrb_int sp_re_match(mrb_regexp_pattern *pat, const char *str) {SP_GC_ROOT_STR(st
    are unchanged); sp_re_caps stay full-string-relative for capture extraction. */
 mrb_int sp_re_match_at(mrb_regexp_pattern *pat, const char *str, mrb_int pos) {SP_GC_ROOT_STR(str);
   if (!str) return -1;
-  int64_t slen = (int64_t)strlen(str);
+  int64_t slen = (int64_t)sp_str_byte_len(str);
   int ncaps = 32;
   int n = re_exec(pat, str, slen, pos, sp_re_caps, ncaps, 0);
   if (n > 0) { sp_re_last_pat = pat; sp_re_set_captures(str, sp_re_caps, n/2); return sp_re_caps[0] - pos; }
@@ -158,6 +182,7 @@ mrb_int sp_re_match_at(mrb_regexp_pattern *pat, const char *str, mrb_int pos) {S
   sp_re_match_str = NULL;
   sp_re_match_pre = NULL;
   sp_re_match_post = NULL;
+  sp_re_pp_span[0] = sp_re_pp_span[1] = -1;
   return -1;
 }
 /* MatchData#inspect: CRuby's #<MatchData "full" 1:"g1" ...> (named groups
@@ -186,7 +211,7 @@ const char *sp_MatchData_inspect(sp_MatchData *m) {SP_GC_ROOT(m);
 const char *sp_str_splice_re(mrb_regexp_pattern *pat, const char *s, const char *val) {SP_GC_ROOT_STR(s);SP_GC_ROOT_STR(val);
   if (!s) s = "";
   if (!val) val = "";
-  int64_t slen = (int64_t)strlen(s);
+  int64_t slen = (int64_t)sp_str_byte_len(s);
   int caps[2];
   int n = re_exec(pat, s, slen, 0, caps, 2, 0);
   if (n <= 0) { sp_raise_cls("IndexError", "regexp not matched"); return s; }
@@ -197,7 +222,7 @@ const char *sp_str_splice_re(mrb_regexp_pattern *pat, const char *s, const char 
    registers set (cleared on no-match, like sp_re_match). */
 const char *sp_str_slice_re(mrb_regexp_pattern *pat, const char *s, const char **rest_out) {SP_GC_ROOT_STR(s);
   if (!s) s = &("\xff" "")[1];  /* header-safe empty: s flows to sp_str_byteslice -> sp_str_byte_len(s[-1]) */
-  int64_t slen = (int64_t)strlen(s);
+  int64_t slen = (int64_t)sp_str_byte_len(s);
   int n = re_exec(pat, s, slen, 0, sp_re_caps, 32, 0);
   if (n <= 0) {
     for (int i = 0; i < 10; i++) sp_re_captures[i] = NULL;
@@ -216,7 +241,7 @@ const char *sp_str_slice_re(mrb_regexp_pattern *pat, const char *s, const char *
   return m;
 }
 mrb_int sp_re_rindex(mrb_regexp_pattern *pat, const char *str) {SP_GC_ROOT_STR(str);
-  int64_t slen = (int64_t)strlen(str);
+  int64_t slen = (int64_t)sp_str_byte_len(str);
   int caps[2];
   int64_t pos = 0;
   mrb_int last = -1;
@@ -234,7 +259,7 @@ mrb_int sp_re_rindex(mrb_regexp_pattern *pat, const char *str) {SP_GC_ROOT_STR(s
 }
 sp_StrArray *sp_re_rpartition(mrb_regexp_pattern *pat, const char *str) {
   SP_GC_ROOT_STR(str);
-  int64_t slen = (int64_t)strlen(str);
+  int64_t slen = (int64_t)sp_str_byte_len(str);
   int caps[2];
   int64_t pos = 0;
   mrb_int ms = -1, me = -1;
@@ -269,13 +294,13 @@ sp_StrArray *sp_re_rpartition(mrb_regexp_pattern *pat, const char *str) {
 }
 mrb_bool sp_re_match_p(mrb_regexp_pattern *pat, const char *str) {
   if (!str) return FALSE;
-  int64_t slen = (int64_t)strlen(str);
+  int64_t slen = (int64_t)sp_str_byte_len(str);
   int caps[2];
   return re_exec(pat, str, slen, 0, caps, 2, 0) > 0;
 }
 mrb_bool sp_re_match_p_at(mrb_regexp_pattern *pat, const char *str, mrb_int pos) {
   if (!str) return FALSE;
-  int64_t slen = (int64_t)strlen(str);
+  int64_t slen = (int64_t)sp_str_byte_len(str);
   if (pos < 0) pos += slen;
   if (pos < 0 || pos > slen) return FALSE;
   int caps[2];
@@ -403,7 +428,7 @@ else if (d == '\\') {
   *out_io = out; *olen_io = olen; *cap_io = cap;
 }
 const char *sp_re_gsub(mrb_regexp_pattern *pat, const char *str, const char *rep) {SP_GC_ROOT_STR(str);SP_GC_ROOT_STR(rep);
-  int64_t slen = (int64_t)strlen(str); size_t rlen = strlen(rep);
+  int64_t slen = (int64_t)sp_str_byte_len(str); size_t rlen = strlen(rep);
   size_t cap = (slen * 2) + (rlen * 4) + 64;
  /* Build into a plain malloc scratch: the buffer is grown with realloc
     here and inside sp_re_expand_rep, which is only valid on a real
@@ -448,7 +473,7 @@ else {
   return res;
 }
 const char *sp_re_sub(mrb_regexp_pattern *pat, const char *str, const char *rep) {SP_GC_ROOT_STR(str);SP_GC_ROOT_STR(rep);
-  int64_t slen = (int64_t)strlen(str); size_t rlen = strlen(rep);
+  int64_t slen = (int64_t)sp_str_byte_len(str); size_t rlen = strlen(rep);
   int caps[64];
   int n = re_exec(pat, str, slen, 0, caps, 64, 0);
   if (n <= 0 || caps[0] < 0) return str;
@@ -472,7 +497,7 @@ sp_StrArray *sp_re_scan(mrb_regexp_pattern *pat, const char *str) {
   SP_GC_ROOT_STR(str);
   sp_StrArray *arr = sp_StrArray_new();
   SP_GC_ROOT(arr);
-  int64_t slen = (int64_t)strlen(str); int64_t pos = 0; int caps[64];
+  int64_t slen = (int64_t)sp_str_byte_len(str); int64_t pos = 0; int caps[64];
   while (pos <= slen) {
     int n = re_exec(pat, str, slen, pos, caps, 64, 0);
     if (n <= 0 || caps[0] < 0) break;
@@ -503,7 +528,7 @@ static void split_push_slice(sp_StrArray *arr, const char *str, int64_t from, in
 
 sp_StrArray *sp_re_split_limit(mrb_regexp_pattern *pat, const char *str, mrb_int limit) {SP_GC_ROOT_STR(str);
   sp_StrArray *arr = sp_StrArray_new();
-  int64_t slen = (int64_t)strlen(str);
+  int64_t slen = (int64_t)sp_str_byte_len(str);
 
   /* limit == 1: the whole string is the single field; "" splits to []. */
   if (limit == 1) {
@@ -618,7 +643,7 @@ mrb_int sp_re_rindex_from_opt(mrb_regexp_pattern *pat, const char *str, mrb_int 
   if (start < 0) return SP_INT_NIL;
   if (start > cl) start = cl;
   size_t limit = sp_utf8_byte_offset(str, start);
-  int64_t slen = (int64_t)strlen(str);
+  int64_t slen = (int64_t)sp_str_byte_len(str);
   int caps[2];
   int64_t pos = 0; mrb_int last = -1;
   while (pos <= slen) {
@@ -710,7 +735,7 @@ sp_PolyArray *sp_re_scan_poly(mrb_regexp_pattern *pat, const char *str) {
   SP_GC_ROOT_STR(str);
   sp_PolyArray *arr = sp_PolyArray_new();
   SP_GC_ROOT(arr);
-  int64_t slen = (int64_t)strlen(str);
+  int64_t slen = (int64_t)sp_str_byte_len(str);
   int64_t pos = 0;
   int ncaps = 64;
   int caps[64];
@@ -749,7 +774,7 @@ else {
 }
 sp_PolyArray *sp_re_match_data(mrb_regexp_pattern *pat, const char *str) {
   SP_GC_ROOT_STR(str);
-  int64_t slen = (int64_t)strlen(str);
+  int64_t slen = (int64_t)sp_str_byte_len(str);
   int ncaps = 64;
   int n = re_exec(pat, str, slen, 0, sp_re_caps, ncaps, 0);
   if (n <= 0 || sp_re_caps[0] < 0) {
@@ -783,7 +808,7 @@ else {
 void sp_MatchData_scan(void *p) { sp_MatchData *m = (sp_MatchData *)p; if (m->source) sp_mark_string(m->source); }
 sp_MatchData *sp_re_matchdata(mrb_regexp_pattern *pat, const char *str) {SP_GC_ROOT_STR(str);
   if (!str) return NULL;   /* Regexp#match(nil) is nil, not a walk off NULL (#3633) */
-  int64_t slen = (int64_t)strlen(str);
+  int64_t slen = (int64_t)sp_str_byte_len(str);
   int caps[64];
   int n = re_exec(pat, str, slen, 0, caps, 64, 0);
   if (n <= 0 || caps[0] < 0) {
@@ -808,7 +833,7 @@ sp_MatchData *sp_re_matchdata_at(mrb_regexp_pattern *pat, const char *str, mrb_i
   if (cpos < 0) cpos += cl;
   if (cpos < 0 || cpos > cl) return NULL;
   size_t boff = sp_utf8_byte_offset(str, cpos);
-  int64_t slen = (int64_t)strlen(str);
+  int64_t slen = (int64_t)sp_str_byte_len(str);
   int caps[64];
   int n = re_exec(pat, str, slen, (mrb_int)boff, caps, 64, 0);
   if (n <= 0 || caps[0] < 0) {

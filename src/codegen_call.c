@@ -330,7 +330,7 @@ static int emit_strchar_cmp(Compiler *c, int recv, int arg, int eq, Buf *b) {
   const char *ity = nt_type(c->nt, si);
   if (ity && sp_streq(ity, "IntegerNode") && nt_int(c->nt, si, "value", 0) < 0) return 0;
   buf_puts(b, "((unsigned char)(");
-  emit_expr(c, sr, b);
+  if (!emit_strbuf_read_ref(c, sr, b)) emit_expr(c, sr, b);
   buf_puts(b, ")[(mrb_int)(");
   emit_expr(c, si, b);
   buf_printf(b, ")] %s %u)", eq ? "==" : "!=", (unsigned)ch);
@@ -9085,8 +9085,8 @@ void emit_call(Compiler *c, int id, Buf *b) {
     /* $~'s MatchData face over the match registers: pre/post_match and to_s
        read the same backing the $` / $' / $& back-references use. */
     if (recv_is_tilde && argc == 0) {
-      if (sp_streq(name, "pre_match"))  { buf_puts(b, "sp_re_match_pre");  return; }
-      if (sp_streq(name, "post_match")) { buf_puts(b, "sp_re_match_post"); return; }
+      if (sp_streq(name, "pre_match"))  { buf_puts(b, "sp_re_pre_match()");  return; }
+      if (sp_streq(name, "post_match")) { buf_puts(b, "sp_re_post_match()"); return; }
       if (sp_streq(name, "to_s"))       { buf_puts(b, "sp_re_match_str");  return; }
     }
   }
