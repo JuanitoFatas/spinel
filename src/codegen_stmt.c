@@ -7394,7 +7394,7 @@ else {
             buf_puts(b, ");\n");
           }
           emit_indent(b, indent);
-          buf_printf(b, "lv_%s = _t%d;\n", rename_local(rest_var), tr0);
+          emit_local_ref(c, id, rest_var, b); buf_printf(b, " = _t%d;\n", tr0);
           if (ln == 0 && rn == 0) return;
         }
         for (int i = 0; i < ln; i++) {
@@ -7402,7 +7402,7 @@ else {
           if (!lty || !sp_streq(lty, "LocalVariableTargetNode")) continue;
           emit_indent(b, indent);
           const char *lvn = nt_str(nt, lefts[i], "name");
-          buf_printf(b, "lv_%s = ", rename_local(lvn));
+          emit_local_ref(c, lefts[i], lvn, b); buf_puts(b, " = ");
           LocalVar *llv = lvn ? scope_local(comp_scope_of(c, id), lvn) : NULL;
           int lpoly = llv && llv->type == TY_POLY;
           if (i == 0) { if (lpoly && st != TY_POLY) emit_boxed(c, value, b); else emit_expr(c, value, b); }
@@ -7430,7 +7430,7 @@ else {
           LocalVar *rlv = rvn ? scope_local(comp_scope_of(c, id), rvn) : NULL;
           int rpoly = rlv && rlv->type == TY_POLY;
           emit_indent(b, indent);
-          buf_printf(b, "lv_%s = ", rename_local(rvn));
+          emit_local_ref(c, rights[j], rvn, b); buf_puts(b, " = ");
           if (j == 0 && ln == 0) {
             if (rpoly && st != TY_POLY) emit_boxed(c, value, b); else emit_expr(c, value, b);
           }
@@ -7572,7 +7572,7 @@ else {
           emit_indent(b, indent);
           buf_printf(b, "SP_GC_ROOT(_t%d);\n", tr);
           emit_indent(b, indent);
-          buf_printf(b, "lv_%s = _t%d;\n", rename_local(rest_var), tr);
+          emit_local_ref(c, id, rest_var, b); buf_printf(b, " = _t%d;\n", tr);
         }
         for (int j = 0; j < rn; j++) {
           const char *lty = nt_type(nt, rights[j]);
@@ -7591,7 +7591,7 @@ else {
             buf_printf(b, "mrb_int _t%d = (_t%d->len - %dLL + %dLL) > %dLL ? (_t%d->len - %dLL + %dLL) : %dLL;\n",
                        tix, tarr, rn, j, ln + j, tarr, rn, j, ln + j);
             emit_indent(b, indent);
-            buf_printf(b, "lv_%s = ", rename_local(rlvn));
+            emit_local_ref(c, rights[j], rlvn, b); buf_puts(b, " = ");
             char rgx[96]; snprintf(rgx, sizeof rgx, "sp_%sArray_get(_t%d, _t%d)", k, tarr, tix);
             if (rllv && rllv->type == TY_POLY && !sp_streq(k, "Poly")) {
               Buf bx; memset(&bx, 0, sizeof bx);
@@ -7669,7 +7669,8 @@ else {
           else if (sp_streq(lty, "LocalVariableTargetNode")) {
             const char *lnm = nt_str(nt, lefts[i], "name");
             emit_indent(b, indent);
-            buf_printf(b, "lv_%s = sp_poly_massign_get(_t%d, %dLL);\n", rename_local(lnm), tarr, i);
+            emit_local_ref(c, lefts[i], lnm, b);
+            buf_printf(b, " = sp_poly_massign_get(_t%d, %dLL);\n", tarr, i);
           }
           else if (sp_streq(lty, "InstanceVariableTargetNode") &&
                    rt_scope_p && rt_scope_p->class_id >= 0) {
@@ -7707,7 +7708,7 @@ else {
             buf_printf(b, "for (mrb_int _t%d = %dLL; _t%d < _t%d - %dLL; _t%d++) sp_PolyArray_push(_t%d, sp_poly_arr_get(_t%d, _t%d));\n",
                        ti, ln, ti, tn, rn, ti, tr, tarr, ti);
             emit_indent(b, indent);
-            buf_printf(b, "lv_%s = _t%d;\n", rename_local(rest_var), tr);
+            emit_local_ref(c, id, rest_var, b); buf_printf(b, " = _t%d;\n", tr);
           }
           for (int j = 0; j < rn; j++) {
             const char *lty = nt_type(nt, rights[j]);
@@ -7722,8 +7723,9 @@ else {
             buf_printf(b, "mrb_int _t%d = (_t%d - %dLL + %dLL) > %dLL ? (_t%d - %dLL + %dLL) : %dLL;\n",
                        tix, tn, rn, j, ln + j, tn, rn, j, ln + j);
             emit_indent(b, indent);
-            buf_printf(b, "lv_%s = (_t%d >= _t%d ? sp_box_nil() : sp_poly_massign_get(_t%d, _t%d));\n",
-                       rename_local(rlvn), tix, tn, tarr, tix);
+            emit_local_ref(c, rights[j], rlvn, b);
+            buf_printf(b, " = (_t%d >= _t%d ? sp_box_nil() : sp_poly_massign_get(_t%d, _t%d));\n",
+                       tix, tn, tarr, tix);
           }
         }
         return;

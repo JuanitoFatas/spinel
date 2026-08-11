@@ -152,4 +152,5 @@ int class_is_blank_slate(Compiler *c, int ci);        /* explicit `< BasicObject
 int proc_to_proc_method_node(Compiler *c, int recv); /* the method(:sym) node behind <method>.to_proc */
 int method_call_param_shift(Compiler *c, int mn, int mi); /* 1 when self carries param[0] (__bam wrapper) */
 
+int a_block_is_lifted(Compiler *c, int id);
 #endif

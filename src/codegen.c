@@ -2274,9 +2274,24 @@ int proc_body_has_return(Compiler *c, int id) {
    Lambdas and bare blocks are excluded (their `return` is local / inlined). */
 int proc_does_nonlocal_return(Compiler *c, int create) {
   const char *cty = nt_type(c->nt, create);
+  /* The dispatch lift hands us the BlockNode itself; the lifted-ness is a
+     property of the call that owns it. */
+  if (cty && sp_streq(cty, "BlockNode")) {
+    for (int o = 0; o < c->nt->count; o++)
+      if (nt_ref(c->nt, o, "block") == create) return proc_does_nonlocal_return(c, o);
+    return 0;
+  }
   if (!cty || !sp_streq(cty, "CallNode")) return 0;          /* proc/Proc.new are calls */
   const char *cn = nt_str(c->nt, create, "name");
   if (!cn) return 0;
+  /* A plain block that is LIFTED to a proc (its call keeps a real &block, or a
+     poly receiver's dispatch materializes it) leaves the home frame just like
+     an explicit proc literal, so a `return` in it is non-local too. An inlined
+     block's `return` is the method's own and never reaches here. */
+  { int lblk = nt_ref(c->nt, create, "block");
+    const char *lbt = lblk >= 0 ? nt_type(c->nt, lblk) : NULL;
+    if (lbt && sp_streq(lbt, "BlockNode") && a_block_is_lifted(c, create))
+      return proc_body_has_return(c, nt_ref(c->nt, lblk, "body")); }
   int recv = nt_ref(c->nt, create, "receiver");
   int is_proc = (recv < 0 && sp_streq(cn, "proc"));
   int is_proc_new = (sp_streq(cn, "new") && recv >= 0 &&
