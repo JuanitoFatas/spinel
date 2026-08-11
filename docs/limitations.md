@@ -300,6 +300,42 @@ rng = (lo..hi)      # compile error: a Range of Ver objects cannot be built
 rng = (0..2**70)    # compile error: a Bignum bound does not fit mrb_int
 ```
 
+#### A call that cannot exist is refused at compile time, not raised at run time
+
+Spinel resolves what it can resolve at compile time -- that is the point of the
+AOT model -- and an undefined method is no exception. Where the receiver's type
+is known and neither the class nor CRuby's own surface for it carries the name,
+the call cannot succeed under any input, so it is reported when the program is
+built rather than left to raise:
+
+```ruby
+[1].nope        # spinel: t.rb:1: undefined method 'nope' for an instance of Array (NoMethodError)
+:s.nope         # ... for an instance of Symbol
+Plain.new.nope  # ... for an instance of Plain
+```
+
+The diagnostic is CRuby's own wording, so the message reads the same as the
+exception would; only the moment differs. The consequence is that a program
+which *only reaches such a call behind a `rescue NoMethodError`* cannot be
+built:
+
+```ruby
+r = (begin; [1].nope; rescue NoMethodError => e; e.receiver; end)   # compile error
+```
+
+A receiver whose type is not statically known -- a `nil`, a boxed value read
+out of a container, a poly union -- keeps the runtime raise, since nothing
+could be proved about it at compile time:
+
+```ruby
+x = nil
+r = (begin; x.nope; rescue NoMethodError; "runtime"; end)   # => "runtime"
+```
+
+A name CRuby *does* define on that class, which Spinel has not implemented, is
+a different thing entirely: that is a gap in Spinel, and it reports itself as
+an `unsupported call` naming the node, not as a `NoMethodError`.
+
 #### A `Float::INFINITY` bound reports the other bound as a `Float`
 
 An integer `Range` is a value with `mrb_int` bounds, which have no

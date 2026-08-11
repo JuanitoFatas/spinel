@@ -563,7 +563,7 @@ static int name_is_synth_method(const char *m) {
 
 /* Enumerable's public instance methods, for respond_to? on a user class
    that includes the module (served through the __enum_to_a redirect). */
-static int name_is_enumerable_module_method(const char *m) {
+int name_is_enumerable_module_method(const char *m) {
   static const char *const em[] = {
     "each", "map", "collect", "select", "filter", "reject", "find",
     "detect", "find_all", "find_index", "reduce", "inject", "to_a",

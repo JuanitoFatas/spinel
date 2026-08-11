@@ -776,6 +776,28 @@ __attribute__((noreturn)) void unsupported(Compiler *c, int id, const char *what
        time. Report it in CRuby's words instead of the internal node dump. */
     if (recv >= 0) {
       TyKind rvt = comp_ntype(c, recv);
+      /* Same for a typed BUILTIN receiver: when CRuby's own surface for that
+         class does not carry the name either, the call is the program's
+         NoMethodError, proved at compile time rather than left for run time --
+         so say so in CRuby's words. A name CRuby *does* have is a spinel gap
+         and keeps the internal report (#3715). */
+      {
+        const char *bcn = rvt == TY_STRING || rvt == TY_STRBUF ? "String"
+                        : rvt == TY_INT ? "Integer" : rvt == TY_FLOAT ? "Float"
+                        : rvt == TY_SYMBOL ? "Symbol"
+                        : rvt == TY_RANGE || rvt == TY_FLOAT_RANGE || rvt == TY_STR_RANGE ? "Range"
+                        : rvt == TY_TIME ? "Time"
+                        : ty_is_array(rvt) ? "Array" : ty_is_hash(rvt) ? "Hash" : NULL;
+        if (bcn && !builtin_method_known(bcn, mname) &&
+            !builtin_object_method_known(mname) &&
+            !name_is_enumerable_module_method(mname) &&
+            !an_user_defines_method(c, mname)) {
+          fprintf(stderr, "spinel: %sundefined method '%s' for an instance of %s (NoMethodError)\n",
+                  pos, mname, bcn);
+          if (collect_mode() && g_unsup_armed) longjmp(g_unsup_recover, 1);
+          exit(1);
+        }
+      }
       if (ty_is_object(rvt)) {
         int cid = ty_object_class(rvt);
         if (cid >= 0 && cid < c->nclasses && !c->classes[cid].is_native_class &&
