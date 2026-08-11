@@ -1,0 +1,12 @@
+"a,,\"b,c\"\n"
+"\"q\"\"uote\",\"nl\nhere\"\n"
+"\"1\",\"2\"\n"
+"a;b\n"
+"a,1\n\"b,c\",\n"
+"name,qty\n\"apple, red\",3\n\"pear \"\"big\"\"\",\n"
+[["name", "qty"], ["apple, red", "3"], ["pear \"big\"", nil]]
+["apple, red", "pear \"big\""]
+[["name", "qty"], ["apple, red", "3"], ["pear \"big\"", nil]]
+["a", "b"]
+1
+nil
