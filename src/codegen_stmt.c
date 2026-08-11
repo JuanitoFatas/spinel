@@ -8005,6 +8005,23 @@ else {
           else buf_printf(b, "_t%d", tmps[i]);
           buf_puts(b, ");\n");
         }
+        else if (recv_t == TY_POLY || recv_t == TY_UNKNOWN) {
+          /* A container the fixpoint could not type -- an attr read whose name
+             several classes own, so the receiver's class is only known at run
+             time -- sets through the boxed index path (#3781). */
+          int tmw = ++g_tmp;
+          buf_printf(b, "{ sp_RbVal _t%d = ", tmw);
+          emit_boxed(c, recv_id, b);
+          buf_puts(b, "; sp_poly_arr_set(_t");
+          buf_printf(b, "%d, ", tmw);
+          emit_int_expr(c, idx_argv[0], b); buf_puts(b, ", ");
+          { TyKind valt = tmpts ? tmpts[i] : comp_ntype(c, els[i]);
+            char tmp_expr[32]; snprintf(tmp_expr, sizeof tmp_expr, "_t%d", tmps[i]);
+            Buf bxi; memset(&bxi, 0, sizeof bxi);
+            emit_boxed_text(c, valt, tmp_expr, &bxi);
+            buf_puts(b, bxi.p ? bxi.p : "sp_box_nil()"); free(bxi.p); }
+          buf_puts(b, "); }\n");
+        }
         else if (ty_is_hash(recv_t)) {
           const char *hn = ty_hash_cname(recv_t);
           if (!hn) { unsupported(c, id, "multiple assignment hash index target unknown kind"); continue; }
