@@ -1936,6 +1936,16 @@ int emit_iteration_stmt(Compiler *c, int id, Buf *b, int indent) {
     int t = ++g_tmp;
     Buf rb; memset(&rb, 0, sizeof rb);
     emit_expr(c, recv, &rb);
+    /* The count is evaluated ONCE, so a receiver that can change (or change
+       something) between rounds has to be hoisted: spliced into the loop
+       condition, `rng.next_int(n).times` re-rolled the die every round. */
+    if (subtree_has_side_effect(nt, recv)) {
+      int tn = ++g_tmp;
+      emit_indent(b, indent);
+      buf_printf(b, "mrb_int _t%d = %s;\n", tn, rb.p ? rb.p : "0");
+      free(rb.p); memset(&rb, 0, sizeof rb);
+      buf_printf(&rb, "_t%d", tn);
+    }
     emit_indent(b, indent);
     buf_printf(b, "for (mrb_int _t%d = 0; _t%d < ", t, t);
     buf_puts(b, rb.p); buf_printf(b, "; _t%d++) {\n", t);
@@ -3056,6 +3066,15 @@ int emit_iteration_stmt(Compiler *c, int id, Buf *b, int indent) {
     Buf lo; memset(&lo, 0, sizeof lo); emit_expr(c, recv, &lo);
     Buf hi; memset(&hi, 0, sizeof hi); emit_expr(c, argv[0], &hi);
     int ti = ++g_tmp;
+    /* the limit sits in the loop condition, so a side-effecting one would be
+       re-evaluated every round: it is computed once in Ruby */
+    if (subtree_has_side_effect(nt, argv[0])) {
+      int th = ++g_tmp;
+      emit_indent(b, indent);
+      buf_printf(b, "mrb_int _t%d = %s;\n", th, hi.p ? hi.p : "0");
+      free(hi.p); memset(&hi, 0, sizeof hi);
+      buf_printf(&hi, "_t%d", th);
+    }
     emit_indent(b, indent);
     buf_printf(b, "for (mrb_int _t%d = ", ti); buf_puts(b, lo.p);
     buf_printf(b, "; _t%d %s ", ti, up ? "<=" : ">="); buf_puts(b, hi.p);
