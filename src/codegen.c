@@ -255,6 +255,13 @@ void emit_int_expr(Compiler *c, int node, Buf *b) {
     buf_puts(b, "sp_poly_to_i("); emit_expr(c, node, b); buf_puts(b, ")");
     return;
   }
+  /* A value the analysis widened to Bignum (a doubling counter, a masked
+     accumulator) used where an integer is wanted -- an array index, a repeat
+     count -- is a pointer, not a number: convert it. */
+  if (comp_ntype(c, node) == TY_BIGINT) {
+    buf_puts(b, "sp_bigint_to_int("); emit_expr(c, node, b); buf_puts(b, ")");
+    return;
+  }
   emit_scalar_operand(c, node, "0", b);
 }
 

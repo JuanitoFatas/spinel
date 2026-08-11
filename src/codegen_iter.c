@@ -1932,10 +1932,10 @@ int emit_iteration_stmt(Compiler *c, int id, Buf *b, int indent) {
   }
 
   /* n.times { |i| ... } */
-  if (sp_streq(name, "times") && rt == TY_INT) {
+  if (sp_streq(name, "times") && (rt == TY_INT || rt == TY_BIGINT)) {
     int t = ++g_tmp;
     Buf rb; memset(&rb, 0, sizeof rb);
-    emit_expr(c, recv, &rb);
+    emit_int_expr(c, recv, &rb);
     /* The count is evaluated ONCE, so a receiver that can change (or change
        something) between rounds has to be hoisted: spliced into the loop
        condition, `rng.next_int(n).times` re-rolled the die every round. */
