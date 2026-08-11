@@ -2213,17 +2213,46 @@ int infer_write_types(Compiler *c) {
       if (recv_argc != 0) continue;
       const char *mname = nt_str(nt, recv, "name");
       if (!mname) continue;
-      Scope *caller = comp_scope_of(c, recv);
-      if (!caller || caller->class_id < 0) continue;
-      int defcls2 = caller->class_id;
-      int getter_mi = comp_method_in_chain(c, caller->class_id, mname, &defcls2);
+      /* The class the getter belongs to: the RECEIVER's when the push names one
+         (`dest.synapses_in << s` from outside), else the enclosing class for
+         the implicit-self form (`list << msg`). Without the receiver case an
+         ivar array filled only from outside kept its empty literal's default
+         and every element read back as an Integer (#3781). */
+      int gcid = -1;
+      int grecv = nt_ref(nt, recv, "receiver");
+      if (grecv >= 0 && !(nt_type(nt, grecv) && sp_streq(nt_type(nt, grecv), "SelfNode"))) {
+        TyKind grt = infer_type(c, grecv);
+        gcid = ty_is_object(grt) ? ty_object_class(grt) : -1;
+        /* The receiver's own type may still be settling (a block parameter over
+           an array whose element type is what this evidence decides). Fall back
+           to the class that owns this getter when exactly one does -- with no
+           ambiguity there is nothing else it could be. */
+        if (gcid < 0) {
+          int owner = -1, nown = 0;
+          for (int k = 0; k < c->nclasses && nown < 2; k++) {
+            int kd = -1;
+            if (comp_reader_in_chain(c, k, mname, &kd)) { if (kd == k) { owner = k; nown++; } }
+            else if (comp_method_in_class(c, k, mname) >= 0) { owner = k; nown++; }
+          }
+          if (nown != 1) continue;
+          gcid = owner;
+        }
+      }
+      else {
+        Scope *caller = comp_scope_of(c, recv);
+        if (!caller || caller->class_id < 0) continue;
+        gcid = caller->class_id;
+      }
+      if (gcid < 0 || gcid >= c->nclasses) continue;
+      int defcls2 = gcid;
+      int getter_mi = comp_method_in_chain(c, gcid, mname, &defcls2);
       const char *inm2 = NULL;
       char reader_iv[300];
       if (getter_mi < 0) {
         /* no hand-written getter: an attr_reader pushes into its backing
            ivar @<name> the same way `@<name> << x` does (#3139) */
-        int rdefcls = caller->class_id;
-        if (!comp_reader_in_chain(c, caller->class_id, mname, &rdefcls)) continue;
+        int rdefcls = gcid;
+        if (!comp_reader_in_chain(c, gcid, mname, &rdefcls)) continue;
         snprintf(reader_iv, sizeof reader_iv, "@%s", mname);
         inm2 = reader_iv;
         defcls2 = rdefcls;
@@ -2239,6 +2268,27 @@ int infer_write_types(Compiler *c) {
       int iv2 = comp_ivar_index(ci2, inm2);
       if (iv2 < 0) continue;
       if (class_ivar_pinned(ci2, inm2)) continue;  /* --rbs seed pins are authoritative */
+      /* a shared-mutable string spends its handle at a typed array's boundary,
+         so the element slot stays a plain string (#3227) */
+      if (vt == TY_STRBUF) vt = TY_STRING;
+      /* Only an ARRAY slot takes element evidence from a push: `q.push(1)` on
+         a Queue attribute is not an array fill. The slot must say it is one --
+         already typed as an array, or written with one -- since a slot that is
+         still settling (`@q = nil` before `@q = Queue.new`) reads UNKNOWN. */
+      if (grecv >= 0 && !ty_is_array(ci2->ivar_types[iv2])) {
+        int arr_written = 0;
+        for (int wi = 0; wi < nt->count && !arr_written; wi++) {
+          if (nt_kind(nt, wi) != NK_InstanceVariableWriteNode) continue;
+          const char *wnm2 = nt_str(nt, wi, "name");
+          if (!wnm2 || !sp_streq(wnm2, inm2)) continue;
+          Scope *ws2 = comp_scope_of(c, wi);
+          if (!ws2 || ws2->class_id != defcls2) continue;
+          int wv2 = nt_ref(nt, wi, "value");
+          if (wv2 >= 0 && (nt_kind(nt, wv2) == NK_ArrayNode || ty_is_array(infer_type(c, wv2))))
+            arr_written = 1;
+        }
+        if (!arr_written) continue;
+      }
       slot = &ci2->ivar_types[iv2];
     }
     else continue;
