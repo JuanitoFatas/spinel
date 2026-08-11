@@ -19150,6 +19150,13 @@ else { memcpy(dir, sf, n); dir[n] = 0; } }
          string, so it is swept and the concat reads freed memory (#3396).
          Hoist it into a rooted temp first. Only when the argument can
          allocate: otherwise nothing can collect in the window. */
+      /* A user operator whose OTHER operand is poly runs through the boxed
+         path, but the fixpoint may still have settled this call's own type on
+         the one class that defines it (`(a % o).value` with `%` answering an
+         Int64). The value is an sp_RbVal here, so unbox it to the type the
+         reader on it expects (#3781). */
+      TyKind pres = comp_ntype(c, id);
+      Buf pcall; memset(&pcall, 0, sizeof pcall);
       if (subtree_may_allocate(nt, argv[0])) {
         int th = ++g_tmp;
         Buf rb; memset(&rb, 0, sizeof rb);
@@ -19158,10 +19165,15 @@ else { memcpy(dir, sf, n); dir[n] = 0; } }
         buf_printf(g_pre, "sp_RbVal _t%d = %s; SP_GC_ROOT_RBVAL(_t%d);\n",
                    th, rb.p ? rb.p : "sp_box_nil()", th);
         free(rb.p);
-        buf_printf(b, "%s(_t%d, ", pfn, th); emit_boxed(c, argv[0], b); buf_puts(b, ")");
-        return;
+        buf_printf(&pcall, "%s(_t%d, ", pfn, th); emit_boxed(c, argv[0], &pcall); buf_puts(&pcall, ")");
       }
-      buf_printf(b, "%s(", pfn); emit_boxed(c, recv, b); buf_puts(b, ", "); emit_boxed(c, argv[0], b); buf_puts(b, ")");
+      else {
+        buf_printf(&pcall, "%s(", pfn); emit_boxed(c, recv, &pcall);
+        buf_puts(&pcall, ", "); emit_boxed(c, argv[0], &pcall); buf_puts(&pcall, ")");
+      }
+      if (ty_is_object(pres)) emit_unbox_text(c, pres, pcall.p ? pcall.p : "sp_box_nil()", b);
+      else buf_puts(b, pcall.p ? pcall.p : "sp_box_nil()");
+      free(pcall.p);
       return;
     }
     const char *cfn = NULL;
