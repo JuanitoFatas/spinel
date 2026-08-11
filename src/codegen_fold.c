@@ -5706,6 +5706,20 @@ void emit_arg_or_default(Compiler *c, Scope *m, int idx, int provided, Buf *out)
           return;
         }
       }
+      /* an IVAR argument: pass the slot itself so the callee's append lands in
+         the object. The generational barrier is order-independent (it only
+         marks the owner dirty), so it goes in the prelude. */
+      if (aty && sp_streq(aty, "InstanceVariableReadNode")) {
+        const char *ivn = nt_str(c->nt, provided, "name");
+        Scope *ivs = comp_scope_of(c, provided);
+        if (ivn && ivs && ivs->class_id >= 0 && !ivs->is_cmethod &&
+            comp_ntype(c, provided) == TY_STRING) {
+          emit_indent(g_pre, g_indent);
+          buf_printf(g_pre, "sp_gc_wb((void *)%s);\n", g_self);
+          buf_printf(out, "&%s%siv_%s", g_self, g_self_deref, iv_c(ivn + 1));
+          return;
+        }
+      }
     }
     Buf ab; memset(&ab, 0, sizeof ab);
     p->byref_out = 0;   /* reenter for the plain coerced value */
@@ -7300,6 +7314,15 @@ else {
       if (p && att == TY_UNKNOWN) att = TY_POLY;  /* poly in the callee signature */
       atmp_ty[k] = att;
       emit_indent(g_pre, g_indent);
+      /* A byref out-param takes the SLOT's address, so its temp is a
+         `const char **`, not the parameter's own type. */
+      if (p && p->byref_out) {
+        emit_ctype(c, att, g_pre);
+        buf_printf(g_pre, " *_t%d = ", atmp[k]);
+        buf_puts(g_pre, ab.p ? ab.p : ""); buf_puts(g_pre, ";\n");
+        free(ab.p);
+        continue;
+      }
       emit_ctype(c, att, g_pre);
       buf_printf(g_pre, " _t%d = ", atmp[k]);
       buf_puts(g_pre, ab.p ? ab.p : ""); buf_puts(g_pre, ";\n");

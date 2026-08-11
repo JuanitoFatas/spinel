@@ -5816,6 +5816,15 @@ int emit_scalar_call(Compiler *c, int id, Buf *b) {
         buf_printf(b, "%s(", comp_ntype(c, id) == TY_POLY_ARRAY ? "sp_re_scan_poly" : "sp_re_scan");
         emit_expr(c, argv[0], b); buf_printf(b, ", %s)", r);
       }
+      /* the same, for a pattern that arrives BOXED (a Regexp read out of a
+         table): its payload is the compiled pattern */
+      else if (sp_streq(name, "scan") && argc == 1 && comp_ntype(c, argv[0]) == TY_POLY &&
+               nt_ref(nt, id, "block") < 0) {
+        buf_printf(b, "%s((mrb_regexp_pattern *)(",
+                   comp_ntype(c, id) == TY_POLY_ARRAY ? "sp_re_scan_poly" : "sp_re_scan");
+        emit_boxed(c, argv[0], b);
+        buf_printf(b, ").v.p, %s)", r);
+      }
       else if (sp_streq(name, "to_sym") || sp_streq(name, "intern")) buf_printf(b, "sp_sym_intern(%s)", r);
       else if (sp_streq(name, "to_c") && argc == 0) buf_printf(b, "sp_str_to_c(%s)", r);
       else if (sp_streq(name, "chr") && argc == 0) buf_printf(b, "sp_str_chr(%s)", r);

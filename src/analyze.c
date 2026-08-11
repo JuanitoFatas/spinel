@@ -7605,7 +7605,15 @@ static void compute_byref_out_params(Compiler *c) {
     if (!s->name || s->def_node < 0 || s->body < 0) continue;
     if (s->yields || s->is_lowered_yield || s->dm_subst_name || s->cs_synth) continue;
     if (s->is_transplanted_source) continue;
-    if (s->class_id >= 0 && !s->is_cmethod) continue;
+    /* An instance method qualifies too: `def add(buf, i); buf << ...; end` is
+       ordinary Ruby, and without the out-param the append landed in a copy and
+       the caller's string stayed empty (#3781). The unique-name rule above
+       still holds, so no override or dispatch sees a different ABI. A class
+       whose instances reach the method through a poly dispatch is fine: those
+       arms fill their arguments through the same emitter. */
+    if (s->class_id >= 0 && !s->is_cmethod && comp_class_index(c, "Toplevel") != s->class_id &&
+        (c->classes[s->class_id].is_struct || c->classes[s->class_id].is_native_class ||
+         c->classes[s->class_id].is_value_type)) continue;
     if (s->rest_idx >= 0 || s->kwrest_idx >= 0 || s->npost_rest > 0) continue;
     if (s->nparams <= 0 || s->nparams > 32 || s->nrequired != s->nparams) continue;
     int pn = nt_ref(nt, s->def_node, "parameters");
