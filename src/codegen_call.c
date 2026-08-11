@@ -9125,7 +9125,13 @@ void emit_call(Compiler *c, int id, Buf *b) {
         emit_indent(g_pre, g_indent); buf_puts(g_pre, "if (setjmp(sp_exc_stack[sp_exc_top-1]) == 0) {\n");
         emit_indent(g_pre, g_indent + 1); buf_puts(g_pre, "for (;;) {\n");
         const char *sv_lb = g_loop_break_var;
-        int sv_lexc = g_loop_exc_base; g_loop_exc_base = g_exc_frame_depth;
+        /* The frame this loop opened is live for its body: a `return` from
+           inside must pop it (see the statement-form loop). The break base is
+           taken AFTER the bump -- a `break` leaves through the code below the
+           loop, which pops that frame itself. */
+        int sv_lexc = g_loop_exc_base;
+        g_exc_frame_depth++;
+        g_loop_exc_base = g_exc_frame_depth;
         int sv_iep = g_ie_res_poly;
         const char *sv_bj = g_brk_ser_var; g_brk_ser_var = NULL;  /* break here targets this loop */
         g_ie_res_poly = (bt == TY_POLY);   /* box a scalar `break <v>` into the poly slot */
@@ -9133,6 +9139,7 @@ void emit_call(Compiler *c, int id, Buf *b) {
         g_loop_break_var = lb_buf;
         int lbody = nt_ref(nt, blk, "body");
         emit_stmts(c, lbody, g_pre, g_indent + 2);
+        g_exc_frame_depth--;
         g_loop_break_var = sv_lb;
         g_loop_exc_base = sv_lexc;
         g_ie_res_poly = sv_iep;

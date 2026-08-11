@@ -1798,7 +1798,13 @@ int emit_iteration_stmt(Compiler *c, int id, Buf *b, int indent) {
     emit_indent(b, indent); buf_puts(b, "sp_exc_msg[sp_exc_top] = 0; sp_exc_obj[sp_exc_top] = 0; sp_exc_top++;\n");
     emit_indent(b, indent); buf_puts(b, "if (setjmp(sp_exc_stack[sp_exc_top-1]) == 0) {\n");
     emit_indent(b, indent + 1); buf_puts(b, "for (;;) {\n");
+    /* The frame this loop opened is live for its body: a `return` from inside
+       has to pop it on the way out, like any begin/rescue frame. Without the
+       accounting the handler stack grew by one per call and eventually wrote
+       past its end (#3781). */
+    g_exc_frame_depth++;
     emit_loop_body(c, lbody, b, indent + 2);
+    g_exc_frame_depth--;
     emit_indent(b, indent + 1); buf_puts(b, "}\n");
     emit_indent(b, indent + 1); buf_puts(b, "sp_exc_top--;\n");
     emit_indent(b, indent); buf_puts(b, "}\n");
