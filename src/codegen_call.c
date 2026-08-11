@@ -19453,21 +19453,25 @@ else { memcpy(dir, sf, n); dir[n] = 0; } }
       (sp_streq(name, "&") || sp_streq(name, "|") || sp_streq(name, "^") ||
        sp_streq(name, "<<") || sp_streq(name, ">>"))) {
     TyKind at0 = comp_ntype(c, argv[0]);
+    /* Both operands are heap Bignums, and either side may allocate (and so
+       collect) while the other is being evaluated -- the C operand order is
+       unspecified besides. Evaluate left then right into rooted temps. */
+    int tbl = ++g_tmp, tbr = ++g_tmp;
     if (sp_streq(name, "<<") || sp_streq(name, ">>")) {
-      buf_printf(b, "sp_bigint_%s(", sp_streq(name, "<<") ? "shl" : "shr");
-      emit_expr(c, recv, b); buf_puts(b, ", ");
+      buf_printf(b, "({ sp_Bigint *_t%d = ", tbl); emit_expr(c, recv, b);
+      buf_printf(b, "; SP_GC_ROOT(_t%d); int64_t _t%d = ", tbl, tbr);
       if (at0 == TY_BIGINT) { buf_puts(b, "sp_bigint_to_int("); emit_expr(c, argv[0], b); buf_puts(b, ")"); }
       else emit_int_expr(c, argv[0], b);
-      buf_puts(b, ")");
+      buf_printf(b, "; sp_bigint_%s(_t%d, _t%d); })", sp_streq(name, "<<") ? "shl" : "shr", tbl, tbr);
     }
     else {
       const char *fn = sp_streq(name, "&") ? "and" : sp_streq(name, "|") ? "or" : "xor";
-      buf_printf(b, "sp_bigint_%s(", fn);
-      emit_expr(c, recv, b); buf_puts(b, ", ");
+      buf_printf(b, "({ sp_Bigint *_t%d = ", tbl); emit_expr(c, recv, b);
+      buf_printf(b, "; SP_GC_ROOT(_t%d); sp_Bigint *_t%d = ", tbl, tbr);
       if (at0 == TY_BIGINT) emit_expr(c, argv[0], b);
       else if (at0 == TY_POLY) { buf_puts(b, "sp_poly_as_bigint("); emit_expr(c, argv[0], b); buf_puts(b, ")"); }
       else { buf_puts(b, "sp_bigint_new_int("); emit_int_expr(c, argv[0], b); buf_puts(b, ")"); }
-      buf_puts(b, ")");
+      buf_printf(b, "; SP_GC_ROOT(_t%d); sp_bigint_%s(_t%d, _t%d); })", tbr, fn, tbl, tbr);
     }
     return;
   }
@@ -19503,11 +19507,16 @@ else { memcpy(dir, sf, n); dir[n] = 0; } }
        receiver is sign-extended forever, so `-1 & 0xFFFFFFFFFFFFFFFF` is that
        whole mask, not -1. */
     if ((sp_streq(name, "|") || sp_streq(name, "^") || sp_streq(name, "&")) && at0 == TY_BIGINT) {
-      buf_printf(b, "sp_bigint_%s(sp_bigint_new_int(",
-                 sp_streq(name, "|") ? "or" : sp_streq(name, "^") ? "xor" : "and");
+      /* the promoted receiver is a fresh Bignum: root it while the operand
+         (which may run arbitrary code, and allocate) is evaluated */
+      int tpl = ++g_tmp, tpr = ++g_tmp;
+      buf_printf(b, "({ sp_Bigint *_t%d = sp_bigint_new_int(", tpl);
       if (rt == TY_POLY) { buf_puts(b, "sp_poly_to_i("); emit_expr(c, recv, b); buf_puts(b, ")"); }
       else emit_expr(c, recv, b);
-      buf_puts(b, "), "); emit_expr(c, argv[0], b); buf_puts(b, ")");
+      buf_printf(b, "); SP_GC_ROOT(_t%d); sp_Bigint *_t%d = ", tpl, tpr);
+      emit_expr(c, argv[0], b);
+      buf_printf(b, "; SP_GC_ROOT(_t%d); sp_bigint_%s(_t%d, _t%d); })", tpr,
+                 sp_streq(name, "|") ? "or" : sp_streq(name, "^") ? "xor" : "and", tpl, tpr);
       return;
     }
     const char *aty0 = nt_type(nt, argv[0]);
