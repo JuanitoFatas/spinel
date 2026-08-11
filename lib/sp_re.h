@@ -93,6 +93,19 @@ sp_PolyArray *sp_re_match_data(mrb_regexp_pattern *pat, const char *str);
 void sp_MatchData_scan(void *p);
 sp_MatchData *sp_re_matchdata(mrb_regexp_pattern *pat, const char *str);
 sp_MatchData *sp_re_last_matchdata(void);   /* $~ from the TLS match registers */
+/* Saved match registers of one method frame: `$~` is frame-local in Ruby, so a
+   method that performs a match restores its caller's on the way out (#3629).
+   The emitter declares one with a cleanup attribute, so every ordinary exit
+   path -- including an early `return` -- puts the caller's registers back. */
+typedef struct {
+  const char *captures[10];
+  int caps[64];
+  const char *last_str, *match_str, *match_pre, *match_post;
+  int last_ncap;
+  const mrb_regexp_pattern *last_pat;
+} sp_re_frame;
+void sp_re_frame_push(sp_re_frame *f);
+void sp_re_frame_pop(sp_re_frame *f);
 sp_MatchData *sp_re_matchdata_at(mrb_regexp_pattern *pat, const char *str, mrb_int cpos);
 const char *sp_MatchData_aref(sp_MatchData *m, mrb_int i);
 const char *sp_MatchData_aref_name(sp_MatchData *m, const char *name);

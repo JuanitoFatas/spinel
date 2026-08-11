@@ -66,6 +66,33 @@ sp_MatchData *sp_re_last_matchdata(void) {
   md->pat = sp_re_last_pat;
   return md;
 }
+/* CRuby's $~ (and the $1..$9 / $` / $' derived from it) is a FRAME-local, so
+   a match inside a method leaves the caller's registers alone once the method
+   returns. The registers here are per-worker globals, so a method that matches
+   saves them on entry and puts them back on the way out; the emitter gives
+   such a method one of these frames (#3629). */
+void sp_re_frame_push(sp_re_frame *f) {
+  if (!f) return;
+  for (int i = 0; i < 10; i++) f->captures[i] = sp_re_captures[i];
+  for (int i = 0; i < 64; i++) f->caps[i] = sp_re_caps[i];
+  f->last_str = sp_re_last_str;
+  f->match_str = sp_re_match_str;
+  f->match_pre = sp_re_match_pre;
+  f->match_post = sp_re_match_post;
+  f->last_ncap = sp_re_last_ncap;
+  f->last_pat = sp_re_last_pat;
+}
+void sp_re_frame_pop(sp_re_frame *f) {
+  if (!f) return;
+  for (int i = 0; i < 10; i++) sp_re_captures[i] = f->captures[i];
+  for (int i = 0; i < 64; i++) sp_re_caps[i] = f->caps[i];
+  sp_re_last_str = f->last_str;
+  sp_re_match_str = f->match_str;
+  sp_re_match_pre = f->match_pre;
+  sp_re_match_post = f->match_post;
+  sp_re_last_ncap = f->last_ncap;
+  sp_re_last_pat = f->last_pat;
+}
 void sp_re_set_captures(const char *str, int *caps, int ncaps) {SP_GC_ROOT_STR(str);
   sp_re_last_str = str;
   sp_re_last_ncap = ncaps;

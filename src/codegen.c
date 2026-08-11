@@ -864,9 +864,44 @@ static int name_in(char **names, int n, const char *nm) {
 
 /* Declare a scope's locals. Params are already C function parameters, so
    they only need a GC root; body locals get a full declaration. */
+/* Does this scope perform a regexp match -- the operations that write the match
+   registers `$~` / `$1`.. read? Such a method needs a frame of its own, since
+   those registers are frame-local in Ruby (#3629). A block is part of the
+   method it is spliced into, so this asks about the method scope as a whole. */
+static int scope_performs_match(Compiler *c, int si) {
+  const NodeTable *nt = c->nt;
+  static const char *const mnames[] = {
+    "=~", "match", "match?", "scan", "gsub", "gsub!", "sub", "sub!",
+    "split", "slice", "index", "rindex", "partition", "rpartition",
+    "start_with?", "end_with?", "grep", "grep_v", "[]", "===", NULL };
+  for (int id = 0; id < nt->count; id++) {
+    if (c->nscope[id] != si) continue;
+    if (nt_kind(nt, id) != NK_CallNode) continue;
+    const char *nm = nt_str(nt, id, "name");
+    if (!nm) continue;
+    int hit = 0;
+    for (int k = 0; mnames[k] && !hit; k++) if (sp_streq(nm, mnames[k])) hit = 1;
+    if (!hit) continue;
+    /* only when a regexp is actually involved: the receiver or an argument */
+    int r = nt_ref(nt, id, "receiver");
+    if (r >= 0 && comp_ntype(c, r) == TY_REGEX) return 1;
+    int a = nt_ref(nt, id, "arguments");
+    int an = 0; const int *av = a >= 0 ? nt_arr(nt, a, "arguments", &an) : NULL;
+    for (int k = 0; k < an && av; k++)
+      if (comp_ntype(c, av[k]) == TY_REGEX) return 1;
+  }
+  return 0;
+}
+
 void emit_scope_decls(Compiler *c, Scope *s, Buf *b) {
   int si = (int)(s - c->scopes);
   int has_begin = scope_has_begin(c, si);
+  /* $~ and the $1.. globals derived from it are frame-local in Ruby: a match
+     inside this method must not outlive it. The cleanup attribute puts the
+     caller's registers back on every ordinary exit, early returns included. */
+  if (s->name && s->def_node >= 0 && scope_performs_match(c, si))
+    buf_puts(b, "    sp_re_frame _sp_rf __attribute__((cleanup(sp_re_frame_pop)));"
+                " sp_re_frame_push(&_sp_rf);\n");
   /* A real (non-yield-inlined) &blk param is an sp_Proc * C parameter; root it
      so the proc box survives a GC fired by an allocation in the block body (or
      by the cell allocations just below). Without this the box's only reference
