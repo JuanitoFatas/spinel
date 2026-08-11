@@ -5745,7 +5745,22 @@ static void oa_uf_union(OAS *sl, int a, int b) {
 static int oa_obj_class_of(Compiler *c, int node) {
   TyKind t = infer_type(c, node);
   if (ty_is_object(t)) return ty_object_class(t);
-  if (t == TY_INT_ARRAY) return OA_CLS_IA;
+  if (t == TY_INT_ARRAY) {
+    /* A literal whose elements are not all settled reads as an int array while
+       the fixpoint runs -- an UNKNOWN element unifies away -- and `[obj, -1]`
+       looked like one until `obj` acquired its class. Narrowing on that
+       evidence pinned the container to a table of int arrays, and the pin
+       survived the rounds that knew better (#3781). Take no evidence until
+       every element has a type. */
+    const NodeTable *nt = c->nt;
+    const char *nty = nt_type(nt, node);
+    if (nty && sp_streq(nty, "ArrayNode")) {
+      int en = 0; const int *els = nt_arr(nt, node, "elements", &en);
+      for (int k = 0; k < en; k++)
+        if (infer_type(c, els[k]) == TY_UNKNOWN) return -1;
+    }
+    return OA_CLS_IA;
+  }
   return -1;
 }
 /* class evidence join: -1 = none seen, -2 = conflicting classes. */
