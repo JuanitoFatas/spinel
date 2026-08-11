@@ -1035,6 +1035,55 @@ int method_is_void(Scope *s) {
   return !is_scalar_ret(s->ret);
 }
 
+/* Does this class method's body read the class it was called ON? A class
+   method inherited by a subclass runs with `self` = that subclass -- CRuby's
+   `def self.bench_name; self.name; end` answers the subclass's name -- so the
+   receiving class has to reach the body. It rides a leading `sp_Class _sp_cls`
+   parameter, added only where it can matter: a class with no descendant can
+   only ever be its own receiver, and a body that never mentions self does not
+   care. */
+static int8_t *g_cm_selfcls = NULL;
+static int g_cm_selfcls_n = -1;
+int cmethod_takes_self_cls(Compiler *c, int si) {
+  if (si < 0 || si >= c->nscopes) return 0;
+  Scope *s = &c->scopes[si];
+  if (!s->is_cmethod || s->class_id < 0 || s->body < 0) return 0;
+  if (g_cm_selfcls_n != c->nscopes) {
+    free(g_cm_selfcls);
+    g_cm_selfcls = (int8_t *)calloc((size_t)c->nscopes, 1);
+    g_cm_selfcls_n = c->nscopes;
+    if (!g_cm_selfcls) { g_cm_selfcls_n = -1; return 0; }
+    for (int k = 0; k < c->nscopes; k++) g_cm_selfcls[k] = -1;
+  }
+  if (!g_cm_selfcls) return 0;
+  if (g_cm_selfcls[si] >= 0) return g_cm_selfcls[si];
+  int ans = 0, has_desc = 0;
+  for (int k = 0; k < c->nclasses && !has_desc; k++)
+    if (k != s->class_id && is_descendant(c, k, s->class_id)) has_desc = 1;
+  if (has_desc) {
+    for (int nid = 0; nid < c->nt->count && !ans; nid++) {
+      if (c->nscope[nid] != si) continue;
+      if (nt_kind(c->nt, nid) == NK_SelfNode) { ans = 1; break; }
+      const char *ty = nt_type(c->nt, nid);
+      if (ty && sp_streq(ty, "CallNode") && nt_ref(c->nt, nid, "receiver") < 0) {
+        const char *nm = nt_str(c->nt, nid, "name");
+        if (nm && sp_streq(nm, "name")) ans = 1;
+      }
+    }
+  }
+  g_cm_selfcls[si] = (int8_t)ans;
+  return ans;
+}
+
+/* Emit the receiving-class argument for such a call: the class the call names,
+   which every call site knows statically (a constant receiver, or one arm of a
+   cls_id cascade). Returns the separator the rest of the arguments need. */
+const char *emit_cmethod_self_cls_arg(Compiler *c, int mi, int recv_cls, Buf *b) {
+  if (!cmethod_takes_self_cls(c, mi)) return "";
+  buf_printf(b, "((sp_Class){%d, NULL})", recv_cls >= 0 ? recv_cls : c->scopes[mi].class_id);
+  return ", ";
+}
+
 /* The mangled C name: sp_<name> for free functions, sp_<Class>_<name>
    for instance methods. */
 void emit_method_cname(Compiler *c, Scope *s, Buf *b) {
@@ -1123,6 +1172,10 @@ void emit_method_signature(Compiler *c, Scope *s, Buf *b) {
   emit_method_cname(c, s, b);
   buf_puts(b, "(");
   int wrote = 0;
+  if (cmethod_takes_self_cls(c, (int)(s - c->scopes))) {
+    buf_puts(b, "sp_Class _sp_cls");
+    wrote = 1;
+  }
   if (s->class_id >= 0 && !s->is_cmethod) {
     const char *cn = c->classes[s->class_id].c_name;
     if (sp_streq(cn, "String"))       { buf_puts(b, "const char *self"); }
@@ -1903,7 +1956,10 @@ void emit_method(Compiler *c, Scope *s, Buf *b) {
   const char *saved_self9 = g_self;
   char cm_self9[32];
   if (s->class_id >= 0 && s->is_cmethod) {
-    snprintf(cm_self9, sizeof cm_self9, "((sp_Class){%d})", s->class_id);
+    if (cmethod_takes_self_cls(c, (int)(s - c->scopes)))
+      snprintf(cm_self9, sizeof cm_self9, "_sp_cls");
+    else
+      snprintf(cm_self9, sizeof cm_self9, "((sp_Class){%d})", s->class_id);
     g_self = cm_self9;
   }
   g_ret_type = method_is_void(s) ? TY_VOID : s->ret;
@@ -4957,6 +5013,10 @@ void emit_super(Compiler *c, int id, Buf *b) {
       return;
     }
     buf_printf(b, "sp_%s_s_%s(", c->classes[cdef].c_name, mc(uname));
+    /* `super` in a class method keeps the receiving class: forward ours. */
+    if (cmethod_takes_self_cls(c, cmi))
+      buf_printf(b, "%s%s", cmethod_takes_self_cls(c, (int)(s - c->scopes)) ? "_sp_cls" : "((sp_Class){-1, NULL})",
+                 c->scopes[cmi].nparams > 0 ? ", " : "");
     if (ty && sp_streq(ty, "ForwardingSuperNode")) {
       Scope *pm = &c->scopes[cmi];
       int n = s->nparams < pm->nparams ? s->nparams : pm->nparams;

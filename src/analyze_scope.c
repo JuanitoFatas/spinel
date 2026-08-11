@@ -3581,13 +3581,18 @@ void specialize_inherited_cls_new(Compiler *c) {
           sp_streq(c->scopes[d].name, src->name) &&
           is_descendant(c, c->scopes[d].class_id, src->class_id)) { specialized = 1; break; }
     if (!specialized) continue;
-    /* keep it if called directly as <DefiningClass>.<name> */
+    /* keep it if some <Class>.<name> call still resolves HERE: the defining
+       class itself, or a subclass that got no specialized copy of its own
+       (`Sub2.describe` when only Sub needed one) -- that call is emitted
+       against this source, so DCEing it left an undefined reference. */
     int called_direct = 0;
     for (int ii = 0; ii < nccall && !called_direct; ii++) {
       int id = ccall[ii];
       if (!nt_str(nt, id, "name") || !sp_streq(nt_str(nt, id, "name"), src->name)) continue;
       int r = nt_ref(nt, id, "receiver");
-      if (comp_class_index(c, nt_str(nt, r, "name")) == src->class_id) called_direct = 1;
+      int rc = comp_class_index(c, nt_str(nt, r, "name"));
+      if (rc < 0) continue;
+      if (rc == src->class_id || comp_cmethod_in_chain(c, rc, src->name, NULL) == s) called_direct = 1;
     }
     /* ... or if a bare call inside some class-method body still resolves to
        this source (a class with no specialized copy of its own) */

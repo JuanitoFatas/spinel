@@ -206,6 +206,12 @@ extern TyKind g_result_ty;
 extern const char *g_method_pr_label;
 extern const char *g_method_pr_var;
 extern const char *g_proc_return_home;
+int cmethod_takes_self_cls(Compiler *c, int si);
+const char *emit_cmethod_self_cls_arg(Compiler *c, int mi, int recv_cls, Buf *b);
+int ctor_needs_self_defaults(Compiler *c, int initm, int argc);
+void emit_ctor_alloc_init(Compiler *c, int cid, int initm, int argsNode, Buf *b);
+extern const char *g_ctor_self;
+extern const char *g_ctor_self_deref;
 extern int g_proc_toplevel_return;
 extern int g_exc_frame_depth;      /* live begin/rescue setjmp frames (see codegen_util.c) */
 extern int g_method_pr_exc_depth;

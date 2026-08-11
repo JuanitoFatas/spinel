@@ -227,6 +227,11 @@ TyKind g_result_ty = TY_UNKNOWN;
 const char *g_method_pr_label = NULL;
 const char *g_method_pr_var = NULL;
 const char *g_proc_return_home = NULL;
+/* While a constructor's omitted defaults are emitted: the C text of the object
+   being built, so a default that reads self (`def initialize(n = config_val)`)
+   resolves against the new instance rather than the caller's self. */
+const char *g_ctor_self = NULL;
+const char *g_ctor_self_deref = NULL;
 /* Emitting the body of a non-lambda proc created at top level: a `return`
    there is a TOP-LEVEL return, which ends the script (#3663). */
 int g_proc_toplevel_return = 0;

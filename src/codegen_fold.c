@@ -5890,11 +5890,17 @@ void emit_arg_or_default(Compiler *c, Scope *m, int idx, int provided, Buf *out)
      case is representable at the call site (the Class object is a constant);
      an instance-method default referencing self keeps the caller's g_self,
      correct for the common same-class implicit-self call. */
-  const char *sv_self_dv = g_self;
+  const char *sv_self_dv = g_self, *sv_deref_dv = g_self_deref;
   char dv_self9[32];
   if (dv >= 0 && m->class_id >= 0 && m->is_cmethod) {
     snprintf(dv_self9, sizeof dv_self9, "((sp_Class){%d})", m->class_id);
     g_self = dv_self9;
+  }
+  /* A constructor's default runs on the object being built, which exists by
+     the time this is emitted (the ctor allocates first, then initializes). */
+  else if (dv >= 0 && g_ctor_self && m->name && sp_streq(m->name, "initialize")) {
+    g_self = g_ctor_self;
+    g_self_deref = g_ctor_self_deref ? g_ctor_self_deref : "->";
   }
   if (dv < 0) {
     /* A missing required arg pads the slot with a zero-ish compat value so
@@ -5943,7 +5949,7 @@ else if (dty && sp_streq(dty, "NilNode")) {
       else emit_expr(c, dv, out);
     }
   }
-  g_self = sv_self_dv;
+  g_self = sv_self_dv; g_self_deref = sv_deref_dv;
 }
 
 /* Emit a comma-separated argument list filling defaults for omitted

@@ -5492,6 +5492,79 @@ static int emit_new_arity_check(Compiler *c, int ci, int argc,
   return 1;
 }
 
+/* Does this initialize's parameter `idx` default to an expression that reads
+   the object being constructed -- self, an ivar, or an implicit-self call the
+   class answers? Such a default cannot be emitted at the call site: there is no
+   instance there yet. */
+static int ctor_default_reads_self(Compiler *c, Scope *m, int node, int depth) {
+  if (node < 0 || depth > 60) return 0;
+  const NodeTable *nt = c->nt;
+  const char *ty = nt_type(nt, node);
+  if (!ty) return 0;
+  if (sp_streq(ty, "SelfNode") || sp_streq(ty, "InstanceVariableReadNode")) return 1;
+  if (sp_streq(ty, "CallNode") && nt_ref(nt, node, "receiver") < 0 && m->class_id >= 0) {
+    const char *cn = nt_str(nt, node, "name");
+    if (cn && (comp_method_in_chain(c, m->class_id, cn, NULL) >= 0 ||
+               comp_reader_in_chain(c, m->class_id, cn, NULL))) return 1;
+  }
+  const SpNode *nd = &nt->nodes[node];
+  for (int i = 0; i < nd->nr; i++)
+    if (ctor_default_reads_self(c, m, nd->r[i].ref, depth + 1)) return 1;
+  for (int i = 0; i < nd->na; i++)
+    for (int j = 0; j < nd->a[i].n; j++)
+      if (ctor_default_reads_self(c, m, nd->a[i].ids[j], depth + 1)) return 1;
+  return 0;
+}
+
+/* True when a `.new` supplying `argc` positional args leaves a parameter whose
+   default reads the instance. Those constructions allocate first and run
+   initialize with the fresh object in scope (emit_ctor_alloc_init). */
+int ctor_needs_self_defaults(Compiler *c, int initm, int argc) {
+  if (initm < 0) return 0;
+  Scope *m = &c->scopes[initm];
+  if (m->is_cmethod || m->class_id < 0 || m->yields) return 0;
+  if (m->blk_param && m->blk_param[0]) return 0;   /* the block is threaded separately */
+  for (int i = argc; i < m->nparams; i++)
+    if (m->pdefault[i] >= 0 && ctor_default_reads_self(c, m, m->pdefault[i], 0)) return 1;
+  return 0;
+}
+
+/* `Klass.new(args)` where an omitted default reads the instance: allocate the
+   object (no initialize), then run initialize with self bound to it, so the
+   default sees the object CRuby would have evaluated it on. Answers the object
+   (a pointer, or the struct itself for a value-type class). */
+void emit_ctor_alloc_init(Compiler *c, int cid, int initm, int argsNode, Buf *b) {
+  ClassInfo *ci = &c->classes[cid];
+  int is_val = comp_ty_value_obj(c, ty_object(cid));
+  int initcls = cid;
+  comp_method_in_chain(c, cid, "initialize", &initcls);
+  int t = ++g_tmp;
+  buf_printf(b, "({ sp_%s %s_t%d = ", ci->c_name, is_val ? "" : "*", t);
+  emit_obj_alloc_expr(c, cid, b);
+  buf_puts(b, "; ");
+  if (!is_val) buf_printf(b, "SP_GC_ROOT(_t%d); ", t);
+  char selftxt[24];
+  snprintf(selftxt, sizeof selftxt, "_t%d", t);
+  const char *sv_cs = g_ctor_self, *sv_csd = g_ctor_self_deref;
+  g_ctor_self = selftxt;
+  g_ctor_self_deref = is_val ? "." : "->";
+  /* A default that has to hoist a statement (a rooted temp for an allocating
+     expression) must hoist it INSIDE this statement expression: the enclosing
+     prelude runs before the object exists. */
+  Buf apre; memset(&apre, 0, sizeof apre);
+  Buf args; memset(&args, 0, sizeof args);
+  Buf *sv_pre = g_pre; int sv_ind = g_indent;
+  g_pre = &apre; g_indent = 0;
+  if (initm >= 0) emit_args_filled(c, initm, argsNode, ", ", &args);
+  g_pre = sv_pre; g_indent = sv_ind;
+  if (apre.p) buf_puts(b, apre.p);
+  buf_printf(b, "sp_%s_initialize(%s_t%d%s); ", c->classes[initcls].c_name,
+             is_val ? "&" : "", t, args.p ? args.p : "");
+  free(apre.p); free(args.p);
+  g_ctor_self = sv_cs; g_ctor_self_deref = sv_csd;
+  buf_printf(b, "_t%d; })", t);
+}
+
 static int emit_class_new_call(Compiler *c, int id, Buf *b) {
   const NodeTable *nt = c->nt;
   const char *name = nt_str(nt, id, "name");
@@ -5623,9 +5696,16 @@ static int emit_class_new_call(Compiler *c, int id, Buf *b) {
         /* the .new result is typed poly (a class-var receiver dispatches
            dynamically), so box the concrete constructor result to match (#2653) */
         int is_val = comp_ty_value_obj(c, ty_object(ci));
+        int initm = comp_method_in_chain(c, ci, "initialize", NULL);
+        if (ctor_needs_self_defaults(c, initm, argc) && !class_is_exc_subclass(c, ci)) {
+          buf_printf(b, is_val ? "sp_box_vobj_%s(" : "sp_box_obj(", c->classes[ci].c_name);
+          emit_ctor_alloc_init(c, ci, initm, nt_ref(nt, id, "arguments"), b);
+          if (is_val) buf_puts(b, ")");
+          else buf_printf(b, ", %d)", ci);
+          return 1;
+        }
         if (is_val) buf_printf(b, "sp_box_vobj_%s(sp_%s_new(", c->classes[ci].c_name, c->classes[ci].c_name);
         else buf_printf(b, "sp_box_obj(sp_%s_new(", c->classes[ci].c_name);
-        int initm = comp_method_in_chain(c, ci, "initialize", NULL);
         if (initm >= 0) emit_args_filled(c, initm, nt_ref(nt, id, "arguments"), "", b);
         if (is_val) buf_puts(b, "))");
         else buf_printf(b, "), %d)", ci);
@@ -5885,6 +5965,13 @@ static int emit_class_new_call(Compiler *c, int id, Buf *b) {
            ArgumentError at the .new site, as in MRI; the check emits the raise
            into the prelude and the (dead) construction below keeps the type. */
         emit_new_arity_check(c, ci, argc, argv, g_pre);
+        {
+          int initm0 = comp_method_in_chain(c, ci, "initialize", NULL);
+          if (ctor_needs_self_defaults(c, initm0, argc) && !class_is_exc_subclass(c, ci)) {
+            emit_ctor_alloc_init(c, ci, initm0, nt_ref(nt, id, "arguments"), b);
+            return 1;
+          }
+        }
         buf_printf(b, "sp_%s_new(", c->classes[ci].c_name);
         int initm = comp_method_in_chain(c, ci, "initialize", NULL);
         if (initm >= 0) emit_args_filled(c, initm, nt_ref(nt, id, "arguments"), "", b);
@@ -8093,7 +8180,7 @@ static int class_responds_to(Compiler *c, int ci, const char *qm) {
 static void emit_cmethod_block_arg(Compiler *c, int id, Scope *cm, int blk_tmp, Buf *b) {
   if (!cm->blk_param || !cm->blk_param[0] || cm->yields) return;
   int blk_node = resolve_forwarded_block(c, nt_ref(c->nt, id, "block"));
-  if (cm->nparams > 0) buf_puts(b, ", ");
+  if (cm->nparams > 0 || cmethod_takes_self_cls(c, (int)(cm - c->scopes))) buf_puts(b, ", ");
   if (blk_node < 0) { buf_puts(b, "NULL"); return; }
   /* `inner(child, &block)` from a REAL function (not a yield-inline splice):
      the caller's &blk is a live sp_Proc* local -- pass it through instead of
@@ -13807,7 +13894,14 @@ else { memcpy(dir, sf, n); dir[n] = 0; } }
         Scope *ms = &c->scopes[smi];
         emit_method_cname(c, ms, b);
         buf_puts(b, "(");
-        emit_args_filled(c, smi, nt_ref(nt, id, "arguments"), "", b);
+        /* a sibling call keeps the receiving class: forward ours when this
+           body has one, else the class it is emitted for */
+        const char *lead2 = "";
+        if (cmethod_takes_self_cls(c, smi)) {
+          if (cmethod_takes_self_cls(c, (int)(encl - c->scopes))) { buf_puts(b, "_sp_cls"); lead2 = ", "; }
+          else lead2 = emit_cmethod_self_cls_arg(c, smi, new_cls, b);
+        }
+        emit_args_filled(c, smi, nt_ref(nt, id, "arguments"), lead2, b);
         emit_cmethod_block_arg(c, id, ms, -1, b);
         buf_puts(b, ")");
         return;
@@ -13821,7 +13915,8 @@ else { memcpy(dir, sf, n); dir[n] = 0; } }
       Scope *ms = &c->scopes[smi];
       emit_method_cname(c, ms, b);
       buf_puts(b, "(");
-      emit_args_filled(c, smi, nt_ref(nt, id, "arguments"), "", b);
+      const char *lead3 = emit_cmethod_self_cls_arg(c, smi, g_class_body_id, b);
+      emit_args_filled(c, smi, nt_ref(nt, id, "arguments"), lead3, b);
       emit_cmethod_block_arg(c, id, ms, -1, b);
       buf_puts(b, ")");
       return;
@@ -13916,7 +14011,8 @@ else { memcpy(dir, sf, n); dir[n] = 0; } }
           /* single implementation: call directly */
           emit_method_cname(c, &c->scopes[defmi], b);
           buf_puts(b, "(");
-          emit_args_filled(c, defmi, nt_ref(nt, id, "arguments"), "", b);
+          { const char *ld = emit_cmethod_self_cls_arg(c, defmi, cid, b);
+            emit_args_filled(c, defmi, nt_ref(nt, id, "arguments"), ld, b); }
           buf_puts(b, ")");
         }
         else {
@@ -13944,7 +14040,8 @@ else { memcpy(dir, sf, n); dir[n] = 0; } }
               /* void-return (raises): call then fall through with nil */
               emit_method_cname(c, &c->scopes[kmi], b);
               buf_puts(b, "(");
-              emit_args_filled(c, kmi, nt_ref(nt, id, "arguments"), "", b);
+              { const char *ld = emit_cmethod_self_cls_arg(c, kmi, k, b);
+                emit_args_filled(c, kmi, nt_ref(nt, id, "arguments"), ld, b); }
               buf_printf(b, "); _t%d = sp_box_nil(); break;", rtmp);
             }
             else {
@@ -13958,7 +14055,8 @@ else { memcpy(dir, sf, n); dir[n] = 0; } }
               }
               emit_method_cname(c, &c->scopes[kmi], b);
               buf_puts(b, "(");
-              emit_args_filled(c, kmi, nt_ref(nt, id, "arguments"), "", b);
+              { const char *ld = emit_cmethod_self_cls_arg(c, kmi, k, b);
+                emit_args_filled(c, kmi, nt_ref(nt, id, "arguments"), ld, b); }
               buf_puts(b, ")");
               if (unified == TY_POLY) {
                 const char *boxfn = (kr == TY_INT) ? "sp_box_int" :
@@ -13976,7 +14074,8 @@ else { memcpy(dir, sf, n); dir[n] = 0; } }
             if (unified == TY_POLY && method_is_void(&c->scopes[defmi])) {
               emit_method_cname(c, &c->scopes[defmi], b);
               buf_puts(b, "(");
-              emit_args_filled(c, defmi, nt_ref(nt, id, "arguments"), "", b);
+              { const char *ld = emit_cmethod_self_cls_arg(c, defmi, cid, b);
+                emit_args_filled(c, defmi, nt_ref(nt, id, "arguments"), ld, b); }
               buf_printf(b, "); _t%d = sp_box_nil(); break;", rtmp);
             }
             else {
@@ -13990,7 +14089,8 @@ else { memcpy(dir, sf, n); dir[n] = 0; } }
               }
               emit_method_cname(c, &c->scopes[defmi], b);
               buf_puts(b, "(");
-              emit_args_filled(c, defmi, nt_ref(nt, id, "arguments"), "", b);
+              { const char *ld = emit_cmethod_self_cls_arg(c, defmi, cid, b);
+                emit_args_filled(c, defmi, nt_ref(nt, id, "arguments"), ld, b); }
               buf_puts(b, ")");
               if (unified == TY_POLY) {
                 const char *boxfn = (dr == TY_INT) ? "sp_box_int" :
@@ -14019,14 +14119,18 @@ else { memcpy(dir, sf, n); dir[n] = 0; } }
     buf_printf(b, "SPL(\"%s\")", nt_str(nt, recv, "name"));
     return;
   }
-  /* self.name / self.to_s / self.inspect inside a class method -> class name */
+  /* self.name / self.to_s / self.inspect inside a class method -> class name.
+     A method a subclass inherits runs with self = that subclass, so when the
+     receiving class rides in (cmethod_takes_self_cls) resolve the name at run
+     time rather than folding the defining class's. */
   if (recv >= 0 && argc == 0 &&
       (sp_streq(name, "name") || sp_streq(name, "to_s") || sp_streq(name, "inspect")) &&
       nt_type(nt, recv) && sp_streq(nt_type(nt, recv), "SelfNode")) {
     Scope *encl = comp_scope_of(c, id);
     if (encl && encl->is_cmethod && encl->class_id >= 0 &&
         comp_cmethod_in_chain(c, encl->class_id, name, NULL) < 0) {
-      buf_printf(b, "SPL(\"%s\")", c->classes[encl->class_id].name);
+      if (cmethod_takes_self_cls(c, (int)(encl - c->scopes))) buf_puts(b, "sp_class_to_s(_sp_cls)");
+      else buf_printf(b, "SPL(\"%s\")", c->classes[encl->class_id].name);
       return;
     }
   }
@@ -14035,7 +14139,8 @@ else { memcpy(dir, sf, n); dir[n] = 0; } }
     Scope *encl = comp_scope_of(c, id);
     if (encl && encl->is_cmethod && encl->class_id >= 0 &&
         comp_cmethod_in_chain(c, encl->class_id, name, NULL) < 0) {
-      buf_printf(b, "SPL(\"%s\")", c->classes[encl->class_id].name);
+      if (cmethod_takes_self_cls(c, (int)(encl - c->scopes))) buf_puts(b, "sp_class_to_s(_sp_cls)");
+      else buf_printf(b, "SPL(\"%s\")", c->classes[encl->class_id].name);
       return;
     }
   }
@@ -15794,6 +15899,31 @@ else { memcpy(dir, sf, n); dir[n] = 0; } }
       int initm = comp_method_in_chain(c, ci, "initialize", NULL);
       int np = initm >= 0 ? c->scopes[initm].nparams : 0;
       int nreq = initm >= 0 ? c->scopes[initm].nrequired : 0;
+      /* A zero-arg construction also reaches a constructor whose params are all
+         optional: the arm fills each with its default, exactly as the
+         statically-known `Klass.new` does. */
+      if (argc == 0 && nreq == 0 && np > 0) {
+        if (class_is_exc_subclass(c, ci)) continue;
+        buf_printf(b, "case %d: _t%d=", ci, rt2);
+        if (ctor_needs_self_defaults(c, initm, 0)) {
+          buf_printf(b, c->classes[ci].is_value_type ? "sp_box_vobj_%s(" : "sp_box_obj(",
+                     c->classes[ci].c_name);
+          emit_ctor_alloc_init(c, ci, initm, -1, b);
+          if (c->classes[ci].is_value_type) buf_puts(b, "); break;");
+          else buf_printf(b, ",%d); break;", ci);
+          continue;
+        }
+        Buf ad; memset(&ad, 0, sizeof ad);
+        emit_args_filled(c, initm, -1, "", &ad);
+        if (c->classes[ci].is_value_type)
+          buf_printf(b, "sp_box_vobj_%s(sp_%s_new(%s)); break;",
+                     c->classes[ci].c_name, c->classes[ci].c_name, ad.p ? ad.p : "");
+        else
+          buf_printf(b, "sp_box_obj(sp_%s_new(%s),%d); break;",
+                     c->classes[ci].c_name, ad.p ? ad.p : "", ci);
+        free(ad.p);
+        continue;
+      }
       if (argc != np || nreq != np) continue;  /* only an exact all-required match */
       buf_printf(b, "case %d: _t%d=", ci, rt2);
       if (c->classes[ci].is_value_type)
@@ -17573,7 +17703,8 @@ else { memcpy(dir, sf, n); dir[n] = 0; } }
       int mi = comp_cmethod_in_chain(c, fold_ci, name, &defcls);
       if (mi >= 0) {
         buf_printf(b, "sp_%s_s_%s(", c->classes[defcls].c_name, mc(c->scopes[mi].name));
-        emit_args_filled(c, mi, nt_ref(nt, id, "arguments"), "", b);
+        const char *lead0 = emit_cmethod_self_cls_arg(c, mi, fold_ci, b);
+        emit_args_filled(c, mi, nt_ref(nt, id, "arguments"), lead0, b);
         emit_cmethod_block_arg(c, id, &c->scopes[mi], -1, b);
         buf_puts(b, ")");
         return;
@@ -17619,7 +17750,8 @@ else { memcpy(dir, sf, n); dir[n] = 0; } }
             int mi = comp_cmethod_in_chain(c, cand[k], name, &defcls);
             if (mi < 0) continue;
             buf_printf(b, "if (_t%d == %d) sp_%s_s_%s(", tcid, cand[k], c->classes[defcls].c_name, mc(c->scopes[mi].name));
-            emit_args_filled(c, mi, nt_ref(nt, id, "arguments"), "", b);
+            { const char *leadv = emit_cmethod_self_cls_arg(c, mi, cand[k], b);
+              emit_args_filled(c, mi, nt_ref(nt, id, "arguments"), leadv, b); }
             emit_cmethod_block_arg(c, id, &c->scopes[mi], blk_tmp, b);
             buf_puts(b, "); ");
           }
@@ -17635,7 +17767,8 @@ else { memcpy(dir, sf, n); dir[n] = 0; } }
           if (res == TY_POLY && c->scopes[mi].ret != TY_POLY) {
             Buf cb; memset(&cb, 0, sizeof cb);
             buf_printf(&cb, "sp_%s_s_%s(", c->classes[defcls].c_name, mc(c->scopes[mi].name));
-            emit_args_filled(c, mi, nt_ref(nt, id, "arguments"), "", &cb);
+            { const char *leadb = emit_cmethod_self_cls_arg(c, mi, cand[k], &cb);
+              emit_args_filled(c, mi, nt_ref(nt, id, "arguments"), leadb, &cb); }
             emit_cmethod_block_arg(c, id, &c->scopes[mi], blk_tmp, &cb);
             buf_puts(&cb, ")");
             emit_boxed_text(c, c->scopes[mi].ret, cb.p ? cb.p : "0", b);
@@ -17643,7 +17776,8 @@ else { memcpy(dir, sf, n); dir[n] = 0; } }
           }
           else {
             buf_printf(b, "sp_%s_s_%s(", c->classes[defcls].c_name, mc(c->scopes[mi].name));
-            emit_args_filled(c, mi, nt_ref(nt, id, "arguments"), "", b);
+            { const char *leadc = emit_cmethod_self_cls_arg(c, mi, cand[k], b);
+              emit_args_filled(c, mi, nt_ref(nt, id, "arguments"), leadc, b); }
             emit_cmethod_block_arg(c, id, &c->scopes[mi], blk_tmp, b);
             buf_puts(b, ")");
           }
@@ -17664,7 +17798,8 @@ else { memcpy(dir, sf, n); dir[n] = 0; } }
       int mi = ci >= 0 ? comp_cmethod_in_chain(c, ci, name, &defcls) : -1;
       if (mi >= 0) {
         buf_printf(b, "sp_%s_s_%s(", c->classes[defcls].c_name, mc(c->scopes[mi].name));
-        emit_args_filled(c, mi, nt_ref(nt, id, "arguments"), "", b);
+        const char *lead1 = emit_cmethod_self_cls_arg(c, mi, ci, b);
+        emit_args_filled(c, mi, nt_ref(nt, id, "arguments"), lead1, b);
         /* Pass &block as sp_Proc * when the class method keeps a real &blk
            param and isn't yield-inlined -- the instance-method and bare-call
            paths already do this; a module/class-method call must too. */
@@ -21782,7 +21917,8 @@ else { memcpy(dir, sf, n); dir[n] = 0; } }
             buf_printf(b, "_t%d.cls_id == %d ? ", tv, ccls[k]);
             Buf cb; memset(&cb, 0, sizeof cb);
             buf_printf(&cb, "sp_%s_s_%s(", c->classes[cdef[k]].c_name, mc(c->scopes[cmi[k]].name));
-            emit_args_filled(c, cmi[k], argsN, "", &cb);
+            const char *leadk = emit_cmethod_self_cls_arg(c, cmi[k], ccls[k], &cb);
+            emit_args_filled(c, cmi[k], argsN, leadk, &cb);
             emit_cmethod_block_arg(c, id, &c->scopes[cmi[k]], -1, &cb);
             buf_puts(&cb, ")");
             TyKind mret = (TyKind)c->scopes[cmi[k]].ret;
