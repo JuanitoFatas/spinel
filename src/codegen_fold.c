@@ -3815,11 +3815,32 @@ else {
     emit_indent(g_pre, g_indent); emit_ctype(c, rt, g_pre);
     buf_printf(g_pre, " _t%d = _t%d;\n", tr, trv);  /* sort! operates on self */
   }
+  /* Bottom-up merge sort: stable, and O(n log n) comparisons. (A bubble sort
+     with the comparator inlined was quadratic -- a 40K-element sort took five
+     seconds.) The scratch buffer only ever holds elements the array still
+     holds too, so a collection during the comparator cannot lose one. */
+  int tw = ++g_tmp, tlo = ++g_tmp, tmid = ++g_tmp, thi = ++g_tmp, to = ++g_tmp, tbuf = ++g_tmp, tc = ++g_tmp;
+  Buf ect; memset(&ect, 0, sizeof ect); emit_ctype(c, et, &ect);
+  const char *ecs = ect.p ? ect.p : "mrb_int";
   emit_indent(g_pre, g_indent); buf_printf(g_pre, "mrb_int _t%d = sp_%sArray_length(_t%d);\n", tn, k, tr);
-  emit_indent(g_pre, g_indent); buf_printf(g_pre, "for (mrb_int _t%d = 0; _t%d < _t%d - 1; _t%d++)\n", ti, ti, tn, ti);
-  emit_indent(g_pre, g_indent + 1); buf_printf(g_pre, "for (mrb_int _t%d = 0; _t%d < _t%d - 1 - _t%d; _t%d++) {\n", tj, tj, tn, ti, tj);
-  emit_indent(g_pre, g_indent + 2); emit_ctype(c, et, g_pre); buf_printf(g_pre, " _t%d = sp_%sArray_get(_t%d, _t%d);\n", ta, k, tr, tj);
-  emit_indent(g_pre, g_indent + 2); emit_ctype(c, et, g_pre); buf_printf(g_pre, " _t%d = sp_%sArray_get(_t%d, _t%d + 1);\n", tb, k, tr, tj);
+  emit_indent(g_pre, g_indent);
+  buf_printf(g_pre, "%s *_t%d = _t%d > 1 ? (%s *)malloc(sizeof(%s) * (size_t)_t%d) : NULL;\n", ecs, tbuf, tn, ecs, ecs, tn);
+  emit_indent(g_pre, g_indent);
+  buf_printf(g_pre, "for (mrb_int _t%d = 1; _t%d && _t%d < _t%d; _t%d *= 2)\n", tw, tbuf, tw, tn, tw);
+  emit_indent(g_pre, g_indent + 1);
+  buf_printf(g_pre, "for (mrb_int _t%d = 0; _t%d < _t%d; _t%d += 2 * _t%d) {\n", tlo, tlo, tn, tlo, tw);
+  emit_indent(g_pre, g_indent + 2);
+  buf_printf(g_pre, "mrb_int _t%d = _t%d + _t%d; if (_t%d > _t%d) _t%d = _t%d;\n", tmid, tlo, tw, tmid, tn, tmid, tn);
+  emit_indent(g_pre, g_indent + 2);
+  buf_printf(g_pre, "mrb_int _t%d = _t%d + 2 * _t%d; if (_t%d > _t%d) _t%d = _t%d;\n", thi, tlo, tw, thi, tn, thi, tn);
+  emit_indent(g_pre, g_indent + 2);
+  buf_printf(g_pre, "if (_t%d >= _t%d) continue;\n", tmid, thi);
+  emit_indent(g_pre, g_indent + 2);
+  buf_printf(g_pre, "mrb_int _t%d = _t%d, _t%d = _t%d, _t%d = _t%d;\n", ti, tlo, tj, tmid, to, tlo);
+  emit_indent(g_pre, g_indent + 2);
+  buf_printf(g_pre, "while (_t%d < _t%d && _t%d < _t%d) {\n", ti, tmid, tj, thi);
+  emit_indent(g_pre, g_indent + 3); buf_printf(g_pre, "%s _t%d = sp_%sArray_get(_t%d, _t%d);\n", ecs, ta, k, tr, ti);
+  emit_indent(g_pre, g_indent + 3); buf_printf(g_pre, "%s _t%d = sp_%sArray_get(_t%d, _t%d);\n", ecs, tb, k, tr, tj);
   Scope *sbsc = comp_scope_of(c, block);
   LocalVar *slv0 = sbsc ? scope_local(sbsc, p0) : NULL;
   LocalVar *slv1 = sbsc ? scope_local(sbsc, p1) : NULL;
@@ -3828,7 +3849,7 @@ else {
   if (slv0) slv0->type = et;
   if (slv1) slv1->type = et;
   for (int j = 0; j < bn; j++) infer_subtree(c, bb[j]);  /* refresh ntype cache */
-  int save = g_indent; g_indent += 2;
+  int save = g_indent; g_indent += 3;
   /* Shadow the outer (possibly poly) block params with et-typed locals */
   emit_indent(g_pre, g_indent); buf_puts(g_pre, "{\n"); g_indent++;
   emit_indent(g_pre, g_indent); emit_ctype(c, et, g_pre); buf_printf(g_pre, " lv_%s = _t%d; ", p0, ta);
@@ -3836,13 +3857,25 @@ else {
   for (int j = 0; j < bn - 1; j++) emit_stmt(c, bb[j], g_pre, g_indent);
   Buf cb; memset(&cb, 0, sizeof cb); emit_expr(c, bb[bn - 1], &cb);
   emit_indent(g_pre, g_indent);
-  buf_printf(g_pre, "if (%s%s) > 0) { sp_%sArray_set(_t%d, _t%d, _t%d); sp_%sArray_set(_t%d, _t%d + 1, _t%d); }\n", cmp_o,
-             cb.p ? cb.p : "0", k, tr, tj, tb, k, tr, tj, ta); free(cb.p);
+  /* take from the left on a tie, so equal elements keep their order */
+  buf_printf(g_pre, "mrb_int _t%d = %s%s);\n", tc, cmp_o, cb.p ? cb.p : "0"); free(cb.p);
+  emit_indent(g_pre, g_indent);
+  buf_printf(g_pre, "if (_t%d > 0) { _t%d[_t%d++] = _t%d; _t%d++; }\nelse { _t%d[_t%d++] = _t%d; _t%d++; }\n",
+             tc, tbuf, to, tb, tj, tbuf, to, ta, ti);
   g_indent--; g_indent = save;
-  emit_indent(g_pre, g_indent + 2); buf_puts(g_pre, "}\n");
+  emit_indent(g_pre, g_indent + 3); buf_puts(g_pre, "}\n");
   if (slv0) slv0->type = spt0;
   if (slv1) slv1->type = spt1;
-  emit_indent(g_pre, g_indent + 1); buf_puts(g_pre, "}\n");
+  emit_indent(g_pre, g_indent + 2); buf_puts(g_pre, "}\n");   /* while merge */
+  emit_indent(g_pre, g_indent + 2);
+  buf_printf(g_pre, "while (_t%d < _t%d) _t%d[_t%d++] = sp_%sArray_get(_t%d, _t%d++);\n", ti, tmid, tbuf, to, k, tr, ti);
+  emit_indent(g_pre, g_indent + 2);
+  buf_printf(g_pre, "while (_t%d < _t%d) _t%d[_t%d++] = sp_%sArray_get(_t%d, _t%d++);\n", tj, thi, tbuf, to, k, tr, tj);
+  emit_indent(g_pre, g_indent + 2);
+  buf_printf(g_pre, "for (mrb_int _q = _t%d; _q < _t%d; _q++) sp_%sArray_set(_t%d, _q, _t%d[_q]);\n", tlo, thi, k, tr, tbuf);
+  emit_indent(g_pre, g_indent + 1); buf_puts(g_pre, "}\n");   /* for lo */
+  emit_indent(g_pre, g_indent); buf_printf(g_pre, "free(_t%d);\n", tbuf);
+  free(ect.p);
   buf_printf(b, "_t%d", tr);
   return 1;
 }
