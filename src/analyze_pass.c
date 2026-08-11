@@ -2516,7 +2516,11 @@ int infer_write_types(Compiler *c) {
     for (int i = 0; i < c->scopes[s].nlocals; i++) {
       LocalVar *lv = &c->scopes[s].locals[i];
       if (lv->oa_pin == TY_UNKNOWN) continue;
-      if (lv->type == TY_POLY_ARRAY || lv->type == lv->oa_pin) lv->type = lv->oa_pin;
+      /* TY_POLY too: a local narrowed to a container's ELEMENT type re-derives
+         as the plain poly scalar the read hands back, exactly as a narrowed
+         container re-derives as the poly array. */
+      if (lv->type == TY_POLY_ARRAY || lv->type == TY_POLY || lv->type == lv->oa_pin)
+        lv->type = lv->oa_pin;
       else lv->oa_pin = TY_UNKNOWN;
     }
 

@@ -1097,7 +1097,14 @@ void emit_block_invoke(Compiler *c, int args_node, Buf *b, int indent, int as_ex
     buf_puts(b, "; ");
   }
   else if (as_expr && !nx_own && want_poly && bn3 > 0 &&
-           ty_is_object(comp_ntype(c, bd3[bn3 - 1])) &&
+           (ty_is_object(comp_ntype(c, bd3[bn3 - 1])) ||
+            /* A CALL whose value the statement form does not carry: `p x`
+               emits as fputs + putchar, so the statement expression's value is
+               putchar's int rather than the call's own. Emitting the tail as an
+               expression is what makes the splice's value the block's value
+               (#3781). */
+            (nt_type(nt, bd3[bn3 - 1]) && sp_streq(nt_type(nt, bd3[bn3 - 1]), "CallNode") &&
+             comp_ntype(c, bd3[bn3 - 1]) == TY_POLY)) &&
            nt_type(nt, bd3[bn3 - 1]) &&
            !sp_streq(nt_type(nt, bd3[bn3 - 1]), "ReturnNode")) {
     /* concrete-typed bare tail into a poly slot: box it (#3278) */

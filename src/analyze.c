@@ -6022,7 +6022,18 @@ static int narrow_locals_from_arrays(Compiler *c) {
         if (elem == TY_UNKNOWN) elem = ec; else if (elem != ec) { ok = 0; break; }
         saw = 1;
       }
-      if (ok && saw && elem != TY_UNKNOWN) { lv->type = elem; prop_ch = 1; any = 1; }
+      if (ok && saw && elem != TY_UNKNOWN) {
+        /* Pin it: the next write pass resets the slot and re-derives the plain
+           poly the container read hands back, and this pass would narrow it
+           again -- an oscillation that never converged, so the fixpoint ran its
+           full round budget and left whatever types the cap happened to catch
+           (#3781). Every write of the local is an index read of the same
+           element type (the loop above insists), so the pin cannot mask a
+           genuine widening. */
+        lv->type = elem;
+        lv->oa_pin = elem;
+        prop_ch = 1; any = 1;
+      }
     }
   }
   if (!prop_ch) break;
@@ -6112,8 +6123,14 @@ static int narrow_object_arrays(Compiler *c) {
      keeping a type its uses no longer support. */
   for (int s = 0; s < c->nscopes; s++) {
     Scope *sc = &c->scopes[s];
-    for (int li = 0; li < sc->nlocals; li++)
-      if (sc->locals[li].oa_pin != TY_UNKNOWN) sc->locals[li].type = TY_POLY_ARRAY;
+    for (int li = 0; li < sc->nlocals; li++) {
+      TyKind pn = sc->locals[li].oa_pin;
+      /* only THIS pass's own narrowings go back on the poly array: the pin
+         field also carries the element-narrowing's decision (a local bound
+         from a container read), and resetting one of those to a poly ARRAY
+         made the two passes trade the slot every round (#3781) */
+      if (pn == TY_INT_ARRAY_ARRAY || ty_is_obj_array(pn)) sc->locals[li].type = TY_POLY_ARRAY;
+    }
   }
   /* 1. candidate slots: POLY_ARRAY locals/params (skip block params + rbs). */
   int cap = 16, n = 0;
@@ -6138,7 +6155,8 @@ static int narrow_object_arrays(Compiler *c) {
         transplanted ones) and returns pinned by a seed stay out. */
   for (int s = 0; s < c->nscopes; s++) {
     Scope *sc = &c->scopes[s];
-    if (sc->ret_oa_pin != TY_UNKNOWN) sc->ret = TY_POLY_ARRAY;   /* same reset */
+    if (sc->ret_oa_pin == TY_INT_ARRAY_ARRAY || ty_is_obj_array(sc->ret_oa_pin))
+      sc->ret = TY_POLY_ARRAY;   /* same reset */
     if (sc->ret != TY_POLY_ARRAY || !sc->name || sc->def_node < 0) continue;
     if (sc->ret_rbs_seeded || sc->ret_specialized) continue;
     if (sc->yields || sc->is_proc_form || sc->is_lowered_yield ||
@@ -6405,24 +6423,41 @@ static int narrow_object_arrays(Compiler *c) {
   }
   for (int i = 0; i < n; i++) {
     int r = oa_uf_find(sl, i);
-    if (!sl[r].alive) continue;
-    if (sl[r].cls == -1 || sl[r].cls == -2) continue;  /* no evidence / conflict */
+    /* This pass cleared every candidate's pin on the way in, but the pin field
+       is also written by the element-narrowing below it. Put a pin back when
+       this pass reaches no decision, or the two passes alternate forever and
+       the fixpoint burns its whole round budget (#3781). */
+    if (!sl[r].alive || sl[r].cls == -1 || sl[r].cls == -2) {
+      if (sl[i].lv) sl[i].lv->oa_pin = sl[i].old_pin;
+      else c->scopes[sl[i].sidx].ret_oa_pin = sl[i].old_pin;
+      continue;
+    }
     TyKind nty;
     if (sl[r].cls == OA_CLS_IA) {
       /* array-of-int-array: the codegen supports index/push/[]=/length/first/
          last but not the boxed sort/min/max comparators yet, so a component
          that used those (needs_cmp) stays on the poly path for now. */
-      if (sl[r].needs_cmp) continue;
+      if (sl[r].needs_cmp) {
+        if (sl[i].lv) sl[i].lv->oa_pin = sl[i].old_pin;
+        else c->scopes[sl[i].sidx].ret_oa_pin = sl[i].old_pin;
+        continue;
+      }
       nty = TY_INT_ARRAY_ARRAY;
     }
     else {
       /* a component using no-block sort/min/max narrows only when the element
          class can actually compare (has `<=>` in its chain); otherwise it stays
          poly, where the boxed comparator raises the CRuby ArgumentError. */
-      if (sl[r].needs_cmp && comp_method_in_chain(c, sl[r].cls, "<=>", NULL) < 0) continue;
+      if (sl[r].needs_cmp && comp_method_in_chain(c, sl[r].cls, "<=>", NULL) < 0) {
+        if (sl[i].lv) sl[i].lv->oa_pin = sl[i].old_pin;
+        else c->scopes[sl[i].sidx].ret_oa_pin = sl[i].old_pin;
+        continue;
+      }
       nty = ty_obj_array(sl[r].cls);
     }
-    if (sl[i].lv) { sl[i].lv->type = nty; sl[i].lv->oa_pin = nty; }
+    if (sl[i].lv) {
+      sl[i].lv->type = nty; sl[i].lv->oa_pin = nty;
+    }
     else { c->scopes[sl[i].sidx].ret = nty; c->scopes[sl[i].sidx].ret_oa_pin = nty; }
   }
   /* the round changed something exactly when some slot's decision differs from
@@ -10700,7 +10735,6 @@ void analyze_program(Compiler *c) {
   g_infer_optimistic = 1;
   for (int iter = 0; iter < 128; iter++) {
     int ch = 0;
-    if (getenv("OA_ITER")) fprintf(stderr, "iter %d\n", iter);
     sp_narrow_memo_bump();  /* invalidate per-iteration narrow-helper memo */
     build_ie_map(c);  /* refresh instance_exec receiver-class map each pass */
     ch |= register_ie_block_ivars(c);  /* slot ivars first assigned in iexec blocks */
