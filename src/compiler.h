@@ -38,6 +38,11 @@ typedef struct {
   int is_cell;      /* captured by an escaping proc: lives in a heap cell
                        (mrb_int *_cell_<name>) so the closure and the enclosing
                        scope share mutable storage */
+  int cell_shadow;  /* the cell belongs to a param of an INLINED iteration
+                       block, which the loop emitters bind by writing the plain
+                       C slot. Keep that slot alongside the cell and copy it in
+                       at the top of the body, so a proc lifted out of the block
+                       reads this iteration's value through the cell. */
   int byref_out;    /* (params) a string param the method body mutates in place
                        (`<<`/bang mutators): passed as const char** so the
                        mutation lands in the caller's variable, like CRuby's

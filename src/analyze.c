@@ -730,9 +730,31 @@ void mark_proc_captures(Compiler *c) {
          slice"), and this proc closes over it -- the enclosing proc's prologue
          materializes the cell (#2648). Only proc-fn enclosers: an inlined
          iterator block's params bind in the loop, where no cell exists yet. */
+      int shadow = 0;
       if (!owned) {
         for (int q = 0; q < nt->count && !owned; q++) {
-          if (q == id || !is_proc_create(c, q)) continue;
+          if (q == id) continue;
+          /* An INLINED iteration block binds its params in the loop, where the
+             emitters write the plain C slot -- so celling one needs the slot
+             kept alongside the cell (LocalVar.cell_shadow) and copied in at the
+             top of the body. Refusing instead left a proc lifted out of a
+             nested block with nowhere to read the enclosing loop variable, and
+             the emitter had to reject the whole program. */
+          int q_is_proc = is_proc_create(c, q);
+          int q_is_block = 0;
+          if (!q_is_proc) {
+            const char *qty = nt_type(nt, q);
+            int qblk = qty && sp_streq(qty, "CallNode") ? nt_ref(nt, q, "block") : -1;
+            const char *qbt = qblk >= 0 ? nt_type(nt, qblk) : NULL;
+            q_is_block = qbt && sp_streq(qbt, "BlockNode");
+          }
+          /* One shared cell per loop, not one per iteration: only a proc the
+             call CONSUMES while the iteration runs may read it. A `proc {}` /
+             lambda / Fiber / Thread body outlives its iteration -- Ruby gives
+             each of those its own binding -- so those keep the by-value
+             capture they had. */
+          if (!q_is_proc && q_is_block && (fib_create || is_proc_create(c, id))) continue;
+          if (!q_is_proc && !q_is_block) continue;
           int qpn = a_proc_params_node(c, q);
           int qrn = 0; const int *qreqs = qpn >= 0 ? nt_arr(nt, qpn, "requireds", &qrn) : NULL;
           int has = 0;
@@ -742,7 +764,7 @@ void mark_proc_captures(Compiler *c) {
           }
           if (!has) continue;
           int qb = a_proc_body(c, q);
-          if (qb >= 0 && a_subtree_contains(nt, qb, id, 0)) owned = 1;
+          if (qb >= 0 && a_subtree_contains(nt, qb, id, 0)) { owned = 1; shadow = !q_is_proc; }
         }
       }
       if (owned) {
@@ -763,6 +785,7 @@ void mark_proc_captures(Compiler *c) {
             lv->type != TY_FLOAT && lv->type != TY_POLY && !heap_ptr)
           continue;   /* capture type without a usable cell: leave by value */
         lv->is_cell = 1;
+        if (shadow) lv->cell_shadow = 1;
       }
     }
     free(params.v); free(used.v);

@@ -716,6 +716,19 @@ void emit_boxed(Compiler *c, int node, Buf *b) {
 /* `vol` makes the local volatile (required for locals live across a setjmp
    in a begin/rescue). Pointers need the volatile on the pointer itself
    (T * volatile), value types take a leading qualifier. */
+/* A cell that shadows a plain C slot (an INLINED block's param, bound by the
+   loop emitters writing that slot) has to take the slot's current value before
+   a proc built here reads the cell. Emitted at the capture fill, which is the
+   one point every such proc goes through. */
+void emit_cell_shadow_store(Compiler *c, Scope *encl, const char *name, Buf *b, int indent) {
+  (void)c;
+  LocalVar *lv = encl && name ? scope_local(encl, name) : NULL;
+  if (!lv || !lv->is_cell || !lv->cell_shadow) return;
+  emit_indent(b, indent);
+  if (lv->type == TY_PROC) buf_printf(b, "*_cell_%s = (mrb_int)(uintptr_t)lv_%s;\n", name, name);
+  else buf_printf(b, "*_cell_%s = lv_%s;\n", name, name);
+}
+
 void declare_local(Compiler *c, Buf *b, LocalVar *lv, int vol) {
   TyKind t = lv->type;
   Buf cty; memset(&cty, 0, sizeof cty);
@@ -943,6 +956,10 @@ void emit_scope_decls(Compiler *c, Scope *s, Buf *b) {
        scope share storage. A param's incoming value is copied into the cell;
        a body local starts at 0. Int and proc cells supported. */
     if (lv->is_cell) {
+      /* A cell over an INLINED block's param: the loop emitters bind the plain
+         C slot, so declare it too and let the body's opening line copy it into
+         the cell (emit_loop_body). */
+      if (lv->cell_shadow && !lv->is_param) declare_local(c, b, lv, 0);
       if (lv->type == TY_PROC) {
         buf_printf(b, "    mrb_int *_cell_%s = (mrb_int *)sp_gc_alloc(sizeof(mrb_int), NULL, NULL);\n", lv->name);
         buf_printf(b, "    SP_GC_ROOT(_cell_%s);\n", lv->name);
@@ -2775,6 +2792,8 @@ void emit_fiber_new(Compiler *c, int id, Buf *b, int as_gen, int size_node) {
     }
     for (int i = 0; i < ncap; i++) {
       LocalVar *lv = encl ? scope_local(encl, caps.v[i]) : NULL;
+      if (!(g_cap_struct && g_cap_names && nameset_has(g_cap_names, caps.v[i])))
+        emit_cell_shadow_store(c, encl, caps.v[i], g_pre, g_indent);
       emit_indent(g_pre, g_indent);
       if (g_cap_struct && g_cap_names && nameset_has(g_cap_names, caps.v[i]))
         buf_printf(g_pre, "_t%d->%s = ((%s *)_cap)->%s;\n", tc, caps.v[i], g_cap_struct, caps.v[i]);
@@ -3788,6 +3807,8 @@ else if (orecv >= 0 && onm) {
          cell arrived through that proc's own capture struct, and the nested
          proc has to forward it from there (#3416). */
       for (int i = 0; i < ncap; i++) {
+        if (!(g_cap_struct && g_cap_names && nameset_has(g_cap_names, caps.v[i])))
+          emit_cell_shadow_store(c, bs, caps.v[i], g_pre, g_indent);
         emit_indent(g_pre, g_indent);
         if (g_cap_struct && g_cap_names && nameset_has(g_cap_names, caps.v[i]))
           buf_printf(g_pre, "_capv_%d->%s = ((%s *)_cap)->%s;\n", pid, caps.v[i], g_cap_struct, caps.v[i]);
