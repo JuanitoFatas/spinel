@@ -1451,6 +1451,9 @@ const char *bigint_arith_fn(const char *op) {
   if (sp_streq(op, "*"))  return "sp_bigint_mul";
   if (sp_streq(op, "/"))  return "sp_bigint_div";
   if (sp_streq(op, "%"))  return "sp_bigint_mod";
+  if (sp_streq(op, "&"))  return "sp_bigint_and";
+  if (sp_streq(op, "|"))  return "sp_bigint_or";
+  if (sp_streq(op, "^"))  return "sp_bigint_xor";
   return NULL;
 }
 /* True if any user exception subclass overrides #message or #to_s, so the

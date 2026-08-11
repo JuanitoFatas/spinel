@@ -6178,8 +6178,10 @@ else {
      return any type -- honored via the sp_obj_hash_hook for keys). */
   if (sp_streq(name, "hash") && recv >= 0 && argc == 0 && !ty_is_object(rt)) return TY_INT;
   if (sp_streq(name, "between?") && argc == 2 && (rt == TY_STRING || ty_is_numeric(rt))) return TY_BOOL;
-  /* int | / ^ a Bignum operand promotes (#2422) */
-  if (recv >= 0 && argc == 1 && (sp_streq(name, "|") || sp_streq(name, "^")) &&
+  /* int & | ^ a Bignum operand promotes (#2422). `&` too: a negative receiver
+     is sign-extended forever, so `-1 & 0xFFFFFFFFFFFFFFFF` IS that mask. */
+  if (recv >= 0 && argc == 1 &&
+      (sp_streq(name, "|") || sp_streq(name, "^") || sp_streq(name, "&")) &&
       infer_type(c, recv) == TY_INT && infer_type(c, argv[0]) == TY_BIGINT) return TY_BIGINT;
   if ((sp_streq(name, "match?") || sp_streq(name, "!~")) && recv >= 0) return TY_BOOL;
   if (sp_streq(name, "match") && recv >= 0 && (argc == 1 || argc == 2)) {

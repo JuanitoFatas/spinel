@@ -10184,8 +10184,19 @@ int emit_poly_call(Compiler *c, int id, Buf *b) {
         emit_expr(c, recv, b); buf_puts(b, ")"); return 1;
       }
     }
-    if (sp_streq(name, "to_i")) { buf_puts(b, "sp_poly_to_i("); emit_expr(c, recv, b); buf_puts(b, ")"); return 1; }
-    if (sp_streq(name, "to_f")) { buf_puts(b, "sp_poly_to_f("); emit_expr(c, recv, b); buf_puts(b, ")"); return 1; }
+    /* Same guard as #to_s above: a user class defining the conversion wins
+       through poly dispatch. sp_poly_to_i answers 0 for an object, so a
+       wrapper's `value.to_i` silently read zero. */
+    if (sp_streq(name, "to_i") || sp_streq(name, "to_f")) {
+      int has_user_conv = 0;
+      if (!g_poly_builtin_arm)
+        for (int k = 0; k < c->nclasses && !has_user_conv; k++)
+          if (comp_method_in_chain(c, k, name, NULL) >= 0) has_user_conv = 1;
+      if (!has_user_conv) {
+        buf_printf(b, "%s(", sp_streq(name, "to_i") ? "sp_poly_to_i" : "sp_poly_to_f");
+        emit_expr(c, recv, b); buf_puts(b, ")"); return 1;
+      }
+    }
     /* Complex#real / #imaginary on a poly value (a Complex read out of a
        container). A user class defining the same name wins via poly dispatch. */
     if ((sp_streq(name, "real") || sp_streq(name, "imaginary") || sp_streq(name, "imag") ||

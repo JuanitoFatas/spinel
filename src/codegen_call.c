@@ -14,6 +14,15 @@ const int *call_args(const NodeTable *nt, int id, int *argc) {
    format has no named reference, more than maxn of them, a name too long for
    the caller's buffer, or a mix of named and positional specifiers (which Ruby
    rejects). */
+/* Unbox a POLY-returning call into a scalar slot. What the method returned is
+   only known at run time -- an Integer that grew into a Bignum reads back as a
+   pointer through a bare `.v.i` -- so convert rather than reinterpret. */
+static void emit_unbox_poly_ret(Compiler *c, TyKind slot, const char *expr, Buf *b) {
+  if (slot == TY_INT)   { buf_printf(b, "sp_poly_to_i(%s)", expr); return; }
+  if (slot == TY_FLOAT) { buf_printf(b, "sp_poly_to_f(%s)", expr); return; }
+  emit_unbox_text(c, slot, expr, b);
+}
+
 static int parse_named_format(const char *fmt, Buf *rew, const char **names,
                               int *name_len, int maxn) {
   int n = 0, has_named = 0, has_positional = 0;
@@ -4084,7 +4093,7 @@ static int emit_poly_method_dispatch(Compiler *c, int id, Buf *b) {
             else {
               buf_printf(b, "_t%d = ", tr);
               if (ret == TY_POLY && mret != TY_POLY) emit_boxed_text(c, mret, nbuf, b);
-              else if (ret != TY_POLY && mret == TY_POLY) emit_unbox_text(c, is_scalar_ret(ret) ? ret : TY_INT, nbuf, b);
+              else if (ret != TY_POLY && mret == TY_POLY) emit_unbox_poly_ret(c, is_scalar_ret(ret) ? ret : TY_INT, nbuf, b);
               else buf_puts(b, nbuf);
             }
             buf_puts(b, "; break;");
@@ -4162,7 +4171,12 @@ static int emit_poly_method_dispatch(Compiler *c, int id, Buf *b) {
             if (ret == TY_POLY && cret9 != TY_POLY) emit_boxed_text(c, cret9, call, b);
             /* The slot is scalar (e.g. a length dispatch fixed to mrb_int) but
                this class's method widened its return to poly: coerce down. */
-            else if (ret != TY_POLY && cret9 == TY_POLY) emit_unbox_text(c, slotty, call, b);
+            else if (ret != TY_POLY && cret9 == TY_POLY) emit_unbox_poly_ret(c, slotty, call, b);
+            /* Two classes own the name and answer different types (one an
+               Integer, another a Bignum): the slot took one of them, so the
+               odd arm converts into it rather than emitting a type error. */
+            else if (slotty == TY_INT && cret9 == TY_BIGINT) buf_printf(b, "sp_bigint_to_int(%s)", call);
+            else if (slotty == TY_FLOAT && cret9 == TY_BIGINT) buf_printf(b, "sp_bigint_to_double(%s)", call);
             else buf_puts(b, call);
           }
           buf_puts(b, "; break;");
@@ -4372,6 +4386,19 @@ static int emit_poly_method_dispatch(Compiler *c, int id, Buf *b) {
          its zero handed callers a NULL container that read back as empty --
          `str.split.join(" ")` answered "" once a user class owned `split`
          (#3394), which is the silent form of the same gap. */
+      /* A conversion the poly runtime serves for every builtin (`5.to_i`,
+         `"7".to_f`) only reached this dispatch because a user class owns the
+         name; a builtin receiver still has to get its own answer. */
+      if (!obj_default_done && argc == 0 &&
+          (sp_streq(name, "to_i") || sp_streq(name, "to_f"))) {
+        char cv[64];
+        snprintf(cv, sizeof cv, "%s(_t%d)", sp_streq(name, "to_i") ? "sp_poly_to_i" : "sp_poly_to_f", tv);
+        buf_printf(b, " default: _t%d = ", tr);
+        if (ret == TY_POLY) emit_boxed_text(c, sp_streq(name, "to_i") ? TY_INT : TY_FLOAT, cv, b);
+        else buf_puts(b, cv);
+        buf_puts(b, "; break;");
+        obj_default_done = 1;
+      }
       if (!obj_default_done)
         buf_printf(b, " default: sp_raise_nomethod(sp_nomethod_msg(\"%s\", _t%d)); break;", name, tv);
       buf_printf(b, " } _t%d; })", tr);
@@ -19472,10 +19499,12 @@ else { memcpy(dir, sf, n); dir[n] = 0; } }
       buf_printf(b, "); sp_raise_cls(\"TypeError\", \"no implicit conversion of %s into Integer\"); (mrb_int)0; })", tn9);
       return;
     }
-    /* |/^ with a Bignum operand promote (the & mask idiom keeps its low-64
-       truncation: the result fits an int either way) (#2422) */
-    if ((sp_streq(name, "|") || sp_streq(name, "^")) && at0 == TY_BIGINT) {
-      buf_printf(b, "sp_bigint_%s(sp_bigint_new_int(", sp_streq(name, "|") ? "or" : "xor");
+    /* &, | and ^ with a Bignum operand promote (#2422). `&` too: a negative
+       receiver is sign-extended forever, so `-1 & 0xFFFFFFFFFFFFFFFF` is that
+       whole mask, not -1. */
+    if ((sp_streq(name, "|") || sp_streq(name, "^") || sp_streq(name, "&")) && at0 == TY_BIGINT) {
+      buf_printf(b, "sp_bigint_%s(sp_bigint_new_int(",
+                 sp_streq(name, "|") ? "or" : sp_streq(name, "^") ? "xor" : "and");
       if (rt == TY_POLY) { buf_puts(b, "sp_poly_to_i("); emit_expr(c, recv, b); buf_puts(b, ")"); }
       else emit_expr(c, recv, b);
       buf_puts(b, "), "); emit_expr(c, argv[0], b); buf_puts(b, ")");

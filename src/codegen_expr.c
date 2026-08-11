@@ -229,6 +229,10 @@ void emit_interp(Compiler *c, int id, Buf *b) {
         buf_puts(&conv, "sp_class_to_s(");
         EMIT_IV(); buf_puts(&conv, ")");
       }
+      else if (t == TY_BIGINT) {
+        buf_puts(&conv, "sp_bigint_to_s(");
+        EMIT_IV(); buf_puts(&conv, ")");
+      }
       else if (ty_nullable_builtin_id(t)) {
         /* a reference-backed builtin handle (IO, Proc, Fiber, Thread, ...):
            renders as `#<IO:fd 3>` and friends rather than refusing the
