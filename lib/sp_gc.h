@@ -309,6 +309,7 @@ void sp_gc_enforce_mem_limit(void);
    under the heap lock. */
 void sp_gc_collect_retune(void);
 void sp_stw_collect(void);
+void sp_gc_collect_request(void);   /* explicit GC.start: same barrier, forced */
 void sp_oom_die(void);
 
 /* ---- Embedder callbacks supplied by the generated TU ----

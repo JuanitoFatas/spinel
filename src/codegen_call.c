@@ -16333,8 +16333,8 @@ else { memcpy(dir, sf, n); dir[n] = 0; } }
   /* GC module methods */
   if (recv >= 0 && nt_type(nt, recv) && sp_streq(nt_type(nt, recv), "ConstantReadNode") &&
       nt_str(nt, recv, "name") && sp_streq(nt_str(nt, recv, "name"), "GC")) {
-    if (sp_streq(name, "start") && argc == 0) { buf_puts(b, "(sp_gc_collect(), (mrb_int)0)"); return; }
-    if (sp_streq(name, "compact") && argc == 0) { buf_puts(b, "(sp_gc_collect(), (mrb_int)0)"); return; }
+    if (sp_streq(name, "start") && argc == 0) { buf_puts(b, "(sp_gc_collect_request(), (mrb_int)0)"); return; }
+    if (sp_streq(name, "compact") && argc == 0) { buf_puts(b, "(sp_gc_collect_request(), (mrb_int)0)"); return; }
     if (sp_streq(name, "stat") && argc == 0) { buf_puts(b, "sp_gc_stat()"); return; }
   }
 

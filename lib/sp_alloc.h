@@ -146,6 +146,7 @@ void sp_str_collect_retune(void);
 void sp_gc_collect_retune_all(void);
 int  sp_gc_collection_wanted(void);
 void sp_stw_collect(void);   /* lib/sp_sched.c: stop-the-world collect (threaded) */
+void sp_gc_collect_request(void);   /* explicit GC.start: same barrier, forced */
 
 /* SPINEL_ALLOC_REPORT counters (#1336): defined in sp_alloc.c. The `on` flag
    is set once by a constructor from the env var; the hot entry points guard

@@ -231,7 +231,25 @@ void sp_safepoint(void) {
    heap access -- or, if a collection is already running, just park through it.
    At N=1 there are no other workers, so the wait is a no-op and this is exactly
    today's inline collect, routed through the barrier. */
-void sp_stw_collect(void) {
+static void sp_stw_collect_impl(int force);
+
+void sp_stw_collect(void) { sp_stw_collect_impl(0); }
+
+/* An EXPLICIT collection (GC.start / GC.compact). It must take the same barrier
+   as a threshold-triggered one: the parallel sweep hands one slot to each other
+   worker and waits for them, which only happens if they are parked here. Run
+   straight from a mutator, the collector waited on sweeps nobody would do and
+   any threaded program calling GC.start hung (#3781). Forced: an explicit
+   request collects even when neither heap is over its trigger. */
+void sp_gc_collect_request(void) {
+#ifdef SP_THREADS
+  sp_stw_collect_impl(1);
+#else
+  sp_gc_collect();
+#endif
+}
+
+static void sp_stw_collect_impl(int force) {
 #ifdef SP_THREADS
   /* Re-entrancy guard: a finalizer run during the sweep may allocate and cross
      the threshold again. We are already the collector with the world stopped
@@ -240,7 +258,7 @@ void sp_stw_collect(void) {
   if (g_collector_active) return;
   SCHED_LOCK();
   if (g_stw_active) { sp_stw_park_locked(); SCHED_UNLOCK(); return; }
-  if (!sp_gc_collection_wanted()) { SCHED_UNLOCK(); return; }  /* another worker just collected */
+  if (!force && !sp_gc_collection_wanted()) { SCHED_UNLOCK(); return; }  /* another worker just collected */
   g_stw_active = 1;
   g_stw_epoch++;     /* new epoch; a previous collection's stragglers won't be counted */
   g_nparked = 0;     /* this collection's park count starts fresh */
@@ -270,6 +288,7 @@ void sp_stw_collect(void) {
   pthread_cond_broadcast(&g_stw_release);
   SCHED_UNLOCK();
 #else
+  (void)force;
   sp_gc_collect_retune();
 #endif
 }
