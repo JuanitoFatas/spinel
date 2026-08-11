@@ -1459,12 +1459,30 @@ int static_isa_cond(Compiler *c, int pred) {
   int recv = nt_ref(nt, pred, "receiver");
   if (recv < 0) return -1;
   TyKind rt = comp_ntype(c, recv);
-  if (!ty_is_object(rt)) return -1;
   int args = nt_ref(nt, pred, "arguments");
   int ac = 0; const int *av = args >= 0 ? nt_arr(nt, args, "arguments", &ac) : NULL;
   if (ac != 1 || !av || !nt_type(nt, av[0]) || !sp_streq(nt_type(nt, av[0]), "ConstantReadNode")) return -1;
-  int target = comp_class_index(c, nt_str(nt, av[0], "name"));
+  const char *tname = nt_str(nt, av[0], "name");
+  int target = comp_class_index(c, tname);
   if (target < 0) return -1;
+  /* A number/symbol/bool is never an instance of a user class, so the arm that
+     reads it as one is dead -- and it is the only place a call like
+     `value.value` on an Integer comes from (`Int64.new(0)` reaching
+     `if value.is_a?(Int64) then value.value`). A builtin's own name is
+     excluded (the class may be a reopen of it), as is a module some reopened
+     builtin includes. */
+  if (!ty_is_object(rt) && !ty_is_array(rt) && !ty_is_hash(rt) &&
+      (rt == TY_INT || rt == TY_BIGINT || rt == TY_FLOAT || rt == TY_BOOL ||
+       rt == TY_SYMBOL || rt == TY_STRING) &&
+      tname && !is_builtin_class_name(tname)) {
+    for (int k = 0; k < c->nclasses; k++) {
+      if (!c->classes[k].name || !is_builtin_class_name(c->classes[k].name)) continue;
+      for (int m = 0; m < c->classes[k].nincluded_mods; m++)
+        if (c->classes[k].included_mods[m] == target) return -1;
+    }
+    return 0;
+  }
+  if (!ty_is_object(rt)) return -1;
   int rcls = ty_object_class(rt);
   if (rcls == target) return 1;
   if (!sp_streq(nm, "instance_of?") && is_descendant(c, rcls, target)) return 1;
