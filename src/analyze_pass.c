@@ -1897,7 +1897,8 @@ int infer_write_types(Compiler *c) {
            every later call went to the wrong type (#3502). Only decline where
            the reading is a guess: a slot the program does write an array into
            keeps the push promotion. */
-        if (sp_streq(name, "<<") && recv >= 0 && an_user_defines_method(c, "<<") &&
+        if (sp_streq(name, "<<") && recv >= 0 &&
+            (an_user_defines_method(c, "<<") || an_native_defines_method(c, "<<")) &&
             !recv_has_array_write(c, recv)) continue;
         is_push = 1; vt = push_elem_ty(c, argv[0]);
         for (int ai = 1; ai < an; ai++) vt = ty_unify(vt, push_elem_ty(c, argv[ai]));
