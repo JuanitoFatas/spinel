@@ -14116,7 +14116,9 @@ else { memcpy(dir, sf, n); dir[n] = 0; } }
       nt_type(nt, recv) && sp_streq(nt_type(nt, recv), "ConstantReadNode") &&
       nt_str(nt, recv, "name") && comp_class_index(c, nt_str(nt, recv, "name")) >= 0 &&
       comp_cmethod_in_chain(c, comp_class_index(c, nt_str(nt, recv, "name")), name, NULL) < 0) {
-    buf_printf(b, "SPL(\"%s\")", nt_str(nt, recv, "name"));
+    { int qci = comp_class_index(c, nt_str(nt, recv, "name"));
+      const char *qn8 = qci >= 0 ? class_ruby_name(c, qci) : NULL;
+      buf_printf(b, "SPL(\"%s\")", qn8 ? qn8 : nt_str(nt, recv, "name")); }
     return;
   }
   /* self.name / self.to_s / self.inspect inside a class method -> class name.
@@ -14130,7 +14132,12 @@ else { memcpy(dir, sf, n); dir[n] = 0; } }
     if (encl && encl->is_cmethod && encl->class_id >= 0 &&
         comp_cmethod_in_chain(c, encl->class_id, name, NULL) < 0) {
       if (cmethod_takes_self_cls(c, (int)(encl - c->scopes))) buf_puts(b, "sp_class_to_s(_sp_cls)");
-      else buf_printf(b, "SPL(\"%s\")", c->classes[encl->class_id].name);
+      else {
+        /* the Ruby-visible name: the enclosing path, with any collision
+           qualification undone (`Brainfuck__Array` is `Brainfuck::Array`) */
+        const char *qn9 = class_ruby_name(c, encl->class_id);
+        buf_printf(b, "SPL(\"%s\")", qn9 ? qn9 : c->classes[encl->class_id].name);
+      }
       return;
     }
   }
@@ -14140,7 +14147,12 @@ else { memcpy(dir, sf, n); dir[n] = 0; } }
     if (encl && encl->is_cmethod && encl->class_id >= 0 &&
         comp_cmethod_in_chain(c, encl->class_id, name, NULL) < 0) {
       if (cmethod_takes_self_cls(c, (int)(encl - c->scopes))) buf_puts(b, "sp_class_to_s(_sp_cls)");
-      else buf_printf(b, "SPL(\"%s\")", c->classes[encl->class_id].name);
+      else {
+        /* the Ruby-visible name: the enclosing path, with any collision
+           qualification undone (`Brainfuck__Array` is `Brainfuck::Array`) */
+        const char *qn9 = class_ruby_name(c, encl->class_id);
+        buf_printf(b, "SPL(\"%s\")", qn9 ? qn9 : c->classes[encl->class_id].name);
+      }
       return;
     }
   }

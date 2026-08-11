@@ -3955,6 +3955,15 @@ const char *class_ruby_name(Compiler *c, int ci) {
   for (int i = depth - 1; i >= 0; i--) {
     const char *seg = c->classes[chain[i]].name;
     if (!seg) continue;
+    /* A name qualify_colliding_classes rewrote carries its enclosing path
+       already (`Brainfuck__Array`): the Ruby-visible name is the leaf, since
+       the enclosers are being prepended here. */
+    const char *tail = strstr(seg, "__");
+    if (tail && i < depth - 1) {
+      const char *last = tail;
+      while (last) { const char *nx = strstr(last + 2, "__"); if (!nx) break; last = nx; }
+      seg = last + 2;
+    }
     if (buf[0]) strncat(buf, "::", sizeof(buf) - strlen(buf) - 1);
     strncat(buf, seg, sizeof(buf) - strlen(buf) - 1);
   }

@@ -10249,6 +10249,33 @@ int emit_poly_call(Compiler *c, int id, Buf *b) {
       buf_printf(b, " } _t%d; })", ts);
       return 1;
     }
+    /* poly.each_byte { } / .each_codepoint { }: the same shape as each_char
+       above, over the integer array #bytes / #codepoints answers. */
+    if ((sp_streq(name, "each_byte") || sp_streq(name, "each_codepoint")) && argc == 0 &&
+        nt_ref(nt, id, "block") >= 0 && !user_defines_or_reads(c, name)) {
+      int eblk = nt_ref(nt, id, "block");
+      const char *ebp = block_param_name(c, eblk, 0);
+      const char *ebpn = ebp ? rename_local(ebp) : NULL;
+      int ebody = nt_ref(nt, eblk, "body");
+      int ebn = 0; const int *ebb = ebody >= 0 ? nt_arr(nt, ebody, "body", &ebn) : NULL;
+      const char *fn = sp_streq(name, "each_byte") ? "sp_str_bytes" : "sp_str_codepoints";
+      int ts = ++g_tmp, ta = ++g_tmp, ti = ++g_tmp;
+      buf_printf(b, "({ const char *_t%d = sp_poly_to_s(", ts); emit_expr(c, recv, b);
+      buf_printf(b, "); SP_GC_ROOT(_t%d);", ts);
+      buf_printf(b, " sp_IntArray *_t%d = %s(_t%d); SP_GC_ROOT(_t%d);", ta, fn, ts, ta);
+      buf_printf(b, " for (mrb_int _t%d = 0; _t%d < sp_IntArray_length(_t%d); _t%d++) {", ti, ti, ta, ti);
+      if (ebpn) {
+        Scope *ebs = comp_scope_of(c, eblk);
+        LocalVar *eblv = ebs ? scope_local(ebs, ebpn) : NULL;
+        if (eblv && eblv->type == TY_POLY)
+          buf_printf(b, " sp_RbVal lv_%s = sp_box_int(sp_IntArray_get(_t%d, _t%d));", ebpn, ta, ti);
+        else
+          buf_printf(b, " mrb_int lv_%s = sp_IntArray_get(_t%d, _t%d);", ebpn, ta, ti);
+      }
+      for (int k2 = 0; k2 < ebn; k2++) emit_stmt(c, ebb[k2], b, 0);
+      buf_printf(b, " } _t%d; })", ts);
+      return 1;
+    }
     /* poly.lines -> TY_STR_ARRAY, the same shape as #chars above (#3403) */
     if (sp_streq(name, "lines") && argc == 0 && nt_ref(nt, id, "block") < 0) {
       if (!user_defines_or_reads(c, "lines")) {

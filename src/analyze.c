@@ -1530,6 +1530,30 @@ void qc_collect_class_writes(Compiler *c, int node, char (*path)[64], int depth,
       depth++;
     }
   }
+  /* `Node = Struct.new(...)` / `Data.define(...)` inside a class or module
+     defines a class just as `class Node` does, and its leaf name collides the
+     same way -- two sibling namespaces each with their own `TreeNode` bound
+     every reference to whichever was registered first. */
+  if (sp_streq(ty, "ConstantWriteNode") && depth > 0) {
+    int v = nt_ref(nt, node, "value");
+    const char *vty = v >= 0 ? nt_type(nt, v) : NULL;
+    if (vty && sp_streq(vty, "CallNode")) {
+      const char *vn = nt_str(nt, v, "name");
+      int vr = nt_ref(nt, v, "receiver");
+      const char *rn = vr >= 0 && nt_type(nt, vr) &&
+                       sp_streq(nt_type(nt, vr), "ConstantReadNode") ? nt_str(nt, vr, "name") : NULL;
+      const char *cn = nt_str(nt, node, "name");
+      if (cn && rn && vn &&
+          ((sp_streq(rn, "Struct") && sp_streq(vn, "new")) ||
+           (sp_streq(rn, "Data") && sp_streq(vn, "define")))) {
+        if (*n >= *cap) { *cap = *cap ? *cap * 2 : 16; *ws = realloc(*ws, sizeof(QCWrite) * (size_t)*cap); }
+        QCWrite *w = &(*ws)[(*n)++];
+        w->node = node; w->depth = depth;
+        for (int i = 0; i < depth; i++) snprintf(w->path[i], 64, "%s", path[i]);
+        snprintf(w->name, sizeof w->name, "%s", cn);
+      }
+    }
+  }
   int nr = nt_num_refs(nt, node);
   for (int i = 0; i < nr; i++) qc_collect_class_writes(c, nt_ref_at(nt, node, i), path, depth, ws, n, cap);
   int na = nt_num_arrs(nt, node);
