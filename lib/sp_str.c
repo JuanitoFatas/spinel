@@ -246,6 +246,38 @@ const char*sp_str_dump(const char*s){SP_GC_ROOT_STR(s);
   out[oi++]='"';out[oi]=0;sp_str_set_len(out,oi);return out;
 }
 const char*sp_str_delete_prefix(const char*s,const char*p){SP_GC_ROOT_STR(s);SP_GC_ROOT_STR(p);if(!s)sp_nil_recv("delete_prefix");if(!p)return s;size_t sl=strlen(s),pl=strlen(p);if(pl<=sl&&memcmp(s,p,pl)==0){char*r=sp_str_alloc_raw(sl-pl+1);memcpy(r,s+pl,sl-pl+1);sp_str_set_len(r,sl-pl);return r;}char*r=sp_str_alloc_raw(sl+1);memcpy(r,s,sl+1);sp_str_set_len(r,sl);return r;}
+/* `s << x`: append in place when the buffer has room, else move to a buffer
+   with room to spare. The emitted form used to be `s = concat(s, x)`, a fresh
+   exact-sized copy per append, so building a document one piece at a time was
+   quadratic (an 8MB log took minutes). Only a heap string (0xfe/0xfc) is
+   written in place; a literal or a frozen string is copied, and the caller has
+   already raised on a frozen receiver. */
+const char *sp_str_append_grow(const char *s, const char *t) {SP_GC_ROOT_STR(s);SP_GC_ROOT_STR(t);
+  if (!s) return t ? t : sp_str_empty;
+  if (!t) return s;
+  size_t la = sp_str_byte_len(s), lb = sp_str_byte_len(t);
+  if (lb == 0) return s;
+  unsigned char m = ((const unsigned char *)s)[-1];
+  if (m == 0xfe || m == 0xfc) {
+    sp_str_hdr *h = ((sp_str_hdr *)(s - 1)) - 1;
+    size_t total = (size_t)(h->size & SP_STR_SIZE_MASK);
+    size_t cap = total > sizeof(sp_str_hdr) + 2 ? total - sizeof(sp_str_hdr) - 2 : 0;
+    if (la + lb <= cap) {
+      memcpy((char *)s + la, t, lb);
+      ((char *)s)[la + lb] = 0;
+      sp_str_lcache_drop(s);
+      sp_str_set_len((char *)s, la + lb);
+      return s;
+    }
+  }
+  size_t want = (la + lb) * 2 + 16;
+  char *r = sp_str_alloc(want);
+  memcpy(r, s, la);
+  memcpy(r + la, t, lb);
+  r[la + lb] = 0;
+  sp_str_set_len(r, la + lb);
+  return r;
+}
 const char*sp_str_substr(const char*s,mrb_int start,mrb_int len){SP_GC_ROOT_STR(s);if(!s)sp_nil_recv("[]");if(len<=0){char*r=sp_str_alloc_raw(1);r[0]=0;sp_str_set_len(r,0);return r;}if(start<0)start=0;char*r=sp_str_alloc_raw(len+1);memcpy(r,s+start,len);r[len]=0;sp_str_set_len(r,(size_t)len);return r;}
 const char*sp_str_delete_suffix(const char*s,const char*p){SP_GC_ROOT_STR(s);SP_GC_ROOT_STR(p);if(!s)sp_nil_recv("delete_suffix");if(!p)return s;size_t sl=strlen(s),pl=strlen(p);if(pl<=sl&&memcmp(s+sl-pl,p,pl)==0){char*r=sp_str_alloc_raw(sl-pl+1);memcpy(r,s,sl-pl);r[sl-pl]=0;sp_str_set_len(r,sl-pl);return r;}char*r=sp_str_alloc_raw(sl+1);memcpy(r,s,sl+1);sp_str_set_len(r,sl);return r;}
 /* strip / lstrip / rstrip. CRuby strips the set "\0\t\n\v\f\r " from the

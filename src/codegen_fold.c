@@ -5747,8 +5747,12 @@ void emit_arg_or_default(Compiler *c, Scope *m, int idx, int provided, Buf *out)
         Scope *ivs = comp_scope_of(c, provided);
         if (ivn && ivs && ivs->class_id >= 0 && !ivs->is_cmethod &&
             comp_ntype(c, provided) == TY_STRING) {
-          emit_indent(g_pre, g_indent);
-          buf_printf(g_pre, "sp_gc_wb((void *)%s);\n", g_self);
+          /* a value-type receiver is a struct, not a heap object: it has no
+             header to mark dirty, and casting it to void* does not compile */
+          if (!comp_ty_value_obj(c, ty_object(ivs->class_id))) {
+            emit_indent(g_pre, g_indent);
+            buf_printf(g_pre, "sp_gc_wb((void *)%s);\n", g_self);
+          }
           buf_printf(out, "&%s%siv_%s", g_self, g_self_deref, iv_c(ivn + 1));
           return;
         }

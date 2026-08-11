@@ -79,6 +79,7 @@ const char*sp_str_capitalize_ascii(const char*s);
 const char*sp_str_dump(const char*s);
 const char*sp_str_delete_prefix(const char*s,const char*p);
 const char*sp_str_substr(const char*s,mrb_int start,mrb_int len);
+const char *sp_str_append_grow(const char *s, const char *t);
 const char*sp_str_delete_suffix(const char*s,const char*p);
 const char*sp_str_strip(const char*s);
 const char*sp_str_chomp(const char*s);

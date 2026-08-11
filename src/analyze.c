@@ -7943,6 +7943,27 @@ static int strbuf_mut_kind(Compiler *c, const char *vn, Scope *vs) {
 /* In-place mutation status of ivar `nm` of class `cid` (same contract as
    strbuf_mut_kind). The supported set is narrower: the shadow-copy shim
    cannot rename an ivar, so []=/insert/slice!/setbyte disqualify. */
+/* True if ivar `nm` of class `cid` is handed to a method as an argument
+   anywhere in that class's own scopes. Such a call may take the slot by
+   reference, which only works when the receiver itself is a heap object. */
+static int an_ivar_passed_as_arg(Compiler *c, int cid, const char *nm) {
+  const NodeTable *nt = c->nt;
+  for (int id = 0; id < nt->count; id++) {
+    if (nt_kind(nt, id) != NK_CallNode) continue;
+    int args = nt_ref(nt, id, "arguments");
+    if (args < 0) continue;
+    int an = 0; const int *av = nt_arr(nt, args, "arguments", &an);
+    for (int k = 0; k < an; k++) {
+      if (nt_kind(nt, av[k]) != NK_InstanceVariableReadNode) continue;
+      const char *ivn = nt_str(nt, av[k], "name");
+      if (!ivn || !nm || !sp_streq(ivn, nm)) continue;
+      Scope *sc = comp_scope_of(c, av[k]);
+      if (sc && sc->class_id == cid) return 1;
+    }
+  }
+  return 0;
+}
+
 static int strbuf_ivar_mut_kind(Compiler *c, int cid, const char *nm) {
   if (!nm) return 0;
   sb_mut_tabs_sync(c);
@@ -12229,6 +12250,10 @@ void analyze_program(Compiler *c) {
          mutation visible through every reference; a by-value struct copy
          would swallow it (#3227 P4) */
       if (t == TY_STRING && strbuf_ivar_mut_kind(c, i, ci->ivars[j]) != 0) { scalar = 0; break; }
+      /* the same mutation one call away: `helper(@s, x)` where the helper
+         appends to its parameter writes through the slot's address, and a
+         by-value receiver would hand it the address of a copy */
+      if (t == TY_STRING && an_ivar_passed_as_arg(c, i, ci->ivars[j])) { scalar = 0; break; }
     }
     if (!scalar) continue;
     int has_sub = 0;
