@@ -6841,10 +6841,19 @@ void emit_args_filled(Compiler *c, int callee_idx, int argsNode, const char *lea
 
   int argov_saved = g_n_argov;
   if (splat_idx < 0 && kwh < 0 && argv) {
+    /* Ruby evaluates arguments left to right; C leaves a call's operand order
+       unspecified (gcc walks it right to left). Once two arguments can observe
+       each other's side effects, every one of them but the last has to be
+       sequenced into a temp -- including scalars, which need no root. */
+    int last_se = -1, n_se = 0;
+    for (int k = 0; k < pos_argc && k < m->nparams; k++)
+      if (subtree_has_side_effect(nt, argv[k])) { last_se = k; n_se++; }
     for (int k = 0; k < pos_argc && k < m->nparams; k++) {
       if (g_n_argov >= MAX_ARG_OVERRIDE) break;
       TyKind at = comp_ntype(c, argv[k]);
-      if (at != TY_POLY && !needs_root(at)) continue;
+      int seq = (n_se >= 2 && k < last_se && subtree_has_side_effect(nt, argv[k]));
+      int root = (at == TY_POLY || needs_root(at));
+      if (!root && !seq) continue;
       const char *aty = nt_type(nt, argv[k]);
       /* a splat at/after the rest slot (splat_idx only marks splats needing
          ELEMENT expansion) is consumed by the rest collection below, which
@@ -6857,10 +6866,11 @@ void emit_args_filled(Compiler *c, int callee_idx, int argsNode, const char *lea
                   sp_streq(aty, "InstanceVariableReadNode") ||
                   sp_streq(aty, "ConstantReadNode") ||
                   sp_streq(aty, "SelfNode") || sp_streq(aty, "NilNode") ||
-                  sp_streq(aty, "StringNode"))) continue;
+                  sp_streq(aty, "StringNode"))) root = 0;
       /* only a fresh allocation needs protecting; a non-allocating heap
          expression (e.g. a ternary over two already-live reads) does not. */
-      if (!subtree_may_allocate(nt, argv[k])) continue;
+      else if (!subtree_may_allocate(nt, argv[k])) root = 0;
+      if (!root && !seq) continue;
       int ht = ++g_tmp;
       /* Evaluate into a side buffer first: the expression may push its own
          setup into g_pre, which must be fully flushed before this temp's
@@ -6869,13 +6879,15 @@ void emit_args_filled(Compiler *c, int callee_idx, int argsNode, const char *lea
       emit_expr(c, argv[k], &hb);
       emit_indent(g_pre, g_indent);
       if (at == TY_POLY) {
-        buf_printf(g_pre, "sp_RbVal _t%d = %s; SP_GC_ROOT_RBVAL(_t%d);\n",
-                   ht, hb.p ? hb.p : "sp_box_nil()", ht);
+        buf_printf(g_pre, "sp_RbVal _t%d = %s;", ht, hb.p ? hb.p : "sp_box_nil()");
+        if (root) buf_printf(g_pre, " SP_GC_ROOT_RBVAL(_t%d);", ht);
+        buf_puts(g_pre, "\n");
       }
 else {
         emit_ctype(c, at, g_pre);
-        buf_printf(g_pre, " _t%d = %s; SP_GC_ROOT(_t%d);\n",
-                   ht, hb.p ? hb.p : "0", ht);
+        buf_printf(g_pre, " _t%d = %s;", ht, hb.p ? hb.p : "0");
+        if (root) buf_printf(g_pre, " SP_GC_ROOT(_t%d);", ht);
+        buf_puts(g_pre, "\n");
       }
       free(hb.p);
       g_argov_node[g_n_argov] = argv[k];

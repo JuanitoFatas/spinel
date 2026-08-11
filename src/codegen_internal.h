@@ -125,6 +125,7 @@ extern int  g_n_argov;
 extern int  g_sn_skip;   /* safe-nav re-entry marker (see codegen_util.c) */
 extern int  g_pd_skip;   /* poly-dispatch builtin-arm re-entry marker */
 int subtree_may_allocate(const NodeTable *nt, int id);
+int subtree_has_side_effect(const NodeTable *nt, int id);
 /* When a yielding method is inlined, g_yield_block_fallback holds the block
    that was active in the CALLER's context so nested `yield`s inside the
    passed block can chain back to the outermost caller's block. */
@@ -342,7 +343,8 @@ extern int g_emit_sym_rt;      /* emit sp_dyn_syms / sp_sym_to_s / sp_sym_intern
 extern int g_emit_class_names; /* emit sp_class_to_s (the class-name table) */
 extern int g_emit_obj_dispatch;/* emit sp_obj_inspect_sw / sp_obj_to_s_sw (user classes exist) */
 extern int g_uses_program_name;/* $0 / $PROGRAM_NAME read somewhere */
-extern int g_gen_obj_hash;  /* a package wants obj reflection + >=1 struct: emit+install sp_obj_to_hash */
+extern int g_gen_obj_hash;
+extern int g_gen_obj_to_json;  /* a package wants obj reflection + >=1 user #to_json */  /* a package wants obj reflection + >=1 struct: emit+install sp_obj_to_hash */
 extern int g_gen_obj_to_h;  /* >=1 instantiated Struct/Data: emit+install sym-keyed sp_obj_to_h (poly #to_h) */
 extern int g_gen_obj_with;  /* >=1 instantiated Data: emit+install sp_obj_with (poly Data#with) */
 extern int g_uses_regex;

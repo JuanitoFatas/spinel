@@ -100,6 +100,31 @@ int subtree_may_allocate(const NodeTable *nt, int id) {
   }
   return 0;
 }
+/* True if evaluating the subtree at `id` can be observed by, or can observe,
+   a sibling argument's evaluation: any call (a user method, a mutating builtin,
+   or an index read of a container someone else may write) or an assignment.
+   Ruby fixes argument evaluation to left-to-right; C leaves a call's operand
+   order unspecified, so such arguments have to be sequenced into temps. */
+int subtree_has_side_effect(const NodeTable *nt, int id) {
+  if (id < 0) return 0;
+  const char *ty = nt_type(nt, id);
+  if (!ty) return 0;
+  if (sp_streq(ty, "CallNode") || sp_streq(ty, "SuperNode") ||
+      sp_streq(ty, "ForwardingSuperNode") || sp_streq(ty, "YieldNode") ||
+      strstr(ty, "WriteNode"))
+    return 1;
+  int nr = nt_num_refs(nt, id);
+  for (int i = 0; i < nr; i++)
+    if (subtree_has_side_effect(nt, nt_ref_at(nt, id, i))) return 1;
+  int na = nt_num_arrs(nt, id);
+  for (int i = 0; i < na; i++) {
+    int n = 0;
+    const int *ids = nt_arr_at(nt, id, i, &n);
+    for (int j = 0; j < n; j++)
+      if (subtree_has_side_effect(nt, ids[j])) return 1;
+  }
+  return 0;
+}
 int  g_tmp = 0;
 char g_ren_from[MAX_RENAME][96];
 char g_ren_to[MAX_RENAME][112];
@@ -464,6 +489,7 @@ int g_emit_class_names = 0;
 int g_emit_obj_dispatch = 0;
 int g_uses_program_name = 0;
 int g_gen_obj_hash = 0;
+int g_gen_obj_to_json = 0;
 int g_gen_obj_to_h = 0;
 int g_gen_obj_with = 0;
 int g_uses_regex = 0;
