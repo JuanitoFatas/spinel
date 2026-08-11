@@ -480,12 +480,23 @@ mrb_int sp_str_length(const char*s){SP_GC_ROOT_STR(s);
   if (sp_str_is_binary(s)) return (mrb_int)sp_str_byte_len(s);
   if (!sp_str_cacheable(s)) return sp_str_count_units(s, sp_str_byte_len(s));
   unsigned h = sp_str_lcache_hash(s);
-  if (sp_str_lcache[h].s == s) return sp_str_lcache[h].char_len;
+  for (unsigned w = 0; w < SP_STR_LCACHE_WAYS; w++)
+    if (sp_str_lcache[h + w].s == s) return sp_str_lcache[h + w].char_len;
   size_t bl = sp_str_byte_len(s);
   mrb_int n = sp_str_count_units(s, bl);
-  sp_str_lcache[h].s = s;
-  sp_str_lcache[h].byte_len = bl;
-  sp_str_lcache[h].char_len = n;
+  /* Evict the cheapest entry to recompute, not the oldest: a scan over one long
+     subject allocates a stream of short strings, and measuring those pushed the
+     subject out of its bucket over and over -- each miss another walk of the
+     whole thing. A short newcomer never displaces a much longer incumbent. */
+  unsigned victim = h;
+  for (unsigned w = 1; w < SP_STR_LCACHE_WAYS; w++) {
+    if (!sp_str_lcache[h + w].s) { victim = h + w; break; }
+    if (sp_str_lcache[h + w].byte_len < sp_str_lcache[victim].byte_len) victim = h + w;
+  }
+  if (sp_str_lcache[victim].s && sp_str_lcache[victim].byte_len > bl * 8) return n;
+  sp_str_lcache[victim].s = s;
+  sp_str_lcache[victim].byte_len = bl;
+  sp_str_lcache[victim].char_len = n;
   return n;
 }
 mrb_int sp_str_ord(const char*s){SP_GC_ROOT_STR(s);if(!s)sp_nil_recv("ord");unsigned char m=((const unsigned char*)s)[-1];size_t blen;if(m==0xfe||m==0xfc){blen=(((const sp_str_hdr*)(s-1))-1)->len;if(blen==0)sp_raise_cls("ArgumentError","empty string");}
@@ -500,10 +511,11 @@ size_t sp_utf8_byte_offset(const char*s,mrb_int char_idx){SP_GC_ROOT_STR(s);
   }
   if (sp_str_cacheable(s)) {
     unsigned h = sp_str_lcache_hash(s);
-    if (sp_str_lcache[h].s == s
-        && (size_t)sp_str_lcache[h].char_len == sp_str_lcache[h].byte_len) {
+    for (unsigned w = 0; w < SP_STR_LCACHE_WAYS; w++) {
+      if (sp_str_lcache[h + w].s != s) continue;
+      if ((size_t)sp_str_lcache[h + w].char_len != sp_str_lcache[h + w].byte_len) break;
       size_t off = (size_t)char_idx;
-      return off > sp_str_lcache[h].byte_len ? sp_str_lcache[h].byte_len : off;
+      return off > sp_str_lcache[h + w].byte_len ? sp_str_lcache[h + w].byte_len : off;
     }
   }
   /* Walk char_idx code points or stop at byte_len, whichever comes first.

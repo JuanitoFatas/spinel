@@ -302,6 +302,7 @@ static void sp_str_sweep_young(sp_str_hdr **head, size_t *bytes,
     }
     else {
       *bytes -= h->size & SP_STR_SIZE_MASK;
+      sp_str_lcache_drop(body + 1);
       free(h);
     }
     h = next;
@@ -380,6 +381,7 @@ static void sp_str_sweep_old(sp_str_hdr **head, size_t *bytes) {
     else {
       *pp = h->next;
       *bytes -= h->size & SP_STR_SIZE_MASK;
+      sp_str_lcache_drop(body + 1);
       free(h);
     }
   }
@@ -401,7 +403,6 @@ static size_t sp_str_sweep_gen(int major) {
   sp_str_sweep_young(&sp_str_heap, &sp_str_heap_bytes,
                      &sp_str_old, &sp_str_old_bytes, &promoted);
 #endif
-  sp_str_lcache_clear();
   return promoted;
 }
 
@@ -497,7 +498,6 @@ void sp_str_sweep_one(int wid, int major, size_t *promoted) {
   if (major) sp_str_sweep_old(&sp_str_wslot[wid].old, &sp_str_wslot[wid].old_bytes);
   sp_str_sweep_young(&sp_str_wslot[wid].young, &sp_str_wslot[wid].young_bytes,
                      &sp_str_wslot[wid].old, &sp_str_wslot[wid].old_bytes, promoted);
-  sp_str_lcache_clear();
 }
 #endif
 static void sp_str_sweep_gated(void) {
