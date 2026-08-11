@@ -12716,7 +12716,14 @@ else { memcpy(dir, sf, n); dir[n] = 0; } }
   if (recv < 0 && argc == 0 &&
       (sp_streq(name, "__method__") || sp_streq(name, "__callee__"))) {
     Scope *s = comp_scope_of(c, id);
-    if (s && s->name && s->name[0]) buf_printf(b, "(sp_sym)%d", comp_sym_intern(c, s->name));
+    /* __callee__ names the ALIAS the call spelled, which only the call site
+       knows: an alias shares the definition's one function. The prologue took
+       the channel; fall back to the definition's name when nothing wrote it
+       (a direct call, or a path with no write). __method__ always answers the
+       definition's name (#3729). */
+    if (s && s->name && s->name[0] && sp_streq(name, "__callee__"))
+      buf_printf(b, "(_sp_cal ? sp_sym_intern(_sp_cal) : (sp_sym)%d)", comp_sym_intern(c, s->name));
+    else if (s && s->name && s->name[0]) buf_printf(b, "(sp_sym)%d", comp_sym_intern(c, s->name));
     else buf_puts(b, "sp_box_nil()");
     return;
   }

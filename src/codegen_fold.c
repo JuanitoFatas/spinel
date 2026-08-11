@@ -60,6 +60,14 @@ void emit_method_call(Compiler *c, int id, Buf *b) {
   const char *name = nt_str(nt, id, "name");
   int mi = comp_method_index(c, name);
   Scope *m = mi >= 0 ? &c->scopes[mi] : NULL;
+  /* a top-level alias reaches the target's one function: hand it the spelled
+     name for __callee__ (#3729) */
+  if (m && m->name && !sp_streq(m->name, name) && scope_reads_callee(c, mi)) {
+    emit_indent(g_pre, g_indent);
+    buf_puts(g_pre, "sp_callee_name = ");
+    emit_str_literal(g_pre, name);
+    buf_puts(g_pre, ";\n");
+  }
   /* a top-level alias resolves to the target's scope: emit ITS symbol, since
      the alias has no function of its own (#3730) */
   buf_printf(b, "sp_%s(", mc(m && m->name ? m->name : name));
@@ -7048,6 +7056,14 @@ void emit_dispatch(Compiler *c, int cid, const char *name,
   int defcls = cid;
   int mi = comp_method_in_chain(c, cid, name, &defcls);
   Scope *m = mi >= 0 ? &c->scopes[mi] : NULL;
+  /* An alias shares the definition's function, so `__callee__` in the body can
+     only learn the spelled name from here (#3729). */
+  if (m && m->name && !sp_streq(m->name, name) && scope_reads_callee(c, mi)) {
+    emit_indent(g_pre, g_indent);
+    buf_puts(g_pre, "sp_callee_name = ");
+    emit_str_literal(g_pre, name);
+    buf_puts(g_pre, ";\n");
+  }
   TyKind ret = m ? m->ret : TY_UNKNOWN;
   /* Unify return type across all descendant implementations so that even
      when the base method has TY_VOID/TY_UNKNOWN, a subclass override

@@ -868,6 +868,19 @@ static int name_in(char **names, int n, const char *nm) {
    registers `$~` / `$1`.. read? Such a method needs a frame of its own, since
    those registers are frame-local in Ruby (#3629). A block is part of the
    method it is spliced into, so this asks about the method scope as a whole. */
+/* Does this scope read `__callee__`? Only such a method needs the called-name
+   channel (#3729). */
+int scope_reads_callee(Compiler *c, int si) {
+  const NodeTable *nt = c->nt;
+  for (int id = 0; id < nt->count; id++) {
+    if (c->nscope[id] != si) continue;
+    if (nt_kind(nt, id) != NK_CallNode || nt_ref(nt, id, "receiver") >= 0) continue;
+    const char *nm = nt_str(nt, id, "name");
+    if (nm && sp_streq(nm, "__callee__")) return 1;
+  }
+  return 0;
+}
+
 static int scope_performs_match(Compiler *c, int si) {
   const NodeTable *nt = c->nt;
   static const char *const mnames[] = {
@@ -902,6 +915,10 @@ void emit_scope_decls(Compiler *c, Scope *s, Buf *b) {
   if (s->name && s->def_node >= 0 && scope_performs_match(c, si))
     buf_puts(b, "    sp_re_frame _sp_rf __attribute__((cleanup(sp_re_frame_pop)));"
                 " sp_re_frame_push(&_sp_rf);\n");
+  /* Take the name this call spelled, and clear the channel so a call that did
+     not write it (or a later nested one) cannot be mistaken for ours (#3729). */
+  if (s->name && s->def_node >= 0 && scope_reads_callee(c, si))
+    buf_puts(b, "    const char *_sp_cal = sp_callee_name; sp_callee_name = NULL; (void)_sp_cal;\n");
   /* A real (non-yield-inlined) &blk param is an sp_Proc * C parameter; root it
      so the proc box survives a GC fired by an allocation in the block body (or
      by the cell allocations just below). Without this the box's only reference

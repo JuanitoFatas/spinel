@@ -8102,6 +8102,12 @@ sp_PolyArray *sp_Enumerator_to_a(sp_Enumerator *e);
    (SP_TLS): a concurrent Proc#call would otherwise race, and no safepoint poll
    lies between a body's store and the call site's read. */
 SP_TLS sp_RbVal _sp_proc_poly_ret;
+/* The name a method was CALLED by, for __callee__ to answer when it differs
+   from the definition's (an alias shares the definition's one function, so the
+   name cannot come from the body). Written by the call site just before the
+   call and consumed -- and cleared -- by the callee's prologue, so a path that
+   does not write it leaves __callee__ on its static answer (#3729). */
+SP_TLS const char *sp_callee_name = NULL;
 /* Boxed-argument side-channel of the same ABI: a poly (or float) proc
    parameter reads its argument back from here, since it does not fit the
    mrb_int[] slot. Declared here so the compose/curry/to_proc trampolines
