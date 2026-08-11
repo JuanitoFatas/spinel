@@ -2422,13 +2422,18 @@ else {
       emit_ctype(c, res, g_pre);
       buf_printf(g_pre, " _t%d = %s;\n", tr,
                  res == TY_RANGE ? "(sp_Range){0}" : default_value(res));
-      /* Emit condition — any prolog from the condition expr also goes to g_pre. */
+      /* Emit the condition into its own buffer: any prolog it hoists is a
+         statement, and writing it to g_pre after "if (" had been written left
+         the declaration in the middle of the expression. */
+      Buf cnd; memset(&cnd, 0, sizeof cnd);
+      emit_cond(c, pred, &cnd);
       emit_indent(g_pre, g_indent);
       buf_puts(g_pre, "if (");
       if (is_unless) buf_puts(g_pre, "!(");
-      emit_cond(c, pred, g_pre);
+      buf_puts(g_pre, cnd.p ? cnd.p : "0");
       if (is_unless) buf_puts(g_pre, ")");
       buf_puts(g_pre, ") {\n");
+      free(cnd.p);
       /* Then branch: side-effect stmts, then assign last expr to temp. */
       for (int i = 0; i < tn - 1; i++) emit_stmt(c, tb[i], g_pre, g_indent + 2);
       if (tn > 0) {

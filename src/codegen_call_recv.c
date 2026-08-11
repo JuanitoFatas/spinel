@@ -10024,9 +10024,16 @@ int emit_poly_call(Compiler *c, int id, Buf *b) {
           }
           int svind = g_indent; g_indent++;
           for (int j = 0; j < cbn - 1; j++) emit_stmt(c, cbb[j], g_pre, g_indent);
-          emit_indent(g_pre, g_indent); buf_puts(g_pre, "if (sp_poly_truthy(");
-          emit_boxed(c, cbb[cbn - 1], g_pre);
-          buf_printf(g_pre, ")) _t%d++;\n", tc);
+          /* Render the condition into its own buffer first: anything it has to
+             hoist (a rooted argument temp) is a STATEMENT, and appending it to
+             g_pre after "if (" was written put the declaration in the middle of
+             the expression. */
+          { Buf ccv; memset(&ccv, 0, sizeof ccv);
+            emit_boxed(c, cbb[cbn - 1], &ccv);
+            emit_indent(g_pre, g_indent);
+            buf_printf(g_pre, "if (sp_poly_truthy(%s)) _t%d++;\n",
+                       ccv.p ? ccv.p : "sp_box_nil()", tc);
+            free(ccv.p); }
           g_indent = svind;
           emit_indent(g_pre, g_indent); buf_puts(g_pre, "}\n");
           buf_printf(b, "_t%d", tc);
