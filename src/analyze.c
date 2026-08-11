@@ -8205,7 +8205,8 @@ static void an_append_scan(Compiler *c, int node, int *app, int *rd, int cap, in
     int a = nt_ref(nt, node, "arguments");
     int ac = 0; if (a >= 0) nt_arr(nt, a, "arguments", &ac);
     if (nm && recv >= 0 && ac == 1 && (sp_streq(nm, "<<") || sp_streq(nm, "concat")) &&
-        nt_kind(nt, recv) == NK_LocalVariableReadNode) {
+        (nt_kind(nt, recv) == NK_LocalVariableReadNode ||
+         nt_kind(nt, recv) == NK_InstanceVariableReadNode)) {
       if (*n_app < cap) app[(*n_app)++] = recv;
       /* the receiver read is the append itself, not a use: skip it below */
       int nr0 = nt_num_refs(nt, node);
@@ -8221,7 +8222,8 @@ static void an_append_scan(Compiler *c, int node, int *app, int *rd, int cap, in
       return;
     }
   }
-  if (nt_kind(nt, node) == NK_LocalVariableReadNode) {
+  if (nt_kind(nt, node) == NK_LocalVariableReadNode ||
+      nt_kind(nt, node) == NK_InstanceVariableReadNode) {
     if (*n_rd < cap) rd[(*n_rd)++] = node;
     return;
   }
@@ -8331,6 +8333,24 @@ static int promote_append_accumulators(Compiler *c) {
       const char *vn = nt_str(nt, app[i], "name");
       Scope *vs = comp_scope_of(c, app[i]);
       if (!vn || !vs) continue;
+      /* the same accumulator held in an ivar: `@out << chunk` round a loop
+         rebuilt the whole string per append (the slot stores a value, so the
+         append is a concat), which is the same quadratic (#3781) */
+      if (nt_kind(nt, app[i]) == NK_InstanceVariableReadNode) {
+        int icid = an_ivar_owner(c, app[i]);
+        if (icid < 0) continue;
+        int ivx = comp_ivar_index(&c->classes[icid], vn);
+        if (ivx < 0 || c->classes[icid].ivar_types[ivx] != TY_STRING) continue;
+        int iv_read = 0;
+        for (int j = 0; j < n_rd && !iv_read; j++)
+          if (nt_kind(nt, rd[j]) == NK_InstanceVariableReadNode &&
+              nt_str(nt, rd[j], "name") && sp_streq(nt_str(nt, rd[j], "name"), vn) &&
+              an_ivar_owner(c, rd[j]) == icid) iv_read = 1;
+        if (iv_read) continue;
+        if (strbuf_ivar_mut_kind(c, icid, vn) != 1) continue;
+        if (strbuf_promote_ivar(c, icid, vn)) changed = 1;
+        continue;
+      }
       /* read elsewhere in this loop: the demoting copy would be the new
          quadratic, so leave the local alone */
       int read_in_loop = 0;

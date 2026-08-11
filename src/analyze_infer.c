@@ -11,6 +11,15 @@
 /* Receiver node whose type the boxed-hash face re-inference pretends is the
    general boxed-key/value hash (see infer_call's last resort). -1 when idle;
    set for the duration of one nested infer_call only. */
+/* The type a READ of ivar slot `iv` yields. A shared-mutable string slot
+   stores an sp_String handle but reads as a plain String (the read copies),
+   so every reader -- attr_reader, a `def m = @x` shim, instance_variable_get
+   -- reports the value form, exactly as a direct ivar read does. */
+static TyKind ivar_value_ty(ClassInfo *ci, int iv) {
+  if (iv < 0 || iv >= ci->nivars) return TY_UNKNOWN;
+  return ci->ivar_types[iv] == TY_STRBUF ? TY_STRING : ci->ivar_types[iv];
+}
+
 static int g_hash_face_node = -1;
 #define SP_NMEMO_SZ 16384
 static unsigned g_narrow_gen = 1;
@@ -2436,7 +2445,7 @@ else {
           if (comp_is_sg_civ(cls, base2)) {
             char ivn[256]; snprintf(ivn, sizeof ivn, "@%s", base2);
             int ivi = comp_ivar_index(cls, ivn);
-            if (ivi >= 0 && cls->ivar_types[ivi] != TY_UNKNOWN) return cls->ivar_types[ivi];
+            if (ivi >= 0 && cls->ivar_types[ivi] != TY_UNKNOWN) return ivar_value_ty(cls, ivi);
           }
           return TY_POLY;
         }
@@ -3661,7 +3670,7 @@ else {
            `@`-name reads as nil and a bad name (no `@`) raises NameError -- both poly. */
         /* Data/Struct members are not @-ivars in CRuby: read as nil (#2849) */
         int iv = (sym && sym[0] == '@' && !cls->is_struct) ? comp_ivar_index(cls, sym) : -1;
-        if (iv >= 0) return cls->ivar_types[iv];
+        if (iv >= 0) return ivar_value_ty(cls, iv);
         return TY_POLY;
       }
     }
@@ -3673,7 +3682,7 @@ else {
         snprintf(ivn, sizeof ivn, "@%s", rname);
         ClassInfo *rci = (rdcls >= 0 && rdcls < c->nclasses) ? &c->classes[rdcls] : cls;
         int iv = comp_ivar_index(rci, ivn);
-        if (iv >= 0) return rci->ivar_types[iv];
+        if (iv >= 0) return ivar_value_ty(rci, iv);
       }
     }
     /* attr writer: obj.x= returns the assigned value */
@@ -3725,7 +3734,7 @@ else {
           snprintf(ivn, sizeof ivn, "@%s", rname2);
           ClassInfo *rci2 = (rdcls2 >= 0 && rdcls2 < c->nclasses) ? &c->classes[rdcls2] : &c->classes[self->class_id];
           int iv = comp_ivar_index(rci2, ivn);
-          if (iv >= 0) return rci2->ivar_types[iv];
+          if (iv >= 0) return ivar_value_ty(rci2, iv);
         }
       }
       /* bare `new` inside a class method returns an instance of self's class */
@@ -5097,7 +5106,7 @@ else {
           const char *rname = comp_resolve_alias(c, k, name);
           char ivn[256]; snprintf(ivn, sizeof ivn, "@%s", rname);
           int iv = comp_ivar_index(&c->classes[rdcls], ivn);
-          TyKind rt2 = iv >= 0 ? c->classes[rdcls].ivar_types[iv] : TY_UNKNOWN;
+          TyKind rt2 = iv >= 0 ? ivar_value_ty(&c->classes[rdcls], iv) : TY_UNKNOWN;
           r = found ? ty_unify(r, rt2) : rt2; found = 1;
         }
       }
@@ -7146,7 +7155,7 @@ TyKind infer_uncached(Compiler *c, int id) {
       int cid2 = ty_object_class(rt2);
       char ivn2[300]; snprintf(ivn2, sizeof ivn2, "@%s", attr);
       int ii2 = comp_ivar_index(&c->classes[cid2], ivn2);
-      if (ii2 >= 0) return c->classes[cid2].ivar_types[ii2];
+      if (ii2 >= 0) return ivar_value_ty(&c->classes[cid2], ii2);
     }
     int v2 = nt_ref(nt, id, "value");
     return v2 >= 0 ? infer_type(c, v2) : TY_UNKNOWN;
