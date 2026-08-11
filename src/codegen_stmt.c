@@ -7688,7 +7688,15 @@ else {
             const char *lnm = nt_str(nt, lefts[i], "name");
             emit_indent(b, indent);
             emit_local_ref(c, lefts[i], lnm, b);
-            buf_printf(b, " = sp_poly_massign_get(_t%d, %dLL);\n", tarr, i);
+            buf_puts(b, " = ");
+            { char mge[64]; snprintf(mge, sizeof mge, "sp_poly_massign_get(_t%d, %dLL)", tarr, i);
+              LocalVar *mlv = scope_local(comp_scope_of(c, lefts[i]), lnm);
+              /* The target's C slot is whatever the fixpoint settled on it: a
+                 scalar one takes the unboxed value, not the sp_RbVal. */
+              if (mlv && mlv->type != TY_POLY && mlv->type != TY_UNKNOWN)
+                emit_unbox_text(c, mlv->type, mge, b);
+              else buf_puts(b, mge); }
+            buf_puts(b, ";\n");
           }
           else if (sp_streq(lty, "InstanceVariableTargetNode") &&
                    rt_scope_p && rt_scope_p->class_id >= 0) {
