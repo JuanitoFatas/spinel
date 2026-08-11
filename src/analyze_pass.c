@@ -9026,6 +9026,39 @@ int is_descendant(Compiler *c, int k, int anc);
 /* True when the method body's tail statement unconditionally raises, so the C
    function never reaches a return (used to widen its void type to the override
    return type -- the unreachable "return value" can safely take that type). */
+/* Does this method's body end in a call that resolves to nothing -- no user
+   method, no reader, no builtin the emitter knows? Codegen answers such a call
+   with a NoMethodError raise, so the method never returns a value. */
+static int scope_tail_unresolved_call(Compiler *c, int s) {
+  const NodeTable *nt = c->nt;
+  int body = c->scopes[s].body;
+  if (body < 0 || nt_kind(nt, body) != NK_StatementsNode) return 0;
+  int bn = 0; const int *bb = nt_arr(nt, body, "body", &bn);
+  if (bn <= 0) return 0;
+  int last = bb[bn - 1];
+  const char *ty = nt_type(nt, last);
+  if (!ty || !sp_streq(ty, "CallNode")) return 0;
+  int recv = nt_ref(nt, last, "receiver");
+  if (recv < 0) return 0;
+  TyKind lt = infer_type(c, last);
+  if (lt != TY_VOID && lt != TY_UNKNOWN) return 0;
+  /* A builtin-typed receiver: the name is either one of that type's methods
+     (and would have a type) or nothing at all. An object/poly/unknown receiver
+     is not decided here -- the fixpoint may still settle it. */
+  TyKind rt = infer_type(c, recv);
+  /* Only an instance of a builtin whose method set is closed: a class
+     reference (`Hash.new`) or a container the fixpoint has not settled can
+     still grow a type, and pinning the return here would freeze the caller's
+     shape before that happened. */
+  if (rt != TY_STRING && rt != TY_STRBUF && rt != TY_INT && rt != TY_BIGINT &&
+      rt != TY_FLOAT && rt != TY_SYMBOL && rt != TY_BOOL) return 0;
+  const char *nm = nt_str(nt, last, "name");
+  if (!nm) return 0;
+  for (int k = 0; k < c->nclasses; k++)
+    if (comp_method_in_chain(c, k, nm, NULL) >= 0 || comp_reader_in_chain(c, k, nm, NULL)) return 0;
+  return 1;
+}
+
 static int scope_tail_raises(Compiler *c, int s) {
   const NodeTable *nt = c->nt;
   int body = c->scopes[s].body;
@@ -9430,6 +9463,41 @@ int infer_return_types(Compiler *c) {
       unified = (unified == TY_VOID) ? ot->ret : ty_unify(unified, ot->ret);
     }
     if (unified != TY_VOID) { sc->ret = unified; changed = 1; }
+  }
+
+  /* A method whose body ends in a call nothing resolves infers a void return:
+     codegen turns that tail into a NoMethodError raise, so the value is never
+     produced. But a caller that READS the value (`@text = j.text`) still needs
+     a typed result, and void gave it none -- the emitted C assigned a void
+     expression. Type those returns poly; the value is unreachable either way. */
+  {
+    char *stmt_pos = NULL;
+    for (int s = 1; s < c->nscopes; s++) {
+      Scope *sc = &c->scopes[s];
+      if (!sc->name || (sc->ret != TY_VOID && sc->ret != TY_UNKNOWN)) continue;
+      if (sc->ret_specialized || sc->ret_rbs_seeded || sc->cs_synth) continue;
+      if (sc->ret_oa_pin != TY_UNKNOWN) continue;
+      if (!scope_tail_unresolved_call(c, s)) continue;
+      if (!stmt_pos) {
+        stmt_pos = (char *)calloc((size_t)c->nt->count, 1);
+        if (!stmt_pos) break;
+        for (int n = 0; n < c->nt->count; n++) {
+          if (nt_kind(c->nt, n) != NK_StatementsNode) continue;
+          int bn2 = 0; const int *bb2 = nt_arr(c->nt, n, "body", &bn2);
+          for (int k = 0; k < bn2; k++) if (bb2[k] >= 0) stmt_pos[bb2[k]] = 1;
+        }
+      }
+      int value_used = 0;
+      for (int n = 0; n < c->nt->count && !value_used; n++) {
+        if (stmt_pos[n]) continue;
+        const char *nty = nt_type(c->nt, n);
+        if (!nty || !sp_streq(nty, "CallNode")) continue;
+        const char *nnm = nt_str(c->nt, n, "name");
+        if (nnm && sp_streq(nnm, sc->name)) value_used = 1;
+      }
+      if (value_used) { sc->ret = TY_POLY; changed = 1; }
+    }
+    free(stmt_pos);
   }
 
   /* A return narrowed to a pointer array keeps that decision across this pass,
