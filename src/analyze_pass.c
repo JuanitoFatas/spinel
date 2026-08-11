@@ -2234,7 +2234,42 @@ int infer_write_types(Compiler *c) {
             if (comp_reader_in_chain(c, k, mname, &kd)) { if (kd == k) { owner = k; nown++; } }
             else if (comp_method_in_class(c, k, mname) >= 0) { owner = k; nown++; }
           }
-          if (nown != 1) continue;
+          if (nown != 1) {
+            /* Several classes own this getter and the receiver's class is only
+               known at run time: apply the evidence to EVERY owner. Leaving
+               them narrow stored a boxed object into an int-array slot, and the
+               elements read back as Integers (#3781). Widening is monotone, so
+               the fixpoint still settles. */
+            TyKind pvt = (vt == TY_STRBUF) ? TY_STRING : vt;
+            if (pvt == TY_UNKNOWN) continue;
+            for (int k = 0; k < c->nclasses; k++) {
+              int kd = k;
+              const char *ivn = NULL;
+              char rbuf[300];
+              int gm = comp_method_in_chain(c, k, mname, &kd);
+              if (gm >= 0) {
+                int last = scope_body_last(c, gm);
+                if (last < 0 || nt_kind(nt, last) != NK_InstanceVariableReadNode) continue;
+                ivn = nt_str(nt, last, "name");
+              }
+              else if (comp_reader_in_chain(c, k, mname, &kd)) {
+                snprintf(rbuf, sizeof rbuf, "@%s", mname);
+                ivn = rbuf;
+              }
+              else continue;
+              if (!ivn || kd < 0 || kd >= c->nclasses) continue;
+              ClassInfo *ck = &c->classes[kd];
+              int ivi = comp_ivar_index(ck, ivn);
+              if (ivi < 0 || class_ivar_pinned(ck, ivn)) continue;
+              if (!ty_is_array(ck->ivar_types[ivi])) continue;   /* an established array slot only */
+              if (ck->ivar_types[ivi] == TY_POLY_ARRAY) continue;
+              if (ck->ivar_types[ivi] != ty_array_of(pvt)) {
+                ck->ivar_types[ivi] = TY_POLY_ARRAY;
+                changed = 1;
+              }
+            }
+            continue;
+          }
           gcid = owner;
         }
       }

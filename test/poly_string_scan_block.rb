@@ -19,3 +19,20 @@ p counts["word"]
 seen = []
 log.scan(/\d+/) { |m| seen << m }
 p seen
+
+# the same, with the receiver statically a String and only the pattern boxed
+class L
+  def initialize
+    @log = "abc 123 def 45"
+  end
+
+  def run
+    counts = Hash.new(0)
+    PATTERNS.each do |name, regex|
+      @log.scan(regex) { counts[name] += 1 }
+    end
+    counts.values.sum
+  end
+end
+
+p L.new.run

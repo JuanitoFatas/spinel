@@ -5698,7 +5698,7 @@ int emit_scalar_call(Compiler *c, int id, Buf *b) {
       }
       else if (sp_streq(name, "scan") && argc == 1 &&
                (re_lit_index(c, argv[0]) >= 0 || comp_ntype(c, argv[0]) == TY_STRING ||
-                comp_ntype(c, argv[0]) == TY_REGEX) &&
+                comp_ntype(c, argv[0]) == TY_REGEX || comp_ntype(c, argv[0]) == TY_POLY) &&
                nt_ref(nt, id, "block") >= 0) {
         /* value-form scan { }: iterate in the prelude; the value is the
            receiver string (CRuby returns self from the block form). With
@@ -5735,6 +5735,15 @@ int emit_scalar_call(Compiler *c, int id, Buf *b) {
           buf_printf(g_pre, "sp_StrArray *_t%d = sp_re_scan(%s, _t%d); SP_GC_ROOT(_t%d);\n",
                      tm, eb.p ? eb.p : "NULL", tr, tm);
           free(eb.p);
+        }
+        else if (comp_ntype(c, argv[0]) == TY_POLY) {
+          /* the pattern is a Regexp read out of a table, so it arrives boxed:
+             its payload IS the compiled pattern */
+          Buf pb2; memset(&pb2, 0, sizeof pb2);
+          emit_boxed(c, argv[0], &pb2);
+          buf_printf(g_pre, "sp_StrArray *_t%d = sp_re_scan((mrb_regexp_pattern *)(%s).v.p, _t%d); SP_GC_ROOT(_t%d);\n",
+                     tm, pb2.p ? pb2.p : "sp_box_nil()", tr, tm);
+          free(pb2.p);
         }
         else {
           buf_printf(g_pre, "sp_StrArray *_t%d = sp_str_scan(_t%d, ", tm, tr);
