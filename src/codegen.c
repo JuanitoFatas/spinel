@@ -3006,8 +3006,11 @@ void emit_proc_literal(Compiler *c, int create, Buf *b) {
     else if (!nameset_has(&locals, nm)) {
       /* read of an enclosing var that wasn't celled and isn't proc-local:
          no storage exists for it inside the fn -- defer rather than miscompile */
-      free(params.v); free(used.v); free(locals.v); free(caps.v);
-      unsupported(c, create, "proc referencing an uncaptured outer variable (later slice)");
+      { static char msg[256];
+        snprintf(msg, sizeof msg,
+                 "proc referencing an uncaptured outer variable `%s` (later slice)", nm);
+        free(params.v); free(used.v); free(locals.v); free(caps.v);
+        unsupported(c, create, msg); }
       return;
     }
   }

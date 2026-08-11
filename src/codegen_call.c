@@ -3981,7 +3981,10 @@ static int emit_poly_method_dispatch(Compiler *c, int id, Buf *b) {
                 scope_needs_proc_form(c, mi0)) {
               blk_tmp0 = ++g_tmp;
               Buf pb0; memset(&pb0, 0, sizeof pb0);
-              emit_proc_literal(c, cblk0, &pb0);
+              /* `&blk` that survived the forwarding resolution names a REAL
+                 proc (this function's own block param), not a literal to
+                 materialize: write the proc expression itself. */
+              if (!emit_forwarded_proc_arg(c, cblk0, &pb0)) emit_proc_literal(c, cblk0, &pb0);
               emit_indent(g_pre, g_indent);
               buf_printf(g_pre, "sp_Proc *_t%d = %s;\n", blk_tmp0, pb0.p ? pb0.p : "NULL");
               emit_indent(g_pre, g_indent);
@@ -4014,7 +4017,7 @@ static int emit_poly_method_dispatch(Compiler *c, int id, Buf *b) {
           else {
             blk_tmp0 = ++g_tmp;
             Buf pb1; memset(&pb1, 0, sizeof pb1);
-            emit_proc_literal(c, cblk1, &pb1);
+            if (!emit_forwarded_proc_arg(c, cblk1, &pb1)) emit_proc_literal(c, cblk1, &pb1);
             emit_indent(g_pre, g_indent);
             buf_printf(g_pre, "sp_Proc *_t%d = %s;\n", blk_tmp0, pb1.p ? pb1.p : "NULL");
             emit_indent(g_pre, g_indent);

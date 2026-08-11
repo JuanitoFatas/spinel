@@ -456,6 +456,35 @@ int a_proc_body(Compiler *c, int create) {
 /* A plain block `m(args) { ... }` passed to a method that keeps a real &block
    parameter (not yield-inlined) is lifted to a standalone proc function, so it
    captures enclosing variables exactly like a proc literal. */
+/* Does this method hand its own block on to a POLY receiver? The dispatch
+   there materializes whatever block reaches it as a real proc, so even though
+   the method itself is yield-inlined (its `&blk` calls are spliced at the call
+   site), the block passed to it still escapes into that proc and its captures
+   need cells. */
+static int a_scope_forwards_block_to_poly(Compiler *c, int mi) {
+  const NodeTable *nt = c->nt;
+  Scope *m = &c->scopes[mi];
+  if (!m->blk_param) return 0;
+  for (int nid = 0; nid < nt->count; nid++) {
+    if (c->nscope[nid] != mi) continue;
+    const char *ty = nt_type(nt, nid);
+    if (!ty || !sp_streq(ty, "CallNode")) continue;
+    int blk = nt_ref(nt, nid, "block");
+    const char *bty = blk >= 0 ? nt_type(nt, blk) : NULL;
+    if (!bty || !sp_streq(bty, "BlockArgumentNode")) continue;
+    int fwd = nt_ref(nt, blk, "expression");
+    if (fwd >= 0) {   /* named `&blk`: only THIS method's block param counts */
+      const char *fty = nt_type(nt, fwd);
+      const char *fn = fty && sp_streq(fty, "LocalVariableReadNode") ? nt_str(nt, fwd, "name") : NULL;
+      if (!fn || !m->blk_param[0] || !sp_streq(fn, m->blk_param)) continue;
+    }
+    int recv = nt_ref(nt, nid, "receiver");
+    if (recv < 0) continue;
+    if (infer_type(c, recv) == TY_POLY) return 1;
+  }
+  return 0;
+}
+
 int a_block_is_lifted(Compiler *c, int id) {
   const NodeTable *nt = c->nt;
   const char *ty = nt_type(nt, id);
@@ -490,11 +519,17 @@ else {
        and captures enclosing locals. (Was omitted -- only ty_is_object was
        handled -- so a block passed to a module method never celled its
        captures, silently dropping writes to them.) */
-    if (rty && (sp_streq(rty, "ConstantReadNode") || sp_streq(rty, "ConstantPathNode"))) {
+    int const_recv = rty && (sp_streq(rty, "ConstantReadNode") || sp_streq(rty, "ConstantPathNode"));
+    int const_is_class = 0;
+    if (const_recv) {
       int ci = comp_class_index(c, nt_str(nt, recv, "name"));
-      if (ci >= 0) mi = comp_cmethod_in_chain(c, ci, name, NULL);
+      if (ci >= 0) { const_is_class = 1; mi = comp_cmethod_in_chain(c, ci, name, NULL); }
     }
-    else {
+    /* A constant that names no class is an ordinary VALUE (`CONFIG.each { }`),
+       so it is typed like any other receiver -- including poly, whose dispatch
+       lifts the block. Reading it as a class name and stopping there left such
+       a block unlifted and its captures without storage. */
+    if (!const_recv || !const_is_class) {
       TyKind rt = infer_type(c, recv);
       if (ty_is_object(rt)) mi = comp_method_in_chain(c, ty_object_class(rt), name, NULL);
       /* A poly receiver dispatches on the runtime class, and the dispatch
@@ -556,6 +591,32 @@ int a_is_fiber_or_gen_create(Compiler *c, int id) {
   return rn && (sp_streq(rn, "Fiber") || sp_streq(rn, "Enumerator") || sp_streq(rn, "Thread"));
 }
 
+/* The block of a call whose target hands the block on to a poly receiver. The
+   target is yield-inlined, so the block is spliced into its body -- and lands
+   on the dispatch there, which materializes it as a real proc. Only the
+   capture marking needs this: the target itself keeps no &block, so the
+   inlining decision (which reads a_proc_create_or_lifted) must not see it. */
+static int a_block_forwarded_into_poly(Compiler *c, int id) {
+  const NodeTable *nt = c->nt;
+  const char *ty = nt_type(nt, id);
+  if (!ty || !sp_streq(ty, "CallNode")) return 0;
+  int blk = nt_ref(nt, id, "block");
+  const char *bty = blk >= 0 ? nt_type(nt, blk) : NULL;
+  if (!bty || !sp_streq(bty, "BlockNode")) return 0;
+  const char *name = nt_str(nt, id, "name");
+  if (!name) return 0;
+  int recv = nt_ref(nt, id, "receiver");
+  int mi = -1;
+  if (recv < 0) {
+    Scope *self = comp_scope_of(c, id);
+    if (self && self->class_id >= 0) mi = comp_method_in_chain(c, self->class_id, name, NULL);
+  } else {
+    TyKind rt = infer_type(c, recv);
+    if (ty_is_object(rt)) mi = comp_method_in_chain(c, ty_object_class(rt), name, NULL);
+  }
+  return mi >= 0 && a_scope_forwards_block_to_poly(c, mi);
+}
+
 int a_proc_create_or_lifted(Compiler *c, int id) {
   return is_proc_create(c, id) || a_block_is_lifted(c, id) ||
          a_is_fiber_or_gen_create(c, id) || is_handler_proc_block(c, id);
@@ -580,10 +641,11 @@ void mark_proc_captures(Compiler *c) {
   char *inproc = (char *)calloc((size_t)nt->count, 1);
   if (!inproc) return;
   for (int id = 0; id < nt->count; id++)
-    if (a_proc_create_or_lifted(c, id)) { int body = a_proc_body(c, id); if (body >= 0) a_mark_subtree(c, body, inproc); }
+    if (a_proc_create_or_lifted(c, id) || a_block_forwarded_into_poly(c, id)) {
+      int body = a_proc_body(c, id); if (body >= 0) a_mark_subtree(c, body, inproc); }
 
   for (int id = 0; id < nt->count; id++) {
-    if (!a_proc_create_or_lifted(c, id)) continue;
+    if (!a_proc_create_or_lifted(c, id) && !a_block_forwarded_into_poly(c, id)) continue;
     /* A fiber/generator only needs a cell for a *value-type* capture, where a
        by-value copy would drop the write. A captured heap object (string, array,
        hash, ...) is already shared by pointer -- in-place mutation reaches the

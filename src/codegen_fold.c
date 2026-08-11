@@ -35,7 +35,7 @@ int resolve_forwarded_block(Compiler *c, int block) {
    NULL) into b and return 1; return 0 when blk_node isn't that shape (a
    literal block, for emit_proc_literal). Mirrors the same branch in
    emit_cmethod_block_arg. */
-static int emit_forwarded_proc_arg(Compiler *c, int blk_node, Buf *b) {
+int emit_forwarded_proc_arg(Compiler *c, int blk_node, Buf *b) {
   const NodeTable *nt = c->nt;
   if (blk_node < 0) return 0;
   const char *ty = nt_type(nt, blk_node);
