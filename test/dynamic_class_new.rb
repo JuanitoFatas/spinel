@@ -1,33 +1,44 @@
-# `table[key].new` -- the receiver is a Class value read out of a container, so
-# the construction switches on its runtime id. The zero-argument form now also
-# reaches a constructor whose parameters are all optional, filling each with
-# its default the way a statically-known `Klass.new` does.
+# Issue #404 Tier 5. Dynamic `<sp_Class>.new` over a Class-typed
+# value. Pre-Tier-5 only the constant-receiver form worked
+# (`Foo.new` resolves at codegen time); a Class-typed local
+# carrying the same class hit the unresolved-call warning + 0
+# emit. The delegated_type / STI shape needs runtime dispatch
+# because the candidate class is determined by data.
+#
+# Coverage:
+#   - Pick a class from a hash at runtime, call .new, get a
+#     boxed instance, dispatch instance methods via the existing
+#     cls_id-keyed poly dispatch.
+#   - Multiple classes share the dispatch table.
+#   - Only the zero-arg shape is supported in this tier; classes
+#     whose initialize requires args fall back to nil from the
+#     dispatch (out of scope for the MVP).
 
-class A
-  def initialize(n = 3)
-    @n = n
-  end
-
-  def val
-    @n
-  end
+class Article
+  def kind; "article"; end
 end
 
-class B
-  def initialize(n = 7)
-    @n = n
-  end
-
-  def val
-    @n * 2
-  end
+class Page
+  def kind; "page"; end
 end
 
-table = { "a" => A, "b" => B }
-["a", "b"].each do |k|
-  klass = table[k]
-  obj = klass.new
-  p obj.val
+class Comment
+  def kind; "comment"; end
 end
 
-p table["a"].new.val
+def make(klass)
+  klass.new
+end
+
+a = make(Article)
+p = make(Page)
+c = make(Comment)
+
+puts a.kind
+puts p.kind
+puts c.kind
+
+# Single dispatch via a Class-typed local variable.
+k = Article
+obj = k.new
+puts obj.kind
