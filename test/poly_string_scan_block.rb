@@ -36,3 +36,8 @@ class L
 end
 
 p L.new.run
+
+# the blockless form with the same boxed pattern
+PATTERNS.each do |name, regex|
+  p [name, log.scan(regex).size]
+end

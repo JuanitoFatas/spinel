@@ -9965,6 +9965,24 @@ int emit_poly_call(Compiler *c, int id, Buf *b) {
       }
     }
   }
+  /* poly.scan(pat) with no block: the rows themselves. The pattern may arrive
+     boxed (read out of a table), where its payload IS the compiled pattern. */
+  if (recv >= 0 && rt == TY_POLY && sp_streq(name, "scan") && argc == 1 &&
+      nt_ref(nt, id, "block") < 0 && !user_defines_or_reads(c, "scan")) {
+    int sre = re_lit_index(c, argv[0]);
+    TyKind spt = comp_ntype(c, argv[0]);
+    TyKind sres = comp_ntype(c, id);
+    const char *sfn = sres == TY_STR_ARRAY ? "sp_re_scan" : "sp_re_scan_poly";
+    if (spt == TY_STRING) { sfn = "sp_str_scan"; }
+    buf_printf(b, "%s(", sfn);
+    if (sre >= 0) buf_printf(b, "sp_re_pat_%d", sre);
+    else if (spt == TY_REGEX) emit_expr(c, argv[0], b);
+    else if (spt == TY_STRING) { buf_puts(b, "sp_poly_to_s("); emit_expr(c, recv, b); buf_puts(b, "), "); }
+    else { buf_puts(b, "(mrb_regexp_pattern *)("); emit_boxed(c, argv[0], b); buf_puts(b, ").v.p"); }
+    if (spt == TY_STRING) { emit_expr(c, argv[0], b); buf_puts(b, ")"); }
+    else { buf_puts(b, ", sp_poly_to_s("); emit_expr(c, recv, b); buf_puts(b, "))"); }
+    return 1;
+  }
   if (recv >= 0 && rt == TY_POLY)
   /* poly.scan(pat) { }: the block form over a receiver only known to be a
      String at run time. Rows are precomputed exactly as the typed-String arm

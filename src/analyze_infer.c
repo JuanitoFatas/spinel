@@ -1330,6 +1330,9 @@ TyKind infer_call(Compiler *c, int id) {
        than the String one for no reason of its own (#3392). */
     if (infer_type(c, argv[0]) == TY_REGEX) return TY_POLY_ARRAY;
     if (infer_type(c, argv[0]) == TY_STRING) return TY_STR_ARRAY;
+    /* a BOXED pattern (a Regexp read out of a table) is as unknowable as a
+       run-time Regexp value: same shape */
+    if (infer_type(c, argv[0]) == TY_POLY) return TY_POLY_ARRAY;
   }
   /* Array#find / #detect over a poly value that is an array at runtime (an
      inner array read out of a poly container): the matched element (or nil) is
