@@ -94,6 +94,37 @@ static int recv_has_array_write(Compiler *c, int recv) {
   const NodeTable *nt = c->nt;
   const char *rty = recv >= 0 ? nt_type(nt, recv) : NULL;
   if (!rty) return 0;
+  /* `obj.list << x` -- the receiver is a READER. Its array evidence is the
+     backing ivar's, in whichever class owns the reader: without it, any
+     program that also contains a user `<<` (a bundled csv or a Set-like class
+     is enough) stopped taking element evidence from every such push, and the
+     pushed-into slot kept the empty literal's bottom kind (#3781). */
+  if (sp_streq(rty, "CallNode") && nt_ref(nt, recv, "receiver") >= 0) {
+    int rargs = nt_ref(nt, recv, "arguments");
+    int rargc = 0;
+    if (rargs >= 0) nt_arr(nt, rargs, "arguments", &rargc);
+    const char *gname = nt_str(nt, recv, "name");
+    if (rargc != 0 || !gname) return 0;
+    char ivn[300];
+    snprintf(ivn, sizeof ivn, "@%s", gname);
+    for (int k = 0; k < c->nclasses; k++) {
+      int rdcls = k;
+      if (!comp_reader_in_chain(c, k, gname, &rdcls)) continue;
+      if (rdcls < 0 || rdcls >= c->nclasses) continue;
+      if (comp_ivar_index(&c->classes[rdcls], ivn) < 0) continue;
+      for (int id = 0; id < nt->count; id++) {
+        if (nt_kind(nt, id) != NK_InstanceVariableWriteNode) continue;
+        const char *wnm = nt_str(nt, id, "name");
+        if (!wnm || !sp_streq(wnm, ivn)) continue;
+        Scope *ws = comp_scope_of(c, id);
+        if (!ws || ws->class_id != rdcls) continue;
+        int v = nt_ref(nt, id, "value");
+        if (v < 0) continue;
+        if (nt_kind(nt, v) == NK_ArrayNode || ty_is_array(infer_type(c, v))) return 1;
+      }
+    }
+    return 0;
+  }
   int is_ivar = sp_streq(rty, "InstanceVariableReadNode");
   int is_local = sp_streq(rty, "LocalVariableReadNode");
   if (!is_ivar && !is_local) return 0;
@@ -9093,8 +9124,23 @@ static int scope_tail_unresolved_call(Compiler *c, int s) {
       rt != TY_FLOAT && rt != TY_SYMBOL && rt != TY_BOOL) return 0;
   const char *nm = nt_str(nt, last, "name");
   if (!nm) return 0;
-  for (int k = 0; k < c->nclasses; k++)
-    if (comp_method_in_chain(c, k, nm, NULL) >= 0 || comp_reader_in_chain(c, k, nm, NULL)) return 0;
+  /* Only a REOPEN of the receiver's own builtin can answer it: an unrelated
+     user class defining the same name is not a candidate here (the receiver is
+     statically a String / Integer / ...), and treating it as one put the
+     method back to void as soon as any library happened to share the name. */
+  { const char *bn = rt == TY_STRING || rt == TY_STRBUF ? "String"
+                   : rt == TY_INT || rt == TY_BIGINT ? "Integer"
+                   : rt == TY_FLOAT ? "Float"
+                   : rt == TY_SYMBOL ? "Symbol" : NULL;
+    if (bn) {
+      int bc = comp_class_index(c, bn);
+      if (bc >= 0 && (comp_method_in_chain(c, bc, nm, NULL) >= 0 ||
+                      comp_reader_in_chain(c, bc, nm, NULL))) return 0;
+    }
+    int oc = comp_class_index(c, "Object");
+    if (oc >= 0 && (comp_method_in_chain(c, oc, nm, NULL) >= 0 ||
+                    comp_reader_in_chain(c, oc, nm, NULL))) return 0;
+  }
   return 1;
 }
 

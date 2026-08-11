@@ -3,6 +3,18 @@
 # NoMethodError raise. A caller that READS the value still needs a typed
 # result, and the untyped return made the assignment a void expression.
 
+# A user class sharing the tail call's NAME is not a candidate when the
+# receiver is statically a String: only a reopen of String could answer it.
+class Holder
+  def initialize
+    @string = "held"
+  end
+
+  def string
+    @string
+  end
+end
+
 class Gen
   def initialize
     @text = ""
@@ -35,3 +47,4 @@ rescue NoMethodError => e
   puts "raised"
 end
 p p1.size
+p Holder.new.string
