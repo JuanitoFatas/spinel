@@ -4564,6 +4564,53 @@ static void emit_obj_to_hash_dispatch(Compiler *c, Buf *b) {
   buf_puts(b, "    default: return sp_box_nil();\n  }\n}\n");
 }
 
+/* A user class's own #to_json, keyed by cls_id and installed as
+   sp_obj_to_json_fn: the json package asks for it before the generic field
+   reflection, so an object nested in a container serializes the way CRuby's
+   json does (which calls #to_json on every value). Only the two shapes that
+   occur in practice are dispatched: `def to_json` and `def to_json(*args)`. */
+static int obj_to_json_method(Compiler *c, int cid, int *defc) {
+  ClassInfo *ci = &c->classes[cid];
+  if (ci->is_native_class || !ci->instantiated) return -1;
+  int dc = cid;
+  int mi = comp_method_in_chain(c, cid, "to_json", &dc);
+  if (mi < 0) return -1;
+  Scope *m = &c->scopes[mi];
+  if (m->is_cmethod || m->ret != TY_STRING) return -1;
+  if (!scope_has_callable_symbol(c, mi)) return -1;
+  if (m->nparams > 1 || (m->nparams == 1 && m->rest_idx != 0)) return -1;
+  if (m->nparams == 1) {
+    LocalVar *lv = scope_local(m, m->pnames[0]);
+    if (!lv || lv->type != TY_POLY_ARRAY) return -1;
+  }
+  if (defc) *defc = dc;
+  return mi;
+}
+
+static int obj_to_json_any(Compiler *c) {
+  if (!c->native_obj_reflect) return 0;
+  for (int i = 0; i < c->nclasses; i++)
+    if (obj_to_json_method(c, i, NULL) >= 0) return 1;
+  return 0;
+}
+
+static void emit_obj_to_json_dispatch(Compiler *c, Buf *b) {
+  if (!g_gen_obj_to_json) return;
+  buf_puts(b, "static const char *sp_obj_to_json(sp_RbVal v) {\n");
+  buf_puts(b, "  switch (v.cls_id) {\n");
+  for (int i = 0; i < c->nclasses; i++) {
+    int defc = -1;
+    int mi = obj_to_json_method(c, i, &defc);
+    if (mi < 0) continue;
+    int vobj = comp_ty_value_obj(c, ty_object(defc));
+    buf_printf(b, "    case %d: return sp_%s_%s(%s(sp_%s *)v.v.p%s);\n", i,
+               c->classes[defc].c_name, mc(c->scopes[mi].name), vobj ? "*" : "",
+               c->classes[defc].c_name,
+               c->scopes[mi].nparams == 1 ? ", sp_PolyArray_new()" : "");
+  }
+  buf_puts(b, "    default: return NULL;\n  }\n}\n");
+}
+
 /* Symbol-keyed Struct/Data #to_h, installed as sp_obj_to_h_fn. Mirrors the
    per-struct inline to_h emitter, but keyed by cls_id so a Struct/Data read out
    of a poly container can answer #to_h at run time (#2906). Data members are
@@ -5620,6 +5667,8 @@ void emit_regex_section(Compiler *c, Buf *b) {
     buf_puts(b, "static int sp_poly_is_a(sp_RbVal obj, sp_Class klass);\n");
   if (g_gen_obj_hash)
     buf_puts(b, "static sp_RbVal sp_obj_to_hash(sp_RbVal v);\n");
+  if (g_gen_obj_to_json)
+    buf_puts(b, "static const char *sp_obj_to_json(sp_RbVal v);\n");
   if (g_gen_obj_to_h)
     buf_puts(b, "static sp_RbVal sp_obj_to_h(sp_RbVal v);\n");
   if (obj_to_a_any(c))
@@ -5704,6 +5753,8 @@ void emit_regex_section(Compiler *c, Buf *b) {
   }
   if (g_gen_obj_hash)
     buf_puts(b, "  sp_obj_to_hash_fn = sp_obj_to_hash;\n");
+  if (g_gen_obj_to_json)
+    buf_puts(b, "  sp_obj_to_json_fn = sp_obj_to_json;\n");
   if (g_gen_obj_to_h)
     buf_puts(b, "  sp_obj_to_h_fn = sp_obj_to_h;\n");
   if (obj_to_a_any(c))
@@ -6211,6 +6262,7 @@ static void scan_prologue_features(Compiler *c) {
     for (int i = 0; i < c->nclasses; i++)
       if (c->classes[i].is_struct) { g_gen_obj_hash = 1; break; }
   }
+  g_gen_obj_to_json = obj_to_json_any(c);
   /* Any instantiated Struct/Data gets the symbol-keyed to_h dispatch, so a
      Struct/Data read out of a poly container answers #to_h (#2906). */
   g_gen_obj_to_h = 0;
@@ -7463,6 +7515,7 @@ char *codegen_program(const NodeTable *nt) {
   if (g_uses_marshal) emit_marshal_dispatch(c, body);
   if (g_emit_obj_dispatch) emit_obj_inspect_dispatch(c, body);
   emit_obj_to_hash_dispatch(c, body);
+  emit_obj_to_json_dispatch(c, body);
   emit_obj_to_h_dispatch(c, body);
   emit_obj_to_a_dispatch(c, body);
   emit_obj_with_dispatch(c, body);

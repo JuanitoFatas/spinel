@@ -47,6 +47,9 @@ sp_sym (*sp_json_sym_intern_fn)(const char *) = NULL;
 void (*sp_json_hash_set_fn)(sp_RbVal, const char *, sp_RbVal) = NULL;
 const char *(*sp_poly_inspect_fn)(sp_RbVal) = NULL;
 sp_RbVal (*sp_obj_to_hash_fn)(sp_RbVal) = NULL;
+/* A user class's own #to_json, keyed by cls_id: the json package asks for it
+   before falling back to the generic field reflection. */
+const char *(*sp_obj_to_json_fn)(sp_RbVal) = NULL;
 sp_RbVal (*sp_obj_to_h_fn)(sp_RbVal) = NULL;
 sp_RbVal (*sp_obj_to_a_fn)(sp_RbVal) = NULL;
 sp_RbVal (*sp_obj_with_fn)(sp_RbVal, sp_RbVal) = NULL;

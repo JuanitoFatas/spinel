@@ -1319,6 +1319,13 @@ TyKind infer_call(Compiler *c, int id) {
   if (recv >= 0 && (rt == TY_POLY || ty_is_hash(rt)) && sp_streq(name, "merge") && argc == 1 &&
       nt_ref(nt, id, "block") >= 0 && !an_user_defines_or_reads(c, "merge"))
     return TY_POLY_POLY_HASH;   /* the conflict block decides each value */
+  /* `x.to_json` -- CRuby's json defines it on every core class. A user class
+     that defines its own wins (the dispatch below sees it); everything else
+     serializes through the generator, exactly as JSON.generate(x) does. */
+  if (recv >= 0 && sp_streq(name, "to_json") && nt_ref(nt, id, "block") < 0 &&
+      sp_feature_required("json") && rt != TY_UNKNOWN && rt != TY_POLY && !ty_is_object(rt))
+    return TY_STRING;
+
   /* poly.scan(re): a String read out of a container. Same shape as the
      rt==TY_STRING rule -- captures give an array of arrays (#3368). */
   if (recv >= 0 && rt == TY_POLY && argc == 1 && sp_streq(name, "scan") &&

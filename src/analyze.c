@@ -214,6 +214,13 @@ void compute_reachable(Compiler *c) {
       while (qhead < qtail) { int s = queue[qhead++]; for (int ni = 0; ni < sc_n[s]; ni++) MARK_NAME(scope_calls[s][ni]); }
   }
 
+  /* JSON.generate serializes a nested user object through its own #to_json,
+     which likewise has no call site of its own in the AST. */
+  if (sp_feature_required("json")) {
+    MARK_NAME("to_json");
+    while (qhead < qtail) { int s = queue[qhead++]; for (int ni = 0; ni < sc_n[s]; ni++) MARK_NAME(scope_calls[s][ni]); }
+  }
+
   /* Alias/prep_to propagation: when alias_new (or alias_old) is in called_names,
      make the counterpart reachable too (aliases have no scope of their own). */
   int changed = 1;

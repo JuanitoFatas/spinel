@@ -8394,6 +8394,26 @@ static int class_includes_module_named(Compiler *c, int cid, const char *mod_nam
   return 0;
 }
 
+/* Can this receiver only be a CORE value for `x.to_json`? A user class that
+   defines its own to_json answers for its own instances (and for a poly slot
+   that may hold one), but a statically typed Hash / Array / String / number is
+   not one of them -- only a reopen of that builtin could be. */
+static int json_to_json_is_builtin(Compiler *c, int recv) {
+  TyKind rt = comp_ntype(c, recv);
+  if (rt == TY_UNKNOWN || rt == TY_POLY || ty_is_object(rt)) return 0;
+  const char *bn = ty_is_hash(rt) ? "Hash"
+                 : ty_is_array(rt) ? "Array"
+                 : (rt == TY_STRING || rt == TY_STRBUF) ? "String"
+                 : (rt == TY_INT || rt == TY_BIGINT) ? "Integer"
+                 : rt == TY_FLOAT ? "Float"
+                 : rt == TY_SYMBOL ? "Symbol" : NULL;
+  if (bn) {
+    int bc = comp_class_index(c, bn);
+    if (bc >= 0 && comp_method_in_chain(c, bc, "to_json", NULL) >= 0) return 0;
+  }
+  return 1;
+}
+
 void emit_call(Compiler *c, int id, Buf *b) {
   /* deep-return pickup (#3227 P6): a marked receiverless call to a method
      whose every return path yields a shared handle -- reset the side
@@ -16573,6 +16593,17 @@ else { memcpy(dir, sf, n); dir[n] = 0; } }
      binding (packages/json -> sp_json_val). A Struct arg serializes via the
      generic sp_obj_to_hash reflection hook (codegen.c), reached from
      sp_json_val, which then serializes the resulting hash. */
+
+  /* `x.to_json` -- CRuby's json defines it on every core class, so the idiom
+     `{...}.to_json` inside a user #to_json is ordinary. A user class that
+     defines its own to_json keeps the dispatch (this arm declines then). */
+  if (recv >= 0 && sp_streq(name, "to_json") && nt_ref(nt, id, "block") < 0 &&
+      sp_feature_required("json") && json_to_json_is_builtin(c, recv)) {
+    for (int a = 0; a < argc; a++) { buf_puts(b, "((void)("); emit_boxed(c, argv[a], b); buf_puts(b, "), "); }
+    buf_puts(b, "sp_json_val("); emit_boxed(c, recv, b); buf_puts(b, ")");
+    for (int a = 0; a < argc; a++) buf_puts(b, ")");
+    return;
+  }
 
   /* Dir.exist? -> directory test; Dir.exists? was removed in Ruby 4.0 (#2780) */
   if (recv >= 0 && nt_type(nt, recv) && sp_streq(nt_type(nt, recv), "ConstantReadNode") &&

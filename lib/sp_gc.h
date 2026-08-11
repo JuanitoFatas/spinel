@@ -348,6 +348,7 @@ extern const char *(*sp_poly_inspect_fn)(sp_RbVal);
    cls_id) when it has Structs and a package consumes it; a consumer such as
    the json package reads it to serialize an object as a hash. NULL otherwise. */
 extern sp_RbVal (*sp_obj_to_hash_fn)(sp_RbVal);
+extern const char *(*sp_obj_to_json_fn)(sp_RbVal);
 /* Symbol-keyed Struct/Data #to_h, for a poly receiver (#2906). */
 extern sp_RbVal (*sp_obj_to_h_fn)(sp_RbVal);
 /* user-object #to_a for container-read poly receivers (#3234): installed by
