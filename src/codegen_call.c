@@ -3905,6 +3905,27 @@ static int emit_poly_method_dispatch(Compiler *c, int id, Buf *b) {
                         " { sp_StringIO_rewind((sp_StringIO *)_t%d.v.p); }\nelse ",
                      tv, tv, sio_cid3, tv);
       }
+      /* A zero-arg CONTAINER reduction whose name a user class also owns
+         (`TreeNode#sum` next to a real Array's). The switch below covers
+         SP_TAG_OBJ user classes only, so an Array receiver fell through to the
+         NoMethodError default. Runtime-guarded on the container kinds, so a
+         user object still takes its own arm. */
+      if (argc == 0 && nt_ref(nt, id, "block") < 0) {
+        const char *cfn = sp_streq(name, "sum")   ? "sp_poly_sum"
+                        : sp_streq(name, "min")   ? "sp_poly_min"
+                        : sp_streq(name, "max")   ? "sp_poly_max"
+                        : sp_streq(name, "first") ? "sp_poly_first"
+                        : sp_streq(name, "last")  ? "sp_poly_last" : NULL;
+        if (cfn) {
+          char cex[96];
+          snprintf(cex, sizeof cex, "%s(_t%d)", cfn, tv);
+          buf_printf(b, "if (_t%d.tag == SP_TAG_OBJ && (sp_poly_is_array_kind(_t%d.cls_id) ||"
+                        " sp_poly_is_hash_kind(_t%d.cls_id))) { _t%d = ", tv, tv, tv, tr);
+          if (ret == TY_POLY) buf_puts(b, cex);
+          else emit_unbox_text(c, ret, cex, b);
+          buf_puts(b, "; }\nelse ");
+        }
+      }
       /* A zero-arg String transform whose name a user class ALSO owns. The
          poly String shortcuts decline to this dispatch so a Struct member or
          attr_reader called `upcase` answers the member rather than the upcased

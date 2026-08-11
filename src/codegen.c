@@ -5169,6 +5169,20 @@ void emit_super(Compiler *c, int id, Buf *b) {
       buf_printf(b, "%s)", default_value(comp_ntype(c, id)));
       return;
     }
+    /* `super()` from an initialize no ancestor defines reaches Object's, which
+       takes no arguments and does nothing -- not a NoMethodError. The bare
+       form forwards this method's params, so it is only that no-op when there
+       are none. */
+    if (sp_streq(uname, "initialize")) {
+      int fwd_super = ty && sp_streq(ty, "ForwardingSuperNode");
+      int sup_args = ty && sp_streq(ty, "SuperNode") ? nt_ref(c->nt, id, "arguments") : -1;
+      int sup_argc = 0;
+      if (sup_args >= 0) nt_arr(c->nt, sup_args, "arguments", &sup_argc);
+      if ((fwd_super && s->nparams == 0) || (!fwd_super && sup_argc == 0)) {
+        buf_puts(b, default_value(comp_ntype(c, id)));
+        return;
+      }
+    }
     /* No superclass method anywhere (parent chain, included-module shadow, and
        the exception-initialize special case all missed). CRuby raises
        NoMethodError at runtime, so emit that rather than rejecting at compile

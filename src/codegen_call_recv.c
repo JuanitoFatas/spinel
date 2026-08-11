@@ -9947,6 +9947,48 @@ int emit_poly_call(Compiler *c, int id, Buf *b) {
       }
     }
   }
+  if (recv >= 0 && rt == TY_POLY)
+  /* poly.scan(pat) { }: the block form over a receiver only known to be a
+     String at run time. Rows are precomputed exactly as the typed-String arm
+     does, then the block runs per row; the value is the receiver string
+     (CRuby answers self). */
+  if (sp_streq(name, "scan") && argc == 1 && nt_ref(nt, id, "block") >= 0 &&
+      !user_defines_or_reads(c, "scan")) {
+    int sblk = nt_ref(nt, id, "block");
+    const char *sp0 = block_param_name(c, sblk, 0);
+    const char *sp0r = sp0 ? rename_local(sp0) : NULL;
+    int sbody = nt_ref(nt, sblk, "body");
+    int sbn = 0; const int *sbb = sbody >= 0 ? nt_arr(nt, sbody, "body", &sbn) : NULL;
+    int re_i = re_lit_index(c, argv[0]);
+    TyKind pat_t = comp_ntype(c, argv[0]);
+    int ts = ++g_tmp, tm = ++g_tmp, ti = ++g_tmp;
+    buf_printf(b, "({ const char *_t%d = sp_poly_to_s(", ts); emit_expr(c, recv, b);
+    buf_printf(b, "); SP_GC_ROOT(_t%d);", ts);
+    buf_printf(b, " sp_StrArray *_t%d = ", tm);
+    if (re_i >= 0) buf_printf(b, "sp_re_scan(sp_re_pat_%d, _t%d)", re_i, ts);
+    else if (pat_t == TY_REGEX) { buf_puts(b, "sp_re_scan("); emit_expr(c, argv[0], b); buf_printf(b, ", _t%d)", ts); }
+    else if (pat_t == TY_STRING) { buf_printf(b, "sp_str_scan(_t%d, ", ts); emit_expr(c, argv[0], b); buf_puts(b, ")"); }
+    else {
+      /* the pattern arrived boxed (a Regexp read out of a table): its payload
+         IS the compiled pattern */
+      buf_puts(b, "sp_re_scan((mrb_regexp_pattern *)(");
+      emit_boxed(c, argv[0], b);
+      buf_printf(b, ").v.p, _t%d)", ts);
+    }
+    buf_printf(b, "; SP_GC_ROOT(_t%d);", tm);
+    buf_printf(b, " for (mrb_int _t%d = 0; _t%d < sp_StrArray_length(_t%d); _t%d++) {", ti, ti, tm, ti);
+    if (sp0r) {
+      Scope *sbs = comp_scope_of(c, sblk);
+      LocalVar *sblv = sbs ? scope_local(sbs, sp0r) : NULL;
+      if (sblv && sblv->type == TY_POLY)
+        buf_printf(b, " sp_RbVal lv_%s = sp_box_str(sp_StrArray_get(_t%d, _t%d));", sp0r, tm, ti);
+      else
+        buf_printf(b, " const char *lv_%s = sp_StrArray_get(_t%d, _t%d);", sp0r, tm, ti);
+    }
+    for (int k2 = 0; k2 < sbn; k2++) emit_stmt(c, sbb[k2], b, 0);
+    buf_printf(b, " } _t%d; })", ts);
+    return 1;
+  }
   if (recv >= 0 && rt == TY_POLY && argc == 0) {
     if (sp_streq(name, "nil?")) { buf_puts(b, "sp_poly_nil_p("); emit_expr(c, recv, b); buf_puts(b, ")"); return 1; }
     /* to_a on a runtime-tagged value: nil -> [], array -> itself, hash -> its
