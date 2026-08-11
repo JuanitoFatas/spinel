@@ -46,11 +46,13 @@ static inline void sp_fd_own(sp_String *s){
 static inline void sp_fd_publish(sp_String *s){
   sp_str_hdr *h = (sp_str_hdr *)sp_fd_base(s->data);
   h->len = (uint32_t)s->len; h->hash = 0;
+  sp_str_lcache_drop(s->data);
 }
 static inline int sp_fd_grow(sp_String *s, int64_t need){
   if (need < s->cap) return 1;
   sp_gc_hdr *h = (sp_gc_hdr *)((char *)s - sizeof(sp_gc_hdr));
   int64_t new_cap = (need * 2) + 16;
+  sp_str_lcache_drop(s->data);
   char *raw = (char *)realloc(sp_fd_base(s->data), SP_FD_OVH + new_cap);
   if (!raw) return 0;
   sp_gc_bytes_sub(s->cap + SP_FD_OVH); h->size -= s->cap + SP_FD_OVH;
@@ -58,7 +60,7 @@ static inline int sp_fd_grow(sp_String *s, int64_t need){
   h->size += s->cap + SP_FD_OVH; sp_gc_bytes_add(s->cap + SP_FD_OVH);
   return 1;
 }
-static inline void sp_String_fin(void*p){free(sp_fd_base(((sp_String*)p)->data));}
+static inline void sp_String_fin(void*p){sp_str_lcache_drop(((sp_String*)p)->data);free(sp_fd_base(((sp_String*)p)->data));}
 static inline sp_String*sp_String_new(const char*s){
   /* Copy s's payload into a raw-malloc'd buffer BEFORE sp_gc_alloc: if s is a
      heap string anchored only by this stack frame, sp_gc_alloc can trigger a

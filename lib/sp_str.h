@@ -22,18 +22,17 @@ static inline int sp_utf8_char_len(unsigned char c){if(c<0x80)return 1;if(c<0xC0
 static inline int sp_utf8_advance(const char*p){int cn=sp_utf8_char_len((unsigned char)*p);int i=1;while(i<cn&&((unsigned char)p[i]&0xC0)==0x80)i++;return i;}
 static inline int sp_utf8_decode(const char*p,uint32_t*out){unsigned char c=(unsigned char)p[0];if(c<0x80){*out=c;return 1;}if(c<0xC0){*out=c;return 1;}unsigned char c1=(unsigned char)p[1];if((c1&0xC0)!=0x80){*out=c;return 1;}if(c<0xE0){*out=((uint32_t)(c&0x1F)<<6)|(c1&0x3F);return 2;}unsigned char c2=(unsigned char)p[2];if((c2&0xC0)!=0x80){*out=c;return 1;}if(c<0xF0){*out=((uint32_t)(c&0x0F)<<12)|((uint32_t)(c1&0x3F)<<6)|(c2&0x3F);return 3;}unsigned char c3=(unsigned char)p[3];if((c3&0xC0)!=0x80){*out=c;return 1;}*out=((uint32_t)(c&0x07)<<18)|((uint32_t)(c1&0x3F)<<12)|((uint32_t)(c2&0x3F)<<6)|(c3&0x3F);return 4;}
 static inline int sp_utf8_encode(uint32_t cp,char*out){if(cp<0x80){out[0]=(char)cp;return 1;}if(cp<0x800){out[0]=(char)(0xC0|(cp>>6));out[1]=(char)(0x80|(cp&0x3F));return 2;}if(cp<0x10000){out[0]=(char)(0xE0|(cp>>12));out[1]=(char)(0x80|((cp>>6)&0x3F));out[2]=(char)(0x80|(cp&0x3F));return 3;}out[0]=(char)(0xF0|(cp>>18));out[1]=(char)(0x80|((cp>>12)&0x3F));out[2]=(char)(0x80|((cp>>6)&0x3F));out[3]=(char)(0x80|(cp&0x3F));return 4;}
-static inline unsigned sp_str_lcache_hash(const char *s) {
-  uintptr_t k = (uintptr_t)s;
-  return (unsigned)((k ^ (k >> 4) ^ (k >> 12)) & (SP_STR_LCACHE_SIZE - 1));
-}
+#define sp_str_lcache_hash sp_str_lcache_slot
 /* 0xf1 is frozen -- an explicitly frozen heap string, and every string literal
    (frozen string literals are permanent). Its contents can never change, so its
    character length is the most cacheable of all; leaving it out meant #length,
    #[] and every character index on a literal rescanned the whole string on each
-   call. 0xfd (the sp_String append buffer) stays out: that one's length moves. */
+   call. 0xfd (the sp_String append buffer) is in as well: its length moves, but
+   every mutation goes through sp_fd_publish, which drops the entry -- without
+   it a scan loop over a built-up string rewalked the whole buffer per index. */
 static inline int sp_str_cacheable(const char *s) {
   unsigned char m = ((const unsigned char *)s)[-1];
-  return m == 0xfe || m == 0xfc || m == 0xff || m == 0xf1;
+  return m == 0xfe || m == 0xfc || m == 0xff || m == 0xf1 || m == 0xfd;
 }
 /* Byte-exact comparison of two heap strings. strcmp stops at the first NUL,
    so two strings that differ only after one compared equal and sorted equal --

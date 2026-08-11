@@ -120,6 +120,17 @@ struct sp_str_lcache_entry {
    its own; it is cleared at every safepoint park (before a sweep can recycle a
    cached string's address) and by the string sweep on the collector. */
 extern SP_TLS struct sp_str_lcache_entry sp_str_lcache[SP_STR_LCACHE_SIZE];
+static inline unsigned sp_str_lcache_slot(const char *s) {
+  uintptr_t k = (uintptr_t)s;
+  return (unsigned)((k ^ (k >> 4) ^ (k >> 12)) & (SP_STR_LCACHE_SIZE - 1));
+}
+/* Forget what we know about `s`: its bytes are about to change, or its buffer
+   is about to be freed and the address handed to something else. */
+static inline void sp_str_lcache_drop(const char *s) {
+  if (!s) return;
+  unsigned h = sp_str_lcache_slot(s);
+  if (sp_str_lcache[h].s == s) sp_str_lcache[h].s = NULL;
+}
 /* Deep-return side channel (#3227): a method whose every return path yields
    a shared-mutable string publishes the sp_String* handle here as the copy
    is read out; a demand-marked call site picks it up right after the call
