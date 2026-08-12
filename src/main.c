@@ -256,24 +256,26 @@ int main(int argc, char **argv) {
     else if (sp_streq(a, "--emit-symbol-map")) { emit_symbol_map = 1; i++; }
     else if (sp_streq(a, "--dump-ast"))    { dump_ast = 1; i++; }
     else if (sp_streq(a, "-h") || sp_streq(a, "--help")) { usage(); return 0; }
+    /* The C compiler is half of what a spinel build is, so name it too: a bug
+       report that turns out to be a codegen/compiler interaction is otherwise
+       missing the other half. Reports whatever `--cc=` selected, when that
+       flag came first; a compiler that cannot be run leaves the line as it
+       was rather than saying anything about it. */
     else if (sp_streq(a, "--version")) {
-        char cc_version[1024] = {0};
-        char cmd[2048];
-        snprintf(cmd, sizeof(cmd), "%s --version | head -n 1", cc_cmd);
-        FILE *fp = popen(cmd, "r");
-        if (fp) {
-            if (fgets(cc_version, sizeof(cc_version), fp)) {
-                char *nl = strchr(cc_version, '\n');
-                if (nl) *nl = '\0';
-            }
-            pclose(fp);
+      char ccv[512] = {0};
+      char ccq[1024];
+      snprintf(ccq, sizeof ccq, "%s --version 2>/dev/null", cc_cmd);
+      FILE *fp = popen(ccq, "r");
+      if (fp) {
+        if (fgets(ccv, sizeof ccv, fp)) {
+          char *nl = strchr(ccv, '\n');
+          if (nl) *nl = '\0';
         }
-        printf("spinel %s", SPINEL_BUILD_REV);
-        if (cc_version[0]) {
-            printf(" [%s]", cc_version);
-        }
-        printf("\n");
-        return 0;
+        pclose(fp);
+      }
+      if (ccv[0]) printf("spinel %s [%s]\n", SPINEL_BUILD_REV, ccv);
+      else printf("spinel %s\n", SPINEL_BUILD_REV);
+      return 0;
     }
     else if (sp_streq(a, "-e")) {
       if (++i < argc) {
