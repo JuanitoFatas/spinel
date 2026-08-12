@@ -3318,6 +3318,13 @@ else if (orecv >= 0 && onm) {
      field. A class-method self has no instance and is left as-is. */
   int cap_self = bs && bs->class_id >= 0 && !bs->is_cmethod &&
                  proc_body_uses_self(c, body, bs->class_id);
+  /* A class method that takes the receiving class as a leading parameter has
+     it in `_sp_cls`; a lifted block's function signature is (_cap, argc, args)
+     and knows nothing of it, so a sibling class-method call inside the block
+     referenced an identifier that is not in scope. Carry it in the capture
+     struct, the way instance self is carried (#3797). */
+  int cap_cls = bs && bs->is_cmethod &&
+                cmethod_takes_self_cls(c, (int)(bs - c->scopes));
   int self_is_value = cap_self && c->classes[bs->class_id].is_value_type;
   const char *self_cls = cap_self ? c->classes[bs->class_id].c_name : NULL;
 
@@ -3418,7 +3425,7 @@ else if (orecv >= 0 && onm) {
      the cap struct itself first (sp_Proc_scan does not), then each cell --
      matching the sp_hashproc convention; marking only the cells would leave
      the cap struct unreachable and free it out from under the proc. */
-  if (ncap > 0 || cap_self || ret_proc) {
+  if (ncap > 0 || cap_self || cap_cls || ret_proc) {
     buf_printf(&g_procs, "typedef struct {");
     for (int i = 0; i < ncap; i++) {
       LocalVar *clv = scope_local(bs, caps.v[i]);
@@ -3429,6 +3436,7 @@ else if (orecv >= 0 && onm) {
     }
     if (cap_self && self_is_value) buf_printf(&g_procs, " sp_%s __self_val;", self_cls);
     else if (cap_self) buf_puts(&g_procs, " void *__self;");
+    if (cap_cls) buf_puts(&g_procs, " sp_Class __self_cls;");
     if (ret_proc) buf_puts(&g_procs, " mrb_int _home;");  /* home method's proc-return id (sp_proc_home.id) */
     buf_printf(&g_procs, " } _proc_cap_%d;\n", pid);
     buf_printf(&g_procs, "static void _proc_cap_scan_%d(void *p) {\n", pid);
@@ -3505,7 +3513,7 @@ else if (orecv >= 0 && onm) {
   Buf *pb = &proc_body_buf;
   buf_printf(pb, "static mrb_int _proc_%d(void *_cap, mrb_int argc, mrb_int *args) {\n", pid);
   buf_puts(pb, "    SP_GC_SAVE();\n");
-  if (ncap == 0 && !cap_self && !ret_proc) buf_puts(pb, "    (void)_cap;\n");
+  if (ncap == 0 && !cap_self && !cap_cls && !ret_proc) buf_puts(pb, "    (void)_cap;\n");
   buf_puts(pb, "    (void)args;\n");
   buf_puts(pb, "    (void)argc;\n");
   /* Captured instance self, read back from _cap (#1436). (void) guards the
@@ -3517,6 +3525,10 @@ else if (orecv >= 0 && onm) {
   else if (cap_self) {
     buf_printf(pb, "    sp_%s *self = (sp_%s *)((_proc_cap_%d *)_cap)->__self;\n", self_cls, self_cls, pid);
     buf_puts(pb, "    (void)self;\n");
+  }
+  if (cap_cls) {
+    buf_printf(pb, "    sp_Class _sp_cls = ((_proc_cap_%d *)_cap)->__self_cls;\n", pid);
+    buf_puts(pb, "    (void)_sp_cls;\n");
   }
   /* Lambda: strict arity -- requireds + trailing posts mandatory, optionals
      widen the max, a splat rest lifts it entirely. */
@@ -3850,7 +3862,7 @@ else if (orecv >= 0 && onm) {
   g_rescue_save_depth = sv_rsd;
   g_fn_pr_label = sv_fn_prl; g_fn_pr_var = sv_fn_prv; g_fn_ret_type = sv_fn_rt;
 
-  if (ncap == 0 && !cap_self && !ret_proc) {
+  if (ncap == 0 && !cap_self && !cap_cls && !ret_proc) {
     buf_printf(b, "sp_proc_new_meta((void *)_proc_%d, NULL, NULL, %d, %s, %d, %s)",
                pid, meta_arity, is_lambda ? "TRUE" : "FALSE", meta_count, meta_args);
   }
@@ -3889,6 +3901,15 @@ else if (orecv >= 0 && onm) {
       else if (cap_self) { emit_indent(g_pre, g_indent); buf_printf(g_pre, "_capv_%d->__self = (void *)%s;\n", pid, sv_self ? sv_self : "self"); }
       /* Capture the home method's proc-return frame so the proc's `return`
          longjmps to it (the creating method declared `_pr`). */
+      /* the receiving class, as the enclosing class method knows it: forwarded
+         from another proc's capture struct when this one is nested */
+      if (cap_cls) {
+        emit_indent(g_pre, g_indent);
+        if (g_cap_struct)
+          buf_printf(g_pre, "_capv_%d->__self_cls = ((%s *)_cap)->__self_cls;\n", pid, g_cap_struct);
+        else
+          buf_printf(g_pre, "_capv_%d->__self_cls = _sp_cls;\n", pid);
+      }
       if (ret_proc) { emit_indent(g_pre, g_indent); buf_printf(g_pre, "_capv_%d->_home = _h.id;\n", pid); }
     }
     buf_printf(b, "sp_proc_new_meta((void *)_proc_%d, _capv_%d, _proc_cap_scan_%d, %d, %s, %d, %s)",
