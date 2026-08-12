@@ -17,7 +17,11 @@
 
 /* Off-GC-heap growable buffer; finalized into a GC string at the end. */
 typedef struct { char *p; size_t len, cap; } jbuf;
-static void jb_add(jbuf *b, const char *s, size_t n) {SP_GC_ROOT_STR(s);
+/* `s` is not rooted: this buffer is off the GC heap and grows with realloc,
+   so nothing here can collect -- and most callers hand it a raw literal or a
+   stack byte, which have no marker byte in front for the collector to read
+   (ASAN: global-buffer-overflow, and a stray write into rodata or the stack). */
+static void jb_add(jbuf *b, const char *s, size_t n) {
   if (b->len + n + 1 > b->cap) {
     b->cap = (b->len + n + 1) * 2;
     b->p = (char *)realloc(b->p, b->cap);
