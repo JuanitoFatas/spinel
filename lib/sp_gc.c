@@ -285,46 +285,10 @@ void sp_gc_promote_slot(sp_gc_hdr *head, sp_gc_hdr *tail, size_t bytes) {
   sp_gc_bytes += bytes;
 }
 #endif
-void sp_gc_collect(void){
-  size_t ob_before = sp_gc_bytes;
-  int full=(sp_gc_cycle%sp_gc_full_interval==0);sp_gc_cycle++;
-  if(full)sp_gc_full_runs++;
-  /* new mark generation: every object becomes unmarked without touching it.
-     On the (30-bit) wrap, clear the whole heap once so no stale stamp can
-     alias the reused generation value. */
-  sp_gc_mark_gen=(sp_gc_mark_gen+1)&0x1fffffffu;   /* marked is 29 bits (see sp_gc_hdr) */
-  if(!sp_gc_mark_gen){
-    sp_gc_mark_gen=1;
-    for(sp_gc_hdr*hh=sp_gc_old_heap;hh;hh=hh->next)hh->marked=0;
-#ifdef SP_THREADS
-    { int n=sp_active_workers; if(n<1)n=1; if(n>SP_MAX_WORKERS)n=SP_MAX_WORKERS; for(int i=0;i<n;i++)for(sp_gc_hdr*hh=sp_gc_wslot[i].young;hh;hh=hh->next)hh->marked=0; }
-#else
-    for(sp_gc_hdr*hh=sp_gc_heap;hh;hh=hh->next)hh->marked=0;
-#endif
-  }
-  /* Opt-in while the barrier's coverage is being completed: the emitted stores
-     are covered, the runtime's container mutators are being swept through, and
-     SPINEL_GC_VERIFY_GEN is what finds what is left. Default off means the
-     collector behaves exactly as it did before the barrier landed. */
-  if (sp_gc_nremembered > sp_gc_rem_peak) sp_gc_rem_peak = sp_gc_nremembered;
-  sp_gc_minor = sp_gc_minor_on && !full && !sp_gc_rem_overflow;
-  sp_gc_mark_all();
-  if(sp_gc_minor){
-    /* the remembered set is the rest of the root set for a minor: each entry is
-       an old object holding a reference the walk above did not follow. */
-    sp_gc_minor = 0;
-    for(int ri=0;ri<sp_gc_nremembered;ri++){
-      sp_gc_hdr *rh=(sp_gc_hdr*)sp_gc_remembered[ri]-1;
-      if(rh->scan) rh->scan(sp_gc_remembered[ri]);
-    }
-    sp_gc_mark_drain();
-  }
-  sp_gc_minor = 0;
-  /* Verification: re-run the mark whole-heap and compare. Anything the full
-     mark reaches that the minor did not is a reference the barrier failed to
-     record -- the one failure mode of this design, silent until it is a use
-     after free. Off unless SPINEL_GC_VERIFY_GEN is set. */
-  if(!full && sp_gc_verify_gen){
+/* The generational check, out of line: it is off unless SPINEL_GC_VERIFY_GEN
+   is set, and inline it added 1.8KB to the middle of the collector -- code
+   the common cycle walks past on its way to the sweep. */
+static SP_NOINLINE void sp_gc_verify_gen_run(void) {
     /* Snapshot the young objects the minor did NOT reach, then mark whole-heap
        and see which of them the full mark does: each one is held only through
        an old object the barrier failed to record. Without the snapshot the
@@ -405,7 +369,48 @@ void sp_gc_collect(void){
       sp_gc_verify_gen_fail = 1;
     }
     free(cand);
+}
+
+void sp_gc_collect(void){
+  size_t ob_before = sp_gc_bytes;
+  int full=(sp_gc_cycle%sp_gc_full_interval==0);sp_gc_cycle++;
+  if(full)sp_gc_full_runs++;
+  /* new mark generation: every object becomes unmarked without touching it.
+     On the (30-bit) wrap, clear the whole heap once so no stale stamp can
+     alias the reused generation value. */
+  sp_gc_mark_gen=(sp_gc_mark_gen+1)&0x1fffffffu;   /* marked is 29 bits (see sp_gc_hdr) */
+  if(!sp_gc_mark_gen){
+    sp_gc_mark_gen=1;
+    for(sp_gc_hdr*hh=sp_gc_old_heap;hh;hh=hh->next)hh->marked=0;
+#ifdef SP_THREADS
+    { int n=sp_active_workers; if(n<1)n=1; if(n>SP_MAX_WORKERS)n=SP_MAX_WORKERS; for(int i=0;i<n;i++)for(sp_gc_hdr*hh=sp_gc_wslot[i].young;hh;hh=hh->next)hh->marked=0; }
+#else
+    for(sp_gc_hdr*hh=sp_gc_heap;hh;hh=hh->next)hh->marked=0;
+#endif
   }
+  /* Opt-in while the barrier's coverage is being completed: the emitted stores
+     are covered, the runtime's container mutators are being swept through, and
+     SPINEL_GC_VERIFY_GEN is what finds what is left. Default off means the
+     collector behaves exactly as it did before the barrier landed. */
+  if (sp_gc_nremembered > sp_gc_rem_peak) sp_gc_rem_peak = sp_gc_nremembered;
+  sp_gc_minor = sp_gc_minor_on && !full && !sp_gc_rem_overflow;
+  sp_gc_mark_all();
+  if(sp_gc_minor){
+    /* the remembered set is the rest of the root set for a minor: each entry is
+       an old object holding a reference the walk above did not follow. */
+    sp_gc_minor = 0;
+    for(int ri=0;ri<sp_gc_nremembered;ri++){
+      sp_gc_hdr *rh=(sp_gc_hdr*)sp_gc_remembered[ri]-1;
+      if(rh->scan) rh->scan(sp_gc_remembered[ri]);
+    }
+    sp_gc_mark_drain();
+  }
+  sp_gc_minor = 0;
+  /* Verification: re-run the mark whole-heap and compare. Anything the full
+     mark reaches that the minor did not is a reference the barrier failed to
+     record -- the one failure mode of this design, silent until it is a use
+     after free. Off unless SPINEL_GC_VERIFY_GEN is set. */
+  if(!full && sp_gc_verify_gen) sp_gc_verify_gen_run();
   if(full){
     size_t old_before=sp_gc_old_bytes;
     sp_gc_hdr**pp=&sp_gc_old_heap;sp_gc_old_bytes=0;
