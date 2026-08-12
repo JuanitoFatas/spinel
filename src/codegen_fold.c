@@ -6888,7 +6888,15 @@ void emit_args_filled(Compiler *c, int callee_idx, int argsNode, const char *lea
     for (int k = 0; k < pos_argc && k < m->nparams; k++) {
       if (g_n_argov >= MAX_ARG_OVERRIDE) break;
       TyKind at = comp_ntype(c, argv[k]);
-      int seq = (n_se >= 2 && k < last_se && subtree_has_side_effect(nt, argv[k]));
+      /* An argument emit_ctype would spell `void` has no C storage to
+         sequence into -- `void _tN = ...` is not a declaration C accepts.
+         Nor is there anything to sequence: a valueless argument is a raise
+         fallback (an unresolved call becomes sp_raise_nomethod), which does
+         not return, so no sibling can observe it. Leave it to the argument
+         slot below, which coerces it to the parameter's type. */
+      int has_storage = ty_is_object(at) || c_type_name(at) != NULL;
+      int seq = (has_storage && n_se >= 2 && k < last_se &&
+                 subtree_has_side_effect(nt, argv[k]));
       int root = (at == TY_POLY || needs_root(at));
       if (!root && !seq) continue;
       const char *aty = nt_type(nt, argv[k]);
