@@ -363,6 +363,16 @@ int nt_clone_subtree(NodeTable *nt, int root) {
 
 /* ---- synthetic node construction ---- */
 
+/* Retype an existing node in place. A desugar that rewrites one construct
+   into another (a CallOperatorWriteNode into the writer CallNode Ruby means)
+   has to keep the id: the parent's ref names it. */
+void nt_node_set_type(NodeTable *nt, int id, const char *type) {
+  if (id < 0 || id >= nt->count || !type) return;
+  SpNode *nd = &nt->nodes[id];
+  node_set_type(nd, type, strlen(type));
+  nd->kind = 0;          /* the cached NodeKind is stale now */
+  nt->version++;
+}
 int nt_new_node(NodeTable *nt, const char *type) {
   if (nt->count >= nt->node_cap) {
     int nc = nt->node_cap ? nt->node_cap * 2 : 8;

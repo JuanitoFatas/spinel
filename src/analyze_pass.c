@@ -6055,6 +6055,68 @@ int desugar_respond_to_probe(Compiler *c) {
   return changed;
 }
 
+/* `recv.attr op= value` where the writer is a hand-written `def attr=`.
+   Ruby desugars this into a reader call and a writer call; the emitter's own
+   lowering goes straight to the backing ivar, which is right for an
+   attr_accessor and wrong for a writer with a body, so it refused the shape
+   outright (#3809). Rewrite it into the two calls Ruby means and let the
+   ordinary call machinery handle them; the accessor case is left alone, where
+   the direct ivar store is worth keeping.
+
+   The receiver is evaluated twice, so only a form with no work behind it and
+   no side effect qualifies: a local, self, an ivar or a constant. */
+int desugar_call_op_write(Compiler *c) {
+  NodeTable *nt = (NodeTable *)c->nt;
+  int changed = 0;
+  int n0 = nt->count;
+  for (int id = 0; id < n0; id++) {
+    const char *ty = nt_type(nt, id);
+    if (!ty || !sp_streq(ty, "CallOperatorWriteNode")) continue;
+    int recv = nt_ref(nt, id, "receiver");
+    const char *attr = nt_str(nt, id, "name");
+    const char *op = nt_str(nt, id, "binary_operator");
+    int val = nt_ref(nt, id, "value");
+    if (recv < 0 || !attr || !op || val < 0) continue;
+    const char *rty = nt_type(nt, recv);
+    if (!rty || !(sp_streq(rty, "LocalVariableReadNode") || sp_streq(rty, "SelfNode") ||
+                  sp_streq(rty, "InstanceVariableReadNode") || sp_streq(rty, "ConstantReadNode")))
+      continue;
+    char wname[300];
+    snprintf(wname, sizeof wname, "%s=", attr);
+    int has_def_writer = 0;
+    for (int k = 0; k < c->nclasses && !has_def_writer; k++)
+      if (comp_method_in_chain(c, k, wname, NULL) >= 0) has_def_writer = 1;
+    if (!has_def_writer) continue;                 /* attr_writer: keep the store */
+    char aname[300]; snprintf(aname, sizeof aname, "%s", attr);
+    char opname[64]; snprintf(opname, sizeof opname, "%s", op);
+    int recv2 = nt_clone_subtree(nt, recv);
+    if (recv2 < 0) continue;
+    int base = nt->count;
+    int rd = nt_new_node(nt, "CallNode");
+    int binargs = nt_new_node(nt, "ArgumentsNode");
+    int bin = nt_new_node(nt, "CallNode");
+    int wargs = nt_new_node(nt, "ArgumentsNode");
+    if (rd < 0 || binargs < 0 || bin < 0 || wargs < 0) continue;
+    nt_node_set_ref(nt, rd, "receiver", recv);
+    nt_node_set_str(nt, rd, "name", aname);
+    { int one[1]; one[0] = val; nt_node_set_arr(nt, binargs, "arguments", one, 1); }
+    nt_node_set_ref(nt, bin, "receiver", rd);
+    nt_node_set_str(nt, bin, "name", opname);
+    nt_node_set_ref(nt, bin, "arguments", binargs);
+    { int one[1]; one[0] = bin; nt_node_set_arr(nt, wargs, "arguments", one, 1); }
+    nt_node_set_type(nt, id, "CallNode");
+    nt_node_set_ref(nt, id, "receiver", recv2);
+    nt_node_set_str(nt, id, "name", wname);
+    nt_node_set_ref(nt, id, "arguments", wargs);
+    comp_grow_node_arrays(c);
+    int encl = c->nscope[id];
+    for (int j = recv2; j < nt->count; j++) c->nscope[j] = encl;
+    (void)base;
+    changed = 1;
+  }
+  return changed;
+}
+
 /* `:sym.to_proc.call(recv, *args)` -> `recv.sym(*args)`. An explicit Symbol#to_proc
    followed by a call applies the named method to the first argument; with both the
    symbol and the call site statically known, it rewrites to an ordinary method call
