@@ -5183,7 +5183,9 @@ else {
          operands. Without a type here the emitted call was evaluated for
          effect and its value dropped (#3512). */
       if (argc == 1 && (sp_streq(name, "divmod") || sp_streq(name, "modulo") ||
-                        sp_streq(name, "quo"))) return TY_POLY;
+                        sp_streq(name, "quo") || sp_streq(name, "div") ||
+                        sp_streq(name, "remainder") || sp_streq(name, "coerce")))
+        return TY_POLY;
       /* String#getbyte on a boxed value: int byte or nil on out-of-range. */
       if (argc == 1 && sp_streq(name, "getbyte")) return TY_POLY;
       /* The count-taking Array reads on a boxed array. Their value is a new

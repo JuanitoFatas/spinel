@@ -2501,8 +2501,11 @@ static sp_RbVal sp_poly_divmod(sp_RbVal a, sp_RbVal b) {
   }
   if (a.tag == SP_TAG_FLT || b.tag == SP_TAG_FLT) {
     mrb_float fa = sp_poly_to_f(a), fb = sp_poly_to_f(b);
+    if (fb == 0) sp_raise_cls("ZeroDivisionError", "divided by 0");
     mrb_float q = floor(fa / fb);
-    sp_PolyArray_push(out, sp_box_float(q));
+    /* CRuby answers the quotient as an Integer (7.0.divmod(3) => [2, 1.0]);
+       only one that no Integer can hold stays a Float. */
+    sp_PolyArray_push(out, (q >= -9.2e18 && q <= 9.2e18) ? sp_box_int((mrb_int)q) : sp_box_float(q));
     sp_PolyArray_push(out, sp_box_float(sp_fmod(fa, fb)));
     return sp_box_poly_array(out);
   }
@@ -2512,6 +2515,51 @@ static sp_RbVal sp_poly_divmod(sp_RbVal a, sp_RbVal b) {
     sp_PolyArray_push(out, sp_box_int(sp_imod(ia, ib)));
     return sp_box_poly_array(out);
   }
+}
+/* Numeric#div: the floor of the quotient, always an Integer, whatever the
+   operands are (7.0.div(3) => 2). Distinct from `/`, which keeps the operand
+   kind, and from #fdiv, which is always a Float (#3800). */
+static sp_RbVal sp_poly_div_m(sp_RbVal a, sp_RbVal b) {
+  if (!sp_poly_numeric_p(a) && !sp_poly_is_rational(a) && !sp_poly_is_brat(a))
+    sp_raise_poly_nomethod("div", a);
+  if (a.tag == SP_TAG_FLT || b.tag == SP_TAG_FLT ||
+      sp_poly_is_rational(a) || sp_poly_is_rational(b)) {
+    mrb_float fb = sp_poly_to_f_with_rational(b);
+    if (fb == 0) sp_raise_cls("ZeroDivisionError", "divided by 0");
+    mrb_float q = floor(sp_poly_to_f_with_rational(a) / fb);
+    return (q >= -9.2e18 && q <= 9.2e18) ? sp_box_int((mrb_int)q) : sp_box_float(q);
+  }
+  return sp_box_int(sp_idiv(sp_poly_to_i(a), sp_poly_to_i(b)));
+}
+/* Numeric#remainder: the remainder with the sign of the RECEIVER, which is
+   what distinguishes it from #modulo ((-7).remainder(3) is -1, not 2). */
+static sp_RbVal sp_poly_remainder(sp_RbVal a, sp_RbVal b) {
+  if (!sp_poly_numeric_p(a) && !sp_poly_is_rational(a) && !sp_poly_is_brat(a))
+    sp_raise_poly_nomethod("remainder", a);
+  if (a.tag == SP_TAG_FLT || b.tag == SP_TAG_FLT ||
+      sp_poly_is_rational(a) || sp_poly_is_rational(b)) {
+    mrb_float fa = sp_poly_to_f_with_rational(a), fb = sp_poly_to_f_with_rational(b);
+    if (fb == 0) sp_raise_cls("ZeroDivisionError", "divided by 0");
+    return sp_box_float(fa - fb * trunc(fa / fb));
+  }
+  { mrb_int ia = sp_poly_to_i(a), ib = sp_poly_to_i(b);
+    if (ib == 0) sp_raise_cls("ZeroDivisionError", "divided by 0");
+    return sp_box_int(ia - ib * (ia / ib)); }
+}
+/* Numeric#coerce: [other, self], both lifted to the wider of the two kinds.
+   The numeric protocol's entry point, so a boxed receiver has to answer it. */
+static sp_RbVal sp_poly_coerce(sp_RbVal a, sp_RbVal b) {
+  if (!sp_poly_numeric_p(a)) sp_raise_poly_nomethod("coerce", a);
+  sp_PolyArray *out = sp_PolyArray_new();
+  SP_GC_ROOT(out);
+  if (a.tag == SP_TAG_FLT || b.tag == SP_TAG_FLT) {
+    sp_PolyArray_push(out, sp_box_float(sp_poly_to_f_with_rational(b)));
+    sp_PolyArray_push(out, sp_box_float(sp_poly_to_f_with_rational(a)));
+  } else {
+    sp_PolyArray_push(out, b);
+    sp_PolyArray_push(out, a);
+  }
+  return sp_box_poly_array(out);
 }
 static sp_RbVal sp_poly_quo(sp_RbVal a, sp_RbVal b) {
   if (a.tag == SP_TAG_FLT || b.tag == SP_TAG_FLT)
@@ -6009,6 +6057,8 @@ static sp_RbVal sp_poly_to_r_m(sp_RbVal v) {
   if (v.tag == SP_TAG_NIL) return sp_box_rational(sp_rational_new(0, 1));
   if (v.tag == SP_TAG_INT) return sp_box_rational(sp_rational_new(v.v.i, 1));
   if (v.tag == SP_TAG_OBJ && v.cls_id == SP_BUILTIN_RATIONAL) return v;
+  /* Float#to_r is exact: the rational the binary value really is (#3800). */
+  if (v.tag == SP_TAG_FLT) return sp_box_rational(sp_float_to_rational(v.v.f));
   sp_raise_cls("NoMethodError", sp_sprintf("undefined method 'to_r' for %s", sp_poly_class_name(v)));
 }
 static sp_RbVal sp_poly_to_c_m(sp_RbVal v) {

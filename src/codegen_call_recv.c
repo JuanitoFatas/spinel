@@ -9984,6 +9984,9 @@ int emit_poly_call(Compiler *c, int id, Buf *b) {
     const char *pfn1 =
       sp_streq(name, "divmod")  ? "sp_poly_divmod" :
       sp_streq(name, "modulo")  ? "sp_poly_mod" :
+      sp_streq(name, "div")     ? "sp_poly_div_m" :
+      sp_streq(name, "remainder") ? "sp_poly_remainder" :
+      sp_streq(name, "coerce")  ? "sp_poly_coerce" :
       sp_streq(name, "quo")     ? "sp_poly_quo" : NULL;
     if (pfn1) {
       int has_user1 = 0;
