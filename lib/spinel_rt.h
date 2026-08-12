@@ -6215,6 +6215,25 @@ static sp_RbVal sp_poly_last(sp_RbVal v) {
   mrb_int n = sp_poly_length(v);
   return n > 0 ? sp_poly_arr_get(v, n - 1) : sp_box_nil();
 }
+/* Array#first(n) / #last(n) on a value only known at run time: the n-element
+   prefix or suffix, as a fresh array. A Hash walks its [k, v] pairs, the way
+   every other Enumerable name here does. */
+static sp_RbVal sp_poly_first_n(sp_RbVal v, mrb_int n) {
+  sp_PolyArray *out = sp_PolyArray_new(); SP_GC_ROOT(out);
+  if (n < 0) sp_raise_cls("ArgumentError", "negative array size");
+  mrb_int len = sp_poly_arr_len_ex(v);
+  if (n > len) n = len;
+  for (mrb_int i = 0; i < n; i++) sp_PolyArray_push(out, sp_poly_each_elem(v, i));
+  return sp_box_poly_array(out);
+}
+static sp_RbVal sp_poly_last_n(sp_RbVal v, mrb_int n) {
+  sp_PolyArray *out = sp_PolyArray_new(); SP_GC_ROOT(out);
+  if (n < 0) sp_raise_cls("ArgumentError", "negative array size");
+  mrb_int len = sp_poly_arr_len_ex(v);
+  if (n > len) n = len;
+  for (mrb_int i = len - n; i < len; i++) sp_PolyArray_push(out, sp_poly_each_elem(v, i));
+  return sp_box_poly_array(out);
+}
 static sp_RbVal sp_poly_sample(sp_RbVal v) {
   mrb_int n = sp_poly_length(v);
   return n > 0 ? sp_poly_arr_get(v, sp_krand_below(n)) : sp_box_nil();

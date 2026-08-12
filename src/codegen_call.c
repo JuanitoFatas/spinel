@@ -4446,6 +4446,11 @@ static int emit_poly_method_dispatch(Compiler *c, int id, Buf *b) {
     int is_pdelete = sp_streq(name, "delete") && argc == 1 && !has_splat_arg;
     int is_pdig = sp_streq(name, "dig") && argc >= 1 && !has_splat_arg;
     int is_pvalues_at = sp_streq(name, "values_at") && argc >= 1 && !has_splat_arg;
+    /* `xs.first(n)` / `xs.last(n)` on a poly value that is a container at run
+       time: the zero-arg forms have had an arm for a long time, the counted
+       ones fell through to the raise (#3781 follow-up). */
+    int is_pfirstn = (sp_streq(name, "first") || sp_streq(name, "last")) &&
+                     argc == 1 && !has_splat_arg;
     int is_include = (sp_streq(name, "include?") || sp_streq(name, "member?") ||
                       sp_streq(name, "has_key?") || sp_streq(name, "key?")) && argc == 1;
     /* intersect? on a poly value that is a builtin array. The typed-receiver
@@ -4519,7 +4524,7 @@ static int emit_poly_method_dispatch(Compiler *c, int id, Buf *b) {
        receiver (#3234): builtin pre-arms, no user candidates required */
     int is_cover = sp_streq(name, "cover?") && argc == 1 && !diag_user_defines(c, name);
     int is_gcdlcm = sp_streq(name, "gcdlcm") && argc == 1 && !diag_user_defines(c, name);
-    if (ncand > 0 || is_index || is_pdelete || is_pdig || is_pvalues_at || is_include || is_fetch || is_push || is_pred || is_strftime || is_intersect || is_arr_index || is_cover || is_gcdlcm) {
+    if (ncand > 0 || is_index || is_pdelete || is_pdig || is_pvalues_at || is_pfirstn || is_include || is_fetch || is_push || is_pred || is_strftime || is_intersect || is_arr_index || is_cover || is_gcdlcm) {
       TyKind ret = comp_ntype(c, id);
       int tv = ++g_tmp, tr = ++g_tmp;
       int *atmp = malloc(sizeof(int) * argc);
@@ -5189,7 +5194,7 @@ else {
          mislabelled raise (#3394). */
       if (!is_pred && !is_strftime && !is_aref && !is_fetch && !is_include &&
           !is_push && !is_cover && !is_gcdlcm && !is_strdel && !is_strsplit &&
-          !is_pdelete && !is_pdig && !is_pvalues_at) {
+          !is_pdelete && !is_pdig && !is_pvalues_at && !is_pfirstn) {
         buf_puts(b, " default:");
         /* index/rindex also belong to String, whose box carries no cls_id, so
            no case above can claim it. Answer it here, ahead of the raise, or a
@@ -5219,6 +5224,14 @@ else {
          answered nil with nothing raised (#3507). The runtime index dispatches
          on the receiver's own kind, and raises where there is no `[]` at all.
          The key goes boxed, since a Hash key is not an offset. */
+      else if (is_pfirstn) {
+        char nx[64]; snprintf(nx, sizeof nx, "_t%d", atmp[0]);
+        char gen[256];
+        snprintf(gen, sizeof gen, "sp_poly_%s_n(_t%d, %s)",
+                 sp_streq(name, "first") ? "first" : "last", tv,
+                 atmp_ty[0] == TY_POLY ? ({ static char cx[80]; snprintf(cx, sizeof cx, "sp_poly_to_i(%s)", nx); cx; }) : nx);
+        if (ret == TY_POLY) buf_printf(b, " default: _t%d = %s; break;", tr, gen);
+      }
       else if (is_pdelete || is_pdig || is_pvalues_at) {
         Buf ab; memset(&ab, 0, sizeof ab);
         for (int a = 0; a < argc; a++) {
