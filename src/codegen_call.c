@@ -21974,6 +21974,34 @@ else { memcpy(dir, sf, n); dir[n] = 0; } }
        typed emitter; inference typed the call by the same pretence, so the
        result slot already fits. A receiver that is not a hash at runtime raises
        exactly the NoMethodError this site would have raised (#3449). */
+    /* `xs.map(&f)` / `xs.select(&f)` on a receiver known only at run time: a
+       forwarded proc has no block body for the loop emitters to splice, so
+       nothing above claimed the call. Drive the proc through the enumerable
+       helper, ahead of the hash-face coercion below -- which would turn an
+       Array receiver into a NoMethodError. */
+    { const char *fpn = nt_str(nt, id, "name");
+      int fpb = nt_ref(nt, id, "block");
+      const char *fpop = fpn ? poly_enum_op_for(fpn) : NULL;
+      if (fpop && recv >= 0 && grt == TY_POLY && fpb >= 0 && nt_type(nt, fpb) &&
+          sp_streq(nt_type(nt, fpb), "BlockArgumentNode")) {
+        Buf fpp; memset(&fpp, 0, sizeof fpp);
+        if (emit_forwarded_proc_arg(c, fpb, &fpp)) {
+          int fpt = ++g_tmp;
+          Buf fpr; memset(&fpr, 0, sizeof fpr); emit_boxed(c, recv, &fpr);
+          char fcall[600];
+          snprintf(fcall, sizeof fcall,
+                   "({ sp_Proc *_t%d = %s; SP_GC_ROOT(_t%d); sp_poly_enum_proc(%s, %s, _t%d); })",
+                   fpt, fpp.p ? fpp.p : "NULL", fpt,
+                   fpr.p ? fpr.p : "sp_box_nil()", fpop, fpt);
+          free(fpr.p); free(fpp.p);
+          TyKind fret = comp_ntype(c, id);
+          if (fret == TY_POLY || fret == TY_UNKNOWN) buf_puts(b, fcall);
+          else emit_unbox_text(c, fret, fcall, b);
+          return;
+        }
+        free(fpp.p);
+      }
+    }
     if (grt == TY_POLY && ty_poly_hash_face_name(nt_str(nt, id, "name")) &&
         g_n_argov < MAX_ARG_OVERRIDE) {
       const char *hnm = nt_str(nt, id, "name");
