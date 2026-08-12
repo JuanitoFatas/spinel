@@ -10592,12 +10592,29 @@ void analyze_program(Compiler *c) {
            receiver falls back to the name: any block-taking method that could
            be the callee decides, which at worst leaves a forwarder uninlined. */
         if (fmi < 0) {
+          /* Several methods can share the name, and the first one found is not
+             necessarily the callee. Take the one that KEEPS the block if any
+             does: assuming the harmless candidate compiled the same program
+             right or wrong depending on the order the classes were defined in
+             (#3786). */
+          int first = -1;
           for (int si = 1; si < c->nscopes; si++) {
             Scope *cs3 = &c->scopes[si];
             if (cs3->is_cmethod || !cs3->name || !sp_streq(cs3->name, fn)) continue;
             if (!cs3->blk_param || !cs3->blk_param[0]) continue;
-            fmi = si; break;
+            if (first < 0) first = si;
+            int keeps = 0;
+            for (int q = 0; q < c->nt->count && !keeps; q++) {
+              if (c->nscope[q] != si) continue;
+              if (nt_kind(c->nt, q) != NK_LocalVariableReadNode) continue;
+              const char *qn = nt_str(c->nt, q, "name");
+              if (!qn || !sp_streq(qn, cs3->blk_param)) continue;
+              if (!(blk_call_recv && blk_call_recv[q]) &&
+                  !(blk_arg_expr && blk_arg_expr[q])) keeps = 1;
+            }
+            if (keeps) { first = si; break; }
           }
+          fmi = first;
         }
       }
       blk_fwd_callee[fe] = fmi;
