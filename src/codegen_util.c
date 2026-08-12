@@ -66,6 +66,9 @@ int  g_sn_skip = -1;
    currently emitting its builtin-container arm, so the re-entered emission
    does not build the same dispatch again (#3459). */
 int  g_pd_skip = -1;
+/* Node whose Class-tag dispatch is emitting its non-Class arm, so the
+   re-entered emission takes the ordinary path instead of rebuilding it. */
+int  g_cls_tag_skip = -1;
 /* True if evaluating the subtree at `id` may allocate (and so may trigger
    a GC): any call, container literal, or string interpolation qualifies. */
 int subtree_may_allocate(const NodeTable *nt, int id) {

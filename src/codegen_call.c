@@ -918,7 +918,13 @@ int g_poly_builtin_arm = 0;
 
 int user_defines_or_reads(Compiler *c, const char *name) {
   if (g_poly_builtin_arm) return 0;
-  if (diag_user_defines(c, name)) return 1;
+  /* Instance reachability only: a CLASS method of the same name is reached
+     through a Class-valued receiver and can never answer an instance call, so
+     counting it made a String receiver decline the String method and bind to
+     `def self.<name>` instead (#3520). */
+  for (int uk = 0; uk < c->nclasses; uk++)
+    if (comp_method_in_chain(c, uk, name, NULL) >= 0) return 1;
+  if (comp_method_index(c, name) >= 0) return 1;
   for (int uk = 0; uk < c->nclasses; uk++)
     if (comp_is_reader(&c->classes[uk], name)) return 1;
   return 0;
@@ -22008,14 +22014,23 @@ else { memcpy(dir, sf, n); dir[n] = 0; } }
          NoMethodError, rather than raising unconditionally (#3215). Gated on a
          genuinely poly receiver (a concrete non-class static type can never be a
          Class) and a poly result slot (dflt nil), the shape this arises in. */
-      if (grt == TY_POLY && nm && (ret == TY_POLY || ret == TY_UNKNOWN)) {
+      if (grt == TY_POLY && nm && (ret == TY_POLY || ret == TY_UNKNOWN) &&
+          g_cls_tag_skip != id) {
         int ccls[64], cmi[64], cdef[64], nc = 0;
+        int cargc = 0;
+        { int ca = nt_ref(nt, id, "arguments");
+          if (ca >= 0) nt_arr(nt, ca, "arguments", &cargc); }
         for (int k = 0; k < c->nclasses && nc < 64; k++) {
           int dc = -1;
           int mi = comp_cmethod_in_chain(c, k, nm, &dc);
-          if (mi >= 0 && scope_has_callable_symbol(c, mi)) {
-            ccls[nc] = k; cmi[nc] = mi; cdef[nc] = dc; nc++;
-          }
+          if (mi < 0 || !scope_has_callable_symbol(c, mi)) continue;
+          /* A class method that cannot take this call's arguments is not a
+             candidate: emitting its arm put the arity raise in the prelude,
+             where it fired before the tag was even tested (#3520). */
+          { Scope *cs4 = &c->scopes[mi];
+            if (cs4->rest_idx < 0 &&
+                (cargc > cs4->nparams || cargc < cs4->nrequired)) continue; }
+          ccls[nc] = k; cmi[nc] = mi; cdef[nc] = dc; nc++;
         }
         if (nc > 0) {
           int tv = ++g_tmp, argsN = nt_ref(nt, id, "arguments");
@@ -22039,7 +22054,25 @@ else { memcpy(dir, sf, n); dir[n] = 0; } }
             free(cb.p);
             buf_puts(b, " : ");
           }
-          buf_printf(b, "%s) : %s; })", raise, raise);
+          /* Not a Class at run time: this is whatever the call would have
+             compiled to with no class method of the name in the program -- a
+             String receiver takes the String method. Raising here instead made
+             `k.downcase` on a String bind to an unrelated `def self.downcase`
+             and fail with that method's arity (#3520). */
+          Buf eb2; memset(&eb2, 0, sizeof eb2);
+          if (g_n_argov < MAX_ARG_OVERRIDE) {
+            int slot2 = g_n_argov++;
+            g_argov_node[slot2] = recv;
+            snprintf(g_argov_text[slot2], sizeof g_argov_text[0], "_t%d", tv);
+            int sv2 = g_cls_tag_skip;
+            g_cls_tag_skip = id;
+            emit_boxed(c, id, &eb2);
+            g_cls_tag_skip = sv2;
+            g_n_argov--;
+          }
+          buf_printf(b, "%s) : %s; })", raise,
+                     (eb2.p && eb2.p[0]) ? eb2.p : raise);
+          free(eb2.p);
           return;
         }
       }

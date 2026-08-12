@@ -55,9 +55,13 @@ int an_user_defines_or_reads(Compiler *c, const char *name) {
   if (!name) return 0;
   for (int k = 0; k < c->nclasses; k++) {
     if (comp_method_in_chain(c, k, name, NULL) >= 0) return 1;
-    if (comp_cmethod_in_chain(c, k, name, NULL) >= 0) return 1;
     if (comp_is_reader(&c->classes[k], name)) return 1;
   }
+  /* A CLASS method of the same name is deliberately not consulted: it is only
+     reachable through a Class-valued receiver, so it cannot be the answer to
+     an instance call. Counting it made `k.downcase` on a String bind to a
+     `def self.downcase(s)` elsewhere in the program and compile to the arity
+     raise (#3520). */
   return comp_method_index(c, name) >= 0;
 }
 
