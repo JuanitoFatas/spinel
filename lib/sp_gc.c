@@ -197,6 +197,36 @@ unsigned sp_gc_verify_probe = 0;
 void *sp_gc_remembered[SP_GC_REMEMBERED_MAX];
 int sp_gc_nremembered = 0;
 int sp_gc_rem_overflow = 0;
+
+void sp_gc_wb_slow(void *obj) {
+  if (!obj) return;
+  /* Same tag-byte protocol sp_gc_mark uses: the byte in front says whether
+     there is a header to read at all. The root fiber is a static whose guard
+     byte is 0xfd, so reaching past it for `old` walks off the end of a global
+     (ASAN: global-buffer-overflow, and a wandering segfault without it), and a
+     literal or a frozen string is not a GC allocation either. */
+  { unsigned char pm = ((unsigned char *)obj)[-1];
+    if (pm == 0xfd || pm == 0xff || pm == 0xf1 || pm == 0xf0 ||
+        pm == 0xfe || pm == 0xfc) return; }
+  sp_gc_hdr *h = (sp_gc_hdr *)obj - 1;
+  if (!h->old || h->dirty) return;
+  h->dirty = 1;
+#ifdef SP_THREADS
+  /* Mutators run this concurrently, so the slot has to be claimed atomically:
+     a plain `n++` lets two workers take the same index and one of the two
+     holders is silently dropped from the set -- a missing barrier with all the
+     barriers in place. The dirty bit needs no such care: only a mutator writes
+     it, only ever to 1, and the collector reads and clears it under
+     stop-the-world. */
+  { int idx = __atomic_fetch_add(&sp_gc_nremembered, 1, __ATOMIC_RELAXED);
+    if (idx < SP_GC_REMEMBERED_MAX) sp_gc_remembered[idx] = obj;
+    else { __atomic_store_n(&sp_gc_rem_overflow, 1, __ATOMIC_RELAXED);
+           __atomic_store_n(&sp_gc_nremembered, SP_GC_REMEMBERED_MAX, __ATOMIC_RELAXED); } }
+#else
+  if (sp_gc_nremembered < SP_GC_REMEMBERED_MAX) sp_gc_remembered[sp_gc_nremembered++] = obj;
+  else sp_gc_rem_overflow = 1;
+#endif
+}
 int sp_gc_str_minor_only = 0;
 /* Object-threshold retune, installed by sp_alloc.c. Running it INSIDE every
    collection (not only on the object-triggered wrapper) keeps the trigger
