@@ -4566,6 +4566,13 @@ int emit_collect_expr(Compiler *c, int id, Buf *b) {
     buf_puts(g_pre, rb2.p ? rb2.p : "sp_box_nil()");
     buf_puts(g_pre, ";\n");
     free(rb2.p);
+    /* The receiver is what the loop reads from, and the body allocates -- the
+       result array, a boxed element, an inspect string. A freshly built
+       receiver (`(g - [vertex]).map { ... }`) was held by nothing, so the
+       first collection inside the loop freed the array being walked and the
+       walk answered nil from its recycled memory (#3801). */
+    emit_indent(g_pre, g_indent);
+    buf_printf(g_pre, "SP_GC_ROOT_RBVAL(_t%d);\n", trecv2);
     emit_indent(g_pre, g_indent);
     buf_printf(g_pre, "mrb_int _t%d = sp_poly_length(_t%d);\n", tn2, trecv2);
     emit_indent(g_pre, g_indent);
