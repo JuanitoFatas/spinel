@@ -161,12 +161,11 @@ __attribute__((constructor)) static void sp_gc_debug_env(void){
   { const char *fi=getenv("SPINEL_GC_FULL_INTERVAL");
     if(fi&&*fi){ int n=atoi(fi); if(n>0&&n<=4096){ sp_gc_full_interval=n; sp_gc_full_interval_fixed=1; } } }
   { const char *g=getenv("SPINEL_GC_VERIFY_GEN"); sp_gc_verify_gen=(g&&*g&&*g!='0');
-    /* On by default: a whole-heap mark on every cycle charges a program for a
-       live set it never touched, which is what an interpreter or a server with
-       a loaded working set is. SPINEL_GC_MINOR=0 forces the whole-heap mark
-       back, both as an escape hatch and so a suspected miscompile can be
-       bisected against the same binary. */
-    const char *mn=getenv("SPINEL_GC_MINOR"); sp_gc_minor_on=!(mn&&*mn&&*mn=='0');
+    /* Opt-in again: the barrier still misses at least one store. A 9-benchmark
+       prefix of the LangArena suite corrupts a live Hash with the minor mark
+       on and is clean without it, which is a missed barrier by construction.
+       SPINEL_GC_MINOR=1 turns it on. */
+    const char *mn=getenv("SPINEL_GC_MINOR"); sp_gc_minor_on=(mn&&*mn&&*mn!='0');
     if(sp_gc_verify_gen) sp_gc_minor_on=1; }
   if (sp_gc_verify) { signal(SIGSEGV, sp_gc_fault_report); signal(SIGBUS, sp_gc_fault_report); }
 }
