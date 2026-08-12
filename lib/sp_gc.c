@@ -442,6 +442,11 @@ void sp_gc_collect(void){
      simply reads as unmarked next generation, which is what a fresh unmark
      pass used to produce. */
   sp_gc_bytes=sp_gc_old_bytes;
+  /* Decided BEFORE the object sweep, because the threaded path sweeps the
+     string heap from inside it (each worker takes its own slot) and would
+     otherwise read this flag while it was still 0 -- and then sweep the old
+     string list on a minor cycle, freeing strings only an old object holds. */
+  sp_gc_str_minor_only = (sp_gc_str_sweep_hook && !full && sp_gc_minor_on);
 #ifdef SP_THREADS
   { int n=sp_active_workers; if(n<1)n=1; if(n>SP_MAX_WORKERS)n=SP_MAX_WORKERS;
     /* Hand each parked worker its own slot. Only with a pool worth the barrier
@@ -511,10 +516,9 @@ void sp_gc_collect(void){
      ballast inversion on lobsters); sweeping young only turns that into
      -52%. */
   if(sp_gc_str_sweep_hook){
-    sp_gc_str_minor_only = (!full && sp_gc_minor_on);
     sp_gc_str_sweep_hook();
-    sp_gc_str_minor_only = 0;
   }
+  sp_gc_str_minor_only = 0;
   /* malloc_trim walks the allocator arena; once per full cycle was ~10% of
      collection time on allocation-heavy runs. Every 4th full keeps the RSS
      benefit at a fraction of the cost. */

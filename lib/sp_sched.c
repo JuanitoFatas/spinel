@@ -479,6 +479,11 @@ static void sp_sched_par_sweep(void) {
      slot. Taking it per worker would let them disagree about `major`. */
   g_str_major = 0;
   g_str_sweep = sp_str_sweep_begin(&g_str_major);
+  /* Same gate the serial sweep applies: on a minor cycle the old string list
+     holds exactly the strings the mark could not reach, so sweeping it frees
+     live ones. Without this a threaded program corrupted a Hash the moment a
+     minor cycle landed on a string-heap trigger. */
+  if (sp_gc_str_minor_only) g_str_major = 0;
   sp_str_par_done = 1;   /* the collector's serial pass must not repeat this */
   SCHED_LOCK();
   memset(g_str_promoted, 0, (size_t)g_sw_hi * sizeof g_str_promoted[0]);
