@@ -6241,6 +6241,31 @@ static void scan_prologue_features(Compiler *c) {
     else if (sp_streq(ty, "ConstantReadNode") || sp_streq(ty, "ConstantPathNode")) {
       const char *nm = nt_str(nt, i, "name");
       if (!nm) continue;
+      /* A class a bundled library defines, named without requiring it. CRuby
+         raises NameError at run time; here the unknown constant flows into
+         the inference as an untyped value and the generated C can end up
+         ill-typed far from the cause, so say what is missing instead. */
+      {
+        static const struct { const char *cls, *feat; } PKG[] = {
+          {"StringIO","stringio"}, {"CSV","csv"}, {"JSON","json"}, {"Set","set"},
+          {"StringScanner","strscan"}, {"Base64","base64"}, {"Digest","digest"},
+          {"ERB","erb"}, {"OptionParser","optparse"}, {"Pathname","pathname"},
+          {NULL,NULL} };
+        for (int pk = 0; PKG[pk].cls; pk++) {
+          if (!sp_streq(nm, PKG[pk].cls)) continue;
+          if (comp_class_index(c, nm) >= 0) break;      /* the program defines it */
+          if (sp_feature_required(PKG[pk].feat)) break;
+          { static char rq[256];
+            snprintf(rq, sizeof rq,
+                     "%s is provided by the bundled %s library, which this program "
+                     "does not require: add `require \"%s\"`. (CRuby's own stdlib "
+                     "sometimes loads it as an implementation detail of another "
+                     "library; that is not part of its interface -- see "
+                     "docs/limitations.md.)", nm, PKG[pk].feat, PKG[pk].feat);
+            unsupported_feature(c, i, rq); }
+          break;
+        }
+      }
       if (sp_streq(nm, "Regexp")) g_uses_regex = 1;
       else if (sp_streq(nm, "Thread") || sp_streq(nm, "Queue") || sp_streq(nm, "SizedQueue") ||
                sp_streq(nm, "Mutex") || sp_streq(nm, "Monitor") ||
