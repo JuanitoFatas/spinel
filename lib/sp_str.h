@@ -215,6 +215,11 @@ static SP_NOINLINE uint64_t sp_str_hash_miss(const char*s,unsigned char m){
   return sp_str_hash_compute(s);
 }
 static inline uint64_t sp_str_hash(const char*s){
+  /* nil hashes like any other absent key: a String-keyed lookup with a nil
+     key answers "not present" in Ruby, and reading the tag byte at s[-1]
+     off a NULL faulted instead (#3790). sp_str_eq already answers false
+     against NULL, so the probe walks past every occupied slot. */
+  if(!s)return 14695981039346656037ULL;
   unsigned char m=((const unsigned char*)s)[-1];
   if(m==0xfe||m==0xfc||m==0xf1){
     uint64_t cached=(((sp_str_hdr*)(s-1))-1)->hash;

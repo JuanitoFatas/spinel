@@ -4405,7 +4405,9 @@ int emit_hash_call(Compiler *c, int id, Buf *b) {
           int t = ++g_tmp;
           buf_printf(b, "({ %s _t%d = ", c_type_name(rt), t); emit_expr(c, recv, b); buf_puts(b, "; ");
           if (vt == TY_INT) buf_printf(b, "_t%d ? _t%d->default_v : SP_INT_NIL; })", t, t);
-          else if (vt == TY_STRING) buf_printf(b, "_t%d && _t%d->default_v ? _t%d->default_v : (&(\"\\xff\")[1]); })", t, t, t);
+          /* absent means the hash's default, which is nil unless one was
+             given -- not the empty string (#3790) */
+          else if (vt == TY_STRING) buf_printf(b, "_t%d ? _t%d->default_v : NULL; })", t, t);
           else buf_printf(b, "_t%d ? _t%d->default_v : sp_box_nil(); })", t, t);
           return 1;
         }
