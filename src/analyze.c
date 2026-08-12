@@ -10285,8 +10285,10 @@ void analyze_program(Compiler *c) {
   register_prepends(c);
   specialize_inherited_cls_new(c);
 
-  /* collect top-level `include <Mod>` calls so bare method calls can
-     resolve to module_function methods in those modules. */
+  /* collect top-level `include <Mod>` / `extend <Mod>` calls so bare method
+     calls can resolve to those modules' methods. At the top level the two
+     differ only in who else gets the methods (Object vs main alone); a
+     receiverless call in this file reaches them either way (#3787). */
   {
     const NodeTable *nt = c->nt;
     int root_stmts = nt_ref(nt, nt->root_id, "statements");
@@ -10294,7 +10296,8 @@ void analyze_program(Compiler *c) {
     const int *stmts = root_stmts >= 0 ? nt_arr(nt, root_stmts, "body", &sn) : NULL;
     for (int i = 0; i < sn; i++) {
       if (!nt_type(nt, stmts[i]) || !sp_streq(nt_type(nt, stmts[i]), "CallNode")) continue;
-      if (!nt_str(nt, stmts[i], "name") || !sp_streq(nt_str(nt, stmts[i], "name"), "include")) continue;
+      { const char *tn = nt_str(nt, stmts[i], "name");
+        if (!tn || (!sp_streq(tn, "include") && !sp_streq(tn, "extend"))) continue; }
       if (nt_ref(nt, stmts[i], "receiver") >= 0) continue;
       int anode = nt_ref(nt, stmts[i], "arguments");
       int an = 0;
