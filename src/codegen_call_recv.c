@@ -7623,7 +7623,14 @@ int emit_object_call(Compiler *c, int id, Buf *b) {
   }
 
   /* Struct instance methods (to_h / to_a / values / members / dig). */
-  if (recv >= 0 && ty_is_object(rt) && c->classes[ty_object_class(rt)].is_struct) {
+  if (recv >= 0 && ty_is_object(rt) && c->classes[ty_object_class(rt)].is_struct &&
+      /* A method written in the `Struct.new` / `Data.define` block overrides the
+         generated one of the same name, as it does in CRuby: `[]` defined there
+         has to run instead of the member lookup, which raised NameError for a
+         key that is not a member (#3794). The generated accessors are not
+         methods, so they are unaffected; the iterator this file synthesizes for
+         a struct is a method and is served by the object path below. */
+      !(name && comp_method_in_chain(c, ty_object_class(rt), name, NULL) >= 0)) {
     ClassInfo *sc = &c->classes[ty_object_class(rt)];
     /* #inspect / #to_s -> the generated (or user-overridden) struct/data stringifier */
     if ((sp_streq(name, "inspect") || sp_streq(name, "to_s")) && argc == 0) {

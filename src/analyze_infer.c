@@ -3486,7 +3486,11 @@ else {
   }
 
   /* Struct instance methods */
-  if (recv >= 0 && ty_is_object(rt) && c->classes[ty_object_class(rt)].is_struct) {
+  if (recv >= 0 && ty_is_object(rt) && c->classes[ty_object_class(rt)].is_struct &&
+      /* a method written in the Struct.new / Data.define block overrides the
+         generated one of that name, so its own return type is the answer
+         (#3794) -- mirrors the same guard in the emitter */
+      !(name && comp_method_in_chain(c, ty_object_class(rt), name, NULL) >= 0)) {
     ClassInfo *sc = &c->classes[ty_object_class(rt)];
     if (sp_streq(name, "with") && sc->is_data) return rt;  /* copy-update returns the same type */
     if (sp_streq(name, "to_a") || sp_streq(name, "values") ||
