@@ -17715,8 +17715,11 @@ else { memcpy(dir, sf, n); dir[n] = 0; } }
     }
   }
 
-  /* self.field = val  /  self.field  inside a class method or module body */
-  if (recv >= 0 && nt_type(nt, recv) && sp_streq(nt_type(nt, recv), "SelfNode")) {
+  /* self.field = val  /  self.field  inside a class method or module body --
+     and the same call written without a receiver, which a method reached
+     through `extend` makes ordinary (#3788) */
+  if ((recv >= 0 && nt_type(nt, recv) && sp_streq(nt_type(nt, recv), "SelfNode")) ||
+      (recv < 0 && argc == 0 && nt_ref(nt, id, "block") < 0)) {
     Scope *_sgencl = comp_scope_of(c, id);
     int _sg_cid = (_sgencl && _sgencl->is_cmethod && _sgencl->class_id >= 0)
                   ? _sgencl->class_id : g_class_body_id;

@@ -2454,7 +2454,8 @@ else {
   }
   /* self.singleton_writer= / self.singleton_reader: inside a class method
      or directly in a class/module body (g_cbody_class_id). */
-  if (recv >= 0 && nt_type(nt, recv) && sp_streq(nt_type(nt, recv), "SelfNode")) {
+  if ((recv >= 0 && nt_type(nt, recv) && sp_streq(nt_type(nt, recv), "SelfNode")) ||
+      (recv < 0 && argc == 0)) {
     Scope *_self = comp_scope_of(c, id);
     int _sg_cid = (_self && _self->is_cmethod && _self->class_id >= 0)
                   ? _self->class_id : g_cbody_class_id;
@@ -2468,7 +2469,11 @@ else {
           if (comp_is_sg_writer(_cls, _base)) return TY_VOID;
         }
       }
-      else if (comp_is_sg_reader(_cls, name)) return TY_POLY;
+      else {
+        /* the alias table maps a renamed accessor onto the reader (#3788) */
+        const char *_rn = comp_resolve_alias(c, _sg_cid, name);
+        if (comp_is_sg_reader(_cls, _rn ? _rn : name)) return TY_POLY;
+      }
     }
   }
 
