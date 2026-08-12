@@ -161,7 +161,12 @@ __attribute__((constructor)) static void sp_gc_debug_env(void){
   { const char *fi=getenv("SPINEL_GC_FULL_INTERVAL");
     if(fi&&*fi){ int n=atoi(fi); if(n>0&&n<=4096){ sp_gc_full_interval=n; sp_gc_full_interval_fixed=1; } } }
   { const char *g=getenv("SPINEL_GC_VERIFY_GEN"); sp_gc_verify_gen=(g&&*g&&*g!='0');
-    const char *mn=getenv("SPINEL_GC_MINOR"); sp_gc_minor_on=(mn&&*mn&&*mn!='0');
+    /* On by default: a whole-heap mark on every cycle charges a program for a
+       live set it never touched, which is what an interpreter or a server with
+       a loaded working set is. SPINEL_GC_MINOR=0 forces the whole-heap mark
+       back, both as an escape hatch and so a suspected miscompile can be
+       bisected against the same binary. */
+    const char *mn=getenv("SPINEL_GC_MINOR"); sp_gc_minor_on=!(mn&&*mn&&*mn=='0');
     if(sp_gc_verify_gen) sp_gc_minor_on=1; }
   if (sp_gc_verify) { signal(SIGSEGV, sp_gc_fault_report); signal(SIGBUS, sp_gc_fault_report); }
 }
@@ -388,10 +393,10 @@ void sp_gc_collect(void){
     for(sp_gc_hdr*hh=sp_gc_heap;hh;hh=hh->next)hh->marked=0;
 #endif
   }
-  /* Opt-in while the barrier's coverage is being completed: the emitted stores
-     are covered, the runtime's container mutators are being swept through, and
-     SPINEL_GC_VERIFY_GEN is what finds what is left. Default off means the
-     collector behaves exactly as it did before the barrier landed. */
+  /* SPINEL_GC_MINOR=0 turns this off and the collector behaves exactly as it
+     did before the barrier landed. SPINEL_GC_VERIFY_GEN is what proves the
+     coverage: it re-marks whole-heap after every minor and names the holder of
+     anything the minor missed. */
   if (sp_gc_nremembered > sp_gc_rem_peak) sp_gc_rem_peak = sp_gc_nremembered;
   sp_gc_minor = sp_gc_minor_on && !full && !sp_gc_rem_overflow;
   sp_gc_mark_all();
