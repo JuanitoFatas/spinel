@@ -3293,7 +3293,18 @@ void unmark_referenced_module_sources(Compiler *c) {
 void register_extends(Compiler *c) {
   const NodeTable *nt = c->nt;
   for (int ci = 0; ci < c->nclasses; ci++) {
-    int body = nt_ref(nt, c->classes[ci].def_node, "body");
+   /* Every body that defines this class, not only the first: `extend M` is
+      commonly written in a REOPENING of the class, and reading def_node alone
+      never saw it, so the module's methods were never transplanted and a call
+      to one did not resolve (#3802). */
+   for (int cn = 0; cn < nt->count; cn++) {
+    if (nt_kind(nt, cn) != NK_ClassNode && nt_kind(nt, cn) != NK_ModuleNode) continue;
+    { int cp = nt_ref(nt, cn, "constant_path");
+      const char *cnm = cp >= 0 ? nt_str(nt, cp, "name") : NULL;
+      /* the body this class is defined by, named the way every other pass
+         reads a ClassNode's name */
+      if (!cnm || comp_class_index(c, cnm) != ci) continue; }
+    int body = nt_ref(nt, cn, "body");
     int n = 0;
     const int *stmts = body >= 0 ? nt_arr(nt, body, "body", &n) : NULL;
     for (int k = 0; k < n; k++) {
@@ -3373,6 +3384,7 @@ void register_extends(Compiler *c) {
         }
       }
     }
+   }
   }
 }
 
