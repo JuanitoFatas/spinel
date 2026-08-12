@@ -2994,6 +2994,7 @@ static void sp_poly_arr_writeback(sp_RbVal orig, sp_PolyArray *work) {
     }
     case SP_BUILTIN_STR_ARRAY: {
       sp_StrArray *a = (sp_StrArray *)orig.v.p;
+      sp_gc_wb((void *)a);
       for (mrb_int i = 0; i < a->len && i < work->len; i++)
         a->data[i] = sp_poly_to_s(work->data[i]);
       return;
@@ -5741,6 +5742,7 @@ static sp_RbVal sp_poly_arr_set_hash(sp_RbVal v, mrb_int idx, sp_RbVal val) {
     case SP_BUILTIN_POLY_ARRAY: {
       sp_PolyArray *_pa = (sp_PolyArray*)v.v.p;
       if (_pa && !_pa->frozen) {
+        sp_gc_wb((void*)_pa);
         while (_pa->len <= idx) sp_PolyArray_push(_pa, sp_box_nil());
         _pa->data[idx] = val;
       }
@@ -6457,7 +6459,10 @@ static sp_RbVal sp_json_symbolize(sp_RbVal v) {
   if (v.cls_id == SP_BUILTIN_POLY_ARRAY) {
     sp_PolyArray *a = (sp_PolyArray *)v.v.p;
     SP_GC_ROOT(a);
-    if (a) for (mrb_int i = 0; i < a->len; i++) a->data[i] = sp_json_symbolize(a->data[i]);
+    /* in place: the recursion answers a freshly built hash for every object
+       element, so an already-old array takes a young reference here */
+    if (a) { sp_gc_wb((void *)a);
+      for (mrb_int i = 0; i < a->len; i++) a->data[i] = sp_json_symbolize(a->data[i]); }
     return v;
   }
   return v;

@@ -1284,6 +1284,13 @@ int emit_poly_recv_block_dispatch(Compiler *c, int id, Buf *b, int indent) {
       emit_indent(b, indent + 1);
       buf_printf(b, "sp_PolyArray *_t%d = sp_poly_arr_recv(_t%d, \"map!\"); SP_GC_ROOT(_t%d);\n",
                  tw, trecv, tw);
+      /* The loop below stores into the array's elements directly rather than
+         through a runtime mutator, so it carries its own write barrier: the
+         receiver may be an old array taking references to values this loop
+         has just made. Once before the loop is enough -- the remembered set
+         dedupes on the object, not the store. */
+      emit_indent(b, indent + 1);
+      buf_printf(b, "sp_gc_wb((void *)_t%d);\n", tw);
       emit_indent(b, indent + 1);
       buf_printf(b, "for (mrb_int _t%d = 0; _t%d < _t%d->len; _t%d++) {\n", ti2, ti2, tw, ti2);
       emit_indent(b, indent + 2);
