@@ -14062,6 +14062,18 @@ else { memcpy(dir, sf, n); dir[n] = 0; } }
         emit_method_cname(c, ms, b);
         buf_puts(b, "(NULL");
         emit_args_filled(c, imi, nt_ref(nt, id, "arguments"), lead, b);
+        /* The declared &block is a parameter like any other: without this the
+           call passed one argument to a two-parameter function and the C did
+           not compile, whether or not a block was written at the call (#3803).
+           The receiver is already in the list, so the separator is needed even
+           when the helper decides it is not. */
+        { Buf bb; memset(&bb, 0, sizeof bb);
+          emit_cmethod_block_arg(c, id, ms, -1, &bb);
+          if (bb.p && bb.p[0]) {
+            if (bb.p[0] != ',') buf_puts(b, ", ");
+            buf_puts(b, bb.p);
+          }
+          free(bb.p); }
         buf_puts(b, ")");
         return;
       }
