@@ -14018,6 +14018,16 @@ else { memcpy(dir, sf, n); dir[n] = 0; } }
   }
   /* bare call to a module_function method made available via top-level include */
   if (recv < 0) {
+    /* Inside a class that includes the same module, the receiverless call is
+       that class's own transplanted copy -- with its own self and its own
+       inferred types. Taking the top-level copy here compiled `fill("=")` in
+       an instance method into the module's null-receiver function, whose
+       return type the class copy does not share (#3795). */
+    { Scope *iencl = comp_scope_of(c, id);
+      if (iencl && iencl->class_id >= 0 && !iencl->is_cmethod &&
+          comp_method_in_chain(c, iencl->class_id, name, NULL) >= 0)
+        goto skip_toplevel_include;
+    }
     int imi = comp_included_method_index(c, name);
     if (imi >= 0) {
       Scope *ms = &c->scopes[imi];
@@ -14051,7 +14061,8 @@ else { memcpy(dir, sf, n); dir[n] = 0; } }
       buf_puts(b, ")");
       return;
     }
-  }
+  }  skip_toplevel_include: ;
+
 
   /* X.class.name / .to_s -> identity when .class yields a string;
      for user-object receivers .class now yields TY_CLASS, so wrap with sp_class_to_s. */

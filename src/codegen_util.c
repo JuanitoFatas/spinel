@@ -1647,10 +1647,24 @@ void scope_proc_form_end(Compiler *c, int s) {
   g_yield_slot_ty = g_pf_saved_slot;
   g_pf_emitting = 0;
 }
+/* A module whose instance methods a TOP-LEVEL `include` makes callable: the
+   bare-call path emits a direct call to the module's own function, so that
+   function has to exist even though including the module into a class also
+   copied it away (#3795). */
+int scope_toplevel_included(Compiler *c, int s) {
+  if (s < 0 || s >= c->nscopes) return 0;
+  Scope *sc = &c->scopes[s];
+  if (sc->is_cmethod || sc->class_id < 0) return 0;
+  for (int i = 0; i < c->ntoplevel_includes; i++)
+    if (c->toplevel_includes[i] == sc->class_id) return 1;
+  return 0;
+}
+
 int scope_has_callable_symbol(Compiler *c, int s) {
   if (s < 0 || s >= c->nscopes) return 0;
   Scope *sc = &c->scopes[s];
-  return sc->reachable && !sc->yields && !sc->is_transplanted_source &&
+  return sc->reachable && !sc->yields &&
+         (!sc->is_transplanted_source || scope_toplevel_included(c, s)) &&
          !scope_is_shadowed(c, s);
 }
 int struct_kwarg_value(Compiler *c, int kwh, const char *name) {
