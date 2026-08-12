@@ -5067,16 +5067,14 @@ else {
          TY_STRING (-> poly) instead of replacing it. No user class keeps the
          concrete TY_STRING, like the rt==TY_STRING rule. */
       if (sp_streq(name, "delete") && argc == 1) {
-        /* Unless the receiver provably carries a container, in which case the
-           answer is the deleted VALUE (a hash) or the object (an array), not
-           a string and not whatever user class owns the name. */
-        if (poly_expr_flows_container(c, recv)) return TY_POLY;
-        TyKind dr = TY_STRING;
-        for (int k = 0; k < c->nclasses; k++) {
-          int mi = comp_method_in_chain(c, k, name, NULL);
-          if (mi >= 0) dr = ty_unify(dr, c->scopes[mi].ret);
-        }
-        return dr;
+        /* The answer is whatever the receiver's own kind returns, so it is
+           boxed: a Hash gives the deleted value, an Array the object, a
+           String the stripped copy. Committing to TY_STRING here made the
+           emitter commit to String#delete, which stringified a Hash receiver
+           and answered a substring of its inspect text (#3806). The container
+           check below stays as documentation of the same conclusion. */
+        (void)poly_expr_flows_container;
+        return TY_POLY;
       }
       if (sp_streq(name, "[]") && argc == 1) return TY_POLY;  /* boxed array element access */
       if (sp_streq(name, "[]") && argc == 2) return TY_POLY;  /* 2-arg poly slice */

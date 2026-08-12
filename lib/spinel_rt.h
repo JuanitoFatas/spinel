@@ -5496,6 +5496,26 @@ static sp_RbVal sp_poly_delete_key(sp_RbVal recv, sp_RbVal key) {
     }
     return was;
   }
+  if (recv.tag == SP_TAG_OBJ && recv.cls_id != SP_BUILTIN_POLY_ARRAY &&
+      sp_poly_is_array_kind(recv.cls_id)) {
+    /* A typed array has to be deleted from in place: sp_poly_to_poly_array
+       COPIES one into a PolyArray, so the removal never reached the array the
+       caller holds. */
+    switch (recv.cls_id) {
+      case SP_BUILTIN_INT_ARRAY: case SP_BUILTIN_SYM_ARRAY: {
+        if (key.tag != (recv.cls_id == SP_BUILTIN_INT_ARRAY ? SP_TAG_INT : SP_TAG_SYM))
+          return sp_box_nil();
+        mrb_int r = sp_IntArray_delete((sp_IntArray *)recv.v.p, key.v.i);
+        return r == SP_INT_NIL ? sp_box_nil() : key;
+      }
+      case SP_BUILTIN_STR_ARRAY: {
+        if (key.tag != SP_TAG_STR) return sp_box_nil();
+        const char *r = sp_StrArray_delete((sp_StrArray *)recv.v.p, key.v.s);
+        return r ? sp_box_str(r) : sp_box_nil();
+      }
+      default: break;
+    }
+  }
   if (recv.tag == SP_TAG_OBJ && sp_poly_is_array_kind(recv.cls_id)) {
     sp_PolyArray *a = sp_poly_to_poly_array(recv);
     mrb_int w = 0, found = 0;
@@ -5505,6 +5525,13 @@ static sp_RbVal sp_poly_delete_key(sp_RbVal recv, sp_RbVal key) {
     }
     if (a) a->len = w;
     return found ? key : sp_box_nil();
+  }
+  /* String#delete(chars): the same name on a string receiver, which reaches
+     here whenever the value only turns out to be a string at run time. */
+  if (recv.tag == SP_TAG_STR || sp_poly_is_strbuf(recv)) {
+    sp_RbVal s = sp_poly_strbuf_deref(recv);
+    if (key.tag != SP_TAG_STR) sp_raise_cls("TypeError", "no implicit conversion into String");
+    return sp_box_str(sp_str_delete(s.v.s ? s.v.s : sp_str_empty, key.v.s ? key.v.s : sp_str_empty));
   }
   sp_raise_nomethod(sp_nomethod_msg("delete", recv));
   return sp_box_nil();
