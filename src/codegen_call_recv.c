@@ -4405,7 +4405,9 @@ int emit_hash_call(Compiler *c, int id, Buf *b) {
           int t = ++g_tmp;
           buf_printf(b, "({ %s _t%d = ", c_type_name(rt), t); emit_expr(c, recv, b); buf_puts(b, "; ");
           if (vt == TY_INT) buf_printf(b, "_t%d ? _t%d->default_v : SP_INT_NIL; })", t, t);
-          else if (vt == TY_STRING) buf_printf(b, "_t%d && _t%d->default_v ? _t%d->default_v : (&(\"\\xff\")[1]); })", t, t, t);
+          /* absent means the hash's default, which is nil unless one was
+             given -- not the empty string (#3790) */
+          else if (vt == TY_STRING) buf_printf(b, "_t%d ? _t%d->default_v : NULL; })", t, t);
           else buf_printf(b, "_t%d ? _t%d->default_v : sp_box_nil(); })", t, t);
           return 1;
         }
@@ -5587,6 +5589,23 @@ static int subtree_reads_match_globals(Compiler *c, int root) {
   return 0;
 }
 
+/* String methods that only read the receiver's bytes: they answer a scalar or
+   build a new string, and never retain the pointer they were handed. A
+   shared-mutable receiver can hand them its live buffer instead of a copy. */
+static int str_recv_reads_only(const char *name) {
+  static const char *const ro[] = {
+    "[]", "slice", "byteslice", "getbyte", "ord", "chr",
+    "index", "rindex", "include?", "start_with?", "end_with?",
+    "count", "length", "size", "bytesize", "empty?",
+    "to_i", "to_f", "hex", "oct", "match?", "casecmp", "casecmp?",
+    "upcase", "downcase", "capitalize", "swapcase", "reverse",
+    "strip", "lstrip", "rstrip", "chomp", "chop", "center", "ljust", "rjust",
+    "each_char", "each_byte", "each_line", "chars", "bytes", "lines", "split",
+    "sum", "hash", "unpack", "unpack1", "codepoints", "scan", NULL };
+  for (int i = 0; ro[i]; i++) if (sp_streq(name, ro[i])) return 1;
+  return 0;
+}
+
 int emit_scalar_call(Compiler *c, int id, Buf *b) {
   /* Shared-mutable shim (#3227): setbyte on a strbuf local -- shadow-copy
      re-entry, same as emit_array_call's. */
@@ -5636,7 +5655,14 @@ int emit_scalar_call(Compiler *c, int id, Buf *b) {
      splice its text (so a literal/complex receiver isn't rebuilt). */
   if (recv >= 0 && (rt == TY_STRING || rt == TY_INT || rt == TY_FLOAT)) {
     Buf rs; memset(&rs, 0, sizeof rs);
-    emit_expr(c, recv, &rs);
+    /* Reading a shared-mutable string as a value copies its whole buffer so
+       the value cannot alias the handle (#3227). A method that only looks at
+       the bytes and answers a scalar or a freshly built string keeps nothing,
+       so it can read the live buffer instead -- `text[i]` in a scan loop was
+       copying the whole subject on every character. */
+    if (rt == TY_STRING && name && str_recv_reads_only(name))
+      emit_strbuf_read_ref(c, recv, &rs);
+    if (!rs.p) emit_expr(c, recv, &rs);
     const char *r = rs.p ? rs.p : "";
     /* A String-typed receiver that resolved to a poly nil -- e.g. an
        unresolvable chain like `Rails.application.class.to_s` in a method that
@@ -5992,8 +6018,8 @@ int emit_scalar_call(Compiler *c, int id, Buf *b) {
         int tr = ++g_tmp;
         buf_printf(b, "({ sp_StrArray *_t%d = sp_StrArray_new();"
                       " if (sp_re_match(sp_re_pat_%d, %s) >= 0) {"
-                      " sp_StrArray_push(_t%d, sp_re_match_pre); sp_StrArray_push(_t%d, sp_re_match_str);"
-                      " sp_StrArray_push(_t%d, sp_re_match_post); }\nelse {"
+                      " sp_StrArray_push(_t%d, sp_re_pre_match()); sp_StrArray_push(_t%d, sp_re_match_str);"
+                      " sp_StrArray_push(_t%d, sp_re_post_match()); }\nelse {"
                       " sp_StrArray_push(_t%d, %s); sp_StrArray_push(_t%d, SPL(\"\")); sp_StrArray_push(_t%d, SPL(\"\")); }"
                       " _t%d; })",
                    tr, re_lit_index(c, argv[0]), r, tr, tr, tr, tr, r, tr, tr, tr);
@@ -10160,8 +10186,19 @@ int emit_poly_call(Compiler *c, int id, Buf *b) {
         emit_expr(c, recv, b); buf_puts(b, ")"); return 1;
       }
     }
-    if (sp_streq(name, "to_i")) { buf_puts(b, "sp_poly_to_i("); emit_expr(c, recv, b); buf_puts(b, ")"); return 1; }
-    if (sp_streq(name, "to_f")) { buf_puts(b, "sp_poly_to_f("); emit_expr(c, recv, b); buf_puts(b, ")"); return 1; }
+    /* Same guard as #to_s above: a user class defining the conversion wins
+       through poly dispatch. sp_poly_to_i answers 0 for an object, so a
+       wrapper's `value.to_i` silently read zero. */
+    if (sp_streq(name, "to_i") || sp_streq(name, "to_f")) {
+      int has_user_conv = 0;
+      if (!g_poly_builtin_arm)
+        for (int k = 0; k < c->nclasses && !has_user_conv; k++)
+          if (comp_method_in_chain(c, k, name, NULL) >= 0) has_user_conv = 1;
+      if (!has_user_conv) {
+        buf_printf(b, "%s(", sp_streq(name, "to_i") ? "sp_poly_to_i" : "sp_poly_to_f");
+        emit_expr(c, recv, b); buf_puts(b, ")"); return 1;
+      }
+    }
     /* Complex#real / #imaginary on a poly value (a Complex read out of a
        container). A user class defining the same name wins via poly dispatch. */
     if ((sp_streq(name, "real") || sp_streq(name, "imaginary") || sp_streq(name, "imag") ||

@@ -105,6 +105,8 @@ const char *sp_json_val(sp_RbVal v) {
          (the generated program installs sp_obj_to_hash when it has Structs)
          and serialize that -- reusing the hash path above. No object-format
          knowledge lives here or in the compiler; only the generic reflection. */
+      /* a user class's own #to_json wins, as it does in CRuby's json */
+      if (sp_obj_to_json_fn) { const char *uj = sp_obj_to_json_fn(v); if (uj) return uj; }
       if (sp_obj_to_hash_fn) return sp_json_val(sp_obj_to_hash_fn(v));
       return JSPL("null");
     }
@@ -158,6 +160,12 @@ static void sp_json_pretty_val(jbuf *b, sp_RbVal v, int depth) {
       sp_json_indent(b, depth);
       jb_c(b, '}');
       return;
+    }
+    /* the user's #to_json answers a compact document; re-read it so it lays
+       out with the surrounding indentation instead of on one line */
+    if (sp_obj_to_json_fn) {
+      const char *uj = sp_obj_to_json_fn(v);
+      if (uj) { sp_json_pretty_val(b, sp_json_parse(uj), depth); return; }
     }
     if (sp_obj_to_hash_fn) { sp_json_pretty_val(b, sp_obj_to_hash_fn(v), depth); return; }
     jb_add(b, "null", 4);

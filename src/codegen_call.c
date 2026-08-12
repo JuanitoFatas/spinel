@@ -14,6 +14,15 @@ const int *call_args(const NodeTable *nt, int id, int *argc) {
    format has no named reference, more than maxn of them, a name too long for
    the caller's buffer, or a mix of named and positional specifiers (which Ruby
    rejects). */
+/* Unbox a POLY-returning call into a scalar slot. What the method returned is
+   only known at run time -- an Integer that grew into a Bignum reads back as a
+   pointer through a bare `.v.i` -- so convert rather than reinterpret. */
+static void emit_unbox_poly_ret(Compiler *c, TyKind slot, const char *expr, Buf *b) {
+  if (slot == TY_INT)   { buf_printf(b, "sp_poly_to_i(%s)", expr); return; }
+  if (slot == TY_FLOAT) { buf_printf(b, "sp_poly_to_f(%s)", expr); return; }
+  emit_unbox_text(c, slot, expr, b);
+}
+
 static int parse_named_format(const char *fmt, Buf *rew, const char **names,
                               int *name_len, int maxn) {
   int n = 0, has_named = 0, has_positional = 0;
@@ -330,7 +339,7 @@ static int emit_strchar_cmp(Compiler *c, int recv, int arg, int eq, Buf *b) {
   const char *ity = nt_type(c->nt, si);
   if (ity && sp_streq(ity, "IntegerNode") && nt_int(c->nt, si, "value", 0) < 0) return 0;
   buf_puts(b, "((unsigned char)(");
-  emit_expr(c, sr, b);
+  if (!emit_strbuf_read_ref(c, sr, b)) emit_expr(c, sr, b);
   buf_puts(b, ")[(mrb_int)(");
   emit_expr(c, si, b);
   buf_printf(b, ")] %s %u)", eq ? "==" : "!=", (unsigned)ch);
@@ -909,7 +918,13 @@ int g_poly_builtin_arm = 0;
 
 int user_defines_or_reads(Compiler *c, const char *name) {
   if (g_poly_builtin_arm) return 0;
-  if (diag_user_defines(c, name)) return 1;
+  /* Instance reachability only: a CLASS method of the same name is reached
+     through a Class-valued receiver and can never answer an instance call, so
+     counting it made a String receiver decline the String method and bind to
+     `def self.<name>` instead (#3520). */
+  for (int uk = 0; uk < c->nclasses; uk++)
+    if (comp_method_in_chain(c, uk, name, NULL) >= 0) return 1;
+  if (comp_method_index(c, name) >= 0) return 1;
   for (int uk = 0; uk < c->nclasses; uk++)
     if (comp_is_reader(&c->classes[uk], name)) return 1;
   return 0;
@@ -4084,7 +4099,7 @@ static int emit_poly_method_dispatch(Compiler *c, int id, Buf *b) {
             else {
               buf_printf(b, "_t%d = ", tr);
               if (ret == TY_POLY && mret != TY_POLY) emit_boxed_text(c, mret, nbuf, b);
-              else if (ret != TY_POLY && mret == TY_POLY) emit_unbox_text(c, is_scalar_ret(ret) ? ret : TY_INT, nbuf, b);
+              else if (ret != TY_POLY && mret == TY_POLY) emit_unbox_poly_ret(c, is_scalar_ret(ret) ? ret : TY_INT, nbuf, b);
               else buf_puts(b, nbuf);
             }
             buf_puts(b, "; break;");
@@ -4162,7 +4177,12 @@ static int emit_poly_method_dispatch(Compiler *c, int id, Buf *b) {
             if (ret == TY_POLY && cret9 != TY_POLY) emit_boxed_text(c, cret9, call, b);
             /* The slot is scalar (e.g. a length dispatch fixed to mrb_int) but
                this class's method widened its return to poly: coerce down. */
-            else if (ret != TY_POLY && cret9 == TY_POLY) emit_unbox_text(c, slotty, call, b);
+            else if (ret != TY_POLY && cret9 == TY_POLY) emit_unbox_poly_ret(c, slotty, call, b);
+            /* Two classes own the name and answer different types (one an
+               Integer, another a Bignum): the slot took one of them, so the
+               odd arm converts into it rather than emitting a type error. */
+            else if (slotty == TY_INT && cret9 == TY_BIGINT) buf_printf(b, "sp_bigint_to_int(%s)", call);
+            else if (slotty == TY_FLOAT && cret9 == TY_BIGINT) buf_printf(b, "sp_bigint_to_double(%s)", call);
             else buf_puts(b, call);
           }
           buf_puts(b, "; break;");
@@ -4372,6 +4392,19 @@ static int emit_poly_method_dispatch(Compiler *c, int id, Buf *b) {
          its zero handed callers a NULL container that read back as empty --
          `str.split.join(" ")` answered "" once a user class owned `split`
          (#3394), which is the silent form of the same gap. */
+      /* A conversion the poly runtime serves for every builtin (`5.to_i`,
+         `"7".to_f`) only reached this dispatch because a user class owns the
+         name; a builtin receiver still has to get its own answer. */
+      if (!obj_default_done && argc == 0 &&
+          (sp_streq(name, "to_i") || sp_streq(name, "to_f"))) {
+        char cv[64];
+        snprintf(cv, sizeof cv, "%s(_t%d)", sp_streq(name, "to_i") ? "sp_poly_to_i" : "sp_poly_to_f", tv);
+        buf_printf(b, " default: _t%d = ", tr);
+        if (ret == TY_POLY) emit_boxed_text(c, sp_streq(name, "to_i") ? TY_INT : TY_FLOAT, cv, b);
+        else buf_puts(b, cv);
+        buf_puts(b, "; break;");
+        obj_default_done = 1;
+      }
       if (!obj_default_done)
         buf_printf(b, " default: sp_raise_nomethod(sp_nomethod_msg(\"%s\", _t%d)); break;", name, tv);
       buf_printf(b, " } _t%d; })", tr);
@@ -4413,6 +4446,11 @@ static int emit_poly_method_dispatch(Compiler *c, int id, Buf *b) {
     int is_pdelete = sp_streq(name, "delete") && argc == 1 && !has_splat_arg;
     int is_pdig = sp_streq(name, "dig") && argc >= 1 && !has_splat_arg;
     int is_pvalues_at = sp_streq(name, "values_at") && argc >= 1 && !has_splat_arg;
+    /* `xs.first(n)` / `xs.last(n)` on a poly value that is a container at run
+       time: the zero-arg forms have had an arm for a long time, the counted
+       ones fell through to the raise (#3781 follow-up). */
+    int is_pfirstn = (sp_streq(name, "first") || sp_streq(name, "last")) &&
+                     argc == 1 && !has_splat_arg;
     int is_include = (sp_streq(name, "include?") || sp_streq(name, "member?") ||
                       sp_streq(name, "has_key?") || sp_streq(name, "key?")) && argc == 1;
     /* intersect? on a poly value that is a builtin array. The typed-receiver
@@ -4486,7 +4524,7 @@ static int emit_poly_method_dispatch(Compiler *c, int id, Buf *b) {
        receiver (#3234): builtin pre-arms, no user candidates required */
     int is_cover = sp_streq(name, "cover?") && argc == 1 && !diag_user_defines(c, name);
     int is_gcdlcm = sp_streq(name, "gcdlcm") && argc == 1 && !diag_user_defines(c, name);
-    if (ncand > 0 || is_index || is_pdelete || is_pdig || is_pvalues_at || is_include || is_fetch || is_push || is_pred || is_strftime || is_intersect || is_arr_index || is_cover || is_gcdlcm) {
+    if (ncand > 0 || is_index || is_pdelete || is_pdig || is_pvalues_at || is_pfirstn || is_include || is_fetch || is_push || is_pred || is_strftime || is_intersect || is_arr_index || is_cover || is_gcdlcm) {
       TyKind ret = comp_ntype(c, id);
       int tv = ++g_tmp, tr = ++g_tmp;
       int *atmp = malloc(sizeof(int) * argc);
@@ -5156,7 +5194,7 @@ else {
          mislabelled raise (#3394). */
       if (!is_pred && !is_strftime && !is_aref && !is_fetch && !is_include &&
           !is_push && !is_cover && !is_gcdlcm && !is_strdel && !is_strsplit &&
-          !is_pdelete && !is_pdig && !is_pvalues_at) {
+          !is_pdelete && !is_pdig && !is_pvalues_at && !is_pfirstn) {
         buf_puts(b, " default:");
         /* index/rindex also belong to String, whose box carries no cls_id, so
            no case above can claim it. Answer it here, ahead of the raise, or a
@@ -5186,6 +5224,14 @@ else {
          answered nil with nothing raised (#3507). The runtime index dispatches
          on the receiver's own kind, and raises where there is no `[]` at all.
          The key goes boxed, since a Hash key is not an offset. */
+      else if (is_pfirstn) {
+        char nx[64]; snprintf(nx, sizeof nx, "_t%d", atmp[0]);
+        char gen[256];
+        snprintf(gen, sizeof gen, "sp_poly_%s_n(_t%d, %s)",
+                 sp_streq(name, "first") ? "first" : "last", tv,
+                 atmp_ty[0] == TY_POLY ? ({ static char cx[80]; snprintf(cx, sizeof cx, "sp_poly_to_i(%s)", nx); cx; }) : nx);
+        if (ret == TY_POLY) buf_printf(b, " default: _t%d = %s; break;", tr, gen);
+      }
       else if (is_pdelete || is_pdig || is_pvalues_at) {
         Buf ab; memset(&ab, 0, sizeof ab);
         for (int a = 0; a < argc; a++) {
@@ -8394,6 +8440,26 @@ static int class_includes_module_named(Compiler *c, int cid, const char *mod_nam
   return 0;
 }
 
+/* Can this receiver only be a CORE value for `x.to_json`? A user class that
+   defines its own to_json answers for its own instances (and for a poly slot
+   that may hold one), but a statically typed Hash / Array / String / number is
+   not one of them -- only a reopen of that builtin could be. */
+static int json_to_json_is_builtin(Compiler *c, int recv) {
+  TyKind rt = comp_ntype(c, recv);
+  if (rt == TY_UNKNOWN || rt == TY_POLY || ty_is_object(rt)) return 0;
+  const char *bn = ty_is_hash(rt) ? "Hash"
+                 : ty_is_array(rt) ? "Array"
+                 : (rt == TY_STRING || rt == TY_STRBUF) ? "String"
+                 : (rt == TY_INT || rt == TY_BIGINT) ? "Integer"
+                 : rt == TY_FLOAT ? "Float"
+                 : rt == TY_SYMBOL ? "Symbol" : NULL;
+  if (bn) {
+    int bc = comp_class_index(c, bn);
+    if (bc >= 0 && comp_method_in_chain(c, bc, "to_json", NULL) >= 0) return 0;
+  }
+  return 1;
+}
+
 void emit_call(Compiler *c, int id, Buf *b) {
   /* deep-return pickup (#3227 P6): a marked receiverless call to a method
      whose every return path yields a shared handle -- reset the side
@@ -9065,8 +9131,8 @@ void emit_call(Compiler *c, int id, Buf *b) {
     /* $~'s MatchData face over the match registers: pre/post_match and to_s
        read the same backing the $` / $' / $& back-references use. */
     if (recv_is_tilde && argc == 0) {
-      if (sp_streq(name, "pre_match"))  { buf_puts(b, "sp_re_match_pre");  return; }
-      if (sp_streq(name, "post_match")) { buf_puts(b, "sp_re_match_post"); return; }
+      if (sp_streq(name, "pre_match"))  { buf_puts(b, "sp_re_pre_match()");  return; }
+      if (sp_streq(name, "post_match")) { buf_puts(b, "sp_re_post_match()"); return; }
       if (sp_streq(name, "to_s"))       { buf_puts(b, "sp_re_match_str");  return; }
     }
   }
@@ -16574,6 +16640,17 @@ else { memcpy(dir, sf, n); dir[n] = 0; } }
      generic sp_obj_to_hash reflection hook (codegen.c), reached from
      sp_json_val, which then serializes the resulting hash. */
 
+  /* `x.to_json` -- CRuby's json defines it on every core class, so the idiom
+     `{...}.to_json` inside a user #to_json is ordinary. A user class that
+     defines its own to_json keeps the dispatch (this arm declines then). */
+  if (recv >= 0 && sp_streq(name, "to_json") && nt_ref(nt, id, "block") < 0 &&
+      sp_feature_required("json") && json_to_json_is_builtin(c, recv)) {
+    for (int a = 0; a < argc; a++) { buf_puts(b, "((void)("); emit_boxed(c, argv[a], b); buf_puts(b, "), "); }
+    buf_puts(b, "sp_json_val("); emit_boxed(c, recv, b); buf_puts(b, ")");
+    for (int a = 0; a < argc; a++) buf_puts(b, ")");
+    return;
+  }
+
   /* Dir.exist? -> directory test; Dir.exists? was removed in Ruby 4.0 (#2780) */
   if (recv >= 0 && nt_type(nt, recv) && sp_streq(nt_type(nt, recv), "ConstantReadNode") &&
       nt_str(nt, recv, "name") && sp_streq(nt_str(nt, recv, "name"), "Dir") &&
@@ -17657,8 +17734,11 @@ else { memcpy(dir, sf, n); dir[n] = 0; } }
     }
   }
 
-  /* self.field = val  /  self.field  inside a class method or module body */
-  if (recv >= 0 && nt_type(nt, recv) && sp_streq(nt_type(nt, recv), "SelfNode")) {
+  /* self.field = val  /  self.field  inside a class method or module body --
+     and the same call written without a receiver, which a method reached
+     through `extend` makes ordinary (#3788) */
+  if ((recv >= 0 && nt_type(nt, recv) && sp_streq(nt_type(nt, recv), "SelfNode")) ||
+      (recv < 0 && argc == 0 && nt_ref(nt, id, "block") < 0)) {
     Scope *_sgencl = comp_scope_of(c, id);
     int _sg_cid = (_sgencl && _sgencl->is_cmethod && _sgencl->class_id >= 0)
                   ? _sgencl->class_id : g_class_body_id;
@@ -19395,21 +19475,25 @@ else { memcpy(dir, sf, n); dir[n] = 0; } }
       (sp_streq(name, "&") || sp_streq(name, "|") || sp_streq(name, "^") ||
        sp_streq(name, "<<") || sp_streq(name, ">>"))) {
     TyKind at0 = comp_ntype(c, argv[0]);
+    /* Both operands are heap Bignums, and either side may allocate (and so
+       collect) while the other is being evaluated -- the C operand order is
+       unspecified besides. Evaluate left then right into rooted temps. */
+    int tbl = ++g_tmp, tbr = ++g_tmp;
     if (sp_streq(name, "<<") || sp_streq(name, ">>")) {
-      buf_printf(b, "sp_bigint_%s(", sp_streq(name, "<<") ? "shl" : "shr");
-      emit_expr(c, recv, b); buf_puts(b, ", ");
+      buf_printf(b, "({ sp_Bigint *_t%d = ", tbl); emit_expr(c, recv, b);
+      buf_printf(b, "; SP_GC_ROOT(_t%d); int64_t _t%d = ", tbl, tbr);
       if (at0 == TY_BIGINT) { buf_puts(b, "sp_bigint_to_int("); emit_expr(c, argv[0], b); buf_puts(b, ")"); }
       else emit_int_expr(c, argv[0], b);
-      buf_puts(b, ")");
+      buf_printf(b, "; sp_bigint_%s(_t%d, _t%d); })", sp_streq(name, "<<") ? "shl" : "shr", tbl, tbr);
     }
     else {
       const char *fn = sp_streq(name, "&") ? "and" : sp_streq(name, "|") ? "or" : "xor";
-      buf_printf(b, "sp_bigint_%s(", fn);
-      emit_expr(c, recv, b); buf_puts(b, ", ");
+      buf_printf(b, "({ sp_Bigint *_t%d = ", tbl); emit_expr(c, recv, b);
+      buf_printf(b, "; SP_GC_ROOT(_t%d); sp_Bigint *_t%d = ", tbl, tbr);
       if (at0 == TY_BIGINT) emit_expr(c, argv[0], b);
       else if (at0 == TY_POLY) { buf_puts(b, "sp_poly_as_bigint("); emit_expr(c, argv[0], b); buf_puts(b, ")"); }
       else { buf_puts(b, "sp_bigint_new_int("); emit_int_expr(c, argv[0], b); buf_puts(b, ")"); }
-      buf_puts(b, ")");
+      buf_printf(b, "; SP_GC_ROOT(_t%d); sp_bigint_%s(_t%d, _t%d); })", tbr, fn, tbl, tbr);
     }
     return;
   }
@@ -19441,13 +19525,20 @@ else { memcpy(dir, sf, n); dir[n] = 0; } }
       buf_printf(b, "); sp_raise_cls(\"TypeError\", \"no implicit conversion of %s into Integer\"); (mrb_int)0; })", tn9);
       return;
     }
-    /* |/^ with a Bignum operand promote (the & mask idiom keeps its low-64
-       truncation: the result fits an int either way) (#2422) */
-    if ((sp_streq(name, "|") || sp_streq(name, "^")) && at0 == TY_BIGINT) {
-      buf_printf(b, "sp_bigint_%s(sp_bigint_new_int(", sp_streq(name, "|") ? "or" : "xor");
+    /* &, | and ^ with a Bignum operand promote (#2422). `&` too: a negative
+       receiver is sign-extended forever, so `-1 & 0xFFFFFFFFFFFFFFFF` is that
+       whole mask, not -1. */
+    if ((sp_streq(name, "|") || sp_streq(name, "^") || sp_streq(name, "&")) && at0 == TY_BIGINT) {
+      /* the promoted receiver is a fresh Bignum: root it while the operand
+         (which may run arbitrary code, and allocate) is evaluated */
+      int tpl = ++g_tmp, tpr = ++g_tmp;
+      buf_printf(b, "({ sp_Bigint *_t%d = sp_bigint_new_int(", tpl);
       if (rt == TY_POLY) { buf_puts(b, "sp_poly_to_i("); emit_expr(c, recv, b); buf_puts(b, ")"); }
       else emit_expr(c, recv, b);
-      buf_puts(b, "), "); emit_expr(c, argv[0], b); buf_puts(b, ")");
+      buf_printf(b, "); SP_GC_ROOT(_t%d); sp_Bigint *_t%d = ", tpl, tpr);
+      emit_expr(c, argv[0], b);
+      buf_printf(b, "; SP_GC_ROOT(_t%d); sp_bigint_%s(_t%d, _t%d); })", tpr,
+                 sp_streq(name, "|") ? "or" : sp_streq(name, "^") ? "xor" : "and", tpl, tpr);
       return;
     }
     const char *aty0 = nt_type(nt, argv[0]);
@@ -21896,6 +21987,34 @@ else { memcpy(dir, sf, n); dir[n] = 0; } }
        typed emitter; inference typed the call by the same pretence, so the
        result slot already fits. A receiver that is not a hash at runtime raises
        exactly the NoMethodError this site would have raised (#3449). */
+    /* `xs.map(&f)` / `xs.select(&f)` on a receiver known only at run time: a
+       forwarded proc has no block body for the loop emitters to splice, so
+       nothing above claimed the call. Drive the proc through the enumerable
+       helper, ahead of the hash-face coercion below -- which would turn an
+       Array receiver into a NoMethodError. */
+    { const char *fpn = nt_str(nt, id, "name");
+      int fpb = nt_ref(nt, id, "block");
+      const char *fpop = fpn ? poly_enum_op_for(fpn) : NULL;
+      if (fpop && recv >= 0 && grt == TY_POLY && fpb >= 0 && nt_type(nt, fpb) &&
+          sp_streq(nt_type(nt, fpb), "BlockArgumentNode")) {
+        Buf fpp; memset(&fpp, 0, sizeof fpp);
+        if (emit_forwarded_proc_arg(c, fpb, &fpp)) {
+          int fpt = ++g_tmp;
+          Buf fpr; memset(&fpr, 0, sizeof fpr); emit_boxed(c, recv, &fpr);
+          char fcall[600];
+          snprintf(fcall, sizeof fcall,
+                   "({ sp_Proc *_t%d = %s; SP_GC_ROOT(_t%d); sp_poly_enum_proc(%s, %s, _t%d); })",
+                   fpt, fpp.p ? fpp.p : "NULL", fpt,
+                   fpr.p ? fpr.p : "sp_box_nil()", fpop, fpt);
+          free(fpr.p); free(fpp.p);
+          TyKind fret = comp_ntype(c, id);
+          if (fret == TY_POLY || fret == TY_UNKNOWN) buf_puts(b, fcall);
+          else emit_unbox_text(c, fret, fcall, b);
+          return;
+        }
+        free(fpp.p);
+      }
+    }
     if (grt == TY_POLY && ty_poly_hash_face_name(nt_str(nt, id, "name")) &&
         g_n_argov < MAX_ARG_OVERRIDE) {
       const char *hnm = nt_str(nt, id, "name");
@@ -21936,14 +22055,23 @@ else { memcpy(dir, sf, n); dir[n] = 0; } }
          NoMethodError, rather than raising unconditionally (#3215). Gated on a
          genuinely poly receiver (a concrete non-class static type can never be a
          Class) and a poly result slot (dflt nil), the shape this arises in. */
-      if (grt == TY_POLY && nm && (ret == TY_POLY || ret == TY_UNKNOWN)) {
+      if (grt == TY_POLY && nm && (ret == TY_POLY || ret == TY_UNKNOWN) &&
+          g_cls_tag_skip != id) {
         int ccls[64], cmi[64], cdef[64], nc = 0;
+        int cargc = 0;
+        { int ca = nt_ref(nt, id, "arguments");
+          if (ca >= 0) nt_arr(nt, ca, "arguments", &cargc); }
         for (int k = 0; k < c->nclasses && nc < 64; k++) {
           int dc = -1;
           int mi = comp_cmethod_in_chain(c, k, nm, &dc);
-          if (mi >= 0 && scope_has_callable_symbol(c, mi)) {
-            ccls[nc] = k; cmi[nc] = mi; cdef[nc] = dc; nc++;
-          }
+          if (mi < 0 || !scope_has_callable_symbol(c, mi)) continue;
+          /* A class method that cannot take this call's arguments is not a
+             candidate: emitting its arm put the arity raise in the prelude,
+             where it fired before the tag was even tested (#3520). */
+          { Scope *cs4 = &c->scopes[mi];
+            if (cs4->rest_idx < 0 &&
+                (cargc > cs4->nparams || cargc < cs4->nrequired)) continue; }
+          ccls[nc] = k; cmi[nc] = mi; cdef[nc] = dc; nc++;
         }
         if (nc > 0) {
           int tv = ++g_tmp, argsN = nt_ref(nt, id, "arguments");
@@ -21967,7 +22095,25 @@ else { memcpy(dir, sf, n); dir[n] = 0; } }
             free(cb.p);
             buf_puts(b, " : ");
           }
-          buf_printf(b, "%s) : %s; })", raise, raise);
+          /* Not a Class at run time: this is whatever the call would have
+             compiled to with no class method of the name in the program -- a
+             String receiver takes the String method. Raising here instead made
+             `k.downcase` on a String bind to an unrelated `def self.downcase`
+             and fail with that method's arity (#3520). */
+          Buf eb2; memset(&eb2, 0, sizeof eb2);
+          if (g_n_argov < MAX_ARG_OVERRIDE) {
+            int slot2 = g_n_argov++;
+            g_argov_node[slot2] = recv;
+            snprintf(g_argov_text[slot2], sizeof g_argov_text[0], "_t%d", tv);
+            int sv2 = g_cls_tag_skip;
+            g_cls_tag_skip = id;
+            emit_boxed(c, id, &eb2);
+            g_cls_tag_skip = sv2;
+            g_n_argov--;
+          }
+          buf_printf(b, "%s) : %s; })", raise,
+                     (eb2.p && eb2.p[0]) ? eb2.p : raise);
+          free(eb2.p);
           return;
         }
       }

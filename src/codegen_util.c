@@ -66,6 +66,9 @@ int  g_sn_skip = -1;
    currently emitting its builtin-container arm, so the re-entered emission
    does not build the same dispatch again (#3459). */
 int  g_pd_skip = -1;
+/* Node whose Class-tag dispatch is emitting its non-Class arm, so the
+   re-entered emission takes the ordinary path instead of rebuilding it. */
+int  g_cls_tag_skip = -1;
 /* True if evaluating the subtree at `id` may allocate (and so may trigger
    a GC): any call, container literal, or string interpolation qualifies. */
 int subtree_may_allocate(const NodeTable *nt, int id) {
@@ -97,6 +100,31 @@ int subtree_may_allocate(const NodeTable *nt, int id) {
     const int *ids = nt_arr_at(nt, id, i, &n);
     for (int j = 0; j < n; j++)
       if (subtree_may_allocate(nt, ids[j])) return 1;
+  }
+  return 0;
+}
+/* True if evaluating the subtree at `id` can be observed by, or can observe,
+   a sibling argument's evaluation: any call (a user method, a mutating builtin,
+   or an index read of a container someone else may write) or an assignment.
+   Ruby fixes argument evaluation to left-to-right; C leaves a call's operand
+   order unspecified, so such arguments have to be sequenced into temps. */
+int subtree_has_side_effect(const NodeTable *nt, int id) {
+  if (id < 0) return 0;
+  const char *ty = nt_type(nt, id);
+  if (!ty) return 0;
+  if (sp_streq(ty, "CallNode") || sp_streq(ty, "SuperNode") ||
+      sp_streq(ty, "ForwardingSuperNode") || sp_streq(ty, "YieldNode") ||
+      strstr(ty, "WriteNode"))
+    return 1;
+  int nr = nt_num_refs(nt, id);
+  for (int i = 0; i < nr; i++)
+    if (subtree_has_side_effect(nt, nt_ref_at(nt, id, i))) return 1;
+  int na = nt_num_arrs(nt, id);
+  for (int i = 0; i < na; i++) {
+    int n = 0;
+    const int *ids = nt_arr_at(nt, id, i, &n);
+    for (int j = 0; j < n; j++)
+      if (subtree_has_side_effect(nt, ids[j])) return 1;
   }
   return 0;
 }
@@ -464,6 +492,7 @@ int g_emit_class_names = 0;
 int g_emit_obj_dispatch = 0;
 int g_uses_program_name = 0;
 int g_gen_obj_hash = 0;
+int g_gen_obj_to_json = 0;
 int g_gen_obj_to_h = 0;
 int g_gen_obj_with = 0;
 int g_uses_regex = 0;
@@ -675,6 +704,20 @@ int emit_poly_rhs_coerced(Compiler *c, TyKind slot, int v, Buf *b) {
   return 1;
 }
 
+/* Emit a shared-mutable string receiver for an operation that only READS its
+   bytes: the live buffer, not the whole-buffer copy an ordinary value read
+   makes (#3227). Answers 0 when the receiver is not such a slot, so the caller
+   falls back to emit_expr. */
+int emit_strbuf_read_ref(Compiler *c, int recv, Buf *b) {
+  char sref[1024];
+  int svm = c->strbuf_box[recv];
+  c->strbuf_box[recv] = 1;
+  int is_sb = strbuf_slot_ref(c, recv, sref, sizeof sref);
+  c->strbuf_box[recv] = (unsigned char)svm;
+  if (!is_sb) return 0;
+  buf_printf(b, "sp_String_cstr(%s)", sref);
+  return 1;
+}
 int strbuf_slot_ref(Compiler *c, int recv, char *out, size_t cap) {
   const char *rn = strbuf_local_name(c, recv);
   if (rn) {
@@ -1411,6 +1454,9 @@ const char *bigint_arith_fn(const char *op) {
   if (sp_streq(op, "*"))  return "sp_bigint_mul";
   if (sp_streq(op, "/"))  return "sp_bigint_div";
   if (sp_streq(op, "%"))  return "sp_bigint_mod";
+  if (sp_streq(op, "&"))  return "sp_bigint_and";
+  if (sp_streq(op, "|"))  return "sp_bigint_or";
+  if (sp_streq(op, "^"))  return "sp_bigint_xor";
   return NULL;
 }
 /* True if any user exception subclass overrides #message or #to_s, so the

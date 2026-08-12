@@ -3204,6 +3204,22 @@ static void specialize_cmethod_for(Compiler *c, int mi, int def_cls, int ci);
 /* True if scope `mi`'s body contains a receiverless (implicit-self) call --
    a `new`, a sibling method, etc. Such a call rebinds when the method runs as
    a class method of an extending class, so its body must be specialized. */
+/* An ivar named in a module method reaches different storage once the method
+   runs as a class method of an extending class: `@x` is then a class-level
+   ivar, not a field of an instance. The transplant shares the module's AST, so
+   the node still resolves to the module scope and the read is emitted against
+   a `self` that is a Class value. Specialize such a body too. */
+static int scope_reads_ivar(Compiler *c, int mi) {
+  const NodeTable *nt = c->nt;
+  NT_FOREACH_KIND(nt, NK_InstanceVariableReadNode, id) {
+    if (c->nscope[id] == mi) return 1;
+  }
+  NT_FOREACH_KIND(nt, NK_InstanceVariableWriteNode, id) {
+    if (c->nscope[id] == mi) return 1;
+  }
+  return 0;
+}
+
 static int scope_has_receiverless_call(Compiler *c, int mi) {
   const NodeTable *nt = c->nt;
   NT_FOREACH_KIND(nt, NK_CallNode, id) {
@@ -3311,7 +3327,17 @@ void register_extends(Compiler *c) {
              has any receiverless call, CLONE and re-walk against `ci` via the
              inherited-cmethod specializer (which also pins a bare-`new` return
              to ty_object(ci)); the module source is then DCE'd (#3177). */
-          if (scope_has_receiverless_call(c, ms)) {
+          if (scope_has_receiverless_call(c, ms) || scope_reads_ivar(c, ms)) {
+            /* the ivars the body names become class-level ivars of the
+               extending class, and their storage is declared from its ivar
+               list -- register them even when nothing assigns one there */
+            { const NodeTable *nt2 = c->nt;
+              NT_FOREACH_KIND(nt2, NK_InstanceVariableReadNode, ivid)
+                if (c->nscope[ivid] == ms && nt_str(nt2, ivid, "name"))
+                  comp_ivar_intern(&c->classes[ci], nt_str(nt2, ivid, "name"));
+              NT_FOREACH_KIND(nt2, NK_InstanceVariableWriteNode, ivid)
+                if (c->nscope[ivid] == ms && nt_str(nt2, ivid, "name"))
+                  comp_ivar_intern(&c->classes[ci], nt_str(nt2, ivid, "name")); }
             specialize_cmethod_for(c, ms, mod_id, ci);
             src = &c->scopes[ms];  /* realloc-safe */
             src->is_transplanted_source = 1;

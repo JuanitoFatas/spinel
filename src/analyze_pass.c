@@ -1897,7 +1897,8 @@ int infer_write_types(Compiler *c) {
            every later call went to the wrong type (#3502). Only decline where
            the reading is a guess: a slot the program does write an array into
            keeps the push promotion. */
-        if (sp_streq(name, "<<") && recv >= 0 && an_user_defines_method(c, "<<") &&
+        if (sp_streq(name, "<<") && recv >= 0 &&
+            (an_user_defines_method(c, "<<") || an_native_defines_method(c, "<<")) &&
             !recv_has_array_write(c, recv)) continue;
         is_push = 1; vt = push_elem_ty(c, argv[0]);
         for (int ai = 1; ai < an; ai++) vt = ty_unify(vt, push_elem_ty(c, argv[ai]));
@@ -7494,6 +7495,32 @@ static int proc_literal_escapes_as_arg(Compiler *c, int lit) {
   return ple_escaped && lit >= 0 && lit < nt->count && ple_escaped[lit];
 }
 
+/* True if this proc/lambda literal is handed on with `&` somewhere: it will
+   then be driven through the proc ABI, whose arguments arrive boxed, so its
+   parameters cannot hold a concrete scalar representation. (The rest, post,
+   optional and keyword params are already permanently poly for the same
+   reason; the requireds were left to be pinned by a `.call` site, which is
+   not the only way in.) */
+static int a_proc_forwarded_with_amp(Compiler *c, int create) {
+  const NodeTable *nt = c->nt;
+  Scope *cs = comp_scope_of(c, create);
+  const char *lname = NULL;
+  NT_FOREACH_KIND(nt, NK_LocalVariableWriteNode, w) {
+    if (nt_ref(nt, w, "value") != create) continue;
+    lname = nt_str(nt, w, "name");
+    break;
+  }
+  if (!lname) return 0;
+  NT_FOREACH_KIND(nt, NK_BlockArgumentNode, ba) {
+    int ex = nt_ref(nt, ba, "expression");
+    if (ex < 0 || nt_kind(nt, ex) != NK_LocalVariableReadNode) continue;
+    const char *en = nt_str(nt, ex, "name");
+    if (!en || !sp_streq(en, lname)) continue;
+    if (comp_scope_of(c, ex) == cs) return 1;
+  }
+  return 0;
+}
+
 int infer_block_params(Compiler *c) {
   const NodeTable *nt = c->nt;
   int changed = 0;
@@ -7571,6 +7598,16 @@ int infer_block_params(Compiler *c) {
     }
     /* Keyword params (`proc { |a:, b: 5| }`): the call-site kwargs arrive as a
        boxed hash on the proc ABI, so the param binds a boxed value. */
+    if (a_proc_forwarded_with_amp(c, id)) {
+      int nrq = 0; const int *reqs = nt_arr(nt, pn, "requireds", &nrq);
+      for (int j = 0; j < nrq; j++) {
+        const char *pname = nt_str(nt, reqs[j], "name");
+        if (!pname) continue;
+        LocalVar *lv = scope_local_intern(bs, pname);
+        lv->is_block_param = 1;
+        if (lv->type != TY_POLY) { lv->type = TY_POLY; changed = 1; }
+      }
+    }
     int nkw = 0; const int *kws = nt_arr(nt, pn, "keywords", &nkw);
     for (int j = 0; j < nkw; j++) {
       const char *pname = nt_str(nt, kws[j], "name");

@@ -255,6 +255,13 @@ void emit_int_expr(Compiler *c, int node, Buf *b) {
     buf_puts(b, "sp_poly_to_i("); emit_expr(c, node, b); buf_puts(b, ")");
     return;
   }
+  /* A value the analysis widened to Bignum (a doubling counter, a masked
+     accumulator) used where an integer is wanted -- an array index, a repeat
+     count -- is a pointer, not a number: convert it. */
+  if (comp_ntype(c, node) == TY_BIGINT) {
+    buf_puts(b, "sp_bigint_to_int("); emit_expr(c, node, b); buf_puts(b, ")");
+    return;
+  }
   emit_scalar_operand(c, node, "0", b);
 }
 
@@ -3311,6 +3318,13 @@ else if (orecv >= 0 && onm) {
      field. A class-method self has no instance and is left as-is. */
   int cap_self = bs && bs->class_id >= 0 && !bs->is_cmethod &&
                  proc_body_uses_self(c, body, bs->class_id);
+  /* A class method that takes the receiving class as a leading parameter has
+     it in `_sp_cls`; a lifted block's function signature is (_cap, argc, args)
+     and knows nothing of it, so a sibling class-method call inside the block
+     referenced an identifier that is not in scope. Carry it in the capture
+     struct, the way instance self is carried (#3797). */
+  int cap_cls = bs && bs->is_cmethod &&
+                cmethod_takes_self_cls(c, (int)(bs - c->scopes));
   int self_is_value = cap_self && c->classes[bs->class_id].is_value_type;
   const char *self_cls = cap_self ? c->classes[bs->class_id].c_name : NULL;
 
@@ -3411,7 +3425,7 @@ else if (orecv >= 0 && onm) {
      the cap struct itself first (sp_Proc_scan does not), then each cell --
      matching the sp_hashproc convention; marking only the cells would leave
      the cap struct unreachable and free it out from under the proc. */
-  if (ncap > 0 || cap_self || ret_proc) {
+  if (ncap > 0 || cap_self || cap_cls || ret_proc) {
     buf_printf(&g_procs, "typedef struct {");
     for (int i = 0; i < ncap; i++) {
       LocalVar *clv = scope_local(bs, caps.v[i]);
@@ -3422,6 +3436,7 @@ else if (orecv >= 0 && onm) {
     }
     if (cap_self && self_is_value) buf_printf(&g_procs, " sp_%s __self_val;", self_cls);
     else if (cap_self) buf_puts(&g_procs, " void *__self;");
+    if (cap_cls) buf_puts(&g_procs, " sp_Class __self_cls;");
     if (ret_proc) buf_puts(&g_procs, " mrb_int _home;");  /* home method's proc-return id (sp_proc_home.id) */
     buf_printf(&g_procs, " } _proc_cap_%d;\n", pid);
     buf_printf(&g_procs, "static void _proc_cap_scan_%d(void *p) {\n", pid);
@@ -3498,7 +3513,7 @@ else if (orecv >= 0 && onm) {
   Buf *pb = &proc_body_buf;
   buf_printf(pb, "static mrb_int _proc_%d(void *_cap, mrb_int argc, mrb_int *args) {\n", pid);
   buf_puts(pb, "    SP_GC_SAVE();\n");
-  if (ncap == 0 && !cap_self && !ret_proc) buf_puts(pb, "    (void)_cap;\n");
+  if (ncap == 0 && !cap_self && !cap_cls && !ret_proc) buf_puts(pb, "    (void)_cap;\n");
   buf_puts(pb, "    (void)args;\n");
   buf_puts(pb, "    (void)argc;\n");
   /* Captured instance self, read back from _cap (#1436). (void) guards the
@@ -3510,6 +3525,10 @@ else if (orecv >= 0 && onm) {
   else if (cap_self) {
     buf_printf(pb, "    sp_%s *self = (sp_%s *)((_proc_cap_%d *)_cap)->__self;\n", self_cls, self_cls, pid);
     buf_puts(pb, "    (void)self;\n");
+  }
+  if (cap_cls) {
+    buf_printf(pb, "    sp_Class _sp_cls = ((_proc_cap_%d *)_cap)->__self_cls;\n", pid);
+    buf_puts(pb, "    (void)_sp_cls;\n");
   }
   /* Lambda: strict arity -- requireds + trailing posts mandatory, optionals
      widen the max, a splat rest lifts it entirely. */
@@ -3843,7 +3862,7 @@ else if (orecv >= 0 && onm) {
   g_rescue_save_depth = sv_rsd;
   g_fn_pr_label = sv_fn_prl; g_fn_pr_var = sv_fn_prv; g_fn_ret_type = sv_fn_rt;
 
-  if (ncap == 0 && !cap_self && !ret_proc) {
+  if (ncap == 0 && !cap_self && !cap_cls && !ret_proc) {
     buf_printf(b, "sp_proc_new_meta((void *)_proc_%d, NULL, NULL, %d, %s, %d, %s)",
                pid, meta_arity, is_lambda ? "TRUE" : "FALSE", meta_count, meta_args);
   }
@@ -3882,6 +3901,15 @@ else if (orecv >= 0 && onm) {
       else if (cap_self) { emit_indent(g_pre, g_indent); buf_printf(g_pre, "_capv_%d->__self = (void *)%s;\n", pid, sv_self ? sv_self : "self"); }
       /* Capture the home method's proc-return frame so the proc's `return`
          longjmps to it (the creating method declared `_pr`). */
+      /* the receiving class, as the enclosing class method knows it: forwarded
+         from another proc's capture struct when this one is nested */
+      if (cap_cls) {
+        emit_indent(g_pre, g_indent);
+        if (g_cap_struct)
+          buf_printf(g_pre, "_capv_%d->__self_cls = ((%s *)_cap)->__self_cls;\n", pid, g_cap_struct);
+        else
+          buf_printf(g_pre, "_capv_%d->__self_cls = _sp_cls;\n", pid);
+      }
       if (ret_proc) { emit_indent(g_pre, g_indent); buf_printf(g_pre, "_capv_%d->_home = _h.id;\n", pid); }
     }
     buf_printf(b, "sp_proc_new_meta((void *)_proc_%d, _capv_%d, _proc_cap_scan_%d, %d, %s, %d, %s)",
@@ -4562,6 +4590,53 @@ static void emit_obj_to_hash_dispatch(Compiler *c, Buf *b) {
     buf_puts(b, "      return sp_box_obj(h, SP_BUILTIN_STR_POLY_HASH);\n    }\n");
   }
   buf_puts(b, "    default: return sp_box_nil();\n  }\n}\n");
+}
+
+/* A user class's own #to_json, keyed by cls_id and installed as
+   sp_obj_to_json_fn: the json package asks for it before the generic field
+   reflection, so an object nested in a container serializes the way CRuby's
+   json does (which calls #to_json on every value). Only the two shapes that
+   occur in practice are dispatched: `def to_json` and `def to_json(*args)`. */
+static int obj_to_json_method(Compiler *c, int cid, int *defc) {
+  ClassInfo *ci = &c->classes[cid];
+  if (ci->is_native_class || !ci->instantiated) return -1;
+  int dc = cid;
+  int mi = comp_method_in_chain(c, cid, "to_json", &dc);
+  if (mi < 0) return -1;
+  Scope *m = &c->scopes[mi];
+  if (m->is_cmethod || m->ret != TY_STRING) return -1;
+  if (!scope_has_callable_symbol(c, mi)) return -1;
+  if (m->nparams > 1 || (m->nparams == 1 && m->rest_idx != 0)) return -1;
+  if (m->nparams == 1) {
+    LocalVar *lv = scope_local(m, m->pnames[0]);
+    if (!lv || lv->type != TY_POLY_ARRAY) return -1;
+  }
+  if (defc) *defc = dc;
+  return mi;
+}
+
+static int obj_to_json_any(Compiler *c) {
+  if (!c->native_obj_reflect) return 0;
+  for (int i = 0; i < c->nclasses; i++)
+    if (obj_to_json_method(c, i, NULL) >= 0) return 1;
+  return 0;
+}
+
+static void emit_obj_to_json_dispatch(Compiler *c, Buf *b) {
+  if (!g_gen_obj_to_json) return;
+  buf_puts(b, "static const char *sp_obj_to_json(sp_RbVal v) {\n");
+  buf_puts(b, "  switch (v.cls_id) {\n");
+  for (int i = 0; i < c->nclasses; i++) {
+    int defc = -1;
+    int mi = obj_to_json_method(c, i, &defc);
+    if (mi < 0) continue;
+    int vobj = comp_ty_value_obj(c, ty_object(defc));
+    buf_printf(b, "    case %d: return sp_%s_%s(%s(sp_%s *)v.v.p%s);\n", i,
+               c->classes[defc].c_name, mc(c->scopes[mi].name), vobj ? "*" : "",
+               c->classes[defc].c_name,
+               c->scopes[mi].nparams == 1 ? ", sp_PolyArray_new()" : "");
+  }
+  buf_puts(b, "    default: return NULL;\n  }\n}\n");
 }
 
 /* Symbol-keyed Struct/Data #to_h, installed as sp_obj_to_h_fn. Mirrors the
@@ -5620,6 +5695,8 @@ void emit_regex_section(Compiler *c, Buf *b) {
     buf_puts(b, "static int sp_poly_is_a(sp_RbVal obj, sp_Class klass);\n");
   if (g_gen_obj_hash)
     buf_puts(b, "static sp_RbVal sp_obj_to_hash(sp_RbVal v);\n");
+  if (g_gen_obj_to_json)
+    buf_puts(b, "static const char *sp_obj_to_json(sp_RbVal v);\n");
   if (g_gen_obj_to_h)
     buf_puts(b, "static sp_RbVal sp_obj_to_h(sp_RbVal v);\n");
   if (obj_to_a_any(c))
@@ -5704,6 +5781,8 @@ void emit_regex_section(Compiler *c, Buf *b) {
   }
   if (g_gen_obj_hash)
     buf_puts(b, "  sp_obj_to_hash_fn = sp_obj_to_hash;\n");
+  if (g_gen_obj_to_json)
+    buf_puts(b, "  sp_obj_to_json_fn = sp_obj_to_json;\n");
   if (g_gen_obj_to_h)
     buf_puts(b, "  sp_obj_to_h_fn = sp_obj_to_h;\n");
   if (obj_to_a_any(c))
@@ -6162,6 +6241,31 @@ static void scan_prologue_features(Compiler *c) {
     else if (sp_streq(ty, "ConstantReadNode") || sp_streq(ty, "ConstantPathNode")) {
       const char *nm = nt_str(nt, i, "name");
       if (!nm) continue;
+      /* A class a bundled library defines, named without requiring it. CRuby
+         raises NameError at run time; here the unknown constant flows into
+         the inference as an untyped value and the generated C can end up
+         ill-typed far from the cause, so say what is missing instead. */
+      {
+        static const struct { const char *cls, *feat; } PKG[] = {
+          {"StringIO","stringio"}, {"CSV","csv"}, {"JSON","json"}, {"Set","set"},
+          {"StringScanner","strscan"}, {"Base64","base64"}, {"Digest","digest"},
+          {"ERB","erb"}, {"OptionParser","optparse"}, {"Pathname","pathname"},
+          {NULL,NULL} };
+        for (int pk = 0; PKG[pk].cls; pk++) {
+          if (!sp_streq(nm, PKG[pk].cls)) continue;
+          if (comp_class_index(c, nm) >= 0) break;      /* the program defines it */
+          if (sp_feature_required(PKG[pk].feat)) break;
+          { static char rq[256];
+            snprintf(rq, sizeof rq,
+                     "%s is provided by the bundled %s library, which this program "
+                     "does not require: add `require \"%s\"`. (CRuby's own stdlib "
+                     "sometimes loads it as an implementation detail of another "
+                     "library; that is not part of its interface -- see "
+                     "docs/limitations.md.)", nm, PKG[pk].feat, PKG[pk].feat);
+            unsupported_feature(c, i, rq); }
+          break;
+        }
+      }
       if (sp_streq(nm, "Regexp")) g_uses_regex = 1;
       else if (sp_streq(nm, "Thread") || sp_streq(nm, "Queue") || sp_streq(nm, "SizedQueue") ||
                sp_streq(nm, "Mutex") || sp_streq(nm, "Monitor") ||
@@ -6211,6 +6315,7 @@ static void scan_prologue_features(Compiler *c) {
     for (int i = 0; i < c->nclasses; i++)
       if (c->classes[i].is_struct) { g_gen_obj_hash = 1; break; }
   }
+  g_gen_obj_to_json = obj_to_json_any(c);
   /* Any instantiated Struct/Data gets the symbol-keyed to_h dispatch, so a
      Struct/Data read out of a poly container answers #to_h (#2906). */
   g_gen_obj_to_h = 0;
@@ -7463,6 +7568,7 @@ char *codegen_program(const NodeTable *nt) {
   if (g_uses_marshal) emit_marshal_dispatch(c, body);
   if (g_emit_obj_dispatch) emit_obj_inspect_dispatch(c, body);
   emit_obj_to_hash_dispatch(c, body);
+  emit_obj_to_json_dispatch(c, body);
   emit_obj_to_h_dispatch(c, body);
   emit_obj_to_a_dispatch(c, body);
   emit_obj_with_dispatch(c, body);

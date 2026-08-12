@@ -42,6 +42,8 @@ extern SP_TLS const mrb_regexp_pattern *sp_re_last_pat;
 extern SP_TLS const char *sp_re_match_str;
 extern SP_TLS const char *sp_re_match_pre;
 extern SP_TLS const char *sp_re_match_post;
+const char *sp_re_pre_match(void);   /* $` , built on demand */
+const char *sp_re_post_match(void);  /* $' , built on demand */
 extern const char *sp_re_startup_err;
 
 /* Stop-the-world support: push this worker's live match-register strings as GC

@@ -3815,11 +3815,32 @@ else {
     emit_indent(g_pre, g_indent); emit_ctype(c, rt, g_pre);
     buf_printf(g_pre, " _t%d = _t%d;\n", tr, trv);  /* sort! operates on self */
   }
+  /* Bottom-up merge sort: stable, and O(n log n) comparisons. (A bubble sort
+     with the comparator inlined was quadratic -- a 40K-element sort took five
+     seconds.) The scratch buffer only ever holds elements the array still
+     holds too, so a collection during the comparator cannot lose one. */
+  int tw = ++g_tmp, tlo = ++g_tmp, tmid = ++g_tmp, thi = ++g_tmp, to = ++g_tmp, tbuf = ++g_tmp, tc = ++g_tmp;
+  Buf ect; memset(&ect, 0, sizeof ect); emit_ctype(c, et, &ect);
+  const char *ecs = ect.p ? ect.p : "mrb_int";
   emit_indent(g_pre, g_indent); buf_printf(g_pre, "mrb_int _t%d = sp_%sArray_length(_t%d);\n", tn, k, tr);
-  emit_indent(g_pre, g_indent); buf_printf(g_pre, "for (mrb_int _t%d = 0; _t%d < _t%d - 1; _t%d++)\n", ti, ti, tn, ti);
-  emit_indent(g_pre, g_indent + 1); buf_printf(g_pre, "for (mrb_int _t%d = 0; _t%d < _t%d - 1 - _t%d; _t%d++) {\n", tj, tj, tn, ti, tj);
-  emit_indent(g_pre, g_indent + 2); emit_ctype(c, et, g_pre); buf_printf(g_pre, " _t%d = sp_%sArray_get(_t%d, _t%d);\n", ta, k, tr, tj);
-  emit_indent(g_pre, g_indent + 2); emit_ctype(c, et, g_pre); buf_printf(g_pre, " _t%d = sp_%sArray_get(_t%d, _t%d + 1);\n", tb, k, tr, tj);
+  emit_indent(g_pre, g_indent);
+  buf_printf(g_pre, "%s *_t%d = _t%d > 1 ? (%s *)malloc(sizeof(%s) * (size_t)_t%d) : NULL;\n", ecs, tbuf, tn, ecs, ecs, tn);
+  emit_indent(g_pre, g_indent);
+  buf_printf(g_pre, "for (mrb_int _t%d = 1; _t%d && _t%d < _t%d; _t%d *= 2)\n", tw, tbuf, tw, tn, tw);
+  emit_indent(g_pre, g_indent + 1);
+  buf_printf(g_pre, "for (mrb_int _t%d = 0; _t%d < _t%d; _t%d += 2 * _t%d) {\n", tlo, tlo, tn, tlo, tw);
+  emit_indent(g_pre, g_indent + 2);
+  buf_printf(g_pre, "mrb_int _t%d = _t%d + _t%d; if (_t%d > _t%d) _t%d = _t%d;\n", tmid, tlo, tw, tmid, tn, tmid, tn);
+  emit_indent(g_pre, g_indent + 2);
+  buf_printf(g_pre, "mrb_int _t%d = _t%d + 2 * _t%d; if (_t%d > _t%d) _t%d = _t%d;\n", thi, tlo, tw, thi, tn, thi, tn);
+  emit_indent(g_pre, g_indent + 2);
+  buf_printf(g_pre, "if (_t%d >= _t%d) continue;\n", tmid, thi);
+  emit_indent(g_pre, g_indent + 2);
+  buf_printf(g_pre, "mrb_int _t%d = _t%d, _t%d = _t%d, _t%d = _t%d;\n", ti, tlo, tj, tmid, to, tlo);
+  emit_indent(g_pre, g_indent + 2);
+  buf_printf(g_pre, "while (_t%d < _t%d && _t%d < _t%d) {\n", ti, tmid, tj, thi);
+  emit_indent(g_pre, g_indent + 3); buf_printf(g_pre, "%s _t%d = sp_%sArray_get(_t%d, _t%d);\n", ecs, ta, k, tr, ti);
+  emit_indent(g_pre, g_indent + 3); buf_printf(g_pre, "%s _t%d = sp_%sArray_get(_t%d, _t%d);\n", ecs, tb, k, tr, tj);
   Scope *sbsc = comp_scope_of(c, block);
   LocalVar *slv0 = sbsc ? scope_local(sbsc, p0) : NULL;
   LocalVar *slv1 = sbsc ? scope_local(sbsc, p1) : NULL;
@@ -3828,7 +3849,7 @@ else {
   if (slv0) slv0->type = et;
   if (slv1) slv1->type = et;
   for (int j = 0; j < bn; j++) infer_subtree(c, bb[j]);  /* refresh ntype cache */
-  int save = g_indent; g_indent += 2;
+  int save = g_indent; g_indent += 3;
   /* Shadow the outer (possibly poly) block params with et-typed locals */
   emit_indent(g_pre, g_indent); buf_puts(g_pre, "{\n"); g_indent++;
   emit_indent(g_pre, g_indent); emit_ctype(c, et, g_pre); buf_printf(g_pre, " lv_%s = _t%d; ", p0, ta);
@@ -3836,13 +3857,25 @@ else {
   for (int j = 0; j < bn - 1; j++) emit_stmt(c, bb[j], g_pre, g_indent);
   Buf cb; memset(&cb, 0, sizeof cb); emit_expr(c, bb[bn - 1], &cb);
   emit_indent(g_pre, g_indent);
-  buf_printf(g_pre, "if (%s%s) > 0) { sp_%sArray_set(_t%d, _t%d, _t%d); sp_%sArray_set(_t%d, _t%d + 1, _t%d); }\n", cmp_o,
-             cb.p ? cb.p : "0", k, tr, tj, tb, k, tr, tj, ta); free(cb.p);
+  /* take from the left on a tie, so equal elements keep their order */
+  buf_printf(g_pre, "mrb_int _t%d = %s%s);\n", tc, cmp_o, cb.p ? cb.p : "0"); free(cb.p);
+  emit_indent(g_pre, g_indent);
+  buf_printf(g_pre, "if (_t%d > 0) { _t%d[_t%d++] = _t%d; _t%d++; }\nelse { _t%d[_t%d++] = _t%d; _t%d++; }\n",
+             tc, tbuf, to, tb, tj, tbuf, to, ta, ti);
   g_indent--; g_indent = save;
-  emit_indent(g_pre, g_indent + 2); buf_puts(g_pre, "}\n");
+  emit_indent(g_pre, g_indent + 3); buf_puts(g_pre, "}\n");
   if (slv0) slv0->type = spt0;
   if (slv1) slv1->type = spt1;
-  emit_indent(g_pre, g_indent + 1); buf_puts(g_pre, "}\n");
+  emit_indent(g_pre, g_indent + 2); buf_puts(g_pre, "}\n");   /* while merge */
+  emit_indent(g_pre, g_indent + 2);
+  buf_printf(g_pre, "while (_t%d < _t%d) _t%d[_t%d++] = sp_%sArray_get(_t%d, _t%d++);\n", ti, tmid, tbuf, to, k, tr, ti);
+  emit_indent(g_pre, g_indent + 2);
+  buf_printf(g_pre, "while (_t%d < _t%d) _t%d[_t%d++] = sp_%sArray_get(_t%d, _t%d++);\n", tj, thi, tbuf, to, k, tr, tj);
+  emit_indent(g_pre, g_indent + 2);
+  buf_printf(g_pre, "for (mrb_int _q = _t%d; _q < _t%d; _q++) sp_%sArray_set(_t%d, _q, _t%d[_q]);\n", tlo, thi, k, tr, tbuf);
+  emit_indent(g_pre, g_indent + 1); buf_puts(g_pre, "}\n");   /* for lo */
+  emit_indent(g_pre, g_indent); buf_printf(g_pre, "free(_t%d);\n", tbuf);
+  free(ect.p);
   buf_printf(b, "_t%d", tr);
   return 1;
 }
@@ -5714,8 +5747,12 @@ void emit_arg_or_default(Compiler *c, Scope *m, int idx, int provided, Buf *out)
         Scope *ivs = comp_scope_of(c, provided);
         if (ivn && ivs && ivs->class_id >= 0 && !ivs->is_cmethod &&
             comp_ntype(c, provided) == TY_STRING) {
-          emit_indent(g_pre, g_indent);
-          buf_printf(g_pre, "sp_gc_wb((void *)%s);\n", g_self);
+          /* a value-type receiver is a struct, not a heap object: it has no
+             header to mark dirty, and casting it to void* does not compile */
+          if (!comp_ty_value_obj(c, ty_object(ivs->class_id))) {
+            emit_indent(g_pre, g_indent);
+            buf_printf(g_pre, "sp_gc_wb((void *)%s);\n", g_self);
+          }
           buf_printf(out, "&%s%siv_%s", g_self, g_self_deref, iv_c(ivn + 1));
           return;
         }
@@ -6841,10 +6878,27 @@ void emit_args_filled(Compiler *c, int callee_idx, int argsNode, const char *lea
 
   int argov_saved = g_n_argov;
   if (splat_idx < 0 && kwh < 0 && argv) {
+    /* Ruby evaluates arguments left to right; C leaves a call's operand order
+       unspecified (gcc walks it right to left). Once two arguments can observe
+       each other's side effects, every one of them but the last has to be
+       sequenced into a temp -- including scalars, which need no root. */
+    int last_se = -1, n_se = 0;
+    for (int k = 0; k < pos_argc && k < m->nparams; k++)
+      if (subtree_has_side_effect(nt, argv[k])) { last_se = k; n_se++; }
     for (int k = 0; k < pos_argc && k < m->nparams; k++) {
       if (g_n_argov >= MAX_ARG_OVERRIDE) break;
       TyKind at = comp_ntype(c, argv[k]);
-      if (at != TY_POLY && !needs_root(at)) continue;
+      /* An argument emit_ctype would spell `void` has no C storage to
+         sequence into -- `void _tN = ...` is not a declaration C accepts.
+         Nor is there anything to sequence: a valueless argument is a raise
+         fallback (an unresolved call becomes sp_raise_nomethod), which does
+         not return, so no sibling can observe it. Leave it to the argument
+         slot below, which coerces it to the parameter's type. */
+      int has_storage = ty_is_object(at) || c_type_name(at) != NULL;
+      int seq = (has_storage && n_se >= 2 && k < last_se &&
+                 subtree_has_side_effect(nt, argv[k]));
+      int root = (at == TY_POLY || needs_root(at));
+      if (!root && !seq) continue;
       const char *aty = nt_type(nt, argv[k]);
       /* a splat at/after the rest slot (splat_idx only marks splats needing
          ELEMENT expansion) is consumed by the rest collection below, which
@@ -6857,10 +6911,11 @@ void emit_args_filled(Compiler *c, int callee_idx, int argsNode, const char *lea
                   sp_streq(aty, "InstanceVariableReadNode") ||
                   sp_streq(aty, "ConstantReadNode") ||
                   sp_streq(aty, "SelfNode") || sp_streq(aty, "NilNode") ||
-                  sp_streq(aty, "StringNode"))) continue;
+                  sp_streq(aty, "StringNode"))) root = 0;
       /* only a fresh allocation needs protecting; a non-allocating heap
          expression (e.g. a ternary over two already-live reads) does not. */
-      if (!subtree_may_allocate(nt, argv[k])) continue;
+      else if (!subtree_may_allocate(nt, argv[k])) root = 0;
+      if (!root && !seq) continue;
       int ht = ++g_tmp;
       /* Evaluate into a side buffer first: the expression may push its own
          setup into g_pre, which must be fully flushed before this temp's
@@ -6869,13 +6924,15 @@ void emit_args_filled(Compiler *c, int callee_idx, int argsNode, const char *lea
       emit_expr(c, argv[k], &hb);
       emit_indent(g_pre, g_indent);
       if (at == TY_POLY) {
-        buf_printf(g_pre, "sp_RbVal _t%d = %s; SP_GC_ROOT_RBVAL(_t%d);\n",
-                   ht, hb.p ? hb.p : "sp_box_nil()", ht);
+        buf_printf(g_pre, "sp_RbVal _t%d = %s;", ht, hb.p ? hb.p : "sp_box_nil()");
+        if (root) buf_printf(g_pre, " SP_GC_ROOT_RBVAL(_t%d);", ht);
+        buf_puts(g_pre, "\n");
       }
 else {
         emit_ctype(c, at, g_pre);
-        buf_printf(g_pre, " _t%d = %s; SP_GC_ROOT(_t%d);\n",
-                   ht, hb.p ? hb.p : "0", ht);
+        buf_printf(g_pre, " _t%d = %s;", ht, hb.p ? hb.p : "0");
+        if (root) buf_printf(g_pre, " SP_GC_ROOT(_t%d);", ht);
+        buf_puts(g_pre, "\n");
       }
       free(hb.p);
       g_argov_node[g_n_argov] = argv[k];

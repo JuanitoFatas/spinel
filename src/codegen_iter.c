@@ -1794,6 +1794,33 @@ int emit_iteration_stmt(Compiler *c, int id, Buf *b, int indent) {
      the only emitter with arms for both (#3409). */
   if (poly_block_call_needs_dispatch(c, id)) return 0;
 
+  /* `xs.each(&h)` forwards a real callable: there is no block body to splice,
+     and the loops below would run with an empty one -- silently doing nothing.
+     On a receiver only known at run time, hand the proc to the enumerable
+     driver; anything else declines to a path that can drive it. (The poly
+     dispatch above takes precedence: a user class owning the name has to see
+     the call, and its own `each` is not a container walk.) */
+  { int rfb = resolve_forwarded_block(c, block);
+    if (rfb < 0 || (nt_type(nt, rfb) && sp_streq(nt_type(nt, rfb), "BlockArgumentNode"))) {
+      const char *inm = nt_str(nt, id, "name");
+      int irecv = nt_ref(nt, id, "receiver");
+      const char *pen = inm ? poly_enum_op_for(inm) : NULL;
+      if (rfb >= 0 && pen && irecv >= 0 && comp_ntype(c, irecv) == TY_POLY) {
+        Buf pb0; memset(&pb0, 0, sizeof pb0);
+        if (!emit_forwarded_proc_arg(c, rfb, &pb0)) { free(pb0.p); return 0; }
+        int tp0 = ++g_tmp;
+        emit_indent(b, indent);
+        buf_printf(b, "sp_Proc *_t%d = %s; SP_GC_ROOT(_t%d);\n", tp0, pb0.p ? pb0.p : "NULL", tp0);
+        free(pb0.p);
+        emit_indent(b, indent);
+        buf_puts(b, "(void)sp_poly_enum_proc("); emit_boxed(c, irecv, b);
+        buf_printf(b, ", %s, _t%d);\n", pen, tp0);
+        return 1;
+      }
+      return 0;
+    } }
+
+
   /* loop { ... } -- infinite loop, exited by break */
   if (recv < 0 && sp_streq(name, "loop")) {
     int lbody = nt_ref(nt, block, "body");
@@ -1932,10 +1959,20 @@ int emit_iteration_stmt(Compiler *c, int id, Buf *b, int indent) {
   }
 
   /* n.times { |i| ... } */
-  if (sp_streq(name, "times") && rt == TY_INT) {
+  if (sp_streq(name, "times") && (rt == TY_INT || rt == TY_BIGINT)) {
     int t = ++g_tmp;
     Buf rb; memset(&rb, 0, sizeof rb);
-    emit_expr(c, recv, &rb);
+    emit_int_expr(c, recv, &rb);
+    /* The count is evaluated ONCE, so a receiver that can change (or change
+       something) between rounds has to be hoisted: spliced into the loop
+       condition, `rng.next_int(n).times` re-rolled the die every round. */
+    if (subtree_has_side_effect(nt, recv)) {
+      int tn = ++g_tmp;
+      emit_indent(b, indent);
+      buf_printf(b, "mrb_int _t%d = %s;\n", tn, rb.p ? rb.p : "0");
+      free(rb.p); memset(&rb, 0, sizeof rb);
+      buf_printf(&rb, "_t%d", tn);
+    }
     emit_indent(b, indent);
     buf_printf(b, "for (mrb_int _t%d = 0; _t%d < ", t, t);
     buf_puts(b, rb.p); buf_printf(b, "; _t%d++) {\n", t);
@@ -3056,6 +3093,15 @@ int emit_iteration_stmt(Compiler *c, int id, Buf *b, int indent) {
     Buf lo; memset(&lo, 0, sizeof lo); emit_expr(c, recv, &lo);
     Buf hi; memset(&hi, 0, sizeof hi); emit_expr(c, argv[0], &hi);
     int ti = ++g_tmp;
+    /* the limit sits in the loop condition, so a side-effecting one would be
+       re-evaluated every round: it is computed once in Ruby */
+    if (subtree_has_side_effect(nt, argv[0])) {
+      int th = ++g_tmp;
+      emit_indent(b, indent);
+      buf_printf(b, "mrb_int _t%d = %s;\n", th, hi.p ? hi.p : "0");
+      free(hi.p); memset(&hi, 0, sizeof hi);
+      buf_printf(&hi, "_t%d", th);
+    }
     emit_indent(b, indent);
     buf_printf(b, "for (mrb_int _t%d = ", ti); buf_puts(b, lo.p);
     buf_printf(b, "; _t%d %s ", ti, up ? "<=" : ">="); buf_puts(b, hi.p);

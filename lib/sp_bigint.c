@@ -5501,11 +5501,61 @@ double sp_bigint_to_double(sp_Bigint *b) {
    int64 round-trip truncated `0x9e37…c16 & MASK64` to its signed value). A
    negative operand follows Ruby's infinite two's-complement, which is uncommon
    for bit masking, so it still routes through the int64 path. */
+/* Load |x| into `out` as an n-limb two's-complement word when x is negative,
+   so a bitwise op sees the infinitely sign-extended value Ruby specifies. */
+static void bw_load(const mpz_t *m, mp_limb *out, size_t n, int neg) {
+  for (size_t i = 0; i < n; i++) out[i] = dg(m, i);
+  if (!neg) return;
+  mp_limb carry = 1;
+  for (size_t i = 0; i < n; i++) {
+    mp_limb v = (mp_limb)(~out[i] & DIG_MASK);
+    mp_limb sum = (mp_limb)((v + carry) & DIG_MASK);
+    carry = (carry && sum == 0) ? 1 : 0;
+    out[i] = sum;
+  }
+}
+
 static sp_Bigint *sp_bigint_bitwise(sp_Bigint *a, sp_Bigint *b, char op) {
-  if (!a || !b || a->mpz.sn < 0 || b->mpz.sn < 0) {
+  if (!a || !b) {
     int64_t x = sp_bigint_to_int(a), y = sp_bigint_to_int(b);
     int64_t r = (op == '&') ? (x & y) : (op == '|') ? (x | y) : (x ^ y);
     return sp_bigint_new_int(r);
+  }
+  /* A negative operand is not a fixed-width word: `-1 & 0xFFFFFFFFFFFFFFFF` is
+     that mask, not -1, so the walk runs over two's-complement limbs and folds
+     the result back into sign+magnitude. */
+  if (a->mpz.sn < 0 || b->mpz.sn < 0) {
+    int sa = a->mpz.sn < 0, sb = b->mpz.sn < 0;
+    size_t na0 = a->mpz.sz, nb0 = b->mpz.sz;
+    size_t n = (na0 > nb0 ? na0 : nb0) + 1;
+    mp_limb *ta = (mp_limb *)calloc(n, sizeof(mp_limb));
+    mp_limb *tb = (mp_limb *)calloc(n, sizeof(mp_limb));
+    if (!ta || !tb) { free(ta); free(tb); sp_oom_die(); }
+    bw_load(&a->mpz, ta, n, sa);
+    bw_load(&b->mpz, tb, n, sb);
+    int rneg = (op == '&') ? (sa && sb) : (op == '|') ? (sa || sb) : (sa != sb);
+    for (size_t i = 0; i < n; i++)
+      ta[i] = (mp_limb)(((op == '&') ? (ta[i] & tb[i])
+                       : (op == '|') ? (ta[i] | tb[i])
+                                     : (ta[i] ^ tb[i])) & DIG_MASK);
+    if (rneg) {  /* back to magnitude: negate the two's-complement word */
+      mp_limb carry = 1;
+      for (size_t i = 0; i < n; i++) {
+        mp_limb v = (mp_limb)(~ta[i] & DIG_MASK);
+        mp_limb sum = (mp_limb)((v + carry) & DIG_MASK);
+        carry = (carry && sum == 0) ? 1 : 0;
+        ta[i] = sum;
+      }
+    }
+    sp_Bigint *rb = sp_bigint_alloc();
+    mpz_t z;
+    mpz_init_heap(sp_mpz_ctx, &z, n);
+    for (size_t i = 0; i < n; i++) z.p[i] = ta[i];
+    z.sn = rneg ? -1 : 1;
+    trim(&z);
+    free(ta); free(tb);
+    rb->mpz = z;
+    return rb;
   }
   size_t na = a->mpz.sz, nb = b->mpz.sz;
   size_t n = (op == '&') ? (na < nb ? na : nb) : (na > nb ? na : nb);

@@ -31,7 +31,7 @@ static void sp_StringIO_scan_gc(void *p) { sp_StringIO *s = (sp_StringIO *)p; if
 sp_StringIO *sp_StringIO_new(mrb_int cls_id) { sp_StringIO *s = (sp_StringIO *)sp_gc_alloc(sizeof(sp_StringIO), sp_StringIO_free, sp_StringIO_scan_gc); memset(s, 0, sizeof *s); s->cls_id = cls_id; s->buf = (char *)calloc(1, 64); if (!s->buf) sp_oom_die(); s->cap = 63; return s; }
 /* Adopt the incoming GC string without copying so #string keeps identity
    with the constructor argument; the first mutation copies (sio_own). */
-sp_StringIO *sp_StringIO_new_s(mrb_int cls_id, const char *init) {SP_GC_ROOT_STR(init); if (!init) sp_raise_cls("TypeError", "no implicit conversion of nil into String"); sp_StringIO *s = (sp_StringIO *)sp_gc_alloc(sizeof(sp_StringIO), sp_StringIO_free, sp_StringIO_scan_gc); memset(s, 0, sizeof *s); s->cls_id = cls_id; int64_t l = (int64_t)strlen(init); s->buf = (char *)init; s->len = l; s->cap = l; s->borrowed = 1; return s; }
+sp_StringIO *sp_StringIO_new_s(mrb_int cls_id, const char *init) {SP_GC_ROOT_STR(init); if (!init) sp_raise_cls("TypeError", "no implicit conversion of nil into String"); sp_StringIO *s = (sp_StringIO *)sp_gc_alloc(sizeof(sp_StringIO), sp_StringIO_free, sp_StringIO_scan_gc); memset(s, 0, sizeof *s); s->cls_id = cls_id; int64_t l = (int64_t)sp_str_byte_len(init); s->buf = (char *)init; s->len = l; s->cap = l; s->borrowed = 1; return s; }
 /* StringIO.new(str, mode): the mode's first char selects the initial
    content/position. "w"/"w+" truncate to empty; "a"/"a+" keep the content and
    seek to the end; "r"/"r+" and anything else keep the content at position 0.
@@ -58,10 +58,12 @@ const char *sp_StringIO_string(sp_StringIO *s) {SP_GC_ROOT(s);
 }
 mrb_int sp_StringIO_pos(sp_StringIO *s) { return s->pos; }
 mrb_int sp_StringIO_size(sp_StringIO *s) { return s->len; }
-mrb_int sp_StringIO_write(sp_StringIO *s, const char *str) { return sio_write(s, str, (int64_t)strlen(str)); }
-mrb_int sp_StringIO_puts(sp_StringIO *s, const char *str) { int64_t l = (int64_t)strlen(str); sio_write(s, str, l); if (l == 0 || str[l-1] != '\n') sio_write(s, "\n", 1); return 0; }
+/* Binary-safe: a Ruby String may carry an embedded NUL (`[0].pack("C")`),
+   so the operand is measured with its recorded length, not strlen. */
+mrb_int sp_StringIO_write(sp_StringIO *s, const char *str) { return sio_write(s, str, (int64_t)sp_str_byte_len(str)); }
+mrb_int sp_StringIO_puts(sp_StringIO *s, const char *str) { int64_t l = (int64_t)sp_str_byte_len(str); sio_write(s, str, l); if (l == 0 || str[l-1] != '\n') sio_write(s, "\n", 1); return 0; }
 mrb_int sp_StringIO_puts_empty(sp_StringIO *s) { sio_write(s, "\n", 1); return 0; }
-mrb_int sp_StringIO_print(sp_StringIO *s, const char *str) { return sio_write(s, str, (int64_t)strlen(str)); }
+mrb_int sp_StringIO_print(sp_StringIO *s, const char *str) { return sio_write(s, str, (int64_t)sp_str_byte_len(str)); }
 mrb_int sp_StringIO_putc(sp_StringIO *s, mrb_int ch) { char c = (char)(ch & 0xFF); sio_write(s, &c, 1); return ch; }
 const char *sp_StringIO_read(sp_StringIO *s) {SP_GC_ROOT(s); if (s->pos >= s->len) return sp_str_empty; size_t rem = s->len - s->pos; char *r = sp_str_alloc(rem); memcpy(r, s->buf + s->pos, rem); r[rem] = 0; s->pos = s->len; return r; }
 const char *sp_StringIO_read_n(sp_StringIO *s, mrb_int n) {SP_GC_ROOT(s); if (s->pos >= s->len) return sp_str_empty; int64_t rem = s->len - s->pos; if (n > rem) n = rem; char *r = sp_str_alloc_raw(n+1); memcpy(r, s->buf + s->pos, n); r[n] = '\0'; sp_str_set_len(r, (size_t)n); s->pos += n; return r; }
@@ -87,7 +89,7 @@ mrb_int sp_StringIO_lineno(sp_StringIO *s) { return s->lineno; }
 mrb_int sp_StringIO_zero(sp_StringIO *s) { (void)s; return 0; }
 
 /* << writes and returns the receiver (chainable), unlike write's byte count. */
-sp_StringIO *sp_StringIO_shl(sp_StringIO *s, const char *str) { sio_write(s, str, (int64_t)strlen(str)); return s; }
+sp_StringIO *sp_StringIO_shl(sp_StringIO *s, const char *str) { sio_write(s, str, (int64_t)sp_str_byte_len(str)); return s; }
 
 /* gets(sep): read through the end of the first occurrence of `sep` (the
    whole rest on a miss); nil at EOF. A multi-byte separator is honored. */
@@ -141,7 +143,7 @@ sp_RbVal sp_StringIO_readlines(sp_StringIO *s) {SP_GC_ROOT(s);
 static void sio_write_val(sp_StringIO *s, sp_RbVal v, int is_puts) {SP_GC_ROOT(s);
   int64_t p0 = s->pos;
   switch (v.tag) {
-    case SP_TAG_STR: { const char *t = v.v.s ? v.v.s : ""; sio_write(s, t, (int64_t)strlen(t)); break; }
+    case SP_TAG_STR: { const char *t = v.v.s ? v.v.s : ""; sio_write(s, t, (int64_t)sp_str_byte_len(t)); break; }
     case SP_TAG_INT: { const char *t = sp_int_to_s(v.v.i); sio_write(s, t, (int64_t)strlen(t)); break; }
     case SP_TAG_FLT: { const char *t = sp_float_to_s(v.v.f); sio_write(s, t, (int64_t)strlen(t)); break; }
     case SP_TAG_BOOL: { const char *t = v.v.b ? "true" : "false"; sio_write(s, t, (int64_t)strlen(t)); break; }

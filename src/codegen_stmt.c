@@ -9189,7 +9189,7 @@ int emit_array_mutate_stmt(Compiler *c, int id, Buf *b, int indent) {
         emit_indent(b, indent);
         buf_puts(b, "sp_str_check_mutable("); emit_expr(c, cur, b); buf_puts(b, ");\n");
         emit_indent(b, indent);
-        emit_expr(c, cur, b); buf_puts(b, " = sp_str_concat(");
+        emit_expr(c, cur, b); buf_puts(b, " = sp_str_append_grow(");
         emit_expr(c, cur, b); buf_puts(b, ", ");
         if (at == TY_INT) { buf_puts(b, "sp_int_codepoint_to_str("); emit_expr(c, arg, b); buf_puts(b, ")"); }
         else if (at == TY_POLY) { buf_puts(b, "sp_poly_to_s("); emit_expr(c, arg, b); buf_puts(b, ")"); }
@@ -9821,16 +9821,20 @@ int emit_array_mutate_stmt(Compiler *c, int id, Buf *b, int indent) {
       TyKind at = comp_ntype(c, argv[a]);
       const char *ak = (at == TY_POLY_ARRAY) ? "Poly" : array_kind(at);
       if (!ak) ak = k;
+      /* Evaluate the source ONCE. It used to be re-emitted for the length and
+         again for every element, so `result.concat(str.bytes)` rebuilt the
+         whole byte array per element -- quadratic, and any side effect ran
+         n+1 times. Rooted: pushing into the receiver can collect. */
+      int ts = ++g_tmp;
       emit_indent(b, indent + 1);
-      buf_printf(b, "{ mrb_int _t%d = sp_%sArray_length(", tn, ak); emit_expr(c, argv[a], b);
-      buf_printf(b, "); for (mrb_int _t%d = 0; _t%d < _t%d; _t%d++) sp_%sArray_push(_t%d, ",
+      buf_printf(b, "{ sp_%sArray *_t%d = ", ak, ts); emit_expr(c, argv[a], b);
+      buf_printf(b, "; SP_GC_ROOT(_t%d);\n", ts);
+      emit_indent(b, indent + 1);
+      buf_printf(b, "mrb_int _t%d = sp_%sArray_length(_t%d);", tn, ak, ts);
+      buf_printf(b, " for (mrb_int _t%d = 0; _t%d < _t%d; _t%d++) sp_%sArray_push(_t%d, ",
                  ti, ti, tn, ti, k, tr);
       char getexpr[256];
-      /* element accessor on the source */
-      Buf eb; memset(&eb, 0, sizeof eb);
-      buf_printf(&eb, "sp_%sArray_get(", ak); { Buf ab; memset(&ab, 0, sizeof ab); emit_expr(c, argv[a], &ab); buf_puts(&eb, ab.p ? ab.p : ""); free(ab.p); }
-      buf_printf(&eb, ", _t%d)", ti);
-      snprintf(getexpr, sizeof getexpr, "%s", eb.p ? eb.p : ""); free(eb.p);
+      snprintf(getexpr, sizeof getexpr, "sp_%sArray_get(_t%d, _t%d)", ak, ts, ti);
       if (sp_streq(k, "Poly") && !sp_streq(ak, "Poly")) {
         /* box the source scalar into the poly receiver */
         emit_boxed_text(c, ty_array_elem(at), getexpr, b);

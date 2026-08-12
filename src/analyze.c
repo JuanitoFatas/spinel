@@ -214,6 +214,13 @@ void compute_reachable(Compiler *c) {
       while (qhead < qtail) { int s = queue[qhead++]; for (int ni = 0; ni < sc_n[s]; ni++) MARK_NAME(scope_calls[s][ni]); }
   }
 
+  /* JSON.generate serializes a nested user object through its own #to_json,
+     which likewise has no call site of its own in the AST. */
+  if (sp_feature_required("json")) {
+    MARK_NAME("to_json");
+    while (qhead < qtail) { int s = queue[qhead++]; for (int ni = 0; ni < sc_n[s]; ni++) MARK_NAME(scope_calls[s][ni]); }
+  }
+
   /* Alias/prep_to propagation: when alias_new (or alias_old) is in called_names,
      make the counterpart reachable too (aliases have no scope of their own). */
   int changed = 1;
@@ -7936,6 +7943,27 @@ static int strbuf_mut_kind(Compiler *c, const char *vn, Scope *vs) {
 /* In-place mutation status of ivar `nm` of class `cid` (same contract as
    strbuf_mut_kind). The supported set is narrower: the shadow-copy shim
    cannot rename an ivar, so []=/insert/slice!/setbyte disqualify. */
+/* True if ivar `nm` of class `cid` is handed to a method as an argument
+   anywhere in that class's own scopes. Such a call may take the slot by
+   reference, which only works when the receiver itself is a heap object. */
+static int an_ivar_passed_as_arg(Compiler *c, int cid, const char *nm) {
+  const NodeTable *nt = c->nt;
+  for (int id = 0; id < nt->count; id++) {
+    if (nt_kind(nt, id) != NK_CallNode) continue;
+    int args = nt_ref(nt, id, "arguments");
+    if (args < 0) continue;
+    int an = 0; const int *av = nt_arr(nt, args, "arguments", &an);
+    for (int k = 0; k < an; k++) {
+      if (nt_kind(nt, av[k]) != NK_InstanceVariableReadNode) continue;
+      const char *ivn = nt_str(nt, av[k], "name");
+      if (!ivn || !nm || !sp_streq(ivn, nm)) continue;
+      Scope *sc = comp_scope_of(c, av[k]);
+      if (sc && sc->class_id == cid) return 1;
+    }
+  }
+  return 0;
+}
+
 static int strbuf_ivar_mut_kind(Compiler *c, int cid, const char *nm) {
   if (!nm) return 0;
   sb_mut_tabs_sync(c);
@@ -8198,7 +8226,8 @@ static void an_append_scan(Compiler *c, int node, int *app, int *rd, int cap, in
     int a = nt_ref(nt, node, "arguments");
     int ac = 0; if (a >= 0) nt_arr(nt, a, "arguments", &ac);
     if (nm && recv >= 0 && ac == 1 && (sp_streq(nm, "<<") || sp_streq(nm, "concat")) &&
-        nt_kind(nt, recv) == NK_LocalVariableReadNode) {
+        (nt_kind(nt, recv) == NK_LocalVariableReadNode ||
+         nt_kind(nt, recv) == NK_InstanceVariableReadNode)) {
       if (*n_app < cap) app[(*n_app)++] = recv;
       /* the receiver read is the append itself, not a use: skip it below */
       int nr0 = nt_num_refs(nt, node);
@@ -8214,7 +8243,8 @@ static void an_append_scan(Compiler *c, int node, int *app, int *rd, int cap, in
       return;
     }
   }
-  if (nt_kind(nt, node) == NK_LocalVariableReadNode) {
+  if (nt_kind(nt, node) == NK_LocalVariableReadNode ||
+      nt_kind(nt, node) == NK_InstanceVariableReadNode) {
     if (*n_rd < cap) rd[(*n_rd)++] = node;
     return;
   }
@@ -8324,6 +8354,24 @@ static int promote_append_accumulators(Compiler *c) {
       const char *vn = nt_str(nt, app[i], "name");
       Scope *vs = comp_scope_of(c, app[i]);
       if (!vn || !vs) continue;
+      /* the same accumulator held in an ivar: `@out << chunk` round a loop
+         rebuilt the whole string per append (the slot stores a value, so the
+         append is a concat), which is the same quadratic (#3781) */
+      if (nt_kind(nt, app[i]) == NK_InstanceVariableReadNode) {
+        int icid = an_ivar_owner(c, app[i]);
+        if (icid < 0) continue;
+        int ivx = comp_ivar_index(&c->classes[icid], vn);
+        if (ivx < 0 || c->classes[icid].ivar_types[ivx] != TY_STRING) continue;
+        int iv_read = 0;
+        for (int j = 0; j < n_rd && !iv_read; j++)
+          if (nt_kind(nt, rd[j]) == NK_InstanceVariableReadNode &&
+              nt_str(nt, rd[j], "name") && sp_streq(nt_str(nt, rd[j], "name"), vn) &&
+              an_ivar_owner(c, rd[j]) == icid) iv_read = 1;
+        if (iv_read) continue;
+        if (strbuf_ivar_mut_kind(c, icid, vn) != 1) continue;
+        if (strbuf_promote_ivar(c, icid, vn)) changed = 1;
+        continue;
+      }
       /* read elsewhere in this loop: the demoting copy would be the new
          quadratic, so leave the local alone */
       int read_in_loop = 0;
@@ -10237,8 +10285,10 @@ void analyze_program(Compiler *c) {
   register_prepends(c);
   specialize_inherited_cls_new(c);
 
-  /* collect top-level `include <Mod>` calls so bare method calls can
-     resolve to module_function methods in those modules. */
+  /* collect top-level `include <Mod>` / `extend <Mod>` calls so bare method
+     calls can resolve to those modules' methods. At the top level the two
+     differ only in who else gets the methods (Object vs main alone); a
+     receiverless call in this file reaches them either way (#3787). */
   {
     const NodeTable *nt = c->nt;
     int root_stmts = nt_ref(nt, nt->root_id, "statements");
@@ -10246,7 +10296,8 @@ void analyze_program(Compiler *c) {
     const int *stmts = root_stmts >= 0 ? nt_arr(nt, root_stmts, "body", &sn) : NULL;
     for (int i = 0; i < sn; i++) {
       if (!nt_type(nt, stmts[i]) || !sp_streq(nt_type(nt, stmts[i]), "CallNode")) continue;
-      if (!nt_str(nt, stmts[i], "name") || !sp_streq(nt_str(nt, stmts[i], "name"), "include")) continue;
+      { const char *tn = nt_str(nt, stmts[i], "name");
+        if (!tn || (!sp_streq(tn, "include") && !sp_streq(tn, "extend"))) continue; }
       if (nt_ref(nt, stmts[i], "receiver") >= 0) continue;
       int anode = nt_ref(nt, stmts[i], "arguments");
       int an = 0;
@@ -10541,12 +10592,29 @@ void analyze_program(Compiler *c) {
            receiver falls back to the name: any block-taking method that could
            be the callee decides, which at worst leaves a forwarder uninlined. */
         if (fmi < 0) {
+          /* Several methods can share the name, and the first one found is not
+             necessarily the callee. Take the one that KEEPS the block if any
+             does: assuming the harmless candidate compiled the same program
+             right or wrong depending on the order the classes were defined in
+             (#3786). */
+          int first = -1;
           for (int si = 1; si < c->nscopes; si++) {
             Scope *cs3 = &c->scopes[si];
             if (cs3->is_cmethod || !cs3->name || !sp_streq(cs3->name, fn)) continue;
             if (!cs3->blk_param || !cs3->blk_param[0]) continue;
-            fmi = si; break;
+            if (first < 0) first = si;
+            int keeps = 0;
+            for (int q = 0; q < c->nt->count && !keeps; q++) {
+              if (c->nscope[q] != si) continue;
+              if (nt_kind(c->nt, q) != NK_LocalVariableReadNode) continue;
+              const char *qn = nt_str(c->nt, q, "name");
+              if (!qn || !sp_streq(qn, cs3->blk_param)) continue;
+              if (!(blk_call_recv && blk_call_recv[q]) &&
+                  !(blk_arg_expr && blk_arg_expr[q])) keeps = 1;
+            }
+            if (keeps) { first = si; break; }
           }
+          fmi = first;
         }
       }
       blk_fwd_callee[fe] = fmi;
@@ -12202,6 +12270,10 @@ void analyze_program(Compiler *c) {
          mutation visible through every reference; a by-value struct copy
          would swallow it (#3227 P4) */
       if (t == TY_STRING && strbuf_ivar_mut_kind(c, i, ci->ivars[j]) != 0) { scalar = 0; break; }
+      /* the same mutation one call away: `helper(@s, x)` where the helper
+         appends to its parameter writes through the slot's address, and a
+         by-value receiver would hand it the address of a copy */
+      if (t == TY_STRING && an_ivar_passed_as_arg(c, i, ci->ivars[j])) { scalar = 0; break; }
     }
     if (!scalar) continue;
     int has_sub = 0;

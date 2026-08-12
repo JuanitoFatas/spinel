@@ -11,6 +11,15 @@
 /* Receiver node whose type the boxed-hash face re-inference pretends is the
    general boxed-key/value hash (see infer_call's last resort). -1 when idle;
    set for the duration of one nested infer_call only. */
+/* The type a READ of ivar slot `iv` yields. A shared-mutable string slot
+   stores an sp_String handle but reads as a plain String (the read copies),
+   so every reader -- attr_reader, a `def m = @x` shim, instance_variable_get
+   -- reports the value form, exactly as a direct ivar read does. */
+static TyKind ivar_value_ty(ClassInfo *ci, int iv) {
+  if (iv < 0 || iv >= ci->nivars) return TY_UNKNOWN;
+  return ci->ivar_types[iv] == TY_STRBUF ? TY_STRING : ci->ivar_types[iv];
+}
+
 static int g_hash_face_node = -1;
 #define SP_NMEMO_SZ 16384
 static unsigned g_narrow_gen = 1;
@@ -46,9 +55,13 @@ int an_user_defines_or_reads(Compiler *c, const char *name) {
   if (!name) return 0;
   for (int k = 0; k < c->nclasses; k++) {
     if (comp_method_in_chain(c, k, name, NULL) >= 0) return 1;
-    if (comp_cmethod_in_chain(c, k, name, NULL) >= 0) return 1;
     if (comp_is_reader(&c->classes[k], name)) return 1;
   }
+  /* A CLASS method of the same name is deliberately not consulted: it is only
+     reachable through a Class-valued receiver, so it cannot be the answer to
+     an instance call. Counting it made `k.downcase` on a String bind to a
+     `def self.downcase(s)` elsewhere in the program and compile to the arity
+     raise (#3520). */
   return comp_method_index(c, name) >= 0;
 }
 
@@ -1319,6 +1332,13 @@ TyKind infer_call(Compiler *c, int id) {
   if (recv >= 0 && (rt == TY_POLY || ty_is_hash(rt)) && sp_streq(name, "merge") && argc == 1 &&
       nt_ref(nt, id, "block") >= 0 && !an_user_defines_or_reads(c, "merge"))
     return TY_POLY_POLY_HASH;   /* the conflict block decides each value */
+  /* `x.to_json` -- CRuby's json defines it on every core class. A user class
+     that defines its own wins (the dispatch below sees it); everything else
+     serializes through the generator, exactly as JSON.generate(x) does. */
+  if (recv >= 0 && sp_streq(name, "to_json") && nt_ref(nt, id, "block") < 0 &&
+      sp_feature_required("json") && rt != TY_UNKNOWN && rt != TY_POLY && !ty_is_object(rt))
+    return TY_STRING;
+
   /* poly.scan(re): a String read out of a container. Same shape as the
      rt==TY_STRING rule -- captures give an array of arrays (#3368). */
   if (recv >= 0 && rt == TY_POLY && argc == 1 && sp_streq(name, "scan") &&
@@ -2429,7 +2449,7 @@ else {
           if (comp_is_sg_civ(cls, base2)) {
             char ivn[256]; snprintf(ivn, sizeof ivn, "@%s", base2);
             int ivi = comp_ivar_index(cls, ivn);
-            if (ivi >= 0 && cls->ivar_types[ivi] != TY_UNKNOWN) return cls->ivar_types[ivi];
+            if (ivi >= 0 && cls->ivar_types[ivi] != TY_UNKNOWN) return ivar_value_ty(cls, ivi);
           }
           return TY_POLY;
         }
@@ -2438,7 +2458,8 @@ else {
   }
   /* self.singleton_writer= / self.singleton_reader: inside a class method
      or directly in a class/module body (g_cbody_class_id). */
-  if (recv >= 0 && nt_type(nt, recv) && sp_streq(nt_type(nt, recv), "SelfNode")) {
+  if ((recv >= 0 && nt_type(nt, recv) && sp_streq(nt_type(nt, recv), "SelfNode")) ||
+      (recv < 0 && argc == 0)) {
     Scope *_self = comp_scope_of(c, id);
     int _sg_cid = (_self && _self->is_cmethod && _self->class_id >= 0)
                   ? _self->class_id : g_cbody_class_id;
@@ -2452,7 +2473,11 @@ else {
           if (comp_is_sg_writer(_cls, _base)) return TY_VOID;
         }
       }
-      else if (comp_is_sg_reader(_cls, name)) return TY_POLY;
+      else {
+        /* the alias table maps a renamed accessor onto the reader (#3788) */
+        const char *_rn = comp_resolve_alias(c, _sg_cid, name);
+        if (comp_is_sg_reader(_cls, _rn ? _rn : name)) return TY_POLY;
+      }
     }
   }
 
@@ -3654,7 +3679,7 @@ else {
            `@`-name reads as nil and a bad name (no `@`) raises NameError -- both poly. */
         /* Data/Struct members are not @-ivars in CRuby: read as nil (#2849) */
         int iv = (sym && sym[0] == '@' && !cls->is_struct) ? comp_ivar_index(cls, sym) : -1;
-        if (iv >= 0) return cls->ivar_types[iv];
+        if (iv >= 0) return ivar_value_ty(cls, iv);
         return TY_POLY;
       }
     }
@@ -3666,7 +3691,7 @@ else {
         snprintf(ivn, sizeof ivn, "@%s", rname);
         ClassInfo *rci = (rdcls >= 0 && rdcls < c->nclasses) ? &c->classes[rdcls] : cls;
         int iv = comp_ivar_index(rci, ivn);
-        if (iv >= 0) return rci->ivar_types[iv];
+        if (iv >= 0) return ivar_value_ty(rci, iv);
       }
     }
     /* attr writer: obj.x= returns the assigned value */
@@ -3718,7 +3743,7 @@ else {
           snprintf(ivn, sizeof ivn, "@%s", rname2);
           ClassInfo *rci2 = (rdcls2 >= 0 && rdcls2 < c->nclasses) ? &c->classes[rdcls2] : &c->classes[self->class_id];
           int iv = comp_ivar_index(rci2, ivn);
-          if (iv >= 0) return rci2->ivar_types[iv];
+          if (iv >= 0) return ivar_value_ty(rci2, iv);
         }
       }
       /* bare `new` inside a class method returns an instance of self's class */
@@ -5090,7 +5115,7 @@ else {
           const char *rname = comp_resolve_alias(c, k, name);
           char ivn[256]; snprintf(ivn, sizeof ivn, "@%s", rname);
           int iv = comp_ivar_index(&c->classes[rdcls], ivn);
-          TyKind rt2 = iv >= 0 ? c->classes[rdcls].ivar_types[iv] : TY_UNKNOWN;
+          TyKind rt2 = iv >= 0 ? ivar_value_ty(&c->classes[rdcls], iv) : TY_UNKNOWN;
           r = found ? ty_unify(r, rt2) : rt2; found = 1;
         }
       }
@@ -6162,8 +6187,10 @@ else {
      return any type -- honored via the sp_obj_hash_hook for keys). */
   if (sp_streq(name, "hash") && recv >= 0 && argc == 0 && !ty_is_object(rt)) return TY_INT;
   if (sp_streq(name, "between?") && argc == 2 && (rt == TY_STRING || ty_is_numeric(rt))) return TY_BOOL;
-  /* int | / ^ a Bignum operand promotes (#2422) */
-  if (recv >= 0 && argc == 1 && (sp_streq(name, "|") || sp_streq(name, "^")) &&
+  /* int & | ^ a Bignum operand promotes (#2422). `&` too: a negative receiver
+     is sign-extended forever, so `-1 & 0xFFFFFFFFFFFFFFFF` IS that mask. */
+  if (recv >= 0 && argc == 1 &&
+      (sp_streq(name, "|") || sp_streq(name, "^") || sp_streq(name, "&")) &&
       infer_type(c, recv) == TY_INT && infer_type(c, argv[0]) == TY_BIGINT) return TY_BIGINT;
   if ((sp_streq(name, "match?") || sp_streq(name, "!~")) && recv >= 0) return TY_BOOL;
   if (sp_streq(name, "match") && recv >= 0 && (argc == 1 || argc == 2)) {
@@ -7139,7 +7166,7 @@ TyKind infer_uncached(Compiler *c, int id) {
       int cid2 = ty_object_class(rt2);
       char ivn2[300]; snprintf(ivn2, sizeof ivn2, "@%s", attr);
       int ii2 = comp_ivar_index(&c->classes[cid2], ivn2);
-      if (ii2 >= 0) return c->classes[cid2].ivar_types[ii2];
+      if (ii2 >= 0) return ivar_value_ty(&c->classes[cid2], ii2);
     }
     int v2 = nt_ref(nt, id, "value");
     return v2 >= 0 ? infer_type(c, v2) : TY_UNKNOWN;

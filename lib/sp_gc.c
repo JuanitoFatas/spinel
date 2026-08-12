@@ -47,6 +47,9 @@ sp_sym (*sp_json_sym_intern_fn)(const char *) = NULL;
 void (*sp_json_hash_set_fn)(sp_RbVal, const char *, sp_RbVal) = NULL;
 const char *(*sp_poly_inspect_fn)(sp_RbVal) = NULL;
 sp_RbVal (*sp_obj_to_hash_fn)(sp_RbVal) = NULL;
+/* A user class's own #to_json, keyed by cls_id: the json package asks for it
+   before falling back to the generic field reflection. */
+const char *(*sp_obj_to_json_fn)(sp_RbVal) = NULL;
 sp_RbVal (*sp_obj_to_h_fn)(sp_RbVal) = NULL;
 sp_RbVal (*sp_obj_to_a_fn)(sp_RbVal) = NULL;
 sp_RbVal (*sp_obj_with_fn)(sp_RbVal, sp_RbVal) = NULL;
@@ -57,9 +60,14 @@ sp_marshal_vt sp_marshal_v = {0};   /* filled by the generated TU (sp_re_init) *
 /* ---- Collector-private globals ---- */
 static int sp_gc_verify = 0;
 static sp_gc_hdr *sp_gc_old_heap = NULL;
+/* The mark stack grows on demand: overflowing it used to drop the walk into
+   recursive scanning, and a live set of a few hundred thousand containers
+   (an A* frontier of [vertex, priority] pairs) then overflowed the C stack
+   and crashed the process mid-collection. */
 #define SP_GC_MARK_STACK_MAX (1024*64)
 static void **sp_gc_mark_stack = NULL;
 static int sp_gc_mark_top = 0;
+static int sp_gc_mark_cap = 0;
 static sp_gc_hdr **sp_gc_vsnap = NULL;
 static size_t sp_gc_vsnap_n = 0, sp_gc_vsnap_cap = 0;
 static size_t sp_gc_max_bytes = 0;
@@ -160,7 +168,8 @@ __attribute__((constructor)) static void sp_gc_debug_env(void){
 
 /* Tag byte preceding `obj`: 0xfe heap-unmarked -> 0xfc; 0xfc/0xff/0xfd/0xf1
  * skipped; else a real GC object reached through its scan hook. */
-void sp_gc_mark(void*obj){if(!obj)return;unsigned char pm=((unsigned char*)obj)[-1];if(pm==0xfe){((char*)obj)[-1]=(char)0xfc;return;}if(pm==0xfc||pm==0xff||pm==0xfd||pm==0xf1)return;sp_gc_hdr*h=(sp_gc_hdr*)((char*)obj-sizeof(sp_gc_hdr));if(sp_gc_verify&&!sp_gc_obj_registered(h))sp_gc_verify_fail(obj,h);if(sp_gc_verify_probe_on){if(!h->old&&h->marked==sp_gc_verify_probe)sp_gc_verify_probe_hit=1;return;}if(h->marked==sp_gc_mark_gen)return;if(sp_gc_minor&&h->old)return;h->marked=sp_gc_mark_gen;if(h->scan){if(sp_gc_mark_stack&&sp_gc_mark_top<SP_GC_MARK_STACK_MAX){sp_gc_mark_stack[sp_gc_mark_top++]=obj;}
+void sp_gc_mark(void*obj){if(!obj)return;unsigned char pm=((unsigned char*)obj)[-1];if(pm==0xfe){((char*)obj)[-1]=(char)0xfc;return;}if(pm==0xfc||pm==0xff||pm==0xfd||pm==0xf1)return;sp_gc_hdr*h=(sp_gc_hdr*)((char*)obj-sizeof(sp_gc_hdr));if(sp_gc_verify&&!sp_gc_obj_registered(h))sp_gc_verify_fail(obj,h);if(sp_gc_verify_probe_on){if(!h->old&&h->marked==sp_gc_verify_probe)sp_gc_verify_probe_hit=1;return;}if(h->marked==sp_gc_mark_gen)return;if(sp_gc_minor&&h->old)return;h->marked=sp_gc_mark_gen;if(h->scan){if(sp_gc_mark_stack&&sp_gc_mark_top>=sp_gc_mark_cap&&sp_gc_mark_cap<(1<<28)){int nc=sp_gc_mark_cap*2;void**ns=(void**)realloc(sp_gc_mark_stack,sizeof(void*)*(size_t)nc);if(ns){sp_gc_mark_stack=ns;sp_gc_mark_cap=nc;}}
+if(sp_gc_mark_stack&&sp_gc_mark_top<sp_gc_mark_cap){sp_gc_mark_stack[sp_gc_mark_top++]=obj;}
 else{h->scan(obj);}}}
 
 void sp_gc_mark_drain(void){
@@ -172,7 +181,7 @@ void sp_gc_mark_drain(void){
     if(sp_gc_verify){sp_gc_dbg_phase="scan";sp_gc_dbg_ctx=obj;}
     if(h->scan)h->scan(obj);}
 }
-void sp_gc_mark_all(void){if(!sp_gc_mark_stack)sp_gc_mark_stack=(void**)malloc(sizeof(void*)*SP_GC_MARK_STACK_MAX);sp_gc_mark_top=0;if(sp_gc_verify)sp_gc_verify_snapshot();int vd=sp_gc_verify;for(int i=0;i<sp_gc_nroots;i++){void**e=sp_gc_roots[i];if(vd){sp_gc_dbg_phase="root";sp_gc_dbg_ctx=(void*)e;}if((uintptr_t)e&(uintptr_t)3){sp_gc_mark_root_entry(e);}
+void sp_gc_mark_all(void){if(!sp_gc_mark_stack){sp_gc_mark_stack=(void**)malloc(sizeof(void*)*SP_GC_MARK_STACK_MAX);if(sp_gc_mark_stack)sp_gc_mark_cap=SP_GC_MARK_STACK_MAX;}sp_gc_mark_top=0;if(sp_gc_verify)sp_gc_verify_snapshot();int vd=sp_gc_verify;for(int i=0;i<sp_gc_nroots;i++){void**e=sp_gc_roots[i];if(vd){sp_gc_dbg_phase="root";sp_gc_dbg_ctx=(void*)e;}if((uintptr_t)e&(uintptr_t)3){sp_gc_mark_root_entry(e);}
 else{void*obj=*e;if(obj)sp_gc_mark(obj);}}if(vd)sp_gc_dbg_phase="fibers";if(sp_gc_mark_suspended_fibers_hook)sp_gc_mark_suspended_fibers_hook();if(vd)sp_gc_dbg_phase="globals";if(sp_gc_mark_globals_hook)sp_gc_mark_globals_hook();sp_gc_mark_drain();if(vd){sp_gc_dbg_phase="?";sp_gc_dbg_ctx=NULL;}}
 
 unsigned sp_gc_mark_gen = 0;

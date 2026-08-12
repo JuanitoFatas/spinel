@@ -106,8 +106,12 @@ extern const char sp_str_empty_data[];
    table the length helpers in spinel_rt.h populate: a per-TU split would leave
    the generated TU's cache pointing at strings the archive-side sweep already
    freed. */
-#define SP_STR_LCACHE_BITS 5
-#define SP_STR_LCACHE_SIZE (1u << SP_STR_LCACHE_BITS)
+/* Two ways per bucket: a scan loop reading one string while measuring another
+   (a CSV parser walking the input and its field buffer) collided on every
+   character with a direct-mapped table and rescanned both strings each time. */
+#define SP_STR_LCACHE_BITS 6
+#define SP_STR_LCACHE_WAYS 2
+#define SP_STR_LCACHE_SIZE ((1u << SP_STR_LCACHE_BITS) * SP_STR_LCACHE_WAYS)
 struct sp_str_lcache_entry {
   const char *s;
   size_t byte_len;
@@ -120,6 +124,19 @@ struct sp_str_lcache_entry {
    its own; it is cleared at every safepoint park (before a sweep can recycle a
    cached string's address) and by the string sweep on the collector. */
 extern SP_TLS struct sp_str_lcache_entry sp_str_lcache[SP_STR_LCACHE_SIZE];
+static inline unsigned sp_str_lcache_slot(const char *s) {
+  uintptr_t k = (uintptr_t)s;
+  return (unsigned)((k ^ (k >> 4) ^ (k >> 12)) & ((1u << SP_STR_LCACHE_BITS) - 1))
+         * SP_STR_LCACHE_WAYS;
+}
+/* Forget what we know about `s`: its bytes are about to change, or its buffer
+   is about to be freed and the address handed to something else. */
+static inline void sp_str_lcache_drop(const char *s) {
+  if (!s) return;
+  unsigned h = sp_str_lcache_slot(s);
+  for (unsigned w = 0; w < SP_STR_LCACHE_WAYS; w++)
+    if (sp_str_lcache[h + w].s == s) sp_str_lcache[h + w].s = NULL;
+}
 /* Deep-return side channel (#3227): a method whose every return path yields
    a shared-mutable string publishes the sp_String* handle here as the copy
    is read out; a demand-marked call site picks it up right after the call

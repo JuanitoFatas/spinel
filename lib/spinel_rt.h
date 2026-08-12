@@ -4272,7 +4272,7 @@ static sp_StrPolyHash*sp_StrPolyHash_new_with_default(sp_RbVal d){sp_StrPolyHash
 static sp_StrPolyHash*sp_StrPolyHash_new_dproc(sp_strpoly_dproc_t fn,void*self){sp_StrPolyHash*h=sp_StrPolyHash_new();h->dproc=fn;h->dproc_self=self;return h;}
 static void sp_StrPolyHash_grow(sp_StrPolyHash*h){ sp_gc_wb((void*)h);mrb_int oc=h->cap;const char**ok=h->keys;sp_RbVal*ov=h->vals;h->cap*=2;h->mask=h->cap-1;h->keys=(const char**)calloc((size_t)h->cap,sizeof(const char*));h->vals=(sp_RbVal*)calloc((size_t)h->cap,sizeof(sp_RbVal));h->order=(const char**)realloc(h->order,sizeof(const char*)*h->cap);h->len=0;for(mrb_int i=0;i<oc;i++){if(ok[i]){mrb_int idx=(mrb_int)(sp_str_hash(ok[i])&h->mask);while(h->keys[idx])idx=(idx+1)&h->mask;h->keys[idx]=ok[i];h->vals[idx]=ov[i];h->len++;}}free(ok);free(ov);}
 static sp_RbVal sp_StrPolyHash_get(sp_StrPolyHash*h,const char*k){if(!h)return sp_box_nil();mrb_int idx=(mrb_int)(sp_str_hash(k)&h->mask);while(h->keys[idx]){if(sp_str_eq(h->keys[idx],k))return h->vals[idx];idx=(idx+1)&h->mask;}if(h->dproc)return h->dproc(h,k,h->dproc_self);return h->default_v;}
-static void sp_StrPolyHash_set(sp_StrPolyHash*h,const char*k,sp_RbVal v){sp_gc_wb((void*)h); if(h->len*2>=h->cap)sp_StrPolyHash_grow(h);mrb_int idx=(mrb_int)(sp_str_hash(k)&h->mask);while(h->keys[idx]){if(sp_str_eq(h->keys[idx],k)){h->vals[idx]=v;return;}idx=(idx+1)&h->mask;}h->keys[idx]=k;h->vals[idx]=v;h->order[h->len]=k;h->len++;}
+static void sp_StrPolyHash_set(sp_StrPolyHash*h,const char*k,sp_RbVal v){sp_gc_wb((void*)h); if(!k){sp_raise_cls("TypeError","no implicit conversion of nil into String");return;} if(h->len*2>=h->cap)sp_StrPolyHash_grow(h);mrb_int idx=(mrb_int)(sp_str_hash(k)&h->mask);while(h->keys[idx]){if(sp_str_eq(h->keys[idx],k)){h->vals[idx]=v;return;}idx=(idx+1)&h->mask;}h->keys[idx]=k;h->vals[idx]=v;h->order[h->len]=k;h->len++;}
 static mrb_bool sp_StrPolyHash_has_key(sp_StrPolyHash*h,const char*k){if(!h)return FALSE;mrb_int idx=(mrb_int)(sp_str_hash(k)&h->mask);while(h->keys[idx]){if(sp_str_eq(h->keys[idx],k))return TRUE;idx=(idx+1)&h->mask;}return FALSE;}
 static mrb_int sp_StrPolyHash_length(sp_StrPolyHash*h){return h->len;}
 static sp_StrArray*sp_StrPolyHash_keys(sp_StrPolyHash*h){SP_GC_ROOT(h);sp_StrArray*a=sp_StrArray_new();SP_GC_ROOT(a);if(!h)return a;for(mrb_int i=0;i<h->len;i++)sp_StrArray_push(a,h->order[i]);return a;}
@@ -6214,6 +6214,25 @@ static sp_RbVal sp_poly_first(sp_RbVal v) {
 static sp_RbVal sp_poly_last(sp_RbVal v) {
   mrb_int n = sp_poly_length(v);
   return n > 0 ? sp_poly_arr_get(v, n - 1) : sp_box_nil();
+}
+/* Array#first(n) / #last(n) on a value only known at run time: the n-element
+   prefix or suffix, as a fresh array. A Hash walks its [k, v] pairs, the way
+   every other Enumerable name here does. */
+static sp_RbVal sp_poly_first_n(sp_RbVal v, mrb_int n) {
+  sp_PolyArray *out = sp_PolyArray_new(); SP_GC_ROOT(out);
+  if (n < 0) sp_raise_cls("ArgumentError", "negative array size");
+  mrb_int len = sp_poly_arr_len_ex(v);
+  if (n > len) n = len;
+  for (mrb_int i = 0; i < n; i++) sp_PolyArray_push(out, sp_poly_each_elem(v, i));
+  return sp_box_poly_array(out);
+}
+static sp_RbVal sp_poly_last_n(sp_RbVal v, mrb_int n) {
+  sp_PolyArray *out = sp_PolyArray_new(); SP_GC_ROOT(out);
+  if (n < 0) sp_raise_cls("ArgumentError", "negative array size");
+  mrb_int len = sp_poly_arr_len_ex(v);
+  if (n > len) n = len;
+  for (mrb_int i = len - n; i < len; i++) sp_PolyArray_push(out, sp_poly_each_elem(v, i));
+  return sp_box_poly_array(out);
 }
 static sp_RbVal sp_poly_sample(sp_RbVal v) {
   mrb_int n = sp_poly_length(v);
