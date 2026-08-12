@@ -6068,6 +6068,11 @@ int rest_kwh_tail(Compiler *c, Scope *m, int kwh) {
    the options-hash collapse is written in two call paths. */
 static int kwh_consumed_by_kwparam(Compiler *c, Scope *m, int kwh) {
   if (kwh < 0 || !m) return 0;
+  /* A `**kwrest` takes every keyword the call passed, so none of them is a
+     positional hash argument. Without this, `def f(a = nil, **kw); f(k: 1)`
+     bound the keyword hash to `a` as well as to `kw`, and any branch testing
+     `a.nil?` took the wrong path (#3808). */
+  if (m->kwrest_idx >= 0) return 1;
   int en = 0; const int *el = nt_arr(c->nt, kwh, "elements", &en);
   for (int e = 0; e < en; e++) {
     int key = el ? nt_ref(c->nt, el[e], "key") : -1;
