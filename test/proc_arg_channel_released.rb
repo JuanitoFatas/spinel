@@ -1,29 +1,46 @@
-# The boxed-argument side channel a proc call publishes through is a GC root.
-# Holding the last call's arguments there kept whatever they pointed at alive
-# for the rest of the program, so a dropped structure was re-marked at every
-# collection. The callee reads the channel into its parameters and clears it.
-def build(n)
+# The boxed-argument and result channels a proc call publishes through are GC
+# roots, and nothing cleared them: the last call's arguments and result stayed
+# reachable for the rest of the program, so a dropped structure was re-marked
+# at every collection. The callee reads them out and drops the references.
+def build(len)
+  n = len.to_i
   a = []
-  n.times { |i| a << [i, i] }
+  i = 0
+  while i < n
+    a << [i, i]
+    i += 1
+  end
   a
 end
 
 sink = proc { |x| x.size }
 
-def feed(sink)
+def feed(s)
   big = build(120_000)
-  sink.call(big) == 120_000
+  s.call(big) == 120_000
 end
 
 base = GC.stat["bytes"]
 p feed(sink)
 GC.start
 GC.start
-# the dropped structure is gone, not merely unreferenced by the program
+# the argument is gone, not merely unreferenced by the program
 p GC.stat["bytes"] < base + 4_000_000
 
-# the arguments themselves still arrive intact, including several of them,
-# a rest parameter and a block's own call
+# the result channel holds its value only until the next call, not forever
+maker = proc { |n| build(n) }
+def take(m)
+  m.call(60_000).size == 60_000
+end
+b2 = GC.stat["bytes"]
+p take(maker)
+noop = proc { |z| z }
+p noop.call(1) == 1
+GC.start
+GC.start
+p GC.stat["bytes"] < b2 + 4_000_000
+
+# the arguments themselves still arrive intact
 two = proc { |a, b| [a, b] }
 p two.call("x", [1, 2])
 rest = proc { |*a| a }
