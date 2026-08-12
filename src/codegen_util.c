@@ -1397,9 +1397,16 @@ else {
     return;
   }
   if (actual == TY_POLY && kt != TY_POLY) {
-    buf_puts(b, "(");
-    emit_expr(c, key, b);
-    buf_puts(b, kt == TY_STRING ? ").v.s" : ").v.i");  /* int/sym share v.i */
+    /* The union member is only valid when the tag agrees. A call site reached
+       with a key of another kind -- the same method called with a String and
+       with a Float -- read a Float's bits as a `const char *` and dereferenced
+       them (#3810). A key of the wrong kind is simply not in the table, so
+       answer a value no key can equal and let the lookup miss. */
+    buf_puts(b, "({ sp_RbVal _hk = ");
+    emit_boxed(c, key, b);
+    if (kt == TY_STRING)      buf_puts(b, "; _hk.tag == SP_TAG_STR ? _hk.v.s : (const char *)0; })");
+    else if (kt == TY_SYMBOL) buf_puts(b, "; _hk.tag == SP_TAG_SYM ? (sp_sym)_hk.v.i : (sp_sym)-1; })");
+    else                      buf_puts(b, "; _hk.tag == SP_TAG_INT ? _hk.v.i : SP_INT_NIL; })");
     return;
   }
   if (kt == TY_POLY && actual != TY_POLY) {
