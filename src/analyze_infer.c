@@ -1914,7 +1914,19 @@ TyKind infer_call(Compiler *c, int id) {
          and a method declaring `&blk` reaches the dispatch this way rather
          than through a yield (#3408). */
       if (c->scopes[emi].is_proc_form) return TY_POLY;
-      return yield_value_type(c, emi);
+      /* The per-site answer is the FIRST concrete block's type, but one body
+         is emitted per site and a `&block` method reached from two sites whose
+         blocks answer differently (Enumerable's collector and its generator)
+         then boxes one of them against the other's type -- the C compiler saw
+         an sp_RbVal cast to a pointer. When the sites disagree the value is
+         only known at run time (#3793). */
+      TyKind bfirst = yield_value_type(c, emi);
+      { int sv_ua = g_yvt_unify_all;
+        g_yvt_unify_all = 1;
+        TyKind ball = yield_value_type(c, emi);
+        g_yvt_unify_all = sv_ua;
+        if (ball != bfirst && ball != TY_UNKNOWN) return TY_POLY; }
+      return bfirst;
     }
   }
 
