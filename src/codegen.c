@@ -3759,6 +3759,14 @@ else if (orecv >= 0 && onm) {
       }
     }
   }
+  /* The boxed-argument channel has been read into this proc's parameters, so
+     drop the references: it is a GC root, and holding the last call's
+     arguments kept whatever they pointed at alive for the rest of the program
+     -- half a million objects in a benchmark that had long since dropped
+     them, re-marked at every collection. Same discipline as _sp_proc_blk. */
+  if (g_needs_proc_poly_argslot)
+    buf_puts(pb, "    for (int _sp_ac = 0; _sp_ac < argc && _sp_ac < 16; _sp_ac++)"
+                 " _sp_proc_poly_args[_sp_ac] = sp_box_nil();\n");
   for (int i = 0; i < locals.n; i++) {
     LocalVar *lv = scope_local(bs, locals.v[i]);
     /* a celled local is a captured var (accessed via _cap), not a fn-local */
