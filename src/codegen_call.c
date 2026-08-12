@@ -6873,6 +6873,16 @@ static int emit_case_eq_call(Compiler *c, int id, Buf *b) {
       buf_puts(b, "((void *)("); emit_expr(c, recv, b); buf_puts(b, ") == (void *)(");
       emit_expr(c, argv[0], b); buf_puts(b, "))");
     }
+    else if (a0 == TY_POLY || a0 == TY_UNKNOWN) {
+      /* A boxed argument can be holding this very object -- the same call
+         reached with an object and with a symbol widens the parameter to
+         poly, and folding the comparison to false then answered false for an
+         object compared with itself (#3807). Compare the addresses when the
+         box holds one. */
+      buf_puts(b, "({ sp_RbVal _eq = "); emit_boxed(c, argv[0], b);
+      buf_puts(b, "; _eq.tag == SP_TAG_OBJ && (void *)_eq.v.p == (void *)(");
+      emit_expr(c, recv, b); buf_puts(b, "); })");
+    }
     else {
       buf_puts(b, "((void)("); emit_expr(c, recv, b); buf_puts(b, "), (void)(");
       emit_expr(c, argv[0], b); buf_puts(b, "), FALSE)");
