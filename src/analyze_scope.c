@@ -1996,6 +1996,50 @@ const char *ffi_arg_str(const NodeTable *nt, int nid) {
   return NULL;
 }
 
+/* Resolve an ffi type-list argument to the ArrayNode it names, folding the
+   compile-time forms a real adapter writes: `[:float].freeze`, a constant
+   holding the list, and `[:float] * 24` (which the 24- and 25-parameter
+   geometry entry points are written as). Answers the array node and, for the
+   repeat form, how many times to repeat it. -1 when it is not constant. */
+static int ffi_type_array_node(Compiler *c, int nid, int *out_repeat, int depth) {
+  const NodeTable *nt = c->nt;
+  *out_repeat = 1;
+  if (nid < 0 || depth > 8) return -1;
+  const char *ty = nt_type(nt, nid);
+  if (!ty) return -1;
+  if (sp_streq(ty, "ArrayNode")) return nid;
+  if (sp_streq(ty, "CallNode")) {
+    const char *nm = nt_str(nt, nid, "name");
+    int recv = nt_ref(nt, nid, "receiver");
+    if (!nm || recv < 0) return -1;
+    if (sp_streq(nm, "freeze") || sp_streq(nm, "dup") || sp_streq(nm, "to_a"))
+      return ffi_type_array_node(c, recv, out_repeat, depth + 1);
+    if (sp_streq(nm, "*")) {
+      int a = nt_ref(nt, nid, "arguments");
+      int an = 0; const int *av = a >= 0 ? nt_arr(nt, a, "arguments", &an) : NULL;
+      if (an != 1 || !av) return -1;
+      int n = ffi_arg_int(nt, av[0]);
+      if (n < 0 || n > 4096) return -1;
+      int inner_rep = 1;
+      int arr = ffi_type_array_node(c, recv, &inner_rep, depth + 1);
+      if (arr < 0) return -1;
+      *out_repeat = n * inner_rep;
+      return arr;
+    }
+    return -1;
+  }
+  if (sp_streq(ty, "ConstantReadNode")) {
+    const char *cn = nt_str(nt, nid, "name");
+    if (!cn) return -1;
+    NT_FOREACH_KIND(nt, NK_ConstantWriteNode, w) {
+      const char *wn = nt_str(nt, w, "name");
+      if (!wn || !sp_streq(wn, cn)) continue;
+      return ffi_type_array_node(c, nt_ref(nt, w, "value"), out_repeat, depth + 1);
+    }
+  }
+  return -1;
+}
+
 /* Extract an integer literal value, or -1. */
 int ffi_arg_int(const NodeTable *nt, int nid) {
   if (nid < 0) return -1;
@@ -2392,15 +2436,26 @@ void register_ffi_decls(Compiler *c) {
         }
         const char *fname = ffi_arg_str(nt, args[0]);
         if (!fname) continue;  /* non-literal name: tolerate */
-        /* arg type array */
-        const char *arr_ty = nt_type(nt, a_arr);
-        if (!arr_ty || !sp_streq(arr_ty, "ArrayNode")) continue;
-        int en = 0;
-        const int *elems = nt_arr(nt, a_arr, "elements", &en);
+        /* arg type array: an array literal, or one of the constant-valued
+           forms an adapter writes for a long list. Anything else used to be
+           dropped in silence, and the failure surfaced at the first CALL of
+           the undeclared function, naming a line nowhere near it (#3804). */
+        int rep = 1;
+        int arr_node = ffi_type_array_node(c, a_arr, &rep, 0);
+        if (arr_node < 0) {
+          char emsg[192];
+          snprintf(emsg, sizeof emsg,
+                   "`%s`'s argument-type list must be an array of type names "
+                   "(an array literal, a constant holding one, or `[...] * n`)", dname);
+          ffi_decl_error(c, s, emsg);
+        }
+        int base_n = 0;
+        const int *elems = nt_arr(nt, arr_node, "elements", &base_n);
+        int en = base_n * rep;
         char **arg_specs = malloc(sizeof(char*) * (size_t)(en + 1));
         if (!arg_specs) { perror("malloc"); exit(1); }
         for (int ei = 0; ei < en; ei++) {
-          const char *spec = ffi_arg_str(nt, elems[ei]);
+          const char *spec = ffi_arg_str(nt, elems[ei % (base_n ? base_n : 1)]);
           arg_specs[ei] = strdup(spec ? spec : "");
         }
         const char *ret_spec = ffi_arg_str(nt, a_ret);
