@@ -5223,22 +5223,29 @@ static SP_NOINLINE sp_RbVal sp_poly_arr_get_hash_cold(sp_RbVal a, mrb_int i);
    nil: no hash, string or Struct arm can be reached, so the cls_id test and the
    cold call behind it are dead. The nil case still has to answer nil, which is
    what the null check does. */
+static SP_NOINLINE sp_RbVal sp_poly_arr_get_aon_cold(sp_RbVal a, mrb_int i);
 static SP_INLINE sp_RbVal sp_poly_arr_get_aon(sp_RbVal a, mrb_int i) {
-  if (a.tag != SP_TAG_OBJ || !a.v.p) return sp_box_nil();
-  /* A typed array boxed into a poly slot -- `h["k"] = [7, 8, 9]` stores an
-     sp_IntArray -- has a different layout, and reading it as an sp_PolyArray
-     answered nil for every index (#3542). */
-  if (a.cls_id != SP_BUILTIN_POLY_ARRAY) {
-    if (!sp_poly_is_array_kind(a.cls_id)) return sp_box_nil();
-    mrb_int n = sp_poly_arr_len(a);
-    mrb_int k2 = i < 0 ? n + i : i;
-    if (k2 < 0 || k2 >= n) return sp_box_nil();
-    return sp_poly_each_elem(a, k2);
+  if (a.tag == SP_TAG_OBJ && a.cls_id == SP_BUILTIN_POLY_ARRAY) {
+    sp_PolyArray *ar = (sp_PolyArray *)a.v.p;
+    if (!ar) return sp_box_nil();
+    mrb_int k = i < 0 ? ar->len + i : i;
+    if (k < 0 || k >= ar->len) return sp_box_nil();
+    return ar->data[k];
   }
-  sp_PolyArray *ar = (sp_PolyArray *)a.v.p;
-  mrb_int k = i < 0 ? ar->len + i : i;
-  if (k < 0 || k >= ar->len) return sp_box_nil();
-  return ar->data[k];
+  return sp_poly_arr_get_aon_cold(a, i);
+}
+/* A typed array boxed into a poly slot -- `h["k"] = [7, 8, 9]` stores an
+   sp_IntArray -- has a different layout, and reading it as an sp_PolyArray
+   answered nil for every index (#3542). That arm belongs out of line for the
+   same reason sp_poly_arr_get_hash's does: it is the rare receiver, and
+   inlining it grows every hot index site by the whole element-kind switch. */
+static SP_NOINLINE sp_RbVal sp_poly_arr_get_aon_cold(sp_RbVal a, mrb_int i) {
+  if (a.tag != SP_TAG_OBJ || !a.v.p) return sp_box_nil();
+  if (!sp_poly_is_array_kind(a.cls_id)) return sp_box_nil();
+  mrb_int n = sp_poly_arr_len(a);
+  mrb_int k2 = i < 0 ? n + i : i;
+  if (k2 < 0 || k2 >= n) return sp_box_nil();
+  return sp_poly_each_elem(a, k2);
 }
 static SP_INLINE sp_RbVal sp_poly_arr_get_hash(sp_RbVal a, mrb_int i) {
   if (a.tag == SP_TAG_OBJ && a.cls_id == SP_BUILTIN_POLY_ARRAY) {
