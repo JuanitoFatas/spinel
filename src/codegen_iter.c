@@ -1794,6 +1794,33 @@ int emit_iteration_stmt(Compiler *c, int id, Buf *b, int indent) {
      the only emitter with arms for both (#3409). */
   if (poly_block_call_needs_dispatch(c, id)) return 0;
 
+  /* `xs.each(&h)` forwards a real callable: there is no block body to splice,
+     and the loops below would run with an empty one -- silently doing nothing.
+     On a receiver only known at run time, hand the proc to the enumerable
+     driver; anything else declines to a path that can drive it. (The poly
+     dispatch above takes precedence: a user class owning the name has to see
+     the call, and its own `each` is not a container walk.) */
+  { int rfb = resolve_forwarded_block(c, block);
+    if (rfb < 0 || (nt_type(nt, rfb) && sp_streq(nt_type(nt, rfb), "BlockArgumentNode"))) {
+      const char *inm = nt_str(nt, id, "name");
+      int irecv = nt_ref(nt, id, "receiver");
+      const char *pen = inm ? poly_enum_op_for(inm) : NULL;
+      if (rfb >= 0 && pen && irecv >= 0 && comp_ntype(c, irecv) == TY_POLY) {
+        Buf pb0; memset(&pb0, 0, sizeof pb0);
+        if (!emit_forwarded_proc_arg(c, rfb, &pb0)) { free(pb0.p); return 0; }
+        int tp0 = ++g_tmp;
+        emit_indent(b, indent);
+        buf_printf(b, "sp_Proc *_t%d = %s; SP_GC_ROOT(_t%d);\n", tp0, pb0.p ? pb0.p : "NULL", tp0);
+        free(pb0.p);
+        emit_indent(b, indent);
+        buf_puts(b, "(void)sp_poly_enum_proc("); emit_boxed(c, irecv, b);
+        buf_printf(b, ", %s, _t%d);\n", pen, tp0);
+        return 1;
+      }
+      return 0;
+    } }
+
+
   /* loop { ... } -- infinite loop, exited by break */
   if (recv < 0 && sp_streq(name, "loop")) {
     int lbody = nt_ref(nt, block, "body");
