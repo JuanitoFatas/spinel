@@ -256,7 +256,25 @@ int main(int argc, char **argv) {
     else if (sp_streq(a, "--emit-symbol-map")) { emit_symbol_map = 1; i++; }
     else if (sp_streq(a, "--dump-ast"))    { dump_ast = 1; i++; }
     else if (sp_streq(a, "-h") || sp_streq(a, "--help")) { usage(); return 0; }
-    else if (sp_streq(a, "--version")) { printf("spinel %s\n", SPINEL_BUILD_REV); return 0; }
+    else if (sp_streq(a, "--version")) {
+        char cc_version[1024] = {0};
+        char cmd[2048];
+        snprintf(cmd, sizeof(cmd), "%s --version | head -n 1", cc_cmd);
+        FILE *fp = popen(cmd, "r");
+        if (fp) {
+            if (fgets(cc_version, sizeof(cc_version), fp)) {
+                char *nl = strchr(cc_version, '\n');
+                if (nl) *nl = '\0';
+            }
+            pclose(fp);
+        }
+        printf("spinel %s", SPINEL_BUILD_REV);
+        if (cc_version[0]) {
+            printf(" [%s]", cc_version);
+        }
+        printf("\n");
+        return 0;
+    }
     else if (sp_streq(a, "-e")) {
       if (++i < argc) {
         if (eval_used) s_add(&eval_src, "\n");
