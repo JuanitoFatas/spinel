@@ -2654,6 +2654,28 @@ static void synth_enum_to_a(Compiler *c) {
           if (ya >= 0) nt_arr(nt, ya, "arguments", &yn2);
           if (yn2 > yarity) yarity = yn2;
         }
+      /* The same method written with an explicit block parameter drives it
+         through `block.call(k, v)` rather than `yield`: count those sites too,
+         or the collector took one parameter and every element arrived as the
+         first value alone (#3792). */
+      if (esi >= 0 && c->scopes[esi].blk_param && c->scopes[esi].blk_param[0]) {
+        const char *bpn = c->scopes[esi].blk_param;
+        for (int nid = 0; nid < nt->count; nid++) {
+          if (c->nscope[nid] != esi) continue;
+          if (nt_kind(nt, nid) != NK_CallNode) continue;
+          const char *cnm2 = nt_str(nt, nid, "name");
+          if (!cnm2 || (!sp_streq(cnm2, "call") && !sp_streq(cnm2, "yield") &&
+                        !sp_streq(cnm2, "()") && !sp_streq(cnm2, "[]"))) continue;
+          int crv = nt_ref(nt, nid, "receiver");
+          if (crv < 0 || nt_kind(nt, crv) != NK_LocalVariableReadNode) continue;
+          const char *crn = nt_str(nt, crv, "name");
+          if (!crn || !sp_streq(crn, bpn)) continue;
+          int ca2 = nt_ref(nt, nid, "arguments");
+          int cn2 = 0;
+          if (ca2 >= 0) nt_arr(nt, ca2, "arguments", &cn2);
+          if (cn2 > yarity) yarity = cn2;
+        }
+      }
       if (yarity > 8) yarity = 8;
       c->classes[cls[k]].enum_yield_arity = yarity;
     }
