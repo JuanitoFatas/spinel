@@ -3666,8 +3666,14 @@ int infer_param_types(Compiler *c) {
         if (ac2 == 0) op_scalar = 0;
         for (int a2 = 0; a2 < ac2 && op_scalar; a2++) {
           TyKind at2 = infer_type(c, av2[a2]);
-          if (!(at2 == TY_INT || at2 == TY_FLOAT || at2 == TY_STRING ||
-                at2 == TY_BOOL || at2 == TY_SYMBOL)) op_scalar = 0;
+          /* Any BUILTIN operand, not just a scalar one: the runtime operator
+             serves every tag it knows before a user-class arm is reached, so
+             binding pins the user method's parameter to something that can
+             never arrive there. `t >= Time.now` on a poly receiver bound
+             Set#superset?'s `other` to Time, and the bundled set.rb then had
+             a `Time#all?` in it and stopped compiling (#3799). A user object
+             on the right IS a real candidate and still binds. */
+          if (at2 == TY_UNKNOWN || at2 == TY_POLY || ty_is_object(at2)) op_scalar = 0;
         }
       }
       if (!op_scalar)
