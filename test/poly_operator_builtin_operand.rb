@@ -4,8 +4,10 @@
 # uncompilable.
 require "set"
 
+# `t` is a second ahead so the ordering is decided by arithmetic, not by
+# whether the clock ticked between two Time.now calls (it did not on macOS).
 vals = [Time.now, 1]
-t = Time.now
+t = Time.now + 1
 p (vals[0] >= t).class
 p (vals[0] > t).class
 p (vals[0] <= t).class
