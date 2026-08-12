@@ -10168,18 +10168,23 @@ int emit_poly_call(Compiler *c, int id, Buf *b) {
          any object whose class exposes the name only as a reader (e.g. a
          `Struct.new(:offset, :size, :name)` entry answering `.size`). */
       int has_user_len = 0;
-      const char *lcheck = (sp_streq(name, "empty?")) ? "length" : name;
+      /* The question is about the name being CALLED. Asking about `length`
+         for an `empty?` call sent every program that defines `length`
+         anywhere down the dispatch path, where nothing answers `empty?` --
+         so the call became an unconditional raise whatever the receiver was
+         (#3805). Defining `length` does not define `empty?` in Ruby either. */
       if (!g_poly_builtin_arm)
       for (int kk = 0; kk < c->nclasses && !has_user_len; kk++)
-        if (comp_method_in_chain(c, kk, lcheck, NULL) >= 0 ||
-            comp_reader_in_chain(c, kk, lcheck, NULL)) has_user_len = 1;
-      if (sp_streq(name, "empty?") && !has_user_len)
-        if (!g_poly_builtin_arm)
-        for (int kk = 0; kk < c->nclasses && !has_user_len; kk++)
-          if (comp_method_in_chain(c, kk, "empty?", NULL) >= 0) has_user_len = 1;
+        if (comp_method_in_chain(c, kk, name, NULL) >= 0 ||
+            comp_reader_in_chain(c, kk, name, NULL)) has_user_len = 1;
       if (!has_user_len) {
         if (sp_streq(name, "empty?")) {
-          buf_puts(b, "(sp_poly_length("); emit_expr(c, recv, b); buf_puts(b, ") == 0)");
+          /* A user object has no #empty? of its own here, and sp_poly_length
+             answers 0 for one, which would make every such object empty.
+             Raise instead, as Ruby does. */
+          buf_puts(b, "({ sp_RbVal _ep = "); emit_boxed(c, recv, b);
+          buf_puts(b, "; sp_poly_is_user_obj(_ep) ? (sp_raise_poly_nomethod(\"empty?\", _ep), 0)"
+                      " : (sp_poly_length(_ep) == 0); })");
         }
         else {
           buf_puts(b, "sp_poly_length("); emit_expr(c, recv, b); buf_puts(b, ")");
