@@ -7501,6 +7501,19 @@ static int proc_literal_escapes_as_arg(Compiler *c, int lit) {
   return ple_escaped && lit >= 0 && lit < nt->count && ple_escaped[lit];
 }
 
+/* Type a proc literal's required params from one `.call` site, unless the
+   literal also escapes (passed as an argument, stored in a container,
+   returned). An escaping proc is invoked from scopes this scan cannot
+   enumerate, so the visible site's argument types are not the whole picture:
+   pinning to them makes the invisible sites read one representation through
+   another (a poly-array argument arriving in an int-array-typed param) and
+   answer garbage with no exception. Widen the requireds to poly instead --
+   the rule the rest, post, optional and keyword params already follow. */
+static int cs_type_params_site(Compiler *c, int create, const int *argv, int argc) {
+  if (proc_literal_escapes_as_arg(c, create)) return widen_proc_params_poly(c, create);
+  return cs_type_params(c, create, argv, argc);
+}
+
 /* True if this proc/lambda literal is handed on with `&` somewhere: it will
    then be driven through the proc ABI, whose arguments arrive boxed, so its
    parameters cannot hold a concrete scalar representation. (The rest, post,
@@ -7861,7 +7874,7 @@ int infer_block_params(Compiler *c) {
        `&->(x){...}` clone, whose params no var write would let us find -- so type
        its own params directly from the call args. */
     if (sp_streq(rty, "LambdaNode") || is_proc_create(c, recv)) {
-      if (cs_type_params(c, recv, argv, argc)) changed = 1;
+      if (cs_type_params_site(c, recv, argv, argc)) changed = 1;
       continue;
     }
     if (!sp_streq(rty, "LocalVariableReadNode")) continue;
@@ -7877,7 +7890,7 @@ int infer_block_params(Compiler *c) {
       if (comp_scope_of(c, w) != call_scope) continue;
       int val = nt_ref(nt, w, "value");
       if (val < 0 || !is_proc_create(c, val)) continue;
-      if (cs_type_params(c, val, argv, argc)) changed = 1;
+      if (cs_type_params_site(c, val, argv, argc)) changed = 1;
     }
   }
 
