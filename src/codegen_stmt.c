@@ -9904,7 +9904,30 @@ int emit_array_mutate_stmt(Compiler *c, int id, Buf *b, int indent) {
          IntArray#concat(PolyArray)); read with the source's kind and coerce
          each element into the receiver's element representation. */
       TyKind at = comp_ntype(c, argv[a]);
+      /* Ask the SLOT, not the node: a block parameter's node type can read as
+         an array kind while its declaration is boxed, and reading the boxed
+         local as a typed pointer does not compile (#3850). */
+      if (nt_type(nt, argv[a]) && sp_streq(nt_type(nt, argv[a]), "LocalVariableReadNode")) {
+        Scope *asc = comp_scope_of(c, argv[a]);
+        LocalVar *alv = asc ? scope_local(asc, nt_str(nt, argv[a], "name")) : NULL;
+        if (alv && alv->type != TY_UNKNOWN) at = alv->type;
+      }
       const char *ak = (at == TY_POLY_ARRAY) ? "Poly" : array_kind(at);
+      if (at == TY_POLY) {
+        /* boxed source: walk it through the boxed surface */
+        int tv = ++g_tmp;
+        emit_indent(b, indent + 1);
+        buf_printf(b, "{ sp_RbVal _t%d = ", tv); emit_boxed(c, argv[a], b);
+        buf_printf(b, "; SP_GC_ROOT_RBVAL(_t%d);\n", tv);
+        emit_indent(b, indent + 1);
+        buf_printf(b, "mrb_int _t%d = sp_poly_length(_t%d);", tn, tv);
+        buf_printf(b, " for (mrb_int _t%d = 0; _t%d < _t%d; _t%d++) sp_%sArray_push(_t%d, ",
+                   ti, ti, tn, ti, k, tr);
+        { char el[64]; snprintf(el, sizeof el, "sp_poly_each_elem(_t%d, _t%d)", tv, ti);
+          emit_unbox_text(c, et, el, b); }
+        buf_puts(b, "); }\n");
+        continue;
+      }
       if (!ak) ak = k;
       /* Evaluate the source ONCE. It used to be re-emitted for the length and
          again for every element, so `result.concat(str.bytes)` rebuilt the

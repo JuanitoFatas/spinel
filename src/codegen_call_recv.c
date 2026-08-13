@@ -2088,8 +2088,44 @@ else {
          Same-kind arguments only; a differently-typed argument has already
          widened the receiver to poly in inference. */
       if (sp_streq(name, "concat") && argc >= 1) {
-        int same = 1;
-        for (int j = 0; j < argc; j++) if (comp_ntype(c, argv[j]) != rt) { same = 0; break; }
+        int same = 1, all_poly = 1;
+        for (int j = 0; j < argc; j++) {
+          /* Ask the SLOT, not the node: a block parameter's node type can
+             read as the element kind while its declaration is boxed, and
+             emitting the boxed local into a typed pointer does not compile
+             (#3850). */
+          TyKind at = comp_ntype(c, argv[j]);
+          if (nt_type(nt, argv[j]) && sp_streq(nt_type(nt, argv[j]), "LocalVariableReadNode")) {
+            Scope *asc = comp_scope_of(c, argv[j]);
+            LocalVar *alv = asc ? scope_local(asc, nt_str(nt, argv[j], "name")) : NULL;
+            if (alv && alv->type != TY_UNKNOWN) at = alv->type;
+          }
+          if (at != rt) same = 0;
+          if (at != TY_POLY) all_poly = 0;
+        }
+        /* A boxed argument -- an element read out of a poly array, which is
+           what `g.each_with_object([]) { |r, acc| acc.concat(r) }` hands it --
+           is an array at run time; reading it as this array's C type did not
+           compile (#3850). Append its elements through the boxed surface. */
+        if (!same && all_poly && k) {
+          int ta = ++g_tmp;
+          Buf ra = expr_buf(c, recv);
+          buf_printf(b, "({ sp_%sArray *_t%d = %s; SP_GC_ROOT(_t%d);", k, ta, ra.p ? ra.p : "NULL", ta);
+          free(ra.p);
+          for (int j = 0; j < argc; j++) {
+            int tv = ++g_tmp, tn = ++g_tmp, ti = ++g_tmp;
+            buf_printf(b, " sp_RbVal _t%d = ", tv); emit_boxed(c, argv[j], b);
+            buf_printf(b, "; SP_GC_ROOT_RBVAL(_t%d);", tv);
+            buf_printf(b, " mrb_int _t%d = sp_poly_length(_t%d);", tn, tv);
+            buf_printf(b, " for (mrb_int _t%d = 0; _t%d < _t%d; _t%d++)", ti, ti, tn, ti);
+            buf_printf(b, " sp_%sArray_push(_t%d, ", k, ta);
+            { char el[64]; snprintf(el, sizeof el, "sp_poly_each_elem(_t%d, _t%d)", tv, ti);
+              emit_unbox_text(c, ty_array_elem(rt), el, b); }
+            buf_puts(b, ");");
+          }
+          buf_printf(b, " _t%d; })", ta);
+          return 1;
+        }
         if (same) {
           int ta = ++g_tmp;
           Buf ra = expr_buf(c, recv);
