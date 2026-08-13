@@ -9023,12 +9023,16 @@ int emit_range_call(Compiler *c, int id, Buf *b) {
       buf_printf(b, "; _t%d.first; })", tr); return 1;
     }
     if (argc == 0 && (sp_streq(name, "end") || sp_streq(name, "last"))) {
+      int as_int2 = comp_ntype(c, id) == TY_INT;
       buf_printf(b, "({ sp_FloatRange _t%d = ", tr); emit_expr(c, recv, b);
-      buf_printf(b, "; _t%d.last; })", tr); return 1;
+      buf_printf(b, "; %s_t%d.last; })", as_int2 ? "(mrb_int)" : "", tr); return 1;
     }
     if (argc == 0 && sp_streq(name, "max")) {
+      /* the endpoint the caller wrote: an Integer end answers an Integer,
+         whatever the other endpoint made of the range's kind (#3837) */
+      int as_int = comp_ntype(c, id) == TY_INT;
       buf_printf(b, "({ sp_FloatRange _t%d = ", tr); emit_expr(c, recv, b);
-      buf_printf(b, "; sp_frange_max(_t%d); })", tr); return 1;
+      buf_printf(b, "; %ssp_frange_max(_t%d); })", as_int ? "(mrb_int)" : "", tr); return 1;
     }
     /* min(n)/max(n) enumerate, which a Float bound cannot (#3665) */
     if (argc == 1 && (sp_streq(name, "min") || sp_streq(name, "max")) &&

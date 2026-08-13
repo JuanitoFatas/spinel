@@ -946,8 +946,25 @@ TyKind infer_call(Compiler *c, int id) {
     }
     if (sp_streq(name, "begin") || sp_streq(name, "end") ||
         sp_streq(name, "first") || sp_streq(name, "last") ||
-        sp_streq(name, "min") || sp_streq(name, "max"))
+        sp_streq(name, "min") || sp_streq(name, "max")) {
+      /* A range is a Float range when EITHER endpoint is one, and the endpoint
+         methods answer the endpoint the caller wrote: `(-Float::INFINITY..5).max`
+         is the Integer 5 (#3837). */
+      if (argc == 0) {
+        int rnode = recv;
+        for (int g = 0; g < 8 && rnode >= 0 && nt_kind(nt, rnode) == NK_ParenthesesNode; g++) {
+          int pb2 = nt_ref(nt, rnode, "body");
+          int pn2 = 0; const int *ps2 = pb2 >= 0 ? nt_arr(nt, pb2, "body", &pn2) : NULL;
+          rnode = (pn2 == 1 && ps2) ? ps2[0] : -1;
+        }
+        if (rnode >= 0 && nt_kind(nt, rnode) == NK_RangeNode) {
+          int side = (sp_streq(name, "begin") || sp_streq(name, "first") ||
+                      sp_streq(name, "min")) ? nt_ref(nt, rnode, "left") : nt_ref(nt, rnode, "right");
+          if (side >= 0 && infer_type(c, side) == TY_INT) return TY_INT;
+        }
+      }
       return argc == 0 ? TY_FLOAT : TY_POLY;   /* first(n)/last(n) raise anyway */
+    }
     if (sp_streq(name, "cover?") || sp_streq(name, "include?") ||
         sp_streq(name, "member?") || sp_streq(name, "===") ||
         sp_streq(name, "==") || sp_streq(name, "eql?") ||
