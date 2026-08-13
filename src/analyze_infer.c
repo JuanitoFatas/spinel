@@ -3567,7 +3567,7 @@ else {
       char szn[272]; snprintf(szn, sizeof szn, "@%s", name);
       if (comp_ivar_index(sc, szn) < 0) return TY_INT;
     }
-    if (sp_streq(name, "values_at") && argc >= 1) return TY_POLY_ARRAY;
+    if (sp_streq(name, "values_at")) return TY_POLY_ARRAY;   /* no keys selects nothing */
     if (sp_streq(name, "hash") && argc == 0) return TY_INT;
     if (sp_streq(name, "deconstruct_keys") && argc == 1) return TY_SYM_POLY_HASH;
     if (sp_streq(name, "dig") && argc >= 1) {
@@ -3593,6 +3593,8 @@ else {
         if (ty_is_array(mt) && argc == 2) return ty_array_elem(mt);
         return TY_POLY;
       }
+      /* a key no literal member matches resolves at run time (#3849) */
+      return TY_POLY;
     }
     if (sp_streq(name, "[]") && argc == 1) {
       /* struct[:sym] or struct[int]: return specific member type if known */

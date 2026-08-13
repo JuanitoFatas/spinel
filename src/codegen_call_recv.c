@@ -67,6 +67,42 @@ static void emit_str_append_arg(Compiler *c, int arg, Buf *b) {
   }
   emit_str_expr(c, arg, b);
 }
+
+/* One member read by an arbitrary key: an index (negative counts from the
+   end), a Symbol or a String naming a member. CRuby raises for a key no member
+   matches, so the miss is IndexError / NameError rather than nil. `rtxt` names
+   a temp already holding the receiver. */
+static void emit_struct_member_by_key(Compiler *c, ClassInfo *sc, const char *rtxt,
+                                      int key, int int_only, Buf *b) {
+  int tk = ++g_tmp, tk0 = ++g_tmp, tr = ++g_tmp;
+  buf_printf(b, "({ sp_RbVal _t%d = ", tk);
+  emit_boxed(c, key, b);
+  buf_printf(b, "; sp_RbVal _t%d = _t%d;", tk0, tk);
+  /* Struct#values_at takes offsets only, unlike #[] / #dig */
+  if (int_only)
+    buf_printf(b, " if (_t%d.tag != SP_TAG_INT) sp_raise_cls(\"TypeError\","
+                  " sp_sprintf(\"no implicit conversion of %%s into Integer\","
+                  " sp_poly_class_name(_t%d)));", tk, tk);
+  buf_printf(b, " if (_t%d.tag == SP_TAG_INT && _t%d.v.i < 0) _t%d = sp_box_int(_t%d.v.i + %d);",
+             tk, tk, tk, tk, sc->nivars);
+  buf_printf(b, " sp_RbVal _t%d = sp_box_nil();", tr);
+  for (int i = 0; i < sc->nivars; i++) {
+    buf_printf(b, " if(sp_rbval_eql_key(_t%d,sp_box_sym((sp_sym)%d))||sp_rbval_eql_key(_t%d,sp_box_int(%dLL))"
+                  "||sp_rbval_eql_key(_t%d,sp_box_str(\"%s\"))){ _t%d = ",
+               tk, comp_sym_intern(c, sc->ivars[i] + 1), tk, (long long)i,
+               tk, sc->ivars[i] + 1, tr);
+    char fld[300]; snprintf(fld, sizeof fld, "%s->iv_%s", rtxt, iv_c(sc->ivars[i] + 1));
+    emit_boxed_text(c, sc->ivar_types[i], fld, b);
+    buf_puts(b, ";}\nelse");
+  }
+  buf_printf(b, " { if (_t%d.tag == SP_TAG_INT)"
+                " sp_raise_cls(\"IndexError\", sp_sprintf(\"offset %%lld too %%s for struct(size:%d)\","
+                " (long long)_t%d.v.i, _t%d.v.i < 0 ? \"small\" : \"large\"));"
+                " sp_raise_cls(\"NameError\", sp_sprintf(\"no member '%%s' in struct\", sp_poly_to_s(_t%d)));"
+                " } _t%d; })",
+             tk0, sc->nivars, tk0, tk0, tk0, tr);
+}
+
 int emit_array_call(Compiler *c, int id, Buf *b) {
   /* The variadic Array mutators accept zero elements and return the receiver
      unchanged; every arm below is written for argc >= 1, so a no-argument call
@@ -7834,13 +7870,22 @@ int emit_object_call(Compiler *c, int id, Buf *b) {
       buf_printf(b, " _t%d; })", rh);
       return 1;
     }
+    /* values_at with no keys selects nothing, as Array#values_at does */
+    if (sp_streq(name, "values_at") && argc == 0) {
+      buf_puts(b, "((void)("); emit_expr(c, recv, b); buf_puts(b, "), sp_PolyArray_new())");
+      return 1;
+    }
     /* values_at(i, j, ... / range): member values by index, boxed */
     if (sp_streq(name, "values_at") && argc >= 1) {
       int tv4 = ++g_tmp, to4 = ++g_tmp;
       Buf rb4 = expr_buf(c, recv);
-      buf_printf(b, "({ sp_%s *_t%d = %s; sp_PolyArray *_t%d = sp_PolyArray_new(); SP_GC_ROOT(_t%d);",
+      /* built aside: a key the literal walk cannot resolve falls back to the
+         runtime form below, and appending to the caller's buffer first would
+         leave the abandoned prefix in it */
+      Buf lit4; memset(&lit4, 0, sizeof lit4);
+      Buf *b4 = &lit4;
+      buf_printf(b4, "({ sp_%s *_t%d = %s; sp_PolyArray *_t%d = sp_PolyArray_new(); SP_GC_ROOT(_t%d);",
                  sc->c_name, tv4, rb4.p ? rb4.p : "", to4, to4);
-      free(rb4.p);
       int ok4 = 1;
       for (int a4 = 0; a4 < argc && ok4; a4++) {
         const char *aty4 = nt_type(nt, argv[a4]);
@@ -7849,9 +7894,9 @@ int emit_object_call(Compiler *c, int id, Buf *b) {
           if (ix < 0) ix += sc->nivars;
           if (ix < 0 || ix >= sc->nivars) { ok4 = 0; break; }
           char fb4[300]; snprintf(fb4, sizeof fb4, "_t%d->iv_%s", tv4, iv_c(sc->ivars[(int)ix] + 1));
-          buf_printf(b, " sp_PolyArray_push(_t%d, ", to4);
-          emit_boxed_text(c, sc->ivar_types[(int)ix], fb4, b);
-          buf_puts(b, ");");
+          buf_printf(b4, " sp_PolyArray_push(_t%d, ", to4);
+          emit_boxed_text(c, sc->ivar_types[(int)ix], fb4, b4);
+          buf_puts(b4, ");");
         }
         else if (aty4 && sp_streq(aty4, "RangeNode")) {
           int rl4 = nt_ref(nt, argv[a4], "left"), rr4 = nt_ref(nt, argv[a4], "right");
@@ -7866,20 +7911,42 @@ int emit_object_call(Compiler *c, int id, Buf *b) {
              Array#values_at does; the walk used to stop at the last member */
           for (long long ix = lo4; ix <= hi4; ix++) {
             if (ix < 0) continue;
-            if (ix >= sc->nivars) { buf_printf(b, " sp_PolyArray_push(_t%d, sp_box_nil());", to4); continue; }
+            if (ix >= sc->nivars) { buf_printf(b4, " sp_PolyArray_push(_t%d, sp_box_nil());", to4); continue; }
             char fb4[300]; snprintf(fb4, sizeof fb4, "_t%d->iv_%s", tv4, iv_c(sc->ivars[(int)ix] + 1));
-            buf_printf(b, " sp_PolyArray_push(_t%d, ", to4);
-            emit_boxed_text(c, sc->ivar_types[(int)ix], fb4, b);
-            buf_puts(b, ");");
+            buf_printf(b4, " sp_PolyArray_push(_t%d, ", to4);
+            emit_boxed_text(c, sc->ivar_types[(int)ix], fb4, b4);
+            buf_puts(b4, ");");
           }
         }
         else ok4 = 0;
       }
       if (ok4) {
-        buf_printf(b, " _t%d; })", to4);
+        buf_printf(b4, " _t%d; })", to4);
+        buf_puts(b, lit4.p ? lit4.p : "");
+        free(lit4.p); free(rb4.p);
         return 1;
       }
-      /* non-literal keys: rebuild b is awkward -- fall through loudly */
+      free(lit4.p);
+      /* A key the loop above could not resolve at compile time (a local, an
+         out-of-range offset, a name) resolves at run time instead of taking
+         the whole file down (#3849). The partial output above is discarded by
+         re-emitting from scratch. */
+      if (!ok4) {
+        int tv5 = ++g_tmp, to5 = ++g_tmp;
+        Buf rb5; memset(&rb5, 0, sizeof rb5); buf_puts(&rb5, rb4.p ? rb4.p : "");
+        free(rb4.p);
+        char rtxt[32]; snprintf(rtxt, sizeof rtxt, "_t%d", tv5);
+        buf_printf(b, "({ sp_%s *_t%d = %s; sp_PolyArray *_t%d = sp_PolyArray_new(); SP_GC_ROOT(_t%d);",
+                   sc->c_name, tv5, rb5.p ? rb5.p : "", to5, to5);
+        free(rb5.p);
+        for (int a5 = 0; a5 < argc; a5++) {
+          buf_printf(b, " sp_PolyArray_push(_t%d, ", to5);
+          emit_struct_member_by_key(c, sc, rtxt, argv[a5], 1, b);
+          buf_puts(b, ");");
+        }
+        buf_printf(b, " _t%d; })", to5);
+        return 1;
+      }
     }
     /* #hash: combine the boxed member hashes so equal-valued structs agree.
        A member literally named `hash` shadows this with its reader (#2975). */
@@ -8135,6 +8202,56 @@ int emit_object_call(Compiler *c, int id, Buf *b) {
         buf_puts(b, "; })");
         return 1;
       }
+      /* a key no literal member matches (a local, an offset, a name) resolves
+         at run time; each further key then digs from that value (#3849) */
+      if (sc->nivars > 0) {
+        int td = ++g_tmp;
+        Buf rbd = expr_buf(c, recv);
+        char rtxt[32]; snprintf(rtxt, sizeof rtxt, "_t%d", td);
+        buf_printf(b, "({ sp_%s *_t%d = %s; ", sc->c_name, td, rbd.p ? rbd.p : "");
+        free(rbd.p);
+        if (argc == 1) emit_struct_member_by_key(c, sc, rtxt, argv[0], 0, b);
+        else {
+          buf_puts(b, "sp_poly_dig_n(");
+          emit_struct_member_by_key(c, sc, rtxt, argv[0], 0, b);
+          buf_printf(b, ", %d, (sp_RbVal[]){", argc - 1);
+          for (int a = 1; a < argc; a++) { if (a > 1) buf_puts(b, ", "); emit_boxed(c, argv[a], b); }
+          buf_puts(b, "})");
+        }
+        buf_puts(b, "; })");
+        return 1;
+      }
+    }
+    /* struct[key] = v: the member the key names takes the value. Only an
+       in-range literal member name had an emitter, so a variable key, an
+       out-of-range offset or a missing name was refused outright (#3849). */
+    if (sp_streq(name, "[]=") && argc == 2) {
+      int tw = ++g_tmp, tk = ++g_tmp, tk0 = ++g_tmp, tv = ++g_tmp;
+      Buf rbw = expr_buf(c, recv);
+      buf_printf(b, "({ sp_%s *_t%d = %s; sp_RbVal _t%d = ", sc->c_name, tw, rbw.p ? rbw.p : "", tk);
+      free(rbw.p);
+      emit_boxed(c, argv[0], b);
+      buf_printf(b, "; sp_RbVal _t%d = _t%d;", tk0, tk);
+      buf_printf(b, " if (_t%d.tag == SP_TAG_INT && _t%d.v.i < 0) _t%d = sp_box_int(_t%d.v.i + %d);",
+                 tk, tk, tk, tk, sc->nivars);
+      buf_printf(b, " sp_RbVal _t%d = ", tv); emit_boxed(c, argv[1], b); buf_puts(b, ";");
+      for (int i = 0; i < sc->nivars; i++) {
+        buf_printf(b, " if(sp_rbval_eql_key(_t%d,sp_box_sym((sp_sym)%d))||sp_rbval_eql_key(_t%d,sp_box_int(%dLL))"
+                      "||sp_rbval_eql_key(_t%d,sp_box_str(\"%s\"))){ _t%d->iv_%s = ",
+                   tk, comp_sym_intern(c, sc->ivars[i] + 1), tk, (long long)i,
+                   tk, sc->ivars[i] + 1, tw, iv_c(sc->ivars[i] + 1));
+        char vtxt[32]; snprintf(vtxt, sizeof vtxt, "_t%d", tv);
+        if (sc->ivar_types[i] == TY_POLY) buf_puts(b, vtxt);
+        else emit_unbox_text(c, sc->ivar_types[i], vtxt, b);
+        buf_puts(b, ";}\nelse");
+      }
+      buf_printf(b, " { if (_t%d.tag == SP_TAG_INT)"
+                    " sp_raise_cls(\"IndexError\", sp_sprintf(\"offset %%lld too %%s for struct(size:%d)\","
+                    " (long long)_t%d.v.i, _t%d.v.i < 0 ? \"small\" : \"large\"));"
+                    " sp_raise_cls(\"NameError\", sp_sprintf(\"no member '%%s' in struct\", sp_poly_to_s(_t%d)));"
+                    " } _t%d; })",
+                 tk0, sc->nivars, tk0, tk0, tk0, tv);
+      return 1;
     }
     if (sp_streq(name, "[]") && argc == 1) {
       /* struct[:sym] or struct[int_literal]: return member value boxed to poly */
