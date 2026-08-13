@@ -5074,6 +5074,12 @@ else {
         sp_streq(name, "to_str") || sp_streq(name, "inspect") ||
         sp_streq(name, "full_message") || sp_streq(name, "detailed_message"))
       return TY_STRING;
+    /* #exception answers an instance of the receiver's own class -- itself
+       with no argument, a copy carrying the new message with one; #== is the
+       value comparison. Neither had an arm for a user subclass instance, so
+       the value was discarded into nil (#3870). */
+    if (sp_streq(name, "exception") && argc <= 1) return rt;
+    if ((sp_streq(name, "==") || sp_streq(name, "eql?")) && argc == 1) return TY_BOOL;
     if (sp_streq(name, "class")) return TY_CLASS;  /* a Class object, carried by name */
     if (sp_streq(name, "backtrace")) return TY_STR_ARRAY;  /* empty: no frames captured */
     if (sp_streq(name, "cause")) return TY_EXCEPTION;      /* the threaded cause, nil if none */

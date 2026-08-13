@@ -13979,6 +13979,27 @@ else { memcpy(dir, sf, n); dir[n] = 0; } }
     }
     /* the accessors every exception carries: an instance of a user subclass is
        still an sp_Exception, so read them off it (#3732) */
+    /* An instance of a user exception subclass is an sp_Exception, so the
+       message-taking #exception and the value #== read off it too; only the
+       no-argument accessors had an arm and both were refused (#3870). */
+    if (argc == 1 && comp_method_in_chain(c, ty_object_class(comp_ntype(c, recv)), name, NULL) < 0 &&
+        (sp_streq(name, "exception") ||
+         ((sp_streq(name, "==") || sp_streq(name, "eql?")) &&
+          (comp_ntype(c, argv[0]) == TY_EXCEPTION ||
+           (ty_is_object(comp_ntype(c, argv[0])) &&
+            class_is_exc_subclass(c, ty_object_class(comp_ntype(c, argv[0])))))))) {
+      if (sp_streq(name, "exception")) {
+        buf_puts(b, "sp_exc_exception((sp_Exception *)(");
+        emit_expr(c, recv, b); buf_puts(b, "), ");
+        if (comp_ntype(c, argv[0]) == TY_STRING) emit_expr(c, argv[0], b);
+        else { buf_puts(b, "sp_poly_to_s("); emit_boxed(c, argv[0], b); buf_puts(b, ")"); }
+        buf_puts(b, ")");
+        return;
+      }
+      buf_puts(b, "sp_exc_eq((sp_Exception *)("); emit_expr(c, recv, b);
+      buf_puts(b, "), (sp_Exception *)("); emit_expr(c, argv[0], b); buf_puts(b, "))");
+      return;
+    }
     if (argc == 0 && (sp_streq(name, "cause") || sp_streq(name, "backtrace") ||
                       sp_streq(name, "full_message") || sp_streq(name, "detailed_message") ||
                       sp_streq(name, "exception")) &&
