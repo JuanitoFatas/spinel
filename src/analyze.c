@@ -7561,6 +7561,68 @@ static void mark_empty_hash_const_writes(Compiler *c) {
     c->empty_hash_want[v] = want;
   }
 }
+/* An Enumerable method called on a LOCAL that only ever holds a bare `{}`:
+   the literal has no key context to pick a variant from, so the local stayed
+   typeless and the call found no hash arm at all (#3829). A direct `{}.each {}`
+   receiver already takes the bare-hash default; a local holding one is the
+   same hash. Skipped when a key operation on the local exists, since that is
+   what picks a variant and this mark would pre-empt it. */
+static void mark_empty_hash_enum_locals(Compiler *c) {
+  if (!c->empty_hash_recv) return;
+  const NodeTable *nt = c->nt;
+  static const char *const enum_names[] = {
+    "each_entry", "each_cons", "each_slice", "cycle", "grep", "grep_v",
+    "take_while", "drop_while", "chunk_while", "slice_when", "slice_before",
+    "slice_after", "minmax", "minmax_by", "zip", "find_index", "flat_map",
+    "collect_concat", "sort", "uniq", NULL
+  };
+  static const char *const key_names[] = {
+    "[]", "[]=", "fetch", "store", "dig", "key?", "has_key?", "include?",
+    "member?", "merge", "merge!", "update", "transform_keys", "transform_values",
+    "default=", NULL
+  };
+  for (int id = 0; id < nt->count; id++) {
+    if (nt_kind(nt, id) != NK_CallNode) continue;
+    const char *nm = nt_str(nt, id, "name");
+    if (!nm) continue;
+    int hit = 0;
+    for (int k = 0; enum_names[k] && !hit; k++) if (sp_streq(nm, enum_names[k])) hit = 1;
+    if (!hit) continue;
+    int recv = nt_ref(nt, id, "receiver");
+    if (recv < 0 || nt_kind(nt, recv) != NK_LocalVariableReadNode) continue;
+    const char *lname = nt_str(nt, recv, "name");
+    Scope *rs = comp_scope_of(c, recv);
+    if (!lname || !rs) continue;
+    /* every write of the local is an empty hash literal, and no key op on it */
+    int lit = -1, ok = 1;
+    for (int w = 0; w < nt->count && ok; w++) {
+      NodeKind wk = nt_kind(nt, w);
+      if (wk == NK_LocalVariableWriteNode) {
+        const char *wn = nt_str(nt, w, "name");
+        if (!wn || !sp_streq(wn, lname) || comp_scope_of(c, w) != rs) continue;
+        int v = nt_ref(nt, w, "value");
+        if (v < 0) { ok = 0; break; }
+        NodeKind vk = nt_kind(nt, v);
+        int en = 0;
+        if (vk == NK_HashNode || vk == NK_KeywordHashNode) nt_arr(nt, v, "elements", &en);
+        else { ok = 0; break; }
+        if (en != 0) { ok = 0; break; }
+        lit = v;
+      }
+      else if (wk == NK_CallNode || wk == NK_IndexOrWriteNode ||
+               wk == NK_IndexAndWriteNode || wk == NK_IndexOperatorWriteNode) {
+        int r2 = nt_ref(nt, w, "receiver");
+        if (r2 < 0 || nt_kind(nt, r2) != NK_LocalVariableReadNode) continue;
+        const char *rn = nt_str(nt, r2, "name");
+        if (!rn || !sp_streq(rn, lname) || comp_scope_of(c, r2) != rs) continue;
+        const char *cn = wk == NK_CallNode ? nt_str(nt, w, "name") : "[]";
+        if (!cn) continue;
+        for (int k = 0; key_names[k]; k++) if (sp_streq(cn, key_names[k])) { ok = 0; break; }
+      }
+    }
+    if (ok && lit >= 0 && lit < c->node_cap) c->empty_hash_recv[lit] = 1;
+  }
+}
 static void mark_empty_hash_receivers(Compiler *c) {
   if (!c->empty_hash_recv) return;
   const NodeTable *nt = c->nt;
@@ -10449,6 +10511,7 @@ void analyze_program(Compiler *c) {
   /* pre-fixpoint: an empty `{}` block-method receiver types as the STR_POLY
      hash so infer_block_params declares its |k, v| params (#2336). */
   mark_empty_hash_receivers(c);
+  mark_empty_hash_enum_locals(c);
   mark_empty_literal_tails(c);
   mark_empty_literal_args(c);
   /* after the arg/receiver marks: a bare `{}` with no other context takes its
