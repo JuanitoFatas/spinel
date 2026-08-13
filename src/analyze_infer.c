@@ -2211,9 +2211,12 @@ TyKind infer_call(Compiler *c, int id) {
 
   /* <proc>.call(args) / .() / [] -> the proc's recorded body return type;
      Proc#=== (case/when dispatch) IS a call in CRuby */
+  /* Proc#=== answers the proc's return VALUE (#3818). Typing it from the
+     proc's body pins it to one shape, and a proc that arrives through a slot
+     has no body to read, so the answer is boxed. */
+  if (recv >= 0 && rt == TY_PROC && sp_streq(name, "===") && argc == 1) return TY_POLY;
   if (recv >= 0 && rt == TY_PROC &&
-      (sp_streq(name, "call") || sp_streq(name, "()") || sp_streq(name, "[]") ||
-       (sp_streq(name, "===") && argc == 1))) {
+      (sp_streq(name, "call") || sp_streq(name, "()") || sp_streq(name, "[]"))) {
     /* In a proc form, a call on the block parameter is the yield: the block is
        a real proc supplied per call site, so its result is poly uniformly --
        the same reason the YieldNode arm answers poly there. Typing it from any
@@ -5010,7 +5013,10 @@ else {
         if (!an_builtin_only)
         for (int k = 0; k < c->nclasses && !has_user; k++)
           if (comp_method_in_chain(c, k, name, NULL) >= 0) has_user = 1;
-        if (!has_user) return TY_BOOL;
+        /* A boxed receiver can be a Proc, whose #=== answers the proc's
+           return value rather than a boolean (#3818); a poly slot holds the
+           booleans every other kind answers just as well. */
+        if (!has_user) return TY_POLY;
       }
       /* & | ^ on a poly receiver dispatch on the runtime tag (nil/bool take
          the boolean ops, ints the bitwise ones) via sp_poly_bitop, whose
@@ -6155,6 +6161,11 @@ else {
     }
   }
 
+  /* A boxed receiver's `===` can be a Proc's, whose answer is the proc's
+     return value rather than a boolean (#3818). Everything else boxed answers
+     a boolean, which a poly slot holds just as well. */
+  if (sp_streq(name, "===") && argc == 1 && recv >= 0 && rt == TY_POLY)
+    return TY_POLY;
   /* /re/ === str -> match boolean */
   if (sp_streq(name, "===") && argc == 1 && recv >= 0 &&
       nt_type(nt, recv) && sp_streq(nt_type(nt, recv), "RegularExpressionNode"))

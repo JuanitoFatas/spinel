@@ -8508,14 +8508,23 @@ void emit_call(Compiler *c, int id, Buf *b) {
     if (pr >= 0 && pn && sp_streq(pn, "===") && pc == 1 &&
         (comp_ntype(c, pr) == TY_POLY || comp_ntype(c, pr) == TY_PROC) &&
         !user_defines_or_reads(c, "===")) {
+      /* The ANSWER is the proc's return value, not whether it was truthy:
+         `->(x){ x * 2 } === 5` is 10 in Ruby, and a case/when only cares
+         about the truthiness of that value (#3818). */
       int tp3 = ++g_tmp;
-      buf_printf(b, "({ sp_RbVal _t%d = ", tp3); emit_boxed(c, pr, b);
-      buf_printf(b, "; _t%d.tag == SP_TAG_OBJ && _t%d.cls_id == SP_BUILTIN_PROC"
-                    " ? sp_poly_truthy(sp_penum_call1((sp_Proc *)_t%d.v.p, ", tp3, tp3, tp3);
-      emit_boxed(c, pv[0], b);
-      buf_printf(b, ")) : sp_poly_eq(_t%d, ", tp3);
-      emit_boxed(c, pv[0], b);
-      buf_puts(b, "); })");
+      Buf pb3; memset(&pb3, 0, sizeof pb3);
+      buf_printf(&pb3, "({ sp_RbVal _t%d = ", tp3);
+      { Buf rb3; memset(&rb3, 0, sizeof rb3); emit_boxed(c, pr, &rb3);
+        buf_puts(&pb3, rb3.p ? rb3.p : "sp_box_nil()"); free(rb3.p); }
+      buf_printf(&pb3, "; _t%d.tag == SP_TAG_OBJ && _t%d.cls_id == SP_BUILTIN_PROC"
+                       " ? sp_penum_call1((sp_Proc *)_t%d.v.p, ", tp3, tp3, tp3);
+      { Buf ab3; memset(&ab3, 0, sizeof ab3); emit_boxed(c, pv[0], &ab3);
+        buf_puts(&pb3, ab3.p ? ab3.p : "sp_box_nil()");
+        buf_printf(&pb3, ") : sp_box_bool(sp_poly_eq(_t%d, ", tp3);
+        buf_puts(&pb3, ab3.p ? ab3.p : "sp_box_nil()"); free(ab3.p); }
+      buf_puts(&pb3, ")); })");
+      emit_unbox_text(c, comp_ntype(c, id), pb3.p ? pb3.p : "sp_box_nil()", b);
+      free(pb3.p);
       return;
     }
   }
