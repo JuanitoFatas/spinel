@@ -1433,8 +1433,16 @@ int emit_minmax_by_expr(Compiler *c, int id, Buf *b) {
     int trv = ++g_tmp, tn = ++g_tmp, tkeys = ++g_tmp, tidx = ++g_tmp, ti = ++g_tmp,
         tres = ++g_tmp, tcnt = ++g_tmp, ttake = ++g_tmp, tg = ++g_tmp;
     Buf rb; memset(&rb, 0, sizeof rb); emit_expr(c, recv, &rb);
-    emit_indent(g_pre, g_indent); emit_ctype(c, rt, g_pre);
-    buf_printf(g_pre, " _t%d = %s;\n", trv, rb.p ? rb.p : ""); free(rb.p);
+    emit_indent(g_pre, g_indent);
+    /* A Range has to be materialized before it can be indexed: the count form
+       read it as an sp_IntArray and did not compile (#3860). */
+    if (is_range) {
+      buf_printf(g_pre, "sp_IntArray *_t%d = sp_range_to_ia(%s);\n", trv, rb.p ? rb.p : "");
+    } else {
+      emit_ctype(c, rt, g_pre);
+      buf_printf(g_pre, " _t%d = %s;\n", trv, rb.p ? rb.p : "");
+    }
+    free(rb.p);
     emit_indent(g_pre, g_indent); buf_printf(g_pre, "SP_GC_ROOT(_t%d);\n", trv);
     emit_indent(g_pre, g_indent); buf_printf(g_pre, "mrb_int _t%d = sp_%sArray_length(_t%d);\n", tn, k, trv);
     emit_indent(g_pre, g_indent); buf_printf(g_pre, "sp_PolyArray *_t%d = sp_PolyArray_new(); SP_GC_ROOT(_t%d);\n", tkeys, tkeys);

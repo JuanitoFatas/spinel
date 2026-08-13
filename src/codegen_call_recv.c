@@ -8827,6 +8827,10 @@ int emit_value_recv_call(Compiler *c, int id, Buf *b) {
       }
       buf_printf(b, " _t%d; })", at);
     }
+    /* no arguments selects nothing: an empty Array, as Array#values_at does
+       (#3846) */
+    else if (sp_streq(name, "values_at") && argc == 0)
+      buf_printf(b, "((void)(%s), sp_PolyArray_new())", r);
     else if (sp_streq(name, "captures"))  buf_printf(b, "sp_MatchData_captures(%s)", r);
     else if (sp_streq(name, "to_a"))      buf_printf(b, "sp_MatchData_to_a(%s)", r);
     else if (sp_streq(name, "nil?"))      buf_printf(b, "(%s == 0)", r);
