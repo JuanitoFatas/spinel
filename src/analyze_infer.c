@@ -564,6 +564,26 @@ static int infer_endpoint_is_infinite(Compiler *c, int ep) {
   return 0;
 }
 
+/* The right endpoint of a literal Range receiver when it was written as a
+   finite Float over an Integer begin (1..5.5): that Range keeps the integer
+   representation (CRuby iterates it), but its END readers answer the Float the
+   caller wrote, which the mrb_int fields cannot hold (#3896). */
+int range_lit_float_end(Compiler *c, int recv) {
+  const NodeTable *nt = c->nt;
+  int rnode = recv;
+  for (int g = 0; g < 8 && rnode >= 0 && nt_kind(nt, rnode) == NK_ParenthesesNode; g++) {
+    int pb = nt_ref(nt, rnode, "body");
+    int pn = 0; const int *ps = pb >= 0 ? nt_arr(nt, pb, "body", &pn) : NULL;
+    rnode = (pn == 1 && ps) ? ps[0] : -1;
+  }
+  if (rnode < 0 || nt_kind(nt, rnode) != NK_RangeNode) return -1;
+  int lo = nt_ref(nt, rnode, "left"), hi = nt_ref(nt, rnode, "right");
+  if (lo < 0 || hi < 0) return -1;
+  if (infer_type(c, lo) != TY_INT) return -1;
+  if (infer_type(c, hi) != TY_FLOAT || infer_endpoint_is_infinite(c, hi)) return -1;
+  return hi;
+}
+
 /* True when `id` is the receiver of an enclosing call that carries a block:
    the chain emitters own that shape (arr.map.with_index { }), so the inner
    blockless call must keep its legacy typing. */
@@ -1022,6 +1042,12 @@ TyKind infer_call(Compiler *c, int id) {
   }
   /* endless literal range: size is the Float infinity; take/first with a
      count materialize just the counted prefix (nothing else can) */
+  /* (1..5.5): the end readers answer the Float the caller wrote; the integer
+     representation truncated it (#3896). */
+  if (rt == TY_RANGE && recv >= 0 && argc == 0 && nt_ref(nt, id, "block") < 0 &&
+      (sp_streq(name, "end") || sp_streq(name, "last") || sp_streq(name, "max")) &&
+      range_lit_float_end(c, recv) >= 0)
+    return TY_FLOAT;
   if (rt == TY_RANGE && recv >= 0) {
     int rnA = recv;
     while (rnA >= 0 && nt_type(nt, rnA) && sp_streq(nt_type(nt, rnA), "ParenthesesNode")) {
@@ -6736,6 +6762,13 @@ TyKind infer_uncached(Compiler *c, int id) {
        representation, which holds the infinity -- at the cost of reporting the
        other (finite) bound as a Float (see docs/limitations.md). #3670 */
     if (lo >= 0 && hi >= 0 && lt == TY_FLOAT && ht == TY_FLOAT)
+      return TY_FLOAT_RANGE;
+    /* A FLOAT begin with an Integer end (1.5..5) is a Float range too: it
+       cannot be iterated from a Float in CRuby either, and the integer
+       representation truncated the begin, which every reader then answered
+       (#3896). The mirror case (1..5.5) keeps the integer representation --
+       CRuby does iterate it -- and its end readers answer the literal. */
+    if (lo >= 0 && hi >= 0 && lt == TY_FLOAT && ht == TY_INT)
       return TY_FLOAT_RANGE;
     /* Only when the BEGIN is the infinite one: `(2..Float::INFINITY)` is the
        canonical lazy source and its integer enumeration is what the fused

@@ -64,6 +64,7 @@ TyKind ie_block_break_next_ty(Compiler *c, int node);
    array). Excludes range-native methods (each/map/select/sum/min/count-no-arg). */
 int range_enum_redispatch(Compiler *c, int id);
 int hash_enum_redispatch(Compiler *c, int id);
+int range_lit_float_end(Compiler *c, int recv);   /* (1..5.5): the Float end node, else -1 */
 int reduce_tail_from_acc(Compiler *c, int tail, const char *accp);
 
 /* True if `node` (a block body / statements subtree) contains a top-level

@@ -809,6 +809,10 @@ void emit_expr(Compiler *c, int id, Buf *b) {
       /* A bound written as absent and one written as Float::INFINITY are the
          same value; record which it was so #inspect can tell them apart. */
       int om = (left < 0 ? 1 : 0) | (right < 0 ? 2 : 0);
+      /* Each endpoint renders as the user wrote it, so record which one was an
+         Integer: a mixed literal (1.5..5) inspects as "1.5..5" (#3896). */
+      if (left >= 0 && comp_ntype(c, left) == TY_INT) om |= 4;
+      if (right >= 0 && comp_ntype(c, right) == TY_INT) om |= 8;
       buf_printf(b, "sp_frange_new%s(", om ? "_o" : "");
       if (left >= 0) emit_float_expr(c, left, b); else buf_puts(b, "(-HUGE_VAL)");
       buf_puts(b, ", ");

@@ -2530,8 +2530,12 @@ mrb_bool sp_frange_eq(sp_FloatRange a, sp_FloatRange b) {
 }
 const char *sp_frange_inspect(sp_FloatRange r) {
   /* an OMITTED bound prints as nothing; an explicit infinity prints itself */
-  const char *lo = (r.omitted & SP_FRANGE_NO_BEGIN) ? "" : sp_float_to_s(r.first);
-  const char *hi = (r.omitted & SP_FRANGE_NO_END) ? "" : sp_float_to_s(r.last);
+  const char *lo = (r.omitted & SP_FRANGE_NO_BEGIN) ? ""
+                 : (r.omitted & SP_FRANGE_INT_BEGIN) ? sp_sprintf("%lld", (long long)r.first)
+                 : sp_float_to_s(r.first);
+  const char *hi = (r.omitted & SP_FRANGE_NO_END) ? ""
+                 : (r.omitted & SP_FRANGE_INT_END) ? sp_sprintf("%lld", (long long)r.last)
+                 : sp_float_to_s(r.last);
   return sp_sprintf("%s%s%s", lo, r.excl ? "..." : "..", hi);
 }
 sp_RbVal sp_box_frange(sp_FloatRange v) {

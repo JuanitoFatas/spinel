@@ -9387,6 +9387,25 @@ int emit_range_call(Compiler *c, int id, Buf *b) {
   /* range value methods (evaluate the range once into a temp) */
   if (recv >= 0 && rt == TY_RANGE) {
     int block = nt_ref(nt, id, "block");
+    /* (1..5.5): the end readers answer the literal Float, which the mrb_int
+       fields cannot hold; #to_s renders it too (#3896). */
+    if (argc == 0 && block < 0) {
+      int fe = range_lit_float_end(c, recv);
+      if (fe >= 0 && (sp_streq(name, "end") || sp_streq(name, "last") ||
+                      sp_streq(name, "max"))) {
+        emit_float_expr(c, fe, b);
+        return 1;
+      }
+      if (fe >= 0 && (sp_streq(name, "to_s") || sp_streq(name, "inspect"))) {
+        int tr7 = ++g_tmp;
+        buf_printf(b, "({ sp_Range _t%d = ", tr7); emit_expr(c, recv, b);
+        buf_printf(b, "; sp_sprintf(\"%%lld%s%%s\", (long long)_t%d.first, sp_float_to_s(",
+                   (int)(nt_int(nt, unwrap_parens(c, recv), "flags", 0) & 4) ? "..." : "..", tr7);
+        emit_float_expr(c, fe, b);
+        buf_puts(b, ")); })");
+        return 1;
+      }
+    }
     /* find / detect / take_while over an ENDLESS Range: there is no array to
        materialize, so walk up from the bounded end the way `each` does. A
        search that never succeeds does not terminate in CRuby either (#3863). */

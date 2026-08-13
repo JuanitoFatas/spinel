@@ -158,6 +158,11 @@ typedef struct{mrb_int first;mrb_int last;mrb_int excl;mrb_int step;}sp_Range;
 typedef struct{mrb_float first;mrb_float last;mrb_int excl;mrb_int omitted;}sp_FloatRange;
 #define SP_FRANGE_NO_BEGIN 1
 #define SP_FRANGE_NO_END   2
+/* A mixed literal (1.5..5) is a Float range whose END was written as an
+   Integer -- and CRuby renders each endpoint as the user wrote it. The bits
+   record that, so #inspect prints "1.5..5" rather than "1.5..5.0" (#3896). */
+#define SP_FRANGE_INT_BEGIN 4
+#define SP_FRANGE_INT_END   8
 /* A String range ("a".."e"): endpoints kept as GC-managed strings so #begin,
    #end, #to_s and #inspect answer as Ruby does. Every traversal (each/to_a/
    include?/...) materializes the element array through
