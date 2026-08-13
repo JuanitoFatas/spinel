@@ -5752,6 +5752,74 @@ static int desugar_for_enumerable(Compiler *c) {
   return changed;
 }
 
+/* `obj.map { |x| }` on a user Enumerable whose #each yields SEVERAL values:
+   CRuby hands them to the block, so a one-parameter block binds the first
+   value -- while #select / #find / #sort_by answer the packed element. The
+   collector packs every yield into one array element, so the map block's sole
+   parameter destructures it, exactly as a `for` index does (#3879). */
+static int desugar_multi_yield_map_param(Compiler *c) {
+  NodeTable *nt = (NodeTable *)c->nt;
+  int changed = 0;
+  int n0 = nt->count;
+  for (int id = 0; id < n0; id++) {
+    if (nt_kind(nt, id) != NK_CallNode) continue;
+    const char *nm = nt_str(nt, id, "name");
+    if (!nm || (!sp_streq(nm, "map") && !sp_streq(nm, "collect"))) continue;
+    int blk = nt_ref(nt, id, "block");
+    if (blk < 0 || nt_kind(nt, blk) != NK_BlockNode) continue;
+    int recv = nt_ref(nt, id, "receiver");
+    if (recv < 0) continue;
+    TyKind rt = infer_type(c, recv);
+    if (!ty_is_object(rt)) continue;
+    int cid = ty_object_class(rt);
+    if (cid < 0 || cid >= c->nclasses || c->classes[cid].enum_yield_arity <= 1) continue;
+    int bp = nt_ref(nt, blk, "parameters");
+    if (bp < 0) continue;
+    const char *bpty = nt_type(nt, bp);
+    int pn = (bpty && sp_streq(bpty, "BlockParametersNode")) ? nt_ref(nt, bp, "parameters") : bp;
+    if (pn < 0 || !nt_type(nt, pn) || !sp_streq(nt_type(nt, pn), "ParametersNode")) continue;
+    int nreq = 0; const int *reqs = nt_arr(nt, pn, "requireds", &nreq);
+    if (nreq != 1 || !reqs) continue;
+    int p0 = reqs[0];
+    if (p0 < 0 || nt_kind(nt, p0) != NK_RequiredParameterNode) continue;
+    const char *pnm = nt_str(nt, p0, "name");
+    int body = nt_ref(nt, blk, "body");
+    if (!pnm || body < 0 || nt_kind(nt, body) != NK_StatementsNode) continue;
+    int bn = 0; const int *bb = nt_arr(nt, body, "body", &bn);
+    /* idempotent: the rewritten body starts with the very assignment below */
+    if (bn > 0 && nt_kind(nt, bb[0]) == NK_LocalVariableWriteNode &&
+        nt_str(nt, bb[0], "name") && sp_streq(nt_str(nt, bb[0], "name"), pnm)) {
+      int v0 = nt_ref(nt, bb[0], "value");
+      if (v0 >= 0 && nt_kind(nt, v0) == NK_CallNode && nt_str(nt, v0, "name") &&
+          sp_streq(nt_str(nt, v0, "name"), "[]")) continue;
+    }
+    int rd = nt_new_node(nt, "LocalVariableReadNode");
+    int ix = nt_new_node(nt, "IntegerNode");
+    int ar = nt_new_node(nt, "ArgumentsNode");
+    int cl = nt_new_node(nt, "CallNode");
+    int wr = nt_new_node(nt, "LocalVariableWriteNode");
+    if (rd < 0 || ix < 0 || ar < 0 || cl < 0 || wr < 0) continue;
+    nt_node_set_str(nt, rd, "name", pnm);
+    nt_node_set_int(nt, ix, "value", 0);
+    nt_node_set_arr(nt, ar, "arguments", &ix, 1);
+    nt_node_set_str(nt, cl, "name", "[]");
+    nt_node_set_ref(nt, cl, "receiver", rd);
+    nt_node_set_ref(nt, cl, "arguments", ar);
+    nt_node_set_ref(nt, cl, "block", -1);
+    nt_node_set_str(nt, wr, "name", pnm);
+    nt_node_set_ref(nt, wr, "value", cl);
+    { int nb[64];
+      if (bn + 1 > 64) continue;
+      nb[0] = wr;
+      for (int q = 0; q < bn; q++) nb[q + 1] = bb[q];
+      nt_node_set_arr(nt, body, "body", nb, bn + 1); }
+    comp_grow_node_arrays(c);
+    c->nscope[rd] = c->nscope[ix] = c->nscope[ar] = c->nscope[cl] = c->nscope[wr] = c->nscope[blk];
+    changed = 1;
+  }
+  return changed;
+}
+
 /* Rewrite `recv.to_enum(:m, *a)` / `enum_for(:m, *a)` into a real Enumerator,
    dispatched on the receiver kind (needs the receiver type, so it runs in the
    fixpoint). A user-class receiver whose class defines a yielding `m` becomes
@@ -11056,6 +11124,7 @@ void analyze_program(Compiler *c) {
     ch |= desugar_include_math(c);             /* include Math: sqrt(x) -> Math.sqrt(x) */
     ch |= desugar_kernel_recv(c);              /* Kernel.puts x -> puts x */
     ch |= desugar_class_literal_ctors(c);      /* Array[a,b] -> [a,b]; Range.new -> (a..b) */
+    ch |= desugar_multi_yield_map_param(c);    /* multi-yield each: map's |x| takes the 1st */
     ch |= desugar_enum_method_recv(c);         /* obj.map{} -> obj.__enum_to_a.map{} */
     ch |= desugar_for_enumerable(c);           /* for x in obj -> for x in obj.__enum_to_a */
     ch |= desugar_lazy_terminal(c);            /* lz.sum -> lz.to_a.sum */
