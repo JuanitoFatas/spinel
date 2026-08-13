@@ -1475,8 +1475,12 @@ void emit_expr(Compiler *c, int id, Buf *b) {
            inline's return slot is only the right answer when the yield IS the
            tail (a yield nested in a literal wants the element type, #3688) */
         TyKind _ynt = comp_ntype(c, id);
+        /* A POLY node type is an answer, not an absence: the inline's return
+           slot is only right when the call IS the tail, and a `&blk` forwarded
+           into a map wants the element (boxed) form -- unboxing to the
+           method's array type did not build (#3886). */
         emit_yield_proc_call(c, nt_ref(nt, id, "arguments"),
-                             (g_pf_emitting || (_ynt != TY_UNKNOWN && _ynt != TY_POLY))
+                             (g_pf_emitting || _ynt != TY_UNKNOWN)
                                ? _ynt : g_yield_slot_ty,
                              b, 0, 1); }
     else
