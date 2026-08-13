@@ -2509,7 +2509,11 @@ int proc_slot_is_ptr(TyKind t) {
       return 1;
     default: break;
   }
-  return ty_is_array(t) || ty_is_hash(t) || ty_is_object(t);
+  /* A narrowed object array (sp_PtrArray of unboxed sp_X*) is as much a heap
+     pointer as any other array; leaving it out refused a stored block that
+     captured an array holding instances of exactly one user class, while the
+     same array holding two classes -- which never narrows -- compiled (#3908). */
+  return ty_is_array(t) || ty_is_obj_array(t) || ty_is_hash(t) || ty_is_object(t);
 }
 
 /* True if a closure cell for `lv` carries the variable's real typed pointer
