@@ -5783,6 +5783,15 @@ static mrb_bool sp_poly_eql(sp_RbVal a, sp_RbVal b) {
        dedupe here (#2884). */
     return FALSE;
   }
+  /* Range#eql? compares endpoints with eql?, so an Integer bound is not eql?
+     to the same Float bound. A mixed literal like (0..1.0) is deliberately
+     carried on the integer representation (see the range literal rule in the
+     analyzer), which cannot tell that pair apart, so an integer Range answers
+     eql? only for itself; a String or Float Range has no such ambiguity and
+     compares by value through ==. */
+  if (a.tag == SP_TAG_OBJ && b.tag == SP_TAG_OBJ &&
+      a.cls_id == SP_BUILTIN_RANGE && b.cls_id == SP_BUILTIN_RANGE)
+    return a.v.p == b.v.p;
   return sp_poly_eq(a, b);
 }
 /* equal? for a poly value: object identity. Immediates (int, symbol, nil,
