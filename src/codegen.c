@@ -1546,7 +1546,7 @@ static void gc_save_take_back(Buf *b, size_t off, size_t save_len) {
 /* Escape hatch: `--no-root-elision` keeps every root, so a suspected
    miscompile can be bisected against the same binary. */
 int g_no_root_elision = 0;
-int g_inline_hot = 0;   /* --inline-hot: force small leaf methods inline */
+int g_inline_hot = 1;   /* --no-inline-hot turns off forcing small leaf methods inline */
 /* Escape hatch: `--no-write-barrier` emits the stores bare, so a suspected
    miscompile can be bisected against the same binary. */
 int g_no_write_barrier = 0;

@@ -1023,10 +1023,11 @@ rubyspec-gate: $(SPINEL) $(RUBYSPEC_DIR)/.pinned
 	done; [ $$ok -eq 1 ]
 
 # ---- Optcarrot integration test ----
-# --inline-hot forces the small leaf methods inline. optcarrot is the emulator
-# loop this compiler is measured on, so it is measured with the flag a program
-# like it would be built with; `make optcarrot OPTCARROT_FLAGS=` drops it.
-OPTCARROT_FLAGS ?= --inline-hot
+# Forcing the small leaf methods inline is the default now; keep the knob so a
+# before-and-after can measure the plain build, which is what an inference
+# change wants when the question is whether the emitted code changed rather
+# than how the inliner reacted: `make optcarrot OPTCARROT_FLAGS=--no-inline-hot`.
+OPTCARROT_FLAGS ?=
 OPTCARROT_DIR  := build/optcarrot
 OPTCARROT_REPO := https://github.com/mame/optcarrot.git
 OPTCARROT_BRANCH := experiment/spinel
