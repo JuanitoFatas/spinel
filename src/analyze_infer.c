@@ -3873,8 +3873,20 @@ else {
       }
     }
     /* attr reader (resolve alias so `alias v access_token` returns @access_token type) */
-    { int rdcls = -1;
-      if (comp_reader_in_chain(c, cid, name, &rdcls)) {
+    { int rdcls = -1, mdcls = -1;
+      /* An explicit `def x` at an equal-or-more-derived class overrides the
+         attribute, and the read emitter already calls it. Take the type from
+         whichever member wins the same arbitration; typing the call as the
+         ivar while emitting a call to the override reinterprets the returned
+         value as the attr's type (#3909). */
+      int reader_wins = comp_reader_in_chain(c, cid, name, &rdcls);
+      if (reader_wins && comp_method_in_chain(c, cid, name, &mdcls) >= 0) {
+        for (int k = cid; k >= 0; k = c->classes[k].parent) {
+          if (k == mdcls) { reader_wins = 0; break; }
+          if (k == rdcls) { reader_wins = 1; break; }
+        }
+      }
+      if (reader_wins) {
         const char *rname = comp_resolve_alias(c, cid, name);
         char ivn[256];
         snprintf(ivn, sizeof ivn, "@%s", rname);
