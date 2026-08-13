@@ -8556,13 +8556,7 @@ int emit_object_call(Compiler *c, int id, Buf *b) {
        wins; on a same-class tie the explicit method wins. */
     int rdc = -1, mdc = -1;
     if (comp_reader_in_chain(c, cid, name, &rdc)) {
-      int reader_wins = 1;
-      if (comp_method_in_chain(c, cid, name, &mdc) >= 0) {
-        for (int k = cid; k >= 0; k = c->classes[k].parent) {
-          if (k == mdc) { reader_wins = 0; break; }
-          if (k == rdc) { reader_wins = 1; break; }
-        }
-      }
+      int reader_wins = comp_resolve_member(c, cid, name, 0, &mdc, NULL) == SP_MEMBER_ATTR;
       if (reader_wins) {
         const char *rn2 = comp_resolve_alias(c, cid, name);
         /* a shared-mutable string slot reads out as a GC COPY of the current

@@ -5647,17 +5647,12 @@ static int emit_nullable_int_ternary(Compiler *c, int v, Buf *b) {
 static void emit_boxed_writer_arms(Compiler *c, const char *base, const char *nm,
                                    const char *objp, const char *src, TyKind at, Buf *b) {
   for (int k = 0; k < c->nclasses; k++) {
-    int wdc = -1, wmdc = -1;
-    int writer_wins = comp_writer_in_chain(c, k, base, &wdc);
-    int kmi = comp_method_in_chain(c, k, nm, &wmdc);
-    if (kmi >= 0 && !scope_has_callable_symbol(c, kmi)) kmi = -1;
-    if (writer_wins && kmi >= 0) {
-      for (int a = k; a >= 0; a = c->classes[a].parent) {
-        if (a == wmdc) { writer_wins = 0; break; }
-        if (a == wdc) { writer_wins = 1; break; }
-      }
-    }
-    if (!writer_wins && kmi < 0) continue;
+    int wmdc = -1, kmi = -1;
+    int kind = comp_resolve_member(c, k, base, 1, &wmdc, &kmi);
+    if (kind == SP_MEMBER_METHOD && !scope_has_callable_symbol(c, kmi))
+      kind = comp_writer_in_chain(c, k, base, &wmdc) ? SP_MEMBER_ATTR : SP_MEMBER_NONE;
+    if (kind == SP_MEMBER_NONE) continue;
+    int writer_wins = (kind == SP_MEMBER_ATTR);
     if (!writer_wins) {
       Scope *arm = &c->scopes[kmi];
       TyKind pt = TY_POLY;
@@ -5958,14 +5953,8 @@ void emit_stmt_inner(Compiler *c, int id, Buf *b, int indent) {
                same-class `def x=`). When overridden, fall through to normal
                dispatch. The more-derived definition wins; a same-class tie
                goes to the explicit method. */
-            int wdc = -1, wmdc = -1;
-            int writer_wins = comp_writer_in_chain(c, ty_object_class(rt), base, &wdc);
-            if (writer_wins && comp_method_in_chain(c, ty_object_class(rt), nm, &wmdc) >= 0) {
-              for (int k = ty_object_class(rt); k >= 0; k = c->classes[k].parent) {
-                if (k == wmdc) { writer_wins = 0; break; }
-                if (k == wdc) { writer_wins = 1; break; }
-              }
-            }
+            int writer_wins =
+                comp_resolve_member(c, ty_object_class(rt), base, 1, NULL, NULL) == SP_MEMBER_ATTR;
             if (writer_wins) {
               if (an >= 1) {
                 int rc = ty_object_class(rt);

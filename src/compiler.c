@@ -892,6 +892,39 @@ void comp_add_alias(ClassInfo *ci, const char *new_name, const char *old_name) {
   comp_add_alias_from(ci, new_name, old_name, -1);
 }
 
+/* An attribute and an explicit method can both own one name. CRuby's
+   attr_accessor defines an ordinary method, so a `def` at an equal-or-more-
+   derived class replaces it: the more-derived definition wins, and a same-class
+   tie goes to the method. Every emission site used to compose this policy from
+   the chain queries itself, and the sites that composed only half of it emitted
+   a call to the override typed as the attribute, or a switch with no arm for
+   the method at all (#3907, #3909, #3910). */
+int comp_resolve_member(Compiler *c, int class_id, const char *name, int want_write,
+                        int *def_class, int *method_index) {
+  if (def_class) *def_class = -1;
+  if (method_index) *method_index = -1;
+  if (!name || class_id < 0 || class_id >= c->nclasses) return SP_MEMBER_NONE;
+  char mbuf[300];
+  const char *mname = name;
+  if (want_write) { snprintf(mbuf, sizeof mbuf, "%s=", name); mname = mbuf; }
+  int adc = -1, mdc = -1;
+  int has_attr = want_write ? comp_writer_in_chain(c, class_id, name, &adc)
+                            : comp_reader_in_chain(c, class_id, name, &adc);
+  int mi = comp_method_in_chain(c, class_id, mname, &mdc);
+  if (mi < 0 && !has_attr) return SP_MEMBER_NONE;
+  int attr_wins = has_attr;
+  if (has_attr && mi >= 0) {
+    for (int k = class_id; k >= 0; k = c->classes[k].parent) {
+      if (k == mdc) { attr_wins = 0; break; }
+      if (k == adc) { attr_wins = 1; break; }
+    }
+  }
+  if (attr_wins) { if (def_class) *def_class = adc; return SP_MEMBER_ATTR; }
+  if (def_class) *def_class = mdc;
+  if (method_index) *method_index = mi;
+  return SP_MEMBER_METHOD;
+}
+
 const char *comp_resolve_alias_at(Compiler *c, int class_id, const char *name, int *start_cls) {
   if (!name) return name;
   /* Follow alias links (chain-aware), guarding against cycles. */
