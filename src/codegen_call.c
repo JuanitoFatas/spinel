@@ -8603,6 +8603,29 @@ void emit_call(Compiler *c, int id, Buf *b) {
     return;
   }
   const NodeTable *nt = c->nt;
+  /* `Integer.sqrt("x")`: the class-method form of the same coercion failure --
+     the string pointer went into the mrb_int slot and the answer was computed
+     from its address (#3862). */
+  {
+    int cr = nt_ref(nt, id, "receiver");
+    const char *cn2 = nt_str(nt, id, "name");
+    int ca = nt_ref(nt, id, "arguments");
+    int cc = 0; const int *cv = ca >= 0 ? nt_arr(nt, ca, "arguments", &cc) : NULL;
+    if (cr >= 0 && cn2 && cc >= 1 && cv && nt_kind(nt, cr) == NK_ConstantReadNode &&
+        nt_str(nt, cr, "name") &&
+        (sp_streq(nt_str(nt, cr, "name"), "Integer") || sp_streq(nt_str(nt, cr, "name"), "Float")) &&
+        (sp_streq(cn2, "sqrt")) && comp_class_index(c, nt_str(nt, cr, "name")) < 0) {
+      NodeKind ak2 = nt_kind(nt, cv[0]);
+      if (ak2 == NK_StringNode || ak2 == NK_SymbolNode || ak2 == NK_ArrayNode ||
+          ak2 == NK_HashNode || ak2 == NK_NilNode || ak2 == NK_TrueNode || ak2 == NK_FalseNode) {
+        TyKind rty2 = comp_ntype(c, id);
+        const char *dv2 = default_value(rty2);
+        buf_printf(b, "({ sp_raise_cls(\"TypeError\", \"%s can't be coerced into Integer\"); %s; })",
+                   ak2 == NK_NilNode ? "nil" : "String", dv2 ? dv2 : "0");
+        return;
+      }
+    }
+  }
   /* A literal `nil` where a number is wanted: CRuby raises rather than
      treating it as zero, which is what every one of these answered (#3883). */
   {
@@ -8614,28 +8637,48 @@ void emit_call(Compiler *c, int id, Buf *b) {
     if (nr >= 0 && nn && nc >= 1 && nv &&
         (nrt == TY_INT || nrt == TY_FLOAT || nrt == TY_BIGINT) &&
         !user_defines_or_reads(c, nn)) {
-      /* clamp is deliberately absent: nil names an OPEN side there. gcd / lcm
-         raise their own "not an integer" TypeError already. */
+      /* gcd / lcm raise their own "not an integer" TypeError already. */
       static const char *const NUMM[] = {
         "coerce", "pow", "fdiv", "divmod", "round", "digits", "to_s", "[]",
-        "gcdlcm", "div", "modulo", "remainder", "ceildiv", "between?", NULL };
+        "gcdlcm", "div", "modulo", "remainder", "ceildiv", "between?", "clamp",
+        "floor", "ceil", "truncate", "upto", "downto", "step", NULL };
       int hit = 0;
       for (int q = 0; NUMM[q] && !hit; q++) if (sp_streq(nn, NUMM[q])) hit = 1;
-      int nil_arg = 0;
-      for (int a = 0; a < nc && !nil_arg; a++)
-        if (nv[a] >= 0 && nt_kind(nt, nv[a]) == NK_NilNode) nil_arg = 1;
-      if (hit && nil_arg) {
+      /* A literal that is not a number where one is wanted. nil is the
+         zero-coercion case (#3883); a String, Symbol or container is the
+         "can't be coerced" one (#3862). clamp takes nil for an OPEN side, so
+         only a non-nil literal counts there. */
+      int nil_arg = 0, bad_arg = 0;
+      for (int a = 0; a < nc; a++) {
+        if (nv[a] < 0) continue;
+        NodeKind ak = nt_kind(nt, nv[a]);
+        if (ak == NK_NilNode) nil_arg = 1;
+        /* a keyword hash is an OPTION (`round(half: :even)`), not an operand */
+        else if (ak == NK_StringNode || ak == NK_SymbolNode || ak == NK_ArrayNode ||
+                 ak == NK_TrueNode || ak == NK_FalseNode) bad_arg = 1;
+      }
+      if (sp_streq(nn, "clamp")) nil_arg = 0;   /* nil is an open side there */
+      if (hit && (nil_arg || bad_arg)) {
         /* #between? / #clamp compare rather than coerce, and CRuby's failed
            comparison is an ArgumentError naming the receiver's class */
-        int cmpform = sp_streq(nn, "between?");
+        /* the comparing forms: CRuby's failed comparison is an ArgumentError */
+        int cmpform = sp_streq(nn, "between?") || sp_streq(nn, "upto") ||
+                      sp_streq(nn, "downto") || sp_streq(nn, "step") ||
+                      (bad_arg && (sp_streq(nn, "clamp") ||
+                                   /* Numeric#coerce turns an unconvertible
+                                      operand into ArgumentError, not the
+                                      TypeError the arithmetic forms raise */
+                                   sp_streq(nn, "coerce")));
         const char *cn = nrt == TY_FLOAT ? "Float" : "Integer";
         TyKind rty = comp_ntype(c, id);
         const char *dv = default_value(rty);
         buf_puts(b, "({ (void)("); emit_expr(c, nr, b); buf_puts(b, "); ");
         if (cmpform)
-          buf_printf(b, "sp_raise_cls(\"ArgumentError\", \"comparison of %s with nil failed\"); ", cn);
+          buf_printf(b, "sp_raise_cls(\"ArgumentError\", \"comparison of %s with %s failed\"); ",
+                     cn, bad_arg ? "a value" : "nil");
         else
-          buf_printf(b, "sp_raise_cls(\"TypeError\", \"nil can't be coerced into %s\"); ", cn);
+          buf_printf(b, "sp_raise_cls(\"TypeError\", \"%s can't be coerced into %s\"); ",
+                     bad_arg ? "String" : "nil", cn);
         buf_printf(b, "%s; })", dv ? dv : "0");
         return;
       }
