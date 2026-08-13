@@ -3028,6 +3028,27 @@ int emit_iteration_stmt(Compiler *c, int id, Buf *b, int indent) {
   /* ("a".."e").each { |s| ... } -- a string-endpoint range has no int sp_Range
      representation, so materialize the succ-sequence as a StrArray and loop over
      it. The block param is shadow-typed String for the body. */
+  /* `(1..2).each { body }` with no block parameter iterates just the same: the
+     emitter required one, so a paramless block fell through to NoMethodError
+     (the `throw` idiom under catch is written that way) (#3858). */
+  if (sp_streq(name, "each") && rt == TY_RANGE && !p0 && block >= 0 &&
+      nt_type(nt, block) && sp_streq(nt_type(nt, block), "BlockNode") &&
+      !range_float_begin(c, recv)) {
+    int t0 = ++g_tmp, ts0 = ++g_tmp, te0 = ++g_tmp, ti0 = ++g_tmp;
+    Buf rb0; memset(&rb0, 0, sizeof rb0); emit_expr(c, recv, &rb0);
+    emit_indent(b, indent);
+    buf_printf(b, "sp_Range _t%d = %s;\n", t0, rb0.p ? rb0.p : "");
+    free(rb0.p);
+    emit_indent(b, indent);
+    buf_printf(b, "mrb_int _t%d = sp_range_step(_t%d); mrb_int _t%d = _t%d.last - (_t%d.excl ? (_t%d > 0 ? 1 : -1) : 0);\n",
+               ts0, t0, te0, t0, t0, ts0);
+    emit_indent(b, indent);
+    buf_printf(b, "for (mrb_int _t%d = _t%d.first; _t%d > 0 ? _t%d <= _t%d : _t%d >= _t%d; _t%d += _t%d) {\n",
+               ti0, t0, ts0, ti0, te0, ti0, te0, ti0, ts0);
+    emit_loop_body(c, body, b, indent + 1);
+    emit_indent(b, indent); buf_puts(b, "}\n");
+    return 1;
+  }
   if (sp_streq(name, "each") && rt == TY_RANGE && p0) {
     if (range_float_begin(c, recv)) {
       emit_indent(b, indent);
