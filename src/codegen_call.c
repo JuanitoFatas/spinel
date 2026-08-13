@@ -14782,6 +14782,13 @@ else { memcpy(dir, sf, n); dir[n] = 0; } }
         { char an[48]; snprintf(an, sizeof an, "StructAnon_%d", recv);
           int rcid = comp_class_index(c, an);
           if (rcid >= 0 && rcid < c->nclasses && c->classes[rcid].is_anon_struct) acid = rcid; }
+        /* the class is just as anonymous when a local holds it (`k =
+           Struct.new(:a); k.name`): resolve the read to the same class the
+           write registered (#3827) */
+        if (acid < 0) {
+          int rcid = class_var_static_ci(c, recv);
+          if (rcid >= 0 && rcid < c->nclasses && c->classes[rcid].is_anon_struct) acid = rcid;
+        }
         if (acid >= 0) {
           buf_puts(b, "((void)("); emit_expr(c, recv, b);
           buf_puts(b, "), (const char *)NULL)");
