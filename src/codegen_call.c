@@ -22123,9 +22123,17 @@ else { memcpy(dir, sf, n); dir[n] = 0; } }
       g_n_argov--;
       return;
     }
+    /* Every builtin container and scalar has a closed method table, so an
+       unresolved call on one is a real NoMethodError rather than a typo worth
+       failing the build over -- and CRuby's is rescuable, which a compile
+       abort makes unwritable (#3811). A user object joins them: the method is
+       genuinely missing, and saying so at run time with the receiver named is
+       what CRuby does. */
     if (grt == TY_POLY || grt == TY_NIL || grt == TY_INT || grt == TY_UNKNOWN ||
         grt == TY_STRING || grt == TY_FLOAT || grt == TY_BOOL ||
-        grt == TY_COMPLEX || grt == TY_RATIONAL || grt_builtin_cls) {
+        grt == TY_COMPLEX || grt == TY_RATIONAL || grt_builtin_cls ||
+        grt == TY_SYMBOL || grt == TY_RANGE || grt == TY_FLOAT_RANGE ||
+        ty_is_array(grt) || ty_is_hash(grt) || ty_is_object(grt)) {
       TyKind ret = comp_ntype(c, id);
       /* An unresolved call raises NoMethodError by default, matching CRuby
          (a dead poly-dispatch arm still emits nothing; a live one raising here
@@ -22228,6 +22236,16 @@ else { memcpy(dir, sf, n); dir[n] = 0; } }
         else if (grt == TY_FLOAT) snprintf(rdesc, sizeof rdesc, "an instance of Float");
         else if (grt == TY_COMPLEX) snprintf(rdesc, sizeof rdesc, "an instance of Complex");
         else if (grt == TY_RATIONAL) snprintf(rdesc, sizeof rdesc, "an instance of Rational");
+        else if (ty_is_object(grt)) {
+          const char *ocn = class_ruby_name(c, ty_object_class(grt));
+          snprintf(rdesc, sizeof rdesc, "an instance of %s",
+                   ocn ? ocn : c->classes[ty_object_class(grt)].name);
+        }
+        else if (ty_is_array(grt)) snprintf(rdesc, sizeof rdesc, "an instance of Array");
+        else if (ty_is_hash(grt)) snprintf(rdesc, sizeof rdesc, "an instance of Hash");
+        else if (grt == TY_SYMBOL) snprintf(rdesc, sizeof rdesc, "an instance of Symbol");
+        else if (grt == TY_RANGE || grt == TY_FLOAT_RANGE)
+          snprintf(rdesc, sizeof rdesc, "an instance of Range");
         else snprintf(rdesc, sizeof rdesc, "%s", ty_name(grt));
         /* a class constant receiver names the class, as CRuby does ("undefined
            method 'x' for class Dir"); the static type of a bare builtin
@@ -22294,7 +22312,11 @@ else { memcpy(dir, sf, n); dir[n] = 0; } }
               sp_streq(_rvty, "ConstantReadNode") || sp_streq(_rvty, "GlobalVariableReadNode") ||
               sp_streq(_rvty, "ClassVariableReadNode") || sp_streq(_rvty, "IntegerNode") ||
               sp_streq(_rvty, "FloatNode") || sp_streq(_rvty, "StringNode") ||
-              sp_streq(_rvty, "SymbolNode"));
+              sp_streq(_rvty, "SymbolNode") ||
+              /* a container literal is side-effect-free to re-emit too, and it
+                 is what `[1].nope` hands NoMethodError#receiver (#3811) */
+              sp_streq(_rvty, "ArrayNode") || sp_streq(_rvty, "HashNode") ||
+              sp_streq(_rvty, "KeywordHashNode"));
           #define EMIT_GATE_MSG() do { \
             const char *_stagefn = gstage ? "sp_stage_recv_args_msg" : "sp_stage_recv_msg"; \
             if (recv_stageable) { \
