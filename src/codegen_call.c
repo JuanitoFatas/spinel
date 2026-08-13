@@ -13775,6 +13775,14 @@ else { memcpy(dir, sf, n); dir[n] = 0; } }
       /* only for the name the class itself defines: #message keeps the helper,
          whose result type the call site is typed for */
       int own = sp_streq(name, "message") ? -1 : comp_method_in_chain(c, xcm, name, NULL);
+      /* #message is #to_s: an override answering something other than a String
+         cannot ride the const char * helper, so call it directly (#3868) */
+      if (own < 0 && sp_streq(name, "message")) {
+        int mi8 = comp_method_in_chain(c, xcm, "to_s", NULL);
+        if (mi8 >= 0 && (TyKind)c->scopes[mi8].ret != TY_STRING &&
+            (TyKind)c->scopes[mi8].ret != TY_UNKNOWN)
+          own = mi8;
+      }
       if (own >= 0) {
         int defc = xcm;
         (void)comp_method_in_chain(c, xcm, c->scopes[own].name, &defc);

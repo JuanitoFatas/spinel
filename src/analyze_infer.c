@@ -4939,6 +4939,15 @@ else {
                    (ty_is_object(rt) && class_is_exc_subclass(c, ty_object_class(rt)) &&
                     comp_method_in_chain(c, ty_object_class(rt), name, NULL) < 0);
   if (recv >= 0 && exc_shaped) {
+    /* Exception#message is #to_s, so an override answering something other
+       than a String carries that value out: the string-typed helper answered
+       the stored message (the class name) instead (#3868). */
+    if (sp_streq(name, "message") && ty_is_object(rt)) {
+      int mi8 = comp_method_in_chain(c, ty_object_class(rt), "to_s", NULL);
+      if (mi8 >= 0 && (TyKind)c->scopes[mi8].ret != TY_STRING &&
+          (TyKind)c->scopes[mi8].ret != TY_UNKNOWN)
+        return (TyKind)c->scopes[mi8].ret;
+    }
     if (sp_streq(name, "message") || sp_streq(name, "to_s") ||
         sp_streq(name, "to_str") || sp_streq(name, "inspect") ||
         sp_streq(name, "full_message") || sp_streq(name, "detailed_message"))

@@ -1485,6 +1485,23 @@ int exc_has_user_msg_override(Compiler *c) {
   return 0;
 }
 
+/* An override that answers something other than a String: Exception#message
+   is #to_s, so such a class carries a non-string value out of #message and the
+   const char * dispatchers cannot represent it. A boxed pair of dispatchers is
+   emitted instead, and the call sites type as poly (#3868). */
+int exc_has_nonstring_msg_override(Compiler *c) {
+  for (int i = 0; i < c->nclasses; i++) {
+    if (!class_is_exc_subclass(c, i)) continue;
+    for (int k = 0; k < 2; k++) {
+      int mi = comp_method_in_chain(c, i, k ? "to_s" : "message", NULL);
+      if (mi < 0) continue;
+      TyKind rk = (TyKind)c->scopes[mi].ret;
+      if (rk != TY_STRING && rk != TY_UNKNOWN) return 1;
+    }
+  }
+  return 0;
+}
+
 const char *mc(const char *name) {
   static char buf[256];
   int j = 0;

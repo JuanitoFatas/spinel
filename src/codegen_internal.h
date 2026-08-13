@@ -411,6 +411,7 @@ int is_builtin_reopen(const char *name);
 int is_exc_name(const char *n);
 int class_is_exc_subclass(Compiler *c, int ci);
 int exc_has_user_msg_override(Compiler *c);
+int exc_has_nonstring_msg_override(Compiler *c);
 const char *class_ruby_name(Compiler *c, int ci);
 int scope_def_line(Compiler *c, Scope *s);
 const char *scope_def_file(Compiler *c, Scope *s);

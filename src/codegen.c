@@ -7559,13 +7559,13 @@ char *codegen_program(const NodeTable *nt) {
      so a program that defines an override without ever querying it left the
      dispatcher calling an undeclared function (#3834). Mark them before the
      prototypes are written. */
-  if (exc_has_user_msg_override(c)) {
+  if (exc_has_user_msg_override(c) || exc_has_nonstring_msg_override(c)) {
     for (int i = 0; i < c->nclasses; i++) {
       if (!class_is_exc_subclass(c, i)) continue;
       static const char *const fns[2] = { "message", "to_s" };
       for (int k = 0; k < 2; k++) {
         int mi = comp_method_in_chain(c, i, fns[k], NULL);
-        if (mi >= 0 && (TyKind)c->scopes[mi].ret == TY_STRING) c->scopes[mi].reachable = 1;
+        if (mi >= 0 && (TyKind)c->scopes[mi].ret != TY_UNKNOWN) c->scopes[mi].reachable = 1;
       }
     }
   }
