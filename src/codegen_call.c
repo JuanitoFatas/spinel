@@ -6006,10 +6006,14 @@ static int emit_class_new_call(Compiler *c, int id, Buf *b) {
               buf_printf(b, "sp_exc_new_sub(\"%s\", \"%s\", ", cn2, par);
             if (argc >= 1) {
               /* an explicitly given message stays, even empty (#3713) */
-              buf_puts(b, "sp_exc_msg_given(");
-              if (comp_ntype(c, argv[0]) == TY_STRING) emit_expr(c, argv[0], b);
-              else { buf_puts(b, "sp_poly_to_s("); emit_boxed(c, argv[0], b); buf_puts(b, ")"); }
-              buf_puts(b, ")");
+              if (comp_ntype(c, argv[0]) == TY_STRING) {
+                buf_puts(b, "sp_exc_msg_given("); emit_expr(c, argv[0], b); buf_puts(b, ")");
+              } else {
+                int mt2 = ++g_tmp;
+                buf_printf(b, "({ sp_RbVal _t%d = ", mt2); emit_boxed(c, argv[0], b);
+                buf_printf(b, "; _t%d.tag == SP_TAG_NIL ? (&(\"\\xff\")[1])"
+                              " : sp_exc_msg_given(sp_poly_to_s(_t%d)); })", mt2, mt2);
+              }
             }
             else buf_puts(b, "(&(\"\\xff\")[1])");
             buf_puts(b, c->classes[ci].nivars > 0 ? "))" : ")");
@@ -6229,10 +6233,16 @@ static int emit_class_new_call(Compiler *c, int id, Buf *b) {
         if (argc >= 1) {
           /* an explicitly given message stays, even empty; only a message-less
              .new falls back to the class name (#3713) */
-          buf_puts(b, "sp_exc_msg_given(");
-          if (comp_ntype(c, argv[0]) == TY_STRING) emit_expr(c, argv[0], b);
-          else { buf_puts(b, "sp_poly_to_s("); emit_boxed(c, argv[0], b); buf_puts(b, ")"); }
-          buf_puts(b, ")");
+          if (comp_ntype(c, argv[0]) == TY_STRING) {
+            buf_puts(b, "sp_exc_msg_given("); emit_expr(c, argv[0], b); buf_puts(b, ")");
+          } else {
+            /* nil is not a message: it falls back to the class name like the
+               no-argument form, while an empty string stays empty (#3812) */
+            int mt = ++g_tmp;
+            buf_printf(b, "({ sp_RbVal _t%d = ", mt); emit_boxed(c, argv[0], b);
+            buf_printf(b, "; _t%d.tag == SP_TAG_NIL ? (&(\"\\xff\")[1])"
+                          " : sp_exc_msg_given(sp_poly_to_s(_t%d)); })", mt, mt);
+          }
         }
         else buf_puts(b, "(&(\"\\xff\")[1])");
         buf_puts(b, ")");
@@ -13576,10 +13586,17 @@ else { memcpy(dir, sf, n); dir[n] = 0; } }
         else {
           /* an explicitly given message is kept even when empty, unlike the
              class-only form, which falls back to the class name (#3711) */
-          buf_printf(b, "sp_raise_cls(\"%s\", sp_exc_msg_given(", effn);
-          if (comp_ntype(c, av[1]) == TY_STRING) emit_expr(c, av[1], b);
-          else { buf_puts(b, "sp_poly_to_s("); emit_boxed(c, av[1], b); buf_puts(b, ")"); }
-          buf_puts(b, "))");
+          if (comp_ntype(c, av[1]) == TY_STRING) {
+            buf_printf(b, "sp_raise_cls(\"%s\", sp_exc_msg_given(", effn);
+            emit_expr(c, av[1], b);
+            buf_puts(b, "))");
+          } else {
+            /* nil is not a message, so the class name answers (#3812) */
+            int rt2 = ++g_tmp;
+            buf_printf(b, "({ sp_RbVal _t%d = ", rt2); emit_boxed(c, av[1], b);
+            buf_printf(b, "; sp_raise_cls(\"%s\", _t%d.tag == SP_TAG_NIL ? (&(\"\\xff\")[1])"
+                          " : sp_exc_msg_given(sp_poly_to_s(_t%d))); })", effn, rt2, rt2);
+          }
         }
       }
     }
