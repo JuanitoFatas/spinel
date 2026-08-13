@@ -8880,6 +8880,26 @@ static sp_RbVal sp_curry_realize_poly(sp_Curry *c) {
   return _sp_proc_poly_ret;
 }
 
+/* Proc#>> / #<< over a curried Proc: composition threads sp_Proc values, and a
+   curry is an argument accumulator rather than one. Wrap it in a Proc whose
+   trampoline applies the call's arguments and realizes the result, so a curry
+   composes exactly like the proc it stands for (#3864). */
+static mrb_int sp_curry_proc_fn(void *cap, mrb_int argc, mrb_int *args) {
+  sp_Curry *cy = (sp_Curry *)cap;
+  (void)args;
+  for (mrb_int i = 0; i < argc && i < 16; i++) cy = sp_curry_apply(cy, _sp_proc_poly_args[i]);
+  _sp_proc_poly_ret = sp_curry_realize_poly(cy);
+  return sp_poly_to_i(_sp_proc_poly_ret);
+}
+/* sp_Proc_scan calls cap_scan WITHOUT marking the capture first, so this hook
+   marks the curry itself before walking it (see sp_proc_compose_scan). */
+static void sp_curry_proc_scan(void *p) { sp_gc_mark(p); sp_curry_scan(p); }
+static sp_Proc *sp_curry_to_proc(sp_Curry *cy) {
+  SP_GC_ROOT(cy);
+  return sp_proc_new_meta((void *)sp_curry_proc_fn, cy, sp_curry_proc_scan, -1,
+                          (cy && cy->target) ? cy->target->lambda_p : TRUE, 1, NULL, NULL);
+}
+
 /* Call a boxed callable. A Proc runs; a curried Proc (which a poly slot now
    carries, #3885) takes the arguments and realizes once it has them, the way
    the typed `curry[x]` path does. */

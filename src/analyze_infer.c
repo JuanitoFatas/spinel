@@ -2304,8 +2304,10 @@ TyKind infer_call(Compiler *c, int id) {
   /* proc << / >> a Proc read out of a container: a composed Proc (#3655) */
   if (recv >= 0 && argc == 1 && (sp_streq(name, "<<") || sp_streq(name, ">>"))) {
     TyKind crt = infer_type(c, recv), cat = infer_type(c, argv[0]);
-    if ((crt == TY_PROC && (cat == TY_PROC || cat == TY_POLY)) ||
-        (cat == TY_PROC && crt == TY_POLY && sp_streq(name, ">>")))
+    /* a curried Proc composes like the proc it stands for (#3864) */
+    int cr_p = (crt == TY_PROC || crt == TY_CURRY), ca_p = (cat == TY_PROC || cat == TY_CURRY);
+    if ((cr_p && (ca_p || cat == TY_POLY)) ||
+        (ca_p && crt == TY_POLY && sp_streq(name, ">>")))
       return TY_PROC;
   }
   /* Proc#to_proc is self (#3687) */

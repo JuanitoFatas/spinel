@@ -11626,13 +11626,16 @@ void emit_call(Compiler *c, int id, Buf *b) {
   /* Proc introspection: arity / lambda? read the sp_Proc metadata directly. */
   /* proc << proc / proc >> proc -> composed Proc. f<<g = f(g(x)) (outer f,
      inner g); f>>g = g(f(x)) (outer g, inner f). */
-  if (recv >= 0 && (comp_ntype(c, recv) == TY_PROC || comp_ntype(c, recv) == TY_POLY) &&
+  if (recv >= 0 &&
+      (comp_ntype(c, recv) == TY_PROC || comp_ntype(c, recv) == TY_CURRY ||
+       comp_ntype(c, recv) == TY_POLY) &&
       argc == 1 && (sp_streq(name, "<<") || sp_streq(name, ">>")) &&
-      (comp_ntype(c, argv[0]) == TY_PROC || comp_ntype(c, argv[0]) == TY_POLY) &&
+      (comp_ntype(c, argv[0]) == TY_PROC || comp_ntype(c, argv[0]) == TY_CURRY ||
+       comp_ntype(c, argv[0]) == TY_POLY) &&
       /* `<<` on a boxed receiver is far more often Array/String append, so a
          poly receiver composes only through `>>`, which nothing else spells */
-      (comp_ntype(c, recv) == TY_PROC || sp_streq(name, ">>")) &&
-      (comp_ntype(c, recv) == TY_PROC || comp_ntype(c, argv[0]) == TY_PROC)) {
+      (comp_ntype(c, recv) != TY_POLY || sp_streq(name, ">>")) &&
+      (comp_ntype(c, recv) != TY_POLY || comp_ntype(c, argv[0]) != TY_POLY)) {
     int fwd = sp_streq(name, ">>");
     /* Both operands are usually built right here (`f >> g` on two literal
        procs), and C does not order the two argument expressions -- whichever
@@ -11643,6 +11646,9 @@ void emit_call(Compiler *c, int id, Buf *b) {
     #define SP_EMIT_PROC_OPERAND(nd_) do { \
       if (comp_ntype(c, (nd_)) == TY_POLY) { \
         buf_puts(b, "sp_poly_to_proc("); emit_boxed(c, (nd_), b); buf_puts(b, ")"); \
+      } else if (comp_ntype(c, (nd_)) == TY_CURRY) { \
+        /* a curry accumulates arguments; composition threads Procs (#3864) */ \
+        buf_puts(b, "sp_curry_to_proc("); emit_expr(c, (nd_), b); buf_puts(b, ")"); \
       } else emit_expr(c, (nd_), b); \
     } while (0)
     buf_printf(b, "({ sp_Proc *_t%d = ", t1);
