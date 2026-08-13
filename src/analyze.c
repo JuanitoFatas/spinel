@@ -7589,7 +7589,23 @@ static int mark_empty_hash_key_ctx(Compiler *c) {
        so the local takes that variant instead of the StrPolyHash default */
     const char *ln = nt_str(nt, recv, "name");
     Scope *sc = comp_scope_of(c, recv);
-    if (!ln || !sc || !local_all_writes_empty_hash(c, sc, ln)) continue;
+    if (!ln || !sc) continue;
+    /* `def m(k, memo = {})`: the default literal is the only thing that says
+       what the parameter holds, and it has no write node to carry the key
+       context back to -- so a key op on the parameter left the default at the
+       StrPolyHash fallback, where an Integer key never matched (#3877). */
+    for (int pi = 0; pi < sc->nparams; pi++) {
+      if (!sc->pnames[pi] || !sp_streq(sc->pnames[pi], ln)) continue;
+      int dn = sc->pdefault[pi];
+      if (dn < 0 || dn >= c->node_cap) break;
+      if (nt_kind(nt, dn) != NK_HashNode && nt_kind(nt, dn) != NK_KeywordHashNode) break;
+      int den = 0; nt_arr(nt, dn, "elements", &den);
+      if (den != 0 || ty_is_hash(c->empty_hash_want[dn])) break;
+      c->empty_hash_want[dn] = want;
+      changed = 1;
+      break;
+    }
+    if (!local_all_writes_empty_hash(c, sc, ln)) continue;
     /* Walk only the writes of local `ln` in this scope (index bucket) rather
        than rescanning the whole table per read site (see the ivar case). */
     int si = (int)(sc - c->scopes);
