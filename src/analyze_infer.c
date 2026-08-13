@@ -50,19 +50,74 @@ static int an_nonblock_no_exception(Compiler *c, int id) {
 static int an_builtin_only = 0;
 int an_builtin_only_p(void) { return an_builtin_only; }
 
+/* Name-keyed answer memo, the same shape (and the same staleness argument) as
+   udm_ in an_user_defines_method: the question below crosses every class with
+   the ancestor chain, and infer_call asks it for every poly-receiver call node
+   on every fixpoint iteration -- on a 40k-line program that is hundreds of
+   millions of chain walks for a few thousand distinct answers. The answer only
+   moves when scope or class shape does, which the (gen, nscopes, nclasses)
+   stamp tracks. */
+static char **udr_names = NULL;
+static signed char *udr_ans = NULL;
+static int *udr_next = NULL, *udr_head = NULL;
+static int udr_n = 0, udr_cap = 0;
+static unsigned udr_gen = (unsigned)-1;
+static int udr_nscopes = -1, udr_nclasses = -1;
+static unsigned udr_hash(const char *s) {
+  unsigned h = 2166136261u;
+  while (*s) { h ^= (unsigned char)*s++; h *= 16777619u; }
+  return h;
+}
+
 int an_user_defines_or_reads(Compiler *c, const char *name) {
   if (an_builtin_only) return 0;
   if (!name) return 0;
-  for (int k = 0; k < c->nclasses; k++) {
-    if (comp_method_in_chain(c, k, name, NULL) >= 0) return 1;
-    if (comp_is_reader(&c->classes[k], name)) return 1;
+  /* Outside the frozen fixpoint scope shape can still change without the counts
+     moving (a rename), so neither consult nor populate the memo there. */
+  int memo = comp_scope_index_is_frozen();
+  unsigned b = 0;
+  if (memo) {
+    unsigned gen = comp_scope_index_gen();
+    if (gen != udr_gen || c->nscopes != udr_nscopes || c->nclasses != udr_nclasses) {
+      for (int i = 0; i < udr_n; i++) free(udr_names[i]);
+      udr_n = 0;
+      if (!udr_cap) {
+        udr_cap = 4096;
+        udr_names = malloc(sizeof(char *) * (size_t)udr_cap);
+        udr_ans = malloc((size_t)udr_cap);
+        udr_next = malloc(sizeof(int) * (size_t)udr_cap);
+        udr_head = malloc(sizeof(int) * (size_t)udr_cap);
+        if (!udr_names || !udr_ans || !udr_next || !udr_head) udr_cap = 0;
+      }
+      for (int i = 0; i < udr_cap; i++) udr_head[i] = -1;
+      udr_gen = gen; udr_nscopes = c->nscopes; udr_nclasses = c->nclasses;
+    }
+    if (udr_cap) {
+      b = udr_hash(name) & (unsigned)(udr_cap - 1);
+      for (int i = udr_head[b]; i >= 0; i = udr_next[i])
+        if (sp_streq(udr_names[i], name)) return udr_ans[i];
+    }
+    else memo = 0;
+  }
+  int ans = 0;
+  for (int k = 0; k < c->nclasses && !ans; k++) {
+    if (comp_method_in_chain(c, k, name, NULL) >= 0) ans = 1;
+    else if (comp_is_reader(&c->classes[k], name)) ans = 1;
   }
   /* A CLASS method of the same name is deliberately not consulted: it is only
      reachable through a Class-valued receiver, so it cannot be the answer to
      an instance call. Counting it made `k.downcase` on a String bind to a
      `def self.downcase(s)` elsewhere in the program and compile to the arity
      raise (#3520). */
-  return comp_method_index(c, name) >= 0;
+  if (!ans) ans = comp_method_index(c, name) >= 0;
+  if (memo && udr_n < udr_cap) {
+    udr_names[udr_n] = strdup(name);
+    if (udr_names[udr_n]) {
+      udr_ans[udr_n] = (signed char)ans;
+      udr_next[udr_n] = udr_head[b]; udr_head[b] = udr_n; udr_n++;
+    }
+  }
+  return ans;
 }
 
 void sp_narrow_memo_bump(void) { g_narrow_gen++; }
