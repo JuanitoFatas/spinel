@@ -2681,6 +2681,15 @@ else {
         buf_printf(b, "); _t%d; })", t);
         return 1;
       }
+      /* insert(i) with no values leaves the array as it is and answers it;
+         only the value-carrying form had an emitter (#3855) */
+      if (sp_streq(name, "insert") && argc == 1) {
+        int t0 = ++g_tmp;
+        buf_printf(b, "({ sp_%sArray *_t%d = ", k, t0); emit_expr(c, recv, b);
+        buf_puts(b, "; (void)("); emit_int_expr(c, argv[0], b);
+        buf_printf(b, "); _t%d; })", t0);
+        return 1;
+      }
       if (sp_streq(name, "insert") && argc >= 2 && (rt == TY_INT_ARRAY || rt == TY_STR_ARRAY)) {
         /* insert(i, v1, v2, ...): normalize a negative index ONCE against the
            pre-insert length (per-element normalization would drift as the
@@ -3702,6 +3711,13 @@ else {
           buf_printf(b, " sp_PolyArray_insert(_t%d, 0, ", t); emit_boxed(c, argv[a2], b); buf_puts(b, ");");
         }
         buf_printf(b, " _t%d; })", t);
+        return 1;
+      }
+      if (sp_streq(name, "insert") && argc == 1) {
+        int t0 = ++g_tmp;
+        buf_printf(b, "({ sp_PolyArray *_t%d = ", t0); emit_expr(c, recv, b);
+        buf_puts(b, "; (void)("); emit_int_expr(c, argv[0], b);
+        buf_printf(b, "); _t%d; })", t0);
         return 1;
       }
       if (sp_streq(name, "insert") && argc >= 2) {
@@ -9711,6 +9727,11 @@ int emit_range_call(Compiler *c, int id, Buf *b) {
           int tf = ++g_tmp, tn = ++g_tmp, ts = ++g_tmp, te = ++g_tmp;
           buf_printf(b, "({ mrb_int _t%d = ", tn); emit_int_expr(c, argv[0], b);
           buf_printf(b, "; if (_t%d < 0) sp_raise_cls(\"ArgumentError\", \"negative array size\");", tn);
+          /* an endless range has no last n elements to walk back from: the
+             loop counted down from INTPTR_MAX and allocated until the process
+             died, where CRuby raises (#3861) */
+          buf_printf(b, " if (_t%d.last == INTPTR_MAX) sp_raise_cls(\"RangeError\","
+                        " \"cannot get the last element of endless range\");", t);
           buf_printf(b, " mrb_int _t%d = _t%d.last - _t%d.excl;", te, t, t);
           buf_printf(b, " mrb_int _t%d = _t%d - _t%d + 1; if (_t%d < _t%d.first) _t%d = _t%d.first;", ts, te, tn, ts, t, ts, t);
           buf_printf(b, " sp_IntArray *_t%d = sp_IntArray_new(); for (mrb_int _i%d = _t%d; _i%d <= _t%d; _i%d++)"
