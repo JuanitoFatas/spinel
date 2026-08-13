@@ -4960,6 +4960,28 @@ else {
       /* PolyPoly receiver: any hash-variant argument folds in through the
          boxed [k, v] pair walk (a heterogeneous hash routinely absorbs a
          typed one). Blockless. */
+      /* merge!(*hashes): the sources are an array whose elements are only
+         known at run time, so walk it and merge each element in (#3848). */
+      if ((sp_streq(name, "merge!") || sp_streq(name, "update")) && argc == 1 &&
+          nt_ref(nt, id, "block") < 0 && nt_kind(nt, argv[0]) == NK_SplatNode) {
+        int inner = nt_ref(nt, argv[0], "expression");
+        if (inner < 0) return 0;
+        TyKind it = comp_ntype(c, inner);
+        if (!ty_is_array(it) && it != TY_POLY_ARRAY && it != TY_POLY) return 0;
+        int tr = ++g_tmp, ts = ++g_tmp, ti = ++g_tmp;
+        buf_printf(b, "({ %s _t%d = ", c_type_name(rt), tr); emit_expr(c, recv, b); buf_puts(b, ";");
+        buf_printf(b, " if (sp_gc_is_frozen(_t%d)) sp_raise_frozen_hash_at(_t%d, %s);", tr, tr, hash_box_cls(rt));
+        buf_printf(b, " sp_RbVal _t%d = ", ts); emit_boxed(c, inner, b);
+        buf_printf(b, "; SP_GC_ROOT_RBVAL(_t%d);", ts);
+        buf_printf(b, " mrb_int _t%d = sp_poly_arr_len_ex(_t%d);", ti, ts);
+        char rtxt[32]; snprintf(rtxt, sizeof rtxt, "_t%d", tr);
+        buf_printf(b, " for (mrb_int _i8 = 0; _i8 < _t%d; _i8++)"
+                      " sp_poly_hash_merge_into(", ti);
+        emit_boxed_text(c, rt, rtxt, b);
+        buf_printf(b, ", sp_poly_each_elem(_t%d, _i8));", ts);
+        buf_printf(b, " _t%d; })", tr);
+        return 1;
+      }
       if ((sp_streq(name, "merge!") || sp_streq(name, "update")) && argc >= 1 &&
           nt_ref(nt, id, "block") < 0 && rt == TY_POLY_POLY_HASH) {
         for (int ai = 0; ai < argc; ai++)

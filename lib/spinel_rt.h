@@ -5915,6 +5915,45 @@ static sp_RbVal sp_poly_set_str(sp_RbVal v, const char *key, sp_RbVal val) {
   }
   return val;
 }
+/* Merge every pair of one boxed hash into another, whatever variants the two
+   hold: the destination's variant decides how each key is stored, and a key
+   it cannot represent is skipped rather than mistyped. Backs the splatted
+   `h.merge!(*hs)`, where the sources are only known at run time (#3848). */
+static void sp_poly_hash_merge_into(sp_RbVal dst, sp_RbVal src) {
+  if (dst.tag != SP_TAG_OBJ || !sp_poly_is_hash_kind(dst.cls_id)) return;
+  if (src.tag != SP_TAG_OBJ || !sp_poly_is_hash_kind(src.cls_id)) return;
+  mrb_int n = sp_poly_length(src);
+  for (mrb_int i = 0; i < n; i++) {
+    sp_RbVal k, v;
+    sp_poly_hash_pair(src, i, &k, &v);
+    switch (dst.cls_id) {
+      case SP_BUILTIN_POLY_POLY_HASH: sp_PolyPolyHash_set((sp_PolyPolyHash *)dst.v.p, k, v); break;
+      case SP_BUILTIN_SYM_POLY_HASH:
+        if (k.tag == SP_TAG_SYM) sp_SymPolyHash_set((sp_SymPolyHash *)dst.v.p, (sp_sym)k.v.i, v);
+        break;
+      case SP_BUILTIN_STR_POLY_HASH:
+        if (k.tag == SP_TAG_STR) sp_StrPolyHash_set((sp_StrPolyHash *)dst.v.p, k.v.s, v);
+        break;
+      case SP_BUILTIN_STR_STR_HASH:
+        if (k.tag == SP_TAG_STR && v.tag == SP_TAG_STR)
+          sp_StrStrHash_set((sp_StrStrHash *)dst.v.p, k.v.s, v.v.s);
+        break;
+      case SP_BUILTIN_STR_INT_HASH:
+        if (k.tag == SP_TAG_STR && v.tag == SP_TAG_INT)
+          sp_StrIntHash_set((sp_StrIntHash *)dst.v.p, k.v.s, v.v.i);
+        break;
+      case SP_BUILTIN_INT_INT_HASH:
+        if (k.tag == SP_TAG_INT && v.tag == SP_TAG_INT)
+          sp_IntIntHash_set((sp_IntIntHash *)dst.v.p, k.v.i, v.v.i);
+        break;
+      case SP_BUILTIN_INT_STR_HASH:
+        if (k.tag == SP_TAG_INT && v.tag == SP_TAG_STR)
+          sp_IntStrHash_set((sp_IntStrHash *)dst.v.p, k.v.i, v.v.s);
+        break;
+      default: break;
+    }
+  }
+}
 /* poly_val[sym_key] = val: runtime dispatch for poly recv `[]=` with symbol key. */
 static sp_RbVal sp_poly_set_sym(sp_RbVal v, sp_sym key, sp_RbVal val) {
   if (v.tag != SP_TAG_OBJ) return val;
