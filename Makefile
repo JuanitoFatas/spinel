@@ -1023,6 +1023,10 @@ rubyspec-gate: $(SPINEL) $(RUBYSPEC_DIR)/.pinned
 	done; [ $$ok -eq 1 ]
 
 # ---- Optcarrot integration test ----
+# --inline-hot forces the small leaf methods inline. optcarrot is the emulator
+# loop this compiler is measured on, so it is measured with the flag a program
+# like it would be built with; `make optcarrot OPTCARROT_FLAGS=` drops it.
+OPTCARROT_FLAGS ?= --inline-hot
 OPTCARROT_DIR  := build/optcarrot
 OPTCARROT_REPO := https://github.com/mame/optcarrot.git
 OPTCARROT_BRANCH := experiment/spinel
@@ -1032,7 +1036,7 @@ optcarrot: $(SPINEL) $(SP_RT_LIB)
 	  git clone --depth=1 --branch=$(OPTCARROT_BRANCH) $(OPTCARROT_REPO) $(OPTCARROT_DIR); \
 	fi
 	@ruby $(OPTCARROT_DIR)/tools/pack-for-spinel.rb > build/optcarrot-single.rb
-	@$(SPINEL) build/optcarrot-single.rb -c --no-line-map -o build/optcarrot-single.c
+	@$(SPINEL) $(OPTCARROT_FLAGS) build/optcarrot-single.rb -c --no-line-map -o build/optcarrot-single.c
 	@$(CC) $(CFLAGS) -DSP_INT_OVERFLOW_MODE_WRAP -Ilib build/optcarrot-single.c $(SP_RT_LIB) $(LDFLAGS) -lm $(GC_FLAGS) -o build/optcarrot-single
 	@n=$${OPTCARROT_RUNS:-5}; fps=""; out=""; \
 	for i in $$(seq 1 $$n); do \
