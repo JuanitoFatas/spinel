@@ -4584,7 +4584,11 @@ int emit_collect_expr(Compiler *c, int id, Buf *b) {
     int body2 = nt_ref(nt, block, "body");
     int bn2 = 0;
     const int *bb2 = body2 >= 0 ? nt_arr(nt, body2, "body", &bn2) : NULL;
-    if (bn2 < 1) return 0;
+    /* `map {}` runs an empty block per element, so the result is one nil per
+       element -- a poly array. The typed-array path already answers that shape;
+       without it here a poly receiver fell through to the dispatch, which has no
+       arm for it, and the call raised NoMethodError (#3905). */
+    if (bn2 < 1 && !res_poly2) return 0;
     int trecv2 = ++g_tmp, tn2 = ++g_tmp, tres2 = ++g_tmp, ti2 = ++g_tmp;
     Buf rb2; memset(&rb2, 0, sizeof rb2); emit_expr(c, recv, &rb2);
     emit_indent(g_pre, g_indent);
@@ -4653,7 +4657,8 @@ int emit_collect_expr(Compiler *c, int id, Buf *b) {
     for (int j2 = 0; j2 < bn2 - 1; j2++) emit_stmt(c, bb2[j2], g_pre, g_indent + 2);
     int saveIndent2 = g_indent; g_indent = g_indent + 2;
     Buf vb2; memset(&vb2, 0, sizeof vb2);
-    if (res_poly2) emit_boxed(c, bb2[bn2 - 1], &vb2);
+    if (bn2 < 1) buf_puts(&vb2, "sp_box_nil()");
+    else if (res_poly2) emit_boxed(c, bb2[bn2 - 1], &vb2);
     else emit_expr(c, bb2[bn2 - 1], &vb2);
     g_indent = saveIndent2;
     emit_indent(g_pre, g_indent + 2);
