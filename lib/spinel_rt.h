@@ -1779,6 +1779,19 @@ static mrb_bool sp_poly_responds_builtin(sp_RbVal v, const char *m) {
     return sp_str_in_list(m, enumm) || sp_str_in_list(m, rngm);
   if (strcmp(cn, "Symbol") == 0) return sp_str_in_list(m, symm);
   if (strcmp(cn, "Proc") == 0) return sp_str_in_list(m, procm);
+  /* nil answers a small surface of its own; the literal receiver folded it at
+     compile time, so only a nil that arrived through a slot came here and got
+     a flat false (#3815). */
+  if (strcmp(cn, "NilClass") == 0) {
+    static const char *const nilm[] = {
+      "to_a", "to_h", "to_i", "to_f", "to_r", "to_c", "&", "|", "^",
+      "inspect", "nil?", "instance_variables", NULL };
+    return sp_str_in_list(m, nilm);
+  }
+  if (strcmp(cn, "TrueClass") == 0 || strcmp(cn, "FalseClass") == 0) {
+    static const char *const boolm[] = { "&", "|", "^", "to_s", "inspect", NULL };
+    return sp_str_in_list(m, boolm);
+  }
   /* an Enumerator answers the Enumerable face (#3625) */
   if (strcmp(cn, "Enumerator") == 0) return sp_str_in_list(m, enumm);
   if (v.tag == SP_TAG_OBJ && v.cls_id == SP_BUILTIN_EXCEPTION)
