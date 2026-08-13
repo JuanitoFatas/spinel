@@ -1608,6 +1608,23 @@ TyKind infer_call(Compiler *c, int id) {
   }
   /* the desugared ENV snapshot (#2742) */
   if (recv < 0 && sp_streq(name, "__env_to_h") && argc == 0) return TY_STR_STR_HASH;
+  /* `exception: false` on an unparseable String answers nil, so the call is
+     nilable and cannot be the unboxed value type (#3893). */
+  if (recv < 0 && (sp_streq(name, "Complex") || sp_streq(name, "Rational")) &&
+      argc == 2 && infer_type(c, argv[0]) == TY_STRING &&
+      nt_type(nt, argv[1]) &&
+      (sp_streq(nt_type(nt, argv[1]), "KeywordHashNode") ||
+       sp_streq(nt_type(nt, argv[1]), "HashNode"))) {
+    int kn9 = 0; const int *els9 = nt_arr(nt, argv[1], "elements", &kn9);
+    int only_exc9 = kn9 > 0;
+    for (int e = 0; e < kn9 && only_exc9; e++) {
+      int key9 = els9 ? nt_ref(nt, els9[e], "key") : -1;
+      const char *kt9 = key9 >= 0 ? nt_type(nt, key9) : NULL;
+      const char *kn9s = (kt9 && sp_streq(kt9, "SymbolNode")) ? nt_str(nt, key9, "value") : NULL;
+      if (!kn9s || !sp_streq(kn9s, "exception")) only_exc9 = 0;
+    }
+    if (only_exc9) return TY_POLY;
+  }
   if (recv < 0 && sp_streq(name, "Complex")) return TY_COMPLEX;
   if (recv < 0 && sp_streq(name, "Rational") && (argc == 1 || argc == 2)) {
     /* a bignum operand needs the big Rational, which is a boxed value */

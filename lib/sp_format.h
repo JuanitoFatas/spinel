@@ -42,6 +42,10 @@ mrb_bool sp_complex_eq(sp_Complex a, sp_Complex b);
 sp_Rational sp_rational_new(mrb_int n, mrb_int d);
 sp_Rational sp_str_to_r(const char *s);
 sp_Rational sp_str_to_r_strict(const char *s);   /* Kernel#Rational(String) */
+/* Kernel's `exception: false`: while set, an unparseable string sets
+   sp_convert_failed instead of raising (defined in lib/sp_cold.c). */
+extern mrb_bool sp_convert_soft;
+extern mrb_bool sp_convert_failed;
 sp_Rational sp_rational_add(sp_Rational a, sp_Rational b);
 sp_Rational sp_rational_sub(sp_Rational a, sp_Rational b);
 sp_Rational sp_rational_mul(sp_Rational a, sp_Rational b);

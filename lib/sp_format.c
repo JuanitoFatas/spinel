@@ -247,7 +247,10 @@ sp_Rational sp_str_to_r_strict(const char *s) {SP_GC_ROOT_STR(s);
     p++;
     while ((*p >= '0' && *p <= '9') || *p == '_') { if (*p != '_') { num = num * 10 + (*p - '0'); den *= 10; any = 1; } p++; }
   }
-  if (!any) sp_raise_cls("ArgumentError", sp_sprintf("invalid value for Rational(): \"%s\"", s));
+  if (!any) {
+    if (sp_convert_soft) { sp_convert_failed = 1; return sp_rational_new(0, 1); }
+    sp_raise_cls("ArgumentError", sp_sprintf("invalid value for Rational(): \"%s\"", s));
+  }
   if (*p == 'e' || *p == 'E') {
     const char *q = p + 1;
     mrb_int esign = 1;

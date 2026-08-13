@@ -264,6 +264,11 @@ const char *sp_file_readlink(const char *path) {SP_GC_ROOT_STR(path);
 
 /* ---- String#to_c parse + Dir.glob (cold; moved from spinel_rt.h) ---- */
 
+/* `exception: false` asks Kernel#Complex / #Rational for nil rather than a
+   raise on an unparseable String. The parsers below set this instead of
+   raising while it is on; the caller reads it back and answers nil (#3893). */
+mrb_bool sp_convert_soft = 0;
+mrb_bool sp_convert_failed = 0;
 sp_Complex sp_str_to_c(const char *s) {
   double re = 0, im = 0;
   int parsed = 0;
@@ -298,7 +303,10 @@ sp_Complex sp_str_to_c(const char *s) {
      incomplete form like "1+" is invalid, not silently (1+0i) (#2617). */
   if (parsed) { while (*fin == ' ' || *fin == '\t') fin++; if (*fin != '\0') parsed = 0; }
   /* an unparseable string (or nil) is not a valid Complex value */
-  if (!parsed) sp_raise_cls("ArgumentError", "invalid value for convert(): ");
+  if (!parsed) {
+    if (sp_convert_soft) { sp_convert_failed = 1; return (sp_Complex){ 0.0, 0.0 }; }
+    sp_raise_cls("ArgumentError", "invalid value for convert(): ");
+  }
   return (sp_Complex){ (mrb_float)re, (mrb_float)im };
 }
 

@@ -2277,6 +2277,7 @@ static int emit_complex_rational_call(Compiler *c, int id, Buf *b) {
     return 1;
   }
   if (recv < 0 && sp_streq(name, "Complex") && argc >= 1) {
+    int soft_convert = 0;
     /* `exception: false` asks for nil instead of a raise on an unparseable
        argument. The keyword hash counted as a second positional, so the
        String form was skipped and the parse read the string as a float
@@ -2294,7 +2295,18 @@ static int emit_complex_rational_call(Compiler *c, int id, Buf *b) {
         const char *knm = (kt && sp_streq(kt, "SymbolNode")) ? nt_str(nt, key, "value") : NULL;
         if (!knm || !sp_streq(knm, "exception")) only_exc = 0;
       }
-      if (only_exc) argc = 1;
+      if (only_exc) { argc = 1; soft_convert = 1; }
+    }
+    /* Complex(str, exception: false): nil rather than a raise when the string
+       does not parse (#3893) */
+    if (soft_convert && argc == 1 && comp_ntype(c, argv[0]) == TY_STRING) {
+      int tc9 = ++g_tmp;
+      buf_printf(b, "({ sp_convert_soft = 1; sp_convert_failed = 0;"
+                    " sp_Complex _t%d = sp_str_to_c(", tc9);
+      emit_expr(c, argv[0], b);
+      buf_printf(b, "); sp_convert_soft = 0;"
+                    " sp_convert_failed ? sp_box_nil() : sp_box_complex(_t%d); })", tc9);
+      return 1;
     }
     /* Complex("2+3i"): parse like String#to_c */
     if (argc == 1 && comp_ntype(c, argv[0]) == TY_STRING) {
@@ -2328,6 +2340,7 @@ static int emit_complex_rational_call(Compiler *c, int id, Buf *b) {
     return 1;
   }
   if (recv < 0 && sp_streq(name, "Rational") && (argc == 1 || argc == 2)) {
+    int soft_convert_r = 0;
     /* `exception: false` asks for nil rather than a raise; the keyword hash
        counted as the denominator and the result was built from its address
        (#3869). spinel's Rational() does not raise, so dropping the keyword is
@@ -2343,7 +2356,17 @@ static int emit_complex_rational_call(Compiler *c, int id, Buf *b) {
         const char *knm = (kt && sp_streq(kt, "SymbolNode")) ? nt_str(nt, key, "value") : NULL;
         if (!knm || !sp_streq(knm, "exception")) only_exc = 0;
       }
-      if (only_exc) argc = 1;
+      if (only_exc) { argc = 1; soft_convert_r = 1; }
+    }
+    /* Rational(str, exception: false): nil rather than a raise (#3893) */
+    if (soft_convert_r && argc == 1 && comp_ntype(c, argv[0]) == TY_STRING) {
+      int tr9 = ++g_tmp;
+      buf_printf(b, "({ sp_convert_soft = 1; sp_convert_failed = 0;"
+                    " sp_Rational _t%d = sp_str_to_r_strict(", tr9);
+      emit_expr(c, argv[0], b);
+      buf_printf(b, "); sp_convert_soft = 0;"
+                    " sp_convert_failed ? sp_box_nil() : sp_box_rational(_t%d); })", tr9);
+      return 1;
     }
     /* Rational(String): parse "n", "n/d", or "n.d" like String#to_r rather than
        reading the string pointer as an integer. */

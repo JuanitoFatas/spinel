@@ -2046,6 +2046,10 @@ static mrb_float sp_poly_to_f_opt(sp_RbVal v) { return v.tag == SP_TAG_NIL ? sp_
    optional [+-]imag i tail, or a bare "Ni"; unparseable input is (0+0i). */
 /* sp_str_to_c: moved to lib/sp_cold.c */
 sp_Complex sp_str_to_c(const char *s);
+/* lib/sp_cold.c: while sp_convert_soft is set, an unparseable Complex/Rational
+   string sets sp_convert_failed instead of raising (Kernel's exception: false). */
+extern mrb_bool sp_convert_soft;
+extern mrb_bool sp_convert_failed;
 /* Hash subset/superset comparisons (boxed, any variant pairing): every pair
    of `a` present in `b` with an equal value; strict adds len <. */
 static void sp_poly_hash_pair(sp_RbVal v, mrb_int i, sp_RbVal *k, sp_RbVal *out);
