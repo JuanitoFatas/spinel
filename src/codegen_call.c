@@ -5676,8 +5676,16 @@ void emit_ctor_alloc_init(Compiler *c, int cid, int initm, int argsNode, Buf *b)
   if (initm >= 0) emit_args_filled(c, initm, argsNode, ", ", &args);
   g_pre = sv_pre; g_indent = sv_ind;
   if (apre.p) buf_puts(b, apre.p);
-  buf_printf(b, "sp_%s_initialize(%s_t%d%s); ", c->classes[initcls].c_name,
-             is_val ? "&" : "", t, args.p ? args.p : "");
+  /* An INHERITED #initialize takes the defining class's pointer: without the
+     cast the C compiler is handed a subclass pointer, which clang rejects
+     outright (#3890). The struct layouts share their prefix, as every other
+     inherited-call site here assumes. */
+  if (initcls != cid && !is_val)
+    buf_printf(b, "sp_%s_initialize((sp_%s *)_t%d%s); ", c->classes[initcls].c_name,
+               c->classes[initcls].c_name, t, args.p ? args.p : "");
+  else
+    buf_printf(b, "sp_%s_initialize(%s_t%d%s); ", c->classes[initcls].c_name,
+               is_val ? "&" : "", t, args.p ? args.p : "");
   free(apre.p); free(args.p);
   g_ctor_self = sv_cs; g_ctor_self_deref = sv_csd;
   buf_printf(b, "_t%d; })", t);
