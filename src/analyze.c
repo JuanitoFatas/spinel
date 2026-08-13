@@ -4179,6 +4179,27 @@ static int pin_arg_position_hash_new(Compiler *c) {
       }
     }
   }
+  /* An optional parameter's default is hoisted to the call site, which is
+     argument position by another name: `def m(x, memo = Hash.new)` had no
+     variable whose key usage could pick a variant either, and the call fell
+     to the unresolved-call gate (#3878). */
+  for (int id = 0; id < nt->count; id++) {
+    { const char *pty = nt_type(nt, id);
+      if (!pty || !sp_streq(pty, "OptionalParameterNode")) continue; }
+    int a = nt_ref(nt, id, "value");
+    if (a < 0 || nt_kind(nt, a) != NK_CallNode) continue;
+    const char *anm = nt_str(nt, a, "name");
+    if (!anm || !sp_streq(anm, "new") || nt_ref(nt, a, "block") >= 0) continue;
+    int arecv = nt_ref(nt, a, "receiver");
+    if (arecv < 0) continue;
+    const char *rty = nt_type(nt, arecv);
+    if (!rty || (!sp_streq(rty, "ConstantReadNode") && !sp_streq(rty, "ConstantPathNode"))) continue;
+    const char *cn = nt_str(nt, arecv, "name");
+    if (cn && sp_streq(cn, "Hash")) {
+      nt_node_set_str(nt, a, "name", "__hash_new_default");
+      changed = 1;
+    }
+  }
   return changed;
 }
 
