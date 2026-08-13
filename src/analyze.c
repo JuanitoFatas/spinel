@@ -229,6 +229,23 @@ void compute_reachable(Compiler *c) {
       while (qhead < qtail) { int s = queue[qhead++]; for (int ni = 0; ni < sc_n[s]; ni++) MARK_NAME(scope_calls[s][ni]); }
   }
 
+  /* Kernel#Integer / Kernel#Float convert their argument through its #to_int /
+     #to_f, which the conversion call site names nowhere in the AST. */
+  {
+    int has_kint = 0, has_kflt = 0;
+    for (int id = 0; id < c->nt->count; id++) {
+      if (nt_kind(c->nt, id) != NK_CallNode || nt_ref(c->nt, id, "receiver") >= 0) continue;
+      const char *nm = nt_str(c->nt, id, "name");
+      if (!nm) continue;
+      if (sp_streq(nm, "Integer")) has_kint = 1;
+      else if (sp_streq(nm, "Float")) has_kflt = 1;
+    }
+    if (has_kint) MARK_NAME("to_int");
+    if (has_kflt) MARK_NAME("to_f");
+    if (has_kint || has_kflt)
+      while (qhead < qtail) { int s = queue[qhead++]; for (int ni = 0; ni < sc_n[s]; ni++) MARK_NAME(scope_calls[s][ni]); }
+  }
+
   /* JSON.generate serializes a nested user object through its own #to_json,
      which likewise has no call site of its own in the AST. */
   if (sp_feature_required("json")) {

@@ -13466,11 +13466,35 @@ else { memcpy(dir, sf, n); dir[n] = 0; } }
     }
     if (sp_streq(name, "Integer") && ac == 1) {
       TyKind at = comp_ntype(c, av[0]);
+      /* An empty `{}` / `[]` literal carries no type of its own, so it reached
+         the untyped pass-through and the container pointer was answered as the
+         integer (#3888). It is a container either way. */
+      { NodeKind ek = nt_kind(nt, av[0]);
+        if (at == TY_UNKNOWN && (ek == NK_HashNode || ek == NK_KeywordHashNode || ek == NK_ArrayNode))
+          at = TY_POLY_ARRAY; }
       if (at == TY_STRING) { buf_puts(b, "sp_str_to_i_strict("); emit_expr(c, av[0], b); buf_puts(b, ")"); }
       else if (at == TY_FLOAT) { buf_puts(b, "((mrb_int)("); emit_expr(c, av[0], b); buf_puts(b, "))"); }
       else if (at == TY_NIL) { buf_puts(b, "((void)("); emit_expr(c, av[0], b); buf_puts(b, "), sp_raise_cls(\"TypeError\", \"can't convert nil into Integer\"), (mrb_int)0)"); }  /* #2514 */
       else if (at == TY_POLY) { buf_puts(b, "sp_poly_Integer("); emit_expr(c, av[0], b); buf_puts(b, ")"); }
       else if (at == TY_INT || at == TY_UNKNOWN) { buf_puts(b, "("); emit_expr(c, av[0], b); buf_puts(b, ")"); }
+      /* Kernel#Integer converts anything answering #to_int, and a Rational or
+         a Complex with no imaginary part are among them (#3888). */
+      else if (at == TY_RATIONAL) {
+        buf_puts(b, "((mrb_int)sp_rational_to_f("); emit_expr(c, av[0], b); buf_puts(b, "))");
+      }
+      else if (at == TY_COMPLEX) {
+        int tc = ++g_tmp;
+        buf_printf(b, "({ sp_Complex _t%d = ", tc); emit_expr(c, av[0], b);
+        buf_printf(b, "; if (_t%d.im != 0) sp_raise_cls(\"RangeError\", "
+                      "\"can't convert into Integer\"); (mrb_int)_t%d.re; })", tc, tc);
+      }
+      else if (ty_is_object(at) &&
+               comp_method_in_chain(c, ty_object_class(at), "to_int", NULL) >= 0) {
+        int dcls = ty_object_class(at);
+        comp_method_in_chain(c, dcls, "to_int", &dcls);
+        buf_printf(b, "sp_%s_to_int((sp_%s *)", c->classes[dcls].c_name, c->classes[dcls].c_name);
+        emit_expr(c, av[0], b); buf_puts(b, ")");
+      }
       else {
         /* an Array, Hash, Range, Symbol or object has no to_int: CRuby's
            TypeError, not the value reinterpreted as an integer (#3717) */
@@ -13508,11 +13532,40 @@ else { memcpy(dir, sf, n); dir[n] = 0; } }
     }
     if (sp_streq(name, "Float") && ac == 1) {
       TyKind at = comp_ntype(c, av[0]);
+      { NodeKind ek = nt_kind(nt, av[0]);
+        if (at == TY_UNKNOWN && (ek == NK_HashNode || ek == NK_KeywordHashNode || ek == NK_ArrayNode))
+          at = TY_POLY_ARRAY; }
       if (at == TY_STRING) { buf_puts(b, "sp_str_to_f_strict("); emit_expr(c, av[0], b); buf_puts(b, ")"); }
       else if (at == TY_INT) { buf_puts(b, "((mrb_float)("); emit_expr(c, av[0], b); buf_puts(b, "))"); }
       else if (at == TY_NIL) { buf_puts(b, "((void)("); emit_expr(c, av[0], b); buf_puts(b, "), sp_raise_cls(\"TypeError\", \"can't convert nil into Float\"), 0.0)"); }  /* #2514 */
       else if (at == TY_POLY) { buf_puts(b, "sp_poly_Float("); emit_expr(c, av[0], b); buf_puts(b, ")"); }
-      else { buf_puts(b, "("); emit_expr(c, av[0], b); buf_puts(b, ")"); }
+      else if (at == TY_FLOAT || at == TY_UNKNOWN) { buf_puts(b, "("); emit_expr(c, av[0], b); buf_puts(b, ")"); }
+      /* Kernel#Float converts anything answering #to_f, and a Rational or a
+         Complex with no imaginary part are among them (#3888). */
+      else if (at == TY_RATIONAL) {
+        buf_puts(b, "sp_rational_to_f("); emit_expr(c, av[0], b); buf_puts(b, ")");
+      }
+      else if (at == TY_COMPLEX) {
+        int tc = ++g_tmp;
+        buf_printf(b, "({ sp_Complex _t%d = ", tc); emit_expr(c, av[0], b);
+        buf_printf(b, "; if (_t%d.im != 0) sp_raise_cls(\"RangeError\", "
+                      "\"can't convert into Float\"); _t%d.re; })", tc, tc);
+      }
+      else if (ty_is_object(at) &&
+               comp_method_in_chain(c, ty_object_class(at), "to_f", NULL) >= 0) {
+        int dcls = ty_object_class(at);
+        comp_method_in_chain(c, dcls, "to_f", &dcls);
+        buf_printf(b, "((mrb_float)(sp_%s_to_f((sp_%s *)", c->classes[dcls].c_name, c->classes[dcls].c_name);
+        emit_expr(c, av[0], b); buf_puts(b, ")))");
+      }
+      else {
+        /* a Boolean, Symbol, Array, Hash or object with no #to_f is CRuby's
+           TypeError, not the value reinterpreted as a double (#3888) */
+        buf_puts(b, "((void)("); emit_expr(c, av[0], b);
+        buf_puts(b, "), sp_raise_cls(\"TypeError\", sp_sprintf(\"can't convert %s into Float\", sp_poly_class_name(");
+        emit_boxed(c, av[0], b);
+        buf_puts(b, "))), 0.0)");
+      }
       return;
     }
     if (sp_streq(name, "String") && ac == 1) {
