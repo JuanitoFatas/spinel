@@ -6055,6 +6055,37 @@ int desugar_respond_to_probe(Compiler *c) {
   return changed;
 }
 
+/* `recv.at(i)` is `recv[i]` for a single argument -- Array#at takes exactly
+   one integer and answers what #[] does. Written as its own name it reached
+   neither the typed array arms nor the boxed dispatch, so an Array read out
+   of a container answered NoMethodError (#3821). Rewritten here, every path
+   that knows #[] knows it. */
+int desugar_array_at(Compiler *c) {
+  NodeTable *nt = (NodeTable *)c->nt;
+  int changed = 0;
+  /* a user class owning the name keeps its own dispatch */
+  for (int k = 0; k < c->nclasses; k++)
+    if (comp_method_in_chain(c, k, "at", NULL) >= 0 ||
+        comp_reader_in_chain(c, k, "at", NULL)) return 0;
+  NT_FOREACH_KIND(nt, NK_CallNode, id) {
+    const char *nm = nt_str(nt, id, "name");
+    if (!nm || !sp_streq(nm, "at")) continue;
+    int recv = nt_ref(nt, id, "receiver");
+    if (recv < 0 || nt_ref(nt, id, "block") >= 0) continue;
+    int args = nt_ref(nt, id, "arguments");
+    int argc = 0; const int *argv = args >= 0 ? nt_arr(nt, args, "arguments", &argc) : NULL;
+    if (argc != 1 || !argv) continue;
+    const char *aty = nt_type(nt, argv[0]);
+    if (aty && sp_streq(aty, "SplatNode")) continue;
+    TyKind rt = infer_type(c, recv);
+    /* Time#at and a Struct's own member reader are different methods */
+    if (rt == TY_TIME || rt == TY_CLASS || ty_is_object(rt)) continue;
+    nt_node_set_str(nt, id, "name", "[]");
+    changed = 1;
+  }
+  return changed;
+}
+
 /* `recv.attr op= value` where the writer is a hand-written `def attr=`.
    Ruby desugars this into a reader call and a writer call; the emitter's own
    lowering goes straight to the backing ivar, which is right for an

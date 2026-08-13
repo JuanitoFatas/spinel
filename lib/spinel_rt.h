@@ -5386,6 +5386,13 @@ static SP_NOINLINE sp_RbVal sp_poly_arr_get_hash_cold(sp_RbVal a, mrb_int i) {
     sp_IntIntHash *h = (sp_IntIntHash *)a.v.p;
     return sp_IntIntHash_has_key(h, i) ? sp_box_int(sp_IntIntHash_get(h, i)) : sp_box_nil();
   }
+  /* The other integer-keyed variants read the same way: a nested hash whose
+     keys are Integers answered nil through a boxed #[] because only the
+     int->int one had an arm (#3822). */
+  if (a.tag == SP_TAG_OBJ && a.cls_id == SP_BUILTIN_INT_STR_HASH) {
+    sp_IntStrHash *h = (sp_IntStrHash *)a.v.p;
+    return sp_IntStrHash_has_key(h, i) ? sp_box_str(sp_IntStrHash_get(h, i)) : sp_box_nil();
+  }
   /* bm[arg]: a boxed bound Method called with the (single) int argument. */
   if (a.tag == SP_TAG_OBJ && a.cls_id == SP_BUILTIN_METHOD) {
     sp_BoundMethod *m = (sp_BoundMethod *)a.v.p;
