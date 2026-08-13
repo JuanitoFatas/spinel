@@ -961,15 +961,21 @@ void emit_assign(Compiler *c, int id, Buf *b, int indent) {
   /* `[].dup` / `[].clone`: a copy of nothing is a new empty array, and it must
      be built at the target's type. Emitted as a call it took the literal's own
      default kind and wrote an sp_IntArray into a poly-array slot (#3608). */
+  int empty_array_frozen = 0;
   if (!is_empty_array && vty && sp_streq(vty, "CallNode") &&
       nt_str(c->nt, v, "name") &&
-      (sp_streq(nt_str(c->nt, v, "name"), "dup") || sp_streq(nt_str(c->nt, v, "name"), "clone")) &&
+      (sp_streq(nt_str(c->nt, v, "name"), "dup") || sp_streq(nt_str(c->nt, v, "name"), "clone") ||
+       sp_streq(nt_str(c->nt, v, "name"), "freeze")) &&
       nt_ref(c->nt, v, "block") < 0) {
     int dr = nt_ref(c->nt, v, "receiver");
     const char *drt = dr >= 0 ? nt_type(c->nt, dr) : NULL;
     int den = 0;
-    if (drt && sp_streq(drt, "ArrayNode") && (nt_arr(c->nt, dr, "elements", &den), den == 0))
+    if (drt && sp_streq(drt, "ArrayNode") && (nt_arr(c->nt, dr, "elements", &den), den == 0)) {
       is_empty_array = 1;
+      /* `[].freeze` is the frozen-empty-array idiom: build it at the target's
+         type like dup/clone, and keep the flag the call is there for (#3828) */
+      empty_array_frozen = sp_streq(nt_str(c->nt, v, "name"), "freeze");
+    }
   }
   /* a bare `Array.new` (no size/block) is an empty array of the target's type */
   if (!is_empty_array && vty && sp_streq(vty, "CallNode") &&
@@ -1037,10 +1043,19 @@ void emit_assign(Compiler *c, int id, Buf *b, int indent) {
   }
   else if (is_empty_array && lv && array_kind(lv->type)) {
     /* `a = []` -> a new array of the variable's resolved element type */
-    buf_printf(b, "sp_%sArray_new()", array_kind(lv->type));
+    if (empty_array_frozen) {
+      int ft = ++g_tmp;
+      buf_printf(b, "({ sp_%sArray *_t%d = sp_%sArray_new(); _t%d->frozen = 1; _t%d; })",
+                 array_kind(lv->type), ft, array_kind(lv->type), ft, ft);
+    }
+    else buf_printf(b, "sp_%sArray_new()", array_kind(lv->type));
   }
   else if (is_empty_array && lv && lv->type == TY_POLY_ARRAY) {
-    buf_puts(b, "sp_PolyArray_new()");
+    if (empty_array_frozen) {
+      int ft = ++g_tmp;
+      buf_printf(b, "({ sp_PolyArray *_t%d = sp_PolyArray_new(); _t%d->frozen = 1; _t%d; })", ft, ft, ft);
+    }
+    else buf_puts(b, "sp_PolyArray_new()");
   }
   else if (is_empty_array && lv && ty_is_ptr_array(lv->type)) {
     /* `a = []` for a narrowed object / int-array array: an sp_PtrArray whose
@@ -6872,6 +6887,9 @@ else {
     emit_indent(b, indent);
     buf_printf(b, "%s_%s = ", pfx, key);
     int vlit = empty_literal_node(c, v);
+    /* `X = [].freeze`: the strip above found the literal so the slot's kind
+       builds it; the freeze it stripped still has to happen (#3828). */
+    int v_lit_frozen = (vlit != v);
     const char *vty = nt_type(nt, vlit);
     int v_empty_arr = 0, v_empty_hash = 0;
     if (vty && sp_streq(vty, "ArrayNode")) {
@@ -6900,8 +6918,17 @@ else {
          set to nil. */
       buf_puts(b, lv->type == TY_RANGE ? "(sp_Range){0}"
                 : lv->type == TY_STRING ? "NULL" : default_value(lv->type));
-    else if (v_empty_arr && lv->type == TY_POLY_ARRAY) buf_puts(b, "sp_PolyArray_new()");
-    else if (v_empty_arr && array_kind(lv->type)) buf_printf(b, "sp_%sArray_new()", array_kind(lv->type));
+    else if (v_empty_arr && lv->type == TY_POLY_ARRAY) {
+      if (v_lit_frozen) { int _ft = ++g_tmp;
+        buf_printf(b, "({ sp_PolyArray *_t%d = sp_PolyArray_new(); _t%d->frozen = 1; _t%d; })", _ft, _ft, _ft); }
+      else buf_puts(b, "sp_PolyArray_new()");
+    }
+    else if (v_empty_arr && array_kind(lv->type)) {
+      if (v_lit_frozen) { int _ft = ++g_tmp;
+        buf_printf(b, "({ sp_%sArray *_t%d = sp_%sArray_new(); _t%d->frozen = 1; _t%d; })",
+                   array_kind(lv->type), _ft, array_kind(lv->type), _ft, _ft); }
+      else buf_printf(b, "sp_%sArray_new()", array_kind(lv->type));
+    }
     else if (v_empty_hash && ty_is_hash(lv->type)) {
       const char *hcn = ty_hash_cname(lv->type);
       if (hcn) buf_printf(b, "sp_%sHash_new()", hcn);
@@ -6927,6 +6954,9 @@ else {
     if (!cv || cv->type == TY_UNKNOWN) { unsupported(c, id, "constant path write"); return; }
     int v = nt_ref(nt, id, "value");
     int vlit = empty_literal_node(c, v);
+    /* `X = [].freeze`: the strip above found the literal so the slot's kind
+       builds it; the freeze it stripped still has to happen (#3828). */
+    int v_lit_frozen = (vlit != v);
     const char *vty = nt_type(nt, vlit);
     int v_empty_arr = 0, v_empty_hash = 0;
     if (vty && sp_streq(vty, "ArrayNode")) {
@@ -6939,8 +6969,17 @@ else {
     buf_printf(b, "cst_%s = ", nm);
     if (vty && sp_streq(vty, "NilNode"))
       buf_puts(b, cv->type == TY_RANGE ? "(sp_Range){0}" : default_value(cv->type));
-    else if (v_empty_arr && cv->type == TY_POLY_ARRAY) buf_puts(b, "sp_PolyArray_new()");
-    else if (v_empty_arr && array_kind(cv->type)) buf_printf(b, "sp_%sArray_new()", array_kind(cv->type));
+    else if (v_empty_arr && cv->type == TY_POLY_ARRAY) {
+      if (v_lit_frozen) { int _ft = ++g_tmp;
+        buf_printf(b, "({ sp_PolyArray *_t%d = sp_PolyArray_new(); _t%d->frozen = 1; _t%d; })", _ft, _ft, _ft); }
+      else buf_puts(b, "sp_PolyArray_new()");
+    }
+    else if (v_empty_arr && array_kind(cv->type)) {
+      if (v_lit_frozen) { int _ft = ++g_tmp;
+        buf_printf(b, "({ sp_%sArray *_t%d = sp_%sArray_new(); _t%d->frozen = 1; _t%d; })",
+                   array_kind(cv->type), _ft, array_kind(cv->type), _ft, _ft); }
+      else buf_printf(b, "sp_%sArray_new()", array_kind(cv->type));
+    }
     else if (v_empty_hash && ty_is_hash(cv->type)) {
       const char *hcn = ty_hash_cname(cv->type);
       if (hcn) buf_printf(b, "sp_%sHash_new()", hcn);

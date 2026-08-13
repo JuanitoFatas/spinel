@@ -15167,6 +15167,32 @@ else { memcpy(dir, sf, n); dir[n] = 0; } }
   if (recv >= 0 && argc == 0 && comp_ntype(c, recv) != TY_POLY) {
     TyKind crt = comp_ntype(c, recv);
     const char *ck = (crt == TY_POLY_ARRAY) ? "Poly" : array_kind(crt);
+    /* An empty array literal infers TY_UNKNOWN and emits as sp_IntArray_new();
+       without this `[].freeze` dropped the call and `[].freeze.frozen?`
+       answered false (#3828). */
+    if (!ck) {
+      const char *rvt = nt_type(nt, recv);
+      int een = 0;
+      if (rvt && sp_streq(rvt, "ArrayNode") && (nt_arr(nt, recv, "elements", &een), een == 0))
+        ck = "Int";
+    }
+    /* An empty hash literal is typed by context too, and its freeze fell
+       through every arm the same way (#3828). Its frozen bit lives in the GC
+       header, so the emitted pointer keeps its own type. */
+    if (!ck && sp_streq(name, "freeze")) {
+      const char *hvt = nt_type(nt, recv);
+      int hen = 0;
+      if (hvt && (sp_streq(hvt, "HashNode") || sp_streq(hvt, "KeywordHashNode")) &&
+          (nt_arr(nt, recv, "elements", &hen), hen == 0)) {
+        int ht = ++g_tmp;
+        buf_printf(b, "({ __typeof__(");
+        emit_expr(c, recv, b);
+        buf_printf(b, ") _t%d = ", ht);
+        emit_expr(c, recv, b);
+        buf_printf(b, "; sp_gc_freeze((void *)_t%d); _t%d; })", ht, ht);
+        return;
+      }
+    }
     if (ck && sp_streq(name, "freeze")) {
       int t = ++g_tmp;
       buf_printf(b, "({ sp_%sArray *_t%d = ", ck, t); emit_expr(c, recv, b);
