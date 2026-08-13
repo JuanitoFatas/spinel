@@ -3108,7 +3108,10 @@ const char *sp_re_sub_str_str_hash(mrb_regexp_pattern *pat, const char *str, sp_
   char *key = kbuf + 1;
   memcpy(key, str + caps[0], mlen);
   key[mlen] = 0;
-  const char *rep = (h && sp_StrStrHash_has_key(h, key)) ? sp_StrStrHash_get(h, key) : "";
+  /* a missing key answers the hash's DEFAULT, which is what Hash.new("?")
+     exists for; hard-coding "" dropped it (#3824) */
+  const char *rep = h ? sp_StrStrHash_get(h, key) : "";
+  if (!rep) rep = "";
   size_t rlen = strlen(rep);
   size_t rest = slen - caps[1];
   size_t total = caps[0] + rlen + rest;
