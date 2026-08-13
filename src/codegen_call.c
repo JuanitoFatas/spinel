@@ -11253,6 +11253,23 @@ void emit_call(Compiler *c, int id, Buf *b) {
        per call-site argument: bound positionally, the first argument went into
        the array pointer's slot and the call died (#3691). */
     int *atmp = eargc ? (int *)calloc((size_t)eargc, sizeof(int)) : NULL;
+    /* `m.call(*args)` into a rest parameter: the splat array IS that rest
+       argument. Expanded positionally instead, its first element went into the
+       array pointer's slot and the call read it as one (#3887). */
+    if (tm && tm->rest_idx >= 0 && splat_at2 >= 0 &&
+        splat_at2 == tm->rest_idx - shift && splat_at2 == eargc - 1) {
+      for (int k = 0; k < splat_at2; k++) {
+        atmp[k] = ++g_tmp;
+        LocalVar *pp = (tm && k + shift < tm->nparams) ? scope_local(tm, tm->pnames[k + shift]) : NULL;
+        emit_ctype(c, pp ? pp->type : TY_INT, b);
+        buf_printf(b, " _t%d = ", atmp[k]); emit_arg_or_default(c, tm, k + shift, argv[k], b);
+        buf_puts(b, "; ");
+      }
+      atmp[splat_at2] = tsplat;
+      eargc = splat_at2 + 1;
+      splat_at2 = -1;
+      goto bm_emit_call;
+    }
     int rest_at = (tm && tm->rest_idx >= 0 && splat_at2 < 0) ? tm->rest_idx - shift : -1;
     if (rest_at >= 0 && rest_at <= eargc) {
       int trest = ++g_tmp;
