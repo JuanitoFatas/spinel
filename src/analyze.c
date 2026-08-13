@@ -7146,7 +7146,10 @@ static int empty_arr_iter_ok(const char *nm) {
     "group_by", "sort_by", "min_by", "max_by", "flat_map",
     "reduce", "inject",
     /* the block forms that were still refusing an empty literal receiver */
-    "partition", "take_while", "drop_while", "each_with_index", NULL };
+    "partition", "take_while", "drop_while", "each_with_index",
+    /* the cycling block forms, which were refused for the same reason: an
+       empty literal receiver has no array kind for the loop (#3852) */
+    "cycle", "each_slice", "each_cons", "each_entry", NULL };
   for (int i = 0; ok[i]; i++) if (sp_streq(nm, ok[i])) return 1;
   return 0;
 }

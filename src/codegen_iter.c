@@ -3245,8 +3245,11 @@ int emit_iteration_stmt(Compiler *c, int id, Buf *b, int indent) {
       emit_indent(b, indent);
       buf_printf(b, "for (mrb_int _t%d = 0; _t%d < _t%d; _t%d++) {\n", ti, ti, tn, ti);
     }
-    else
-      buf_puts(b, "for (;;) {\n");
+    else {
+      /* An empty receiver cycles zero times, not forever: the countless form
+         answers nil straight away in CRuby (#3852). */
+      buf_printf(b, "if (sp_%sArray_length(_t%d) > 0) for (;;) {\n", k, ta);
+    }
     emit_indent(b, indent + 1);
     buf_printf(b, "for (mrb_int _t%d = 0; _t%d < sp_%sArray_length(_t%d); _t%d++) {\n", tj, tj, k, ta, tj);
     int innerIndent = indent + 2;
