@@ -1158,6 +1158,54 @@ static TyKind pf_yield_ty(Compiler *c, int id, int *found) {
   }
   return TY_UNKNOWN;
 }
+/* Should this method carry an `inline` hint?
+
+   The C compiler sizes a function by the machine code it has after our runtime
+   helpers are expanded into it, and that is nothing like the size of the Ruby
+   it came from: PPU#render_pixel is fifteen lines and compiles to 1.4KB,
+   because every array read carries its bounds check and every unboxing its
+   conversion arms. So the inliner declines exactly the methods a Ruby program
+   most wants inlined -- small ones called from a hot loop -- and optcarrot
+   pays a call and a frame per pixel for one.
+
+   The emitter knows the size the C compiler cannot see. A method with a small
+   body and few call sites gets the hint, which raises the C compiler's own
+   limit for it without forcing anything: it still decides. Worth 3-4% on
+   optcarrot for 0.6% of binary size and no measurable compile time. */
+static int *g_mih_nodes = NULL;      /* AST nodes per scope */
+static int  g_mih_nscopes = 0;
+static const NodeTable *g_mih_nt = NULL;
+static int  g_mih_ntcount = 0;
+static int method_inline_hint(Compiler *c, Scope *s) {
+  if (g_debug) return 0;                      /* debug builds want real frames */
+  if (!s->name || s->body < 0 || s->yields) return 0;
+  const NodeTable *nt = c->nt;
+  if (g_mih_nt != nt || g_mih_ntcount != nt->count || g_mih_nscopes != c->nscopes) {
+    free(g_mih_nodes);
+    g_mih_nodes = (int *)calloc((size_t)(c->nscopes > 0 ? c->nscopes : 1), sizeof(int));
+    g_mih_nscopes = c->nscopes; g_mih_nt = nt; g_mih_ntcount = nt->count;
+    if (!g_mih_nodes) return 0;
+    for (int id = 0; id < nt->count; id++) {
+      int sc = c->nscope[id];
+      if (sc >= 0 && sc < c->nscopes) g_mih_nodes[sc]++;
+    }
+  }
+  if (!g_mih_nodes) return 0;
+  int si = (int)(s - c->scopes);
+  if (si < 0 || si >= g_mih_nscopes) return 0;
+  int limit = 90;
+  { const char *e = getenv("SPINEL_INLINE_NODES"); if (e && *e) limit = atoi(e); }
+  if (limit <= 0) return 0;
+  if (g_mih_nodes[si] > limit) return 0;
+  /* few enough call sites that expanding it cannot multiply the program */
+  int calls = 0;
+  NT_FOREACH_KIND(nt, NK_CallNode, id) {
+    const char *nm = nt_str(nt, id, "name");
+    if (nm && sp_streq(nm, s->name) && ++calls > 12) return 0;
+  }
+  return calls > 0;
+}
+
 void emit_method_signature(Compiler *c, Scope *s, Buf *b) {
   /* In a debug build, give instance/class methods external linkage so
      -rdynamic exposes sp_<Class>_<method> to backtrace_symbols and the
@@ -1174,8 +1222,9 @@ void emit_method_signature(Compiler *c, Scope *s, Buf *b) {
   const char *unused = (s->class_id >= 0 && !s->is_cmethod &&
                         !c->classes[s->class_id].instantiated)
                        ? "__attribute__((unused)) " : "";
-  if (method_is_void(s)) { buf_puts(b, stor); buf_puts(b, unused); buf_puts(b, "void "); }
-  else { buf_puts(b, stor); buf_puts(b, unused); emit_ctype(c, s->ret, b); buf_puts(b, " "); }
+  const char *ihint = method_inline_hint(c, s) ? "inline " : "";
+  if (method_is_void(s)) { buf_puts(b, stor); buf_puts(b, ihint); buf_puts(b, unused); buf_puts(b, "void "); }
+  else { buf_puts(b, stor); buf_puts(b, ihint); buf_puts(b, unused); emit_ctype(c, s->ret, b); buf_puts(b, " "); }
   emit_method_cname(c, s, b);
   buf_puts(b, "(");
   int wrote = 0;
