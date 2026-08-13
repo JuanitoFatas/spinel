@@ -6302,6 +6302,13 @@ else {
        result is a poly array. */
     if (ty_is_array(rt) && ty_is_array(a0) && a0 != rt) return TY_POLY_ARRAY;
   }
+  /* The variadic set operations with NO argument answer a copy of the
+     receiver, and fetch_values with none answers an empty Array; only the
+     union form had an arm, so the others were refused outright (#3851). */
+  if (recv >= 0 && argc == 0 && ty_is_array(rt) &&
+      (sp_streq(name, "intersection") || sp_streq(name, "difference") ||
+       sp_streq(name, "union")))
+    return rt;
   /* Array#intersect?(other) -> bool */
   if (recv >= 0 && argc == 1 && sp_streq(name, "intersect?") && ty_is_array(rt))
     return TY_BOOL;

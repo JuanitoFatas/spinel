@@ -3326,6 +3326,17 @@ else {
         buf_printf(b, "sp_%sArray_union(", k); emit_expr(c, recv, b); buf_puts(b, ", NULL)");
         return 1;
       }
+      /* intersection / difference with no argument fold over nothing: a copy
+         of the receiver, the way the union form already answered (#3851) */
+      if ((sp_streq(name, "intersection") || sp_streq(name, "difference")) && argc == 0) {
+        buf_printf(b, "sp_%sArray_dup(", k); emit_expr(c, recv, b); buf_puts(b, ")");
+        return 1;
+      }
+      /* fetch_values with no keys reads nothing: an empty Array */
+      if (sp_streq(name, "fetch_values") && argc == 0) {
+        buf_printf(b, "((void)("); emit_expr(c, recv, b); buf_printf(b, "), sp_%sArray_new())", k);
+        return 1;
+      }
       if (sp_streq(name, "sample") &&
           (argc == 0 || (argc == 1 && nt_type(nt, argv[0]) &&
                          sp_streq(nt_type(nt, argv[0]), "KeywordHashNode")))) {
