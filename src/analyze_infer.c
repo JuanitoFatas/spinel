@@ -4774,6 +4774,16 @@ else {
                        (bt == TY_RATIONAL || bt == TY_COMPLEX ||
                         bt == TY_POLY || bt == TY_BIGINT)) it = TY_POLY;
             }
+            /* An ARRAY seed is reassigned to the block's value too. A boxed
+               result -- `a + r` over a poly element -- cannot go back into the
+               seed's typed array slot, and the C compiler rejected the whole
+               program; an empty `[]` seed escaped only because it already types
+               poly (#3854). */
+            if (rbn > 0 && ty_is_array(it) && it != TY_POLY_ARRAY) {
+              TyKind abt = infer_type(c, rbb[rbn - 1]);
+              if (abt == TY_POLY) it = TY_POLY;
+              else if (ty_is_array(abt) && abt != it) it = TY_POLY_ARRAY;
+            }
             /* reduce(init, :op) symbol-operator form has no block, so the block
                promotion above cannot fire: an int seed folded over floats with
                `:+` still came out Integer. Promote a numeric seed by the element

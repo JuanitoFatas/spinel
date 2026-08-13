@@ -3184,6 +3184,23 @@ int emit_reduce_block_expr(Compiler *c, int id, Buf *b) {
       !reduce_tail_from_acc(c, bb[bn - 1], p0_orig) &&
       comp_ntype(c, bb[bn - 1]) == TY_POLY)
     acc_ty = TY_POLY;
+  /* A typed-array seed whose block value is BOXED -- `a + r` over poly elements
+     runs through the poly adder -- cannot take that value back into its pointer
+     slot, and the C compiler rejected the program; an empty `[]` seed escaped
+     only because it already accumulates poly (#3854). Probe the body under the
+     accumulator shadow the loop installs below, and widen. */
+  if (init >= 0 && ty_is_array(acc_ty) && acc_ty != TY_POLY_ARRAY) {
+    Scope *psc = comp_scope_of(c, block);
+    LocalVar *pl0 = psc ? scope_local(psc, p0_orig) : NULL;
+    LocalVar *pl1 = (psc && p1_orig) ? scope_local(psc, p1_orig) : NULL;
+    TyKind s0 = pl0 ? pl0->type : TY_UNKNOWN, s1 = pl1 ? pl1->type : TY_UNKNOWN;
+    if (pl0) pl0->type = acc_ty;
+    if (pl1) pl1->type = et;
+    for (int j = 0; j < bn; j++) infer_subtree(c, bb[j]);
+    if (comp_ntype(c, bb[bn - 1]) == TY_POLY) acc_ty = TY_POLY_ARRAY;
+    if (pl0) pl0->type = s0;
+    if (pl1) pl1->type = s1;
+  }
   int ta = ++g_tmp, tacc = ++g_tmp, ti = ++g_tmp;
   buf_puts(b, "({ ");
   emit_ctype(c, rt, b); buf_printf(b, " _t%d = ", ta); emit_expr(c, recv, b); buf_puts(b, "; ");
@@ -3209,6 +3226,10 @@ int emit_reduce_block_expr(Compiler *c, int id, Buf *b) {
   else if (init >= 0) {
     /* a boxed accumulator wants a boxed seed */
     if (acc_ty == TY_POLY && comp_ntype(c, init) != TY_POLY) emit_boxed(c, init, b);
+    /* a seed of a narrower array kind than the widened accumulator converts */
+    else if (acc_ty == TY_POLY_ARRAY && comp_ntype(c, init) != TY_POLY_ARRAY) {
+      buf_puts(b, "sp_poly_to_poly_array("); emit_boxed(c, init, b); buf_puts(b, ")");
+    }
     else emit_expr(c, init, b);
     buf_puts(b, "; "); start = 0;
   }
