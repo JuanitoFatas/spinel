@@ -6064,9 +6064,11 @@ int desugar_array_at(Compiler *c) {
   NodeTable *nt = (NodeTable *)c->nt;
   int changed = 0;
   /* a user class owning the name keeps its own dispatch */
-  for (int k = 0; k < c->nclasses; k++)
+  int user_at = 0;
+  for (int k = 0; k < c->nclasses && !user_at; k++)
     if (comp_method_in_chain(c, k, "at", NULL) >= 0 ||
-        comp_reader_in_chain(c, k, "at", NULL)) return 0;
+        comp_reader_in_chain(c, k, "at", NULL)) user_at = 1;
+  if (!user_at)
   NT_FOREACH_KIND(nt, NK_CallNode, id) {
     const char *nm = nt_str(nt, id, "name");
     if (!nm || !sp_streq(nm, "at")) continue;
