@@ -7613,7 +7613,17 @@ static void mark_empty_hash_enum_locals(Compiler *c) {
     for (int k = 0; enum_names[k] && !hit; k++) if (sp_streq(nm, enum_names[k])) hit = 1;
     if (!hit) continue;
     int recv = nt_ref(nt, id, "receiver");
-    if (recv < 0 || nt_kind(nt, recv) != NK_LocalVariableReadNode) continue;
+    if (recv < 0) continue;
+    /* the same call on a direct empty literal: the receiver marking only
+       covered the block forms, so a blockless `{}.each_slice(2)` had no hash
+       to build an Enumerator from (#3856) */
+    if ((nt_kind(nt, recv) == NK_HashNode || nt_kind(nt, recv) == NK_KeywordHashNode) &&
+        recv < c->node_cap) {
+      int en0 = 0; nt_arr(nt, recv, "elements", &en0);
+      if (en0 == 0) c->empty_hash_recv[recv] = 1;
+      continue;
+    }
+    if (nt_kind(nt, recv) != NK_LocalVariableReadNode) continue;
     const char *lname = nt_str(nt, recv, "name");
     Scope *rs = comp_scope_of(c, recv);
     if (!lname || !rs) continue;
