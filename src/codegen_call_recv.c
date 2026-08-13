@@ -8619,6 +8619,20 @@ int emit_value_recv_call(Compiler *c, int id, Buf *b) {
       buf_printf(b, " sp_box_obj(_t%d, SP_BUILTIN_SYM_POLY_HASH); })", th);
     }
     else if (sp_streq(name, "strftime") && argc == 1) { buf_printf(b, "sp_time_strftime(%s, ", r); emit_expr(c, argv[0], b); buf_puts(b, ")"); }
+    /* Comparable#between? / #clamp compare a Time with a Time; CRuby raises
+       ArgumentError ("comparison of Time with 1 failed") for anything else,
+       where reading the operand as an sp_Time did not compile (#3865). */
+    else if ((sp_streq(name, "between?") || sp_streq(name, "clamp")) && argc == 2 &&
+             (comp_ntype(c, argv[0]) != TY_TIME || comp_ntype(c, argv[1]) != TY_TIME)) {
+      int tt = ++g_tmp;
+      buf_printf(b, "({ sp_Time _t%d = %s; (void)(", tt, r);
+      emit_boxed(c, argv[0], b); buf_puts(b, "); (void)(");
+      emit_boxed(c, argv[1], b);
+      buf_puts(b, "); sp_raise_cls(\"ArgumentError\", sp_sprintf(\"comparison of Time with %s failed\", sp_poly_inspect(");
+      emit_boxed(c, argv[0], b);
+      if (sp_streq(name, "clamp")) buf_printf(b, "))); _t%d; })", tt);
+      else buf_puts(b, "))); (mrb_bool)0; })");
+    }
     else if (sp_streq(name, "between?") && argc == 2) {
       int tt = ++g_tmp, ta = ++g_tmp, tb2 = ++g_tmp;
       buf_printf(b, "({ sp_Time _t%d = %s; sp_Time _t%d = ", tt, r, ta); emit_expr(c, argv[0], b);
