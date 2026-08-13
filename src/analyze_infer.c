@@ -1420,7 +1420,9 @@ TyKind infer_call(Compiler *c, int id) {
       (sp_streq(name, "arity") || sp_streq(name, "year") || sp_streq(name, "mon") ||
        sp_streq(name, "month") || sp_streq(name, "mday") ||
        sp_streq(name, "hour") || sp_streq(name, "sec") ||
-       sp_streq(name, "wday") || sp_streq(name, "yday")))
+       sp_streq(name, "wday") || sp_streq(name, "yday") ||
+       /* tv_sec is the epoch second, the same read #to_i answers (#3866) */
+       sp_streq(name, "tv_sec")))
     return TY_INT;
   /* Range#to_a on a poly value: its element array. */
   if (recv >= 0 && rt == TY_POLY && argc == 0 && nt_ref(nt, id, "block") < 0 &&

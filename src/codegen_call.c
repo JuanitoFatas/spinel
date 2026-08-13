@@ -3491,6 +3491,21 @@ static int emit_poly_builtin_method(Compiler *c, int id, Buf *b) {
     else if (sp_streq(name, "wday")) tf = "wday";
     else if (sp_streq(name, "yday")) tf = "yday";
   }
+  /* tv_sec reads the field rather than a sp_time_* helper, and to_r builds the
+     same Rational the typed receiver's does: both were missing, so a Time read
+     out of a container answered NoMethodError (#3866). */
+  if (argc == 0 && sp_streq(name, "tv_sec") && !user_defines_or_reads(c, name)) {
+    /* the epoch second read off the boxed Time, the same value #to_i answers;
+       there was no arm at all, so a Time read out of a container raised
+       NoMethodError (#3866) */
+    int tv = ++g_tmp;
+    buf_printf(b, "({ sp_RbVal _t%d = ", tv); emit_expr(c, recv, b);
+    buf_printf(b, "; _t%d.tag == SP_TAG_OBJ && _t%d.cls_id == SP_BUILTIN_TIME"
+                  " ? (mrb_int)((sp_Time *)_t%d.v.p)->tv_sec"
+                  " : (mrb_int)(sp_raise_nomethod(sp_nomethod_msg(\"tv_sec\", _t%d)), 0); })",
+               tv, tv, tv, tv);
+    return 1;
+  }
   if (tf) {
     int tv = ++g_tmp;
     buf_printf(b, "({ sp_RbVal _t%d = ", tv); emit_expr(c, recv, b);

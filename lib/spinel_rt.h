@@ -6198,6 +6198,13 @@ static sp_RbVal sp_poly_to_r_m(sp_RbVal v) {
   if (v.tag == SP_TAG_OBJ && v.cls_id == SP_BUILTIN_RATIONAL) return v;
   /* Float#to_r is exact: the rational the binary value really is (#3800). */
   if (v.tag == SP_TAG_FLT) return sp_box_rational(sp_float_to_rational(v.v.f));
+  /* Time#to_r is the exact epoch time, the same value the typed receiver
+     answers; a Time read out of a container reached here (#3866). */
+  if (v.tag == SP_TAG_OBJ && v.cls_id == SP_BUILTIN_TIME && v.v.p) {
+    sp_Time *t = (sp_Time *)v.v.p;
+    return sp_box_rational(sp_rational_new((mrb_int)t->tv_sec * 1000000000 + t->tv_nsec,
+                                           1000000000));
+  }
   sp_raise_cls("NoMethodError", sp_sprintf("undefined method 'to_r' for %s", sp_poly_class_name(v)));
 }
 static sp_RbVal sp_poly_to_c_m(sp_RbVal v) {
