@@ -379,3 +379,13 @@ const char *sp_exc_signm_acc(sp_Exception *e) {SP_GC_ROOT(e);
   sp_exc_acc_gate(e, "SignalException", "signm");
   return sp_exc_message(e);
 }
+
+/* `p e` on an exception instance: the same string #inspect answers, for the
+   dispatch a container read or a `p` of a user subclass goes through (#3813). */
+const char *sp_exc_inspect(void *p) {
+  sp_Exception *e = (sp_Exception *)p;
+  if (!e) return "nil";
+  const char *cn = e->cls_name ? e->cls_name : "Exception";
+  const char *msg = sp_exc_message(e);
+  return (!msg || !*msg) ? cn : sp_sprintf("#<%s: %s>", cn, msg);
+}

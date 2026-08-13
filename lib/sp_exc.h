@@ -82,6 +82,7 @@ int sp_exc_exit_status(void *obj);
 sp_Exception *sp_exc_exception(sp_Exception *e, const char *msg);
 const char *sp_exc_class_name(volatile sp_Exception *ve);
 const char *sp_exc_message(volatile sp_Exception *ve);
+const char *sp_exc_inspect(void *p);   /* #<Cls: msg>, for the inspect dispatch */
 sp_Exception *sp_exc_cause(volatile sp_Exception *ve);
 sp_RbVal sp_exc_result(volatile sp_Exception *ve);
 const char *sp_exc_parent_of_name(const char *cls);

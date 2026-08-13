@@ -5000,7 +5000,9 @@ static int class_inspectable(Compiler *c, int i) {
   ClassInfo *ci = &c->classes[i];
   if (is_builtin_reopen(ci->name)) return 0;
   if (ci->is_native_class) return 0;   /* the package owns the struct */
-  if (class_is_exc_subclass(c, i)) return 0;  /* #<Cls: msg> path exists */
+  /* an exception subclass renders as #<Cls: msg>, which the dispatch below
+     routes to sp_exc_inspect: without a case here `p e` fell to the default
+     and printed #<Object> (#3813) */
   if (comp_ty_value_obj(c, ty_object(i))) return 0;  /* no stable address */
   return 1;
 }
@@ -5059,6 +5061,10 @@ static void emit_obj_inspect_dispatch(Compiler *c, Buf *b) {
        so [d] and {k: d} print like a directly-inspected d (#2698). */
     if (ci->is_struct || ci->is_data) {
       buf_printf(b, "    case %d: return sp_%s_inspect((sp_%s *)p);\n", i, ci->c_name, ci->c_name);
+      continue;
+    }
+    if (class_is_exc_subclass(c, i)) {
+      buf_printf(b, "    case %d: return sp_exc_inspect(p);\n", i);
       continue;
     }
     buf_printf(b, "    case %d: {\n", i);
