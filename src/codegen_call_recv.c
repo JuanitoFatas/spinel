@@ -8462,6 +8462,22 @@ int emit_object_call(Compiler *c, int id, Buf *b) {
         TyKind mt = c->classes[cid].ivar_types[mi];
         const char *acc = is_val ? "." : "->";
         if (is_set) {
+          /* the write is a mutation like any other: a frozen receiver raises
+             FrozenError rather than taking it (#3872) */
+          if (!is_val && c->classes[cid].freeze_observed) {
+            int tf9 = ++g_tmp;
+            Buf rbf; memset(&rbf, 0, sizeof rbf); emit_expr(c, recv, &rbf);
+            buf_printf(b, "({ sp_%s *_t%d = %s; ", c->classes[cid].c_name, tf9,
+                       rbf.p ? rbf.p : "NULL");
+            free(rbf.p);
+            char selft[32]; snprintf(selft, sizeof selft, "_t%d", tf9);
+            emit_frozen_obj_guard(c, cid, selft, b);
+            buf_printf(b, "_t%d->iv_%s = ", tf9, iv_c(sym + 1));
+            if (mt == TY_POLY) emit_boxed(c, argv[1], b);
+            else emit_expr(c, argv[1], b);
+            buf_puts(b, "; })");
+            return 1;
+          }
           buf_puts(b, "(("); emit_expr(c, recv, b);
           buf_printf(b, ")%siv_%s = ", acc, iv_c(sym + 1));
           if (mt == TY_POLY) emit_boxed(c, argv[1], b);
