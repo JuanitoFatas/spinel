@@ -377,17 +377,25 @@ int lazy_alias_chain(Compiler *c, int var_read) {
   if (!vn) return -1;
   Scope *sc = comp_scope_of(c, var_read);
   int val = -1;
-  for (int w = 0; w < nt->count; w++) {
-    NodeKind k = nt_kind(nt, w);
-    if (k != NK_LocalVariableWriteNode && k != NK_LocalVariableOrWriteNode &&
-        k != NK_LocalVariableAndWriteNode && k != NK_LocalVariableOperatorWriteNode &&
-        k != NK_LocalVariableTargetNode)
-      continue;
-    const char *wn = nt_str(nt, w, "name");
-    if (!wn || !sp_streq(wn, vn)) continue;
-    if (k != NK_LocalVariableWriteNode || comp_scope_of(c, w) != sc || val >= 0)
-      return -1;   /* not a single plain write */
-    val = nt_ref(nt, w, "value");
+  /* Walk the write kinds through the node table's own kind index rather than
+     rescanning every node: the query runs per lazy-receiver read on every
+     fixpoint iteration, and all five kinds together are a small slice of the
+     table. The answer does not depend on the order writes are visited in --
+     it is "exactly one matching write, plain kind, same scope" -- so taking
+     them kind by kind gives what the linear scan gave. */
+  static const NodeKind LOCAL_WRITE_KINDS[] = {
+    NK_LocalVariableWriteNode, NK_LocalVariableOrWriteNode,
+    NK_LocalVariableAndWriteNode, NK_LocalVariableOperatorWriteNode,
+    NK_LocalVariableTargetNode };
+  for (size_t ki = 0; ki < sizeof LOCAL_WRITE_KINDS / sizeof *LOCAL_WRITE_KINDS; ki++) {
+    NodeKind k = LOCAL_WRITE_KINDS[ki];
+    NT_FOREACH_KIND(nt, k, w) {
+      const char *wn = nt_str(nt, w, "name");
+      if (!wn || !sp_streq(wn, vn)) continue;
+      if (k != NK_LocalVariableWriteNode || comp_scope_of(c, w) != sc || val >= 0)
+        return -1;   /* not a single plain write */
+      val = nt_ref(nt, w, "value");
+    }
   }
   if (val < 0) return -1;
   return chain_is_lazy_valued(c, val) ? val : -1;
