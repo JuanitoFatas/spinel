@@ -2866,7 +2866,13 @@ else {
          and no value, or a hang on integer and mixed keys (#3487). The
          symbol-keyed default stays for the case it was written for: a
          keyword call whose own type has not settled. */
-      if (!any_kw_bound && pos_argc < max_bind && max_bind > 0) {
+      /* A `**kwrest` takes every keyword the call passed, so there is no
+         trailing hash left to collapse into a positional parameter. Typing the
+         positional from it left `def a(x = nil, **kw)` with a hash-typed `x`
+         whose nil default is a NULL hash: it rendered as `{}` and any Hash
+         method on it dereferenced the NULL (#3911). This is the type-inference
+         half of the binding rule in kwh_consumed_by_kwparam. */
+      if (!any_kw_bound && m->kwrest_idx < 0 && pos_argc < max_bind && max_bind > 0) {
         LocalVar *p = m->pnames[pos_argc] ? scope_local(m, m->pnames[pos_argc]) : NULL;
         if (p && !p->rbs_seeded) {
           TyKind kwt = infer_type(c, kwh);
