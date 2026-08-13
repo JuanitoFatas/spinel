@@ -18088,8 +18088,10 @@ else { memcpy(dir, sf, n); dir[n] = 0; } }
   /* Regexp#hash is the pattern source's, so an equal pattern built either way
      serves as one Hash key (#3681) */
   if (recv >= 0 && comp_ntype(c, recv) == TY_REGEX && argc == 0 && sp_streq(name, "hash")) {
-    buf_puts(b, "(mrb_int)sp_str_hash(sp_re_source((void *)(");
-    emit_expr(c, recv, b); buf_puts(b, ")))");
+    /* the flags are part of the pattern's identity: /ab/ and /ab/i are not
+       eql?, so their hashes must differ (#3816) */
+    buf_puts(b, "(mrb_int)sp_re_hash((void *)(");
+    emit_expr(c, recv, b); buf_puts(b, "))");
     return;
   }
   /* #eql? is value equality too, like #== (only #equal? is identity) */

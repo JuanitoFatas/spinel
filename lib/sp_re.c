@@ -1097,3 +1097,10 @@ void sp_re_default_error_handler(const char *msg) {SP_GC_ROOT_STR(msg);
   }
   sp_raise_cls("RegexpError", msg);
 }
+
+/* Regexp#hash: the source AND the flags. /ab/ and /ab/i are not eql?, so a
+   hash over the source alone made them collide as Hash keys (#3816). */
+mrb_int sp_re_hash(void *pat) {
+  mrb_int h = (mrb_int)sp_str_hash(sp_re_source(pat));
+  return h ^ ((mrb_int)sp_re_options(pat) * 0x9E3779B1);
+}
