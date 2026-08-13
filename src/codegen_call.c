@@ -8603,6 +8603,44 @@ void emit_call(Compiler *c, int id, Buf *b) {
     return;
   }
   const NodeTable *nt = c->nt;
+  /* A literal `nil` where a number is wanted: CRuby raises rather than
+     treating it as zero, which is what every one of these answered (#3883). */
+  {
+    int nr = nt_ref(nt, id, "receiver");
+    const char *nn = nt_str(nt, id, "name");
+    int na = nt_ref(nt, id, "arguments");
+    int nc = 0; const int *nv = na >= 0 ? nt_arr(nt, na, "arguments", &nc) : NULL;
+    TyKind nrt = nr >= 0 ? comp_ntype(c, nr) : TY_UNKNOWN;
+    if (nr >= 0 && nn && nc >= 1 && nv &&
+        (nrt == TY_INT || nrt == TY_FLOAT || nrt == TY_BIGINT) &&
+        !user_defines_or_reads(c, nn)) {
+      /* clamp is deliberately absent: nil names an OPEN side there. gcd / lcm
+         raise their own "not an integer" TypeError already. */
+      static const char *const NUMM[] = {
+        "coerce", "pow", "fdiv", "divmod", "round", "digits", "to_s", "[]",
+        "gcdlcm", "div", "modulo", "remainder", "ceildiv", "between?", NULL };
+      int hit = 0;
+      for (int q = 0; NUMM[q] && !hit; q++) if (sp_streq(nn, NUMM[q])) hit = 1;
+      int nil_arg = 0;
+      for (int a = 0; a < nc && !nil_arg; a++)
+        if (nv[a] >= 0 && nt_kind(nt, nv[a]) == NK_NilNode) nil_arg = 1;
+      if (hit && nil_arg) {
+        /* #between? / #clamp compare rather than coerce, and CRuby's failed
+           comparison is an ArgumentError naming the receiver's class */
+        int cmpform = sp_streq(nn, "between?");
+        const char *cn = nrt == TY_FLOAT ? "Float" : "Integer";
+        TyKind rty = comp_ntype(c, id);
+        const char *dv = default_value(rty);
+        buf_puts(b, "({ (void)("); emit_expr(c, nr, b); buf_puts(b, "); ");
+        if (cmpform)
+          buf_printf(b, "sp_raise_cls(\"ArgumentError\", \"comparison of %s with nil failed\"); ", cn);
+        else
+          buf_printf(b, "sp_raise_cls(\"TypeError\", \"nil can't be coerced into %s\"); ", cn);
+        buf_printf(b, "%s; })", dv ? dv : "0");
+        return;
+      }
+    }
+  }
   /* Proc#=== calls the proc; a Proc read out of a container arrives boxed,
      where a value comparison would just answer false (#3683). */
   {
