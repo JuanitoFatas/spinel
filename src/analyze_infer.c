@@ -5108,6 +5108,12 @@ else {
           (TyKind)c->scopes[mi8].ret != TY_UNKNOWN)
         return (TyKind)c->scopes[mi8].ret;
     }
+    /* On a receiver whose class is only known at run time, any exception in the
+       program may be the one answering: when some subclass carries a non-String
+       out of #message, the query is a union and rides the boxed dispatcher. */
+    if (rt == TY_EXCEPTION && (sp_streq(name, "message") || sp_streq(name, "to_s")) &&
+        exc_has_nonstring_msg_override(c))
+      return TY_POLY;
     if (sp_streq(name, "message") || sp_streq(name, "to_s") ||
         sp_streq(name, "to_str") || sp_streq(name, "inspect") ||
         sp_streq(name, "full_message") || sp_streq(name, "detailed_message"))

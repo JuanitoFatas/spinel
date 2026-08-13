@@ -14348,6 +14348,14 @@ else { memcpy(dir, sf, n); dir[n] = 0; } }
       emit_indent(g_pre, g_indent);
       buf_printf(g_pre, "sp_Exception *_t%d = ", t);
       buf_puts(g_pre, rb.p ? rb.p : ""); buf_puts(g_pre, ";\n"); free(rb.p);
+      /* An override answering something other than a String cannot ride the
+         const char * dispatcher; the boxed pair carries it, and the call types
+         poly to match (#3868). */
+      if (exc_has_nonstring_msg_override(c) && comp_ntype(c, id) == TY_POLY) {
+        buf_printf(b, "(_t%d ? %s(_t%d) : sp_box_str(sp_str_empty))", t,
+                   sp_streq(name, "message") ? "sp_user_exc_message_v" : "sp_user_exc_to_s_v", t);
+        return;
+      }
       const char *fn = exc_has_user_msg_override(c)
         ? (sp_streq(name, "message") ? "sp_user_exc_message" : "sp_user_exc_to_s")
         : "sp_exc_message";

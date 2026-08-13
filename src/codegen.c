@@ -7679,6 +7679,52 @@ char *codegen_program(const NodeTable *nt) {
       buf_puts(&b, "  return sp_exc_message(e);\n}\n");
     }
   }
+  /* The boxed pair: an override answering something other than a String cannot
+     be represented by the const char * dispatchers above, so #message on an
+     exception whose class is only known at run time reported the stored message
+     (the class name) instead of what #to_s answered (#3868). */
+  if (exc_has_nonstring_msg_override(c)) {
+    for (int pass = 0; pass < 2; pass++) {
+      int want_message = pass;
+      buf_printf(&b, "__attribute__((unused)) static sp_RbVal %s(sp_Exception *e){\n",
+                 want_message ? "sp_user_exc_message_v" : "sp_user_exc_to_s_v");
+      buf_puts(&b, "  if(!e)return sp_box_str((&(\"\\xff\")[1]));\n  const char *cls=e->cls_name;\n");
+      for (int i = 0; i < c->nclasses; i++) {
+        if (!class_is_exc_subclass(c, i)) continue;
+        int dmsg = -1, dtos = -1;
+        int mi_msg = comp_method_in_chain(c, i, "message", &dmsg);
+        int mi_tos = comp_method_in_chain(c, i, "to_s", &dtos);
+        int mi = -1, dcls = -1;
+        const char *fn = NULL;
+        if (want_message) {
+          if (mi_msg >= 0)      { mi = mi_msg; dcls = dmsg; fn = "message"; }
+          else if (mi_tos >= 0) { mi = mi_tos; dcls = dtos; fn = "to_s"; }
+        }
+        else if (mi_tos >= 0) { mi = mi_tos; dcls = dtos; fn = "to_s"; }
+        if (mi < 0) continue;
+        TyKind mret = (TyKind)c->scopes[mi].ret;
+        if (mret == TY_UNKNOWN || mret == TY_VOID) continue;
+        const char *dcn = c->classes[dcls].c_name;
+        const char *cn0 = class_ruby_name(c, i);
+        if (!cn0) cn0 = c->classes[i].name;
+        if (!cn0) continue;
+        char callx[256];
+        snprintf(callx, sizeof callx, "sp_%s_%s((sp_%s*)e)", dcn, fn, dcn);
+        Buf bx; memset(&bx, 0, sizeof bx);
+        if (mret == TY_POLY) buf_puts(&bx, callx);
+        else emit_boxed_text(c, mret, callx, &bx);
+        buf_printf(&b, "  if(!strcmp(cls,\"%s\"))return %s;\n", cn0, bx.p ? bx.p : "sp_box_nil()");
+        if (c->classes[i].name && !sp_streq(cn0, c->classes[i].name))
+          buf_printf(&b, "  if(!strcmp(cls,\"%s\"))return %s;\n",
+                     c->classes[i].name, bx.p ? bx.p : "sp_box_nil()");
+        free(bx.p);
+      }
+      buf_printf(&b, "  return sp_box_str(%s(e));\n}\n",
+                 exc_has_user_msg_override(c)
+                   ? (want_message ? "sp_user_exc_message" : "sp_user_exc_to_s")
+                   : "sp_exc_message");
+    }
+  }
   /* constructor prototypes + definitions (after method protos: new calls initialize) */
   for (int i = 0; i < c->nclasses; i++) {
     ClassInfo *ci = &c->classes[i];
