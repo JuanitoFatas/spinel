@@ -73,7 +73,7 @@ static void emit_str_append_arg(Compiler *c, int arg, Buf *b) {
    matches, so the miss is IndexError / NameError rather than nil. `rtxt` names
    a temp already holding the receiver. */
 static void emit_struct_member_by_key(Compiler *c, ClassInfo *sc, const char *rtxt,
-                                      int key, int int_only, Buf *b) {
+                                      int key, int int_only, int nil_on_miss, Buf *b) {
   int tk = ++g_tmp, tk0 = ++g_tmp, tr = ++g_tmp;
   buf_printf(b, "({ sp_RbVal _t%d = ", tk);
   emit_boxed(c, key, b);
@@ -95,12 +95,15 @@ static void emit_struct_member_by_key(Compiler *c, ClassInfo *sc, const char *rt
     emit_boxed_text(c, sc->ivar_types[i], fld, b);
     buf_puts(b, ";}\nelse");
   }
-  buf_printf(b, " { if (_t%d.tag == SP_TAG_INT)"
-                " sp_raise_cls(\"IndexError\", sp_sprintf(\"offset %%lld too %%s for struct(size:%d)\","
-                " (long long)_t%d.v.i, _t%d.v.i < 0 ? \"small\" : \"large\"));"
-                " sp_raise_cls(\"NameError\", sp_sprintf(\"no member '%%s' in struct\", sp_poly_to_s(_t%d)));"
-                " } _t%d; })",
-             tk0, sc->nivars, tk0, tk0, tk0, tr);
+  /* #dig answers nil for a key no member matches, where #[] raises (#3892) */
+  if (nil_on_miss) buf_printf(b, " { (void)_t%d; } _t%d; })", tk0, tr);
+  else
+    buf_printf(b, " { if (_t%d.tag == SP_TAG_INT)"
+                  " sp_raise_cls(\"IndexError\", sp_sprintf(\"offset %%lld too %%s for struct(size:%d)\","
+                  " (long long)_t%d.v.i, _t%d.v.i < 0 ? \"small\" : \"large\"));"
+                  " sp_raise_cls(\"NameError\", sp_sprintf(\"no member '%%s' in struct\", sp_poly_to_s(_t%d)));"
+                  " } _t%d; })",
+               tk0, sc->nivars, tk0, tk0, tk0, tr);
 }
 
 int emit_array_call(Compiler *c, int id, Buf *b) {
@@ -7957,7 +7960,7 @@ int emit_object_call(Compiler *c, int id, Buf *b) {
         free(rb5.p);
         for (int a5 = 0; a5 < argc; a5++) {
           buf_printf(b, " sp_PolyArray_push(_t%d, ", to5);
-          emit_struct_member_by_key(c, sc, rtxt, argv[a5], 1, b);
+          emit_struct_member_by_key(c, sc, rtxt, argv[a5], 1, 0, b);
           buf_puts(b, ");");
         }
         buf_printf(b, " _t%d; })", to5);
@@ -8138,9 +8141,14 @@ int emit_object_call(Compiler *c, int id, Buf *b) {
       /* literal key resolves a member at compile time */
       int mi = -1;
       const char *kty = nt_type(nt, argv[0]);
-      if (kty && sp_streq(kty, "SymbolNode")) {
-        char ivn[256]; snprintf(ivn, sizeof ivn, "@%s", nt_str(nt, argv[0], "value"));
-        mi = comp_ivar_index(sc, ivn);
+      if (kty && (sp_streq(kty, "SymbolNode") || sp_streq(kty, "StringNode"))) {
+        /* a String names a member too, and inference resolves one: leaving it
+           to the runtime walk answered a boxed value into the member-typed
+           slot the call site declares (#3892) */
+        const char *kv = sp_streq(kty, "SymbolNode") ? nt_str(nt, argv[0], "value")
+                                                     : nt_str(nt, argv[0], "content");
+        if (kv) { char ivn[256]; snprintf(ivn, sizeof ivn, "@%s", kv);
+                  mi = comp_ivar_index(sc, ivn); }
       }
       else if (kty && sp_streq(kty, "IntegerNode")) {
         int v = (int)nt_int(nt, argv[0], "value", -1);
@@ -8226,10 +8234,10 @@ int emit_object_call(Compiler *c, int id, Buf *b) {
         char rtxt[32]; snprintf(rtxt, sizeof rtxt, "_t%d", td);
         buf_printf(b, "({ sp_%s *_t%d = %s; ", sc->c_name, td, rbd.p ? rbd.p : "");
         free(rbd.p);
-        if (argc == 1) emit_struct_member_by_key(c, sc, rtxt, argv[0], 0, b);
+        if (argc == 1) emit_struct_member_by_key(c, sc, rtxt, argv[0], 0, 1, b);
         else {
           buf_puts(b, "sp_poly_dig_n(");
-          emit_struct_member_by_key(c, sc, rtxt, argv[0], 0, b);
+          emit_struct_member_by_key(c, sc, rtxt, argv[0], 0, 1, b);
           buf_printf(b, ", %d, (sp_RbVal[]){", argc - 1);
           for (int a = 1; a < argc; a++) { if (a > 1) buf_puts(b, ", "); emit_boxed(c, argv[a], b); }
           buf_puts(b, "})");
@@ -8250,7 +8258,21 @@ int emit_object_call(Compiler *c, int id, Buf *b) {
       buf_printf(b, "; sp_RbVal _t%d = _t%d;", tk0, tk);
       buf_printf(b, " if (_t%d.tag == SP_TAG_INT && _t%d.v.i < 0) _t%d = sp_box_int(_t%d.v.i + %d);",
                  tk, tk, tk, tk, sc->nivars);
-      buf_printf(b, " sp_RbVal _t%d = ", tv); emit_boxed(c, argv[1], b); buf_puts(b, ";");
+      /* The assignment's own value is the right-hand side in ITS type -- that
+         is what the call site is typed for -- so keep it, and box a copy for
+         the per-member stores (#3897). */
+      TyKind vt = comp_ntype(c, argv[1]);
+      int tvraw = ++g_tmp;
+      if (vt != TY_POLY && vt != TY_UNKNOWN) {
+        buf_printf(b, " "); emit_ctype(c, vt, b);
+        buf_printf(b, " _t%d = ", tvraw); emit_expr(c, argv[1], b); buf_puts(b, ";");
+        char rawtxt[32]; snprintf(rawtxt, sizeof rawtxt, "_t%d", tvraw);
+        buf_printf(b, " sp_RbVal _t%d = ", tv); emit_boxed_text(c, vt, rawtxt, b); buf_puts(b, ";");
+      }
+      else {
+        buf_printf(b, " sp_RbVal _t%d = ", tv); emit_boxed(c, argv[1], b); buf_puts(b, ";");
+        tvraw = tv;
+      }
       for (int i = 0; i < sc->nivars; i++) {
         buf_printf(b, " if(sp_rbval_eql_key(_t%d,sp_box_sym((sp_sym)%d))||sp_rbval_eql_key(_t%d,sp_box_int(%dLL))"
                       "||sp_rbval_eql_key(_t%d,sp_box_str(\"%s\"))){ _t%d->iv_%s = ",
@@ -8266,7 +8288,7 @@ int emit_object_call(Compiler *c, int id, Buf *b) {
                     " (long long)_t%d.v.i, _t%d.v.i < 0 ? \"small\" : \"large\"));"
                     " sp_raise_cls(\"NameError\", sp_sprintf(\"no member '%%s' in struct\", sp_poly_to_s(_t%d)));"
                     " } _t%d; })",
-                 tk0, sc->nivars, tk0, tk0, tk0, tv);
+                 tk0, sc->nivars, tk0, tk0, tk0, tvraw);
       return 1;
     }
     if (sp_streq(name, "[]") && argc == 1) {
