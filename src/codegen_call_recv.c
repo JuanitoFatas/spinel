@@ -1174,11 +1174,21 @@ int emit_array_call(Compiler *c, int id, Buf *b) {
                        tk, tk, ts, tk, an, to, an, tr, ts, tk);
           }
           else if (at == TY_RANGE) {
-            int trng = ++g_tmp, ti = ++g_tmp;
+            /* an open or negative endpoint resolves against the length, the
+               way Array#[] resolves it: read raw, an endless range ran to
+               INTPTR_MAX and pushed until the process died (#3847) */
+            int trng = ++g_tmp, ti = ++g_tmp, tlen = ++g_tmp, tlo = ++g_tmp, thi = ++g_tmp;
             buf_printf(b, "{ sp_Range _t%d = ", trng); emit_expr(c, argv[a], b);
-            buf_printf(b, "; for (mrb_int _t%d = _t%d.first; _t%d <= _t%d.last - _t%d.excl; _t%d++)"
+            buf_printf(b, "; mrb_int _t%d = sp_%sArray_length(_t%d);", tlen, an, tr);
+            buf_printf(b, " mrb_int _t%d = _t%d.first == INTPTR_MIN ? 0"
+                          " : (_t%d.first < 0 ? _t%d.first + _t%d : _t%d.first);",
+                       tlo, trng, trng, trng, tlen, trng);
+            buf_printf(b, " mrb_int _t%d = _t%d.last == INTPTR_MAX ? _t%d - 1"
+                          " : ((_t%d.last < 0 ? _t%d.last + _t%d : _t%d.last) - (_t%d.excl ? 1 : 0));",
+                       thi, trng, tlen, trng, trng, tlen, trng, trng);
+            buf_printf(b, " for (mrb_int _t%d = _t%d; _t%d <= _t%d; _t%d++)"
                           " sp_%sArray_push(_t%d, sp_%sArray_get(_t%d, _t%d)); } ",
-                       ti, trng, ti, trng, trng, ti, an, to, an, tr, ti);
+                       ti, tlo, ti, thi, ti, an, to, an, tr, ti);
           }
           else {
             buf_printf(b, "sp_%sArray_push(_t%d, sp_%sArray_get(_t%d, ", an, to, an, tr);
