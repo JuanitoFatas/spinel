@@ -263,6 +263,11 @@ typedef struct {
   int nsg_civ, csg_civ;
   char **alias_new;    /* `alias new old`: alias_new[i] redirects to alias_old[i] */
   char **alias_old;
+  int   *alias_cls;    /* class the lookup resumes from (an alias of an
+                          INHERITED method keeps naming the ancestor's body
+                          even when this class redefines the name), or -1 */
+  int   *alias_node;   /* the alias statement's node id, so the pass that runs
+                          once superclasses are wired can fill alias_cls */
   int naliases, caliases;
   int enum_yield_arity; /* widest `yield` arity in this class's each, so the
                            Enumerable collector packs a multi-value yield into
@@ -677,6 +682,7 @@ void       comp_add_sg_writer(ClassInfo *ci, const char *name);
 int        comp_is_sg_reader(ClassInfo *ci, const char *name);
 int        comp_is_sg_writer(ClassInfo *ci, const char *name);
 void       comp_add_alias(ClassInfo *ci, const char *new_name, const char *old_name);
+void       comp_add_alias_from(ClassInfo *ci, const char *new_name, const char *old_name, int from_cls);
 void       comp_add_sg_civ(ClassInfo *ci, const char *name);
 int        comp_is_sg_civ(ClassInfo *ci, const char *name);
 /* Prepend-chain helpers. */
@@ -686,6 +692,7 @@ const char *comp_prep_user_name(const char *name);
 /* Resolve `name` through the class's (chain-aware) alias table to the
    underlying method/attr name. Returns `name` unchanged if not aliased. */
 const char *comp_resolve_alias(Compiler *c, int class_id, const char *name);
+const char *comp_resolve_alias_at(Compiler *c, int class_id, const char *name, int *start_cls);
 
 /* Set by codegen while a block is spliced: answers the type the block being
    inlined RIGHT HERE gives a yield, which the node cache cannot hold (one

@@ -443,8 +443,9 @@ int comp_cmethod_in_chain(Compiler *c, int class_id, const char *name, int *def_
 }
 
 int comp_method_in_chain(Compiler *c, int class_id, const char *name, int *def_class) {
-  name = comp_resolve_alias(c, class_id, name);
-  for (int cid = class_id; cid >= 0; cid = c->classes[cid].parent) {
+  int start = class_id;
+  name = comp_resolve_alias_at(c, class_id, name, &start);
+  for (int cid = start; cid >= 0; cid = c->classes[cid].parent) {
     int mi = comp_method_in_class(c, cid, name);
     if (mi >= 0) { if (def_class) *def_class = cid; return mi; }
   }
@@ -869,7 +870,7 @@ int comp_is_sg_civ(ClassInfo *ci, const char *name) { return name_in(ci->sg_civ,
 int comp_is_sg_reader(ClassInfo *ci, const char *name) { return name_in(ci->sg_readers, ci->nsg_readers, name); }
 int comp_is_sg_writer(ClassInfo *ci, const char *name) { return name_in(ci->sg_writers, ci->nsg_writers, name); }
 
-void comp_add_alias(ClassInfo *ci, const char *new_name, const char *old_name) {
+void comp_add_alias_from(ClassInfo *ci, const char *new_name, const char *old_name, int alias_node) {
   if (!new_name || !old_name) return;
   for (int i = 0; i < ci->naliases; i++)
     if (sp_streq(ci->alias_new[i], new_name)) return;
@@ -877,13 +878,21 @@ void comp_add_alias(ClassInfo *ci, const char *new_name, const char *old_name) {
     ci->caliases = ci->caliases ? ci->caliases * 2 : 4;
     ci->alias_new = realloc(ci->alias_new, sizeof(char *) * (size_t)ci->caliases);
     ci->alias_old = realloc(ci->alias_old, sizeof(char *) * (size_t)ci->caliases);
+    ci->alias_cls = realloc(ci->alias_cls, sizeof(int) * (size_t)ci->caliases);
+    ci->alias_node = realloc(ci->alias_node, sizeof(int) * (size_t)ci->caliases);
   }
   ci->alias_new[ci->naliases] = strdup(new_name);
   ci->alias_old[ci->naliases] = strdup(old_name);
+  ci->alias_cls[ci->naliases] = -1;
+  ci->alias_node[ci->naliases] = alias_node;
   ci->naliases++;
 }
 
-const char *comp_resolve_alias(Compiler *c, int class_id, const char *name) {
+void comp_add_alias(ClassInfo *ci, const char *new_name, const char *old_name) {
+  comp_add_alias_from(ci, new_name, old_name, -1);
+}
+
+const char *comp_resolve_alias_at(Compiler *c, int class_id, const char *name, int *start_cls) {
   if (!name) return name;
   /* Follow alias links (chain-aware), guarding against cycles. */
   for (int hops = 0; hops < 32; hops++) {
@@ -891,12 +900,24 @@ const char *comp_resolve_alias(Compiler *c, int class_id, const char *name) {
     for (int cid = class_id; cid >= 0 && !next; cid = c->classes[cid].parent) {
       ClassInfo *ci = &c->classes[cid];
       for (int i = 0; i < ci->naliases; i++)
-        if (sp_streq(ci->alias_new[i], name)) { next = ci->alias_old[i]; break; }
+        if (sp_streq(ci->alias_new[i], name)) {
+          next = ci->alias_old[i];
+          /* An alias of an INHERITED method names the body that was in effect
+             where the alias appeared, so a redefinition in this class must not
+             capture it: resume the lookup at the ancestor that owned the name
+             (#3873). */
+          if (start_cls && ci->alias_cls && ci->alias_cls[i] >= 0) *start_cls = ci->alias_cls[i];
+          break;
+        }
     }
     if (!next) return name;
     name = next;
   }
   return name;
+}
+
+const char *comp_resolve_alias(Compiler *c, int class_id, const char *name) {
+  return comp_resolve_alias_at(c, class_id, name, NULL);
 }
 
 /* native-binding registry (Path B): a native_func maps a Ruby Module.method to

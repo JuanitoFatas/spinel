@@ -1741,6 +1741,11 @@ static int alias_capture_earlier_def(Compiler *c, ClassInfo *cls,
   return 1;
 }
 
+static void alias_register(Compiler *c, ClassInfo *cls, const char *nw, const char *od, int s) {
+  if (alias_capture_earlier_def(c, cls, nw, od, s)) return;
+  comp_add_alias_from(cls, nw, od, s);
+}
+
 void register_aliases_body(Compiler *c, ClassInfo *cls, int body) {
   const NodeTable *nt = c->nt;
   int n = 0;
@@ -1754,7 +1759,7 @@ void register_aliases_body(Compiler *c, ClassInfo *cls, int body) {
       int on = nt_ref(nt, s, "old_name");
       const char *nw = nn >= 0 ? nt_str(nt, nn, "value") : NULL;
       const char *od = on >= 0 ? nt_str(nt, on, "value") : NULL;
-      if (!alias_capture_earlier_def(c, cls, nw, od, s)) comp_add_alias(cls, nw, od);
+      alias_register(c, cls, nw, od, s);
     }
     else if (sp_streq(sty, "CallNode")) {
       const char *nm = nt_str(nt, s, "name");
@@ -1765,7 +1770,7 @@ void register_aliases_body(Compiler *c, ClassInfo *cls, int body) {
       if (an >= 2 && nt_type(nt, argv[0]) && sp_streq(nt_type(nt, argv[0]), "SymbolNode") &&
           nt_type(nt, argv[1]) && sp_streq(nt_type(nt, argv[1]), "SymbolNode"))
       { const char *anw = nt_str(nt, argv[0], "value"), *aod = nt_str(nt, argv[1], "value");
-        if (!alias_capture_earlier_def(c, cls, anw, aod, s)) comp_add_alias(cls, anw, aod); }
+        alias_register(c, cls, anw, aod, s); }
     }
     else if (sp_streq(sty, "SingletonClassNode")) {
       /* `class << self; alias_method :a, :b; end` names a CLASS method; the
@@ -2989,6 +2994,33 @@ void resolve_parents(Compiler *c) {
     if (sty && (sp_streq(sty, "ConstantReadNode") || sp_streq(sty, "ConstantPathNode"))) {
       int p = comp_class_index(c, nt_str(nt, sc, "name"));
       if (p >= 0 && p != i) c->classes[i].parent = p;
+    }
+  }
+  resolve_inherited_aliases(c);
+}
+
+/* An alias of a method this class only INHERITS names the ancestor's body: a
+   redefinition later in the same class must not capture it. Record where the
+   lookup resumes, now that superclasses are wired (they are not at the point
+   the alias itself is registered). The same-class case -- a definition earlier
+   in this very body -- is already handled by renaming that definition. */
+void resolve_inherited_aliases(Compiler *c) {
+  for (int ci = 0; ci < c->nclasses; ci++) {
+    ClassInfo *cls = &c->classes[ci];
+    if (c->classes[ci].parent < 0) continue;
+    for (int a = 0; a < cls->naliases; a++) {
+      if (!cls->alias_node || cls->alias_node[a] < 0) continue;
+      const char *od = cls->alias_old[a];
+      int later = 0, own = 0;
+      for (int si = 1; si < c->nscopes; si++) {
+        Scope *sc = &c->scopes[si];
+        if (sc->class_id != ci || sc->is_cmethod || !sc->name || !sp_streq(sc->name, od)) continue;
+        if (sc->def_node >= 0 && sc->def_node < cls->alias_node[a]) { own = 1; break; }
+        later = 1;
+      }
+      if (own || !later) continue;
+      for (int p = c->classes[ci].parent; p >= 0; p = c->classes[p].parent)
+        if (comp_method_in_class(c, p, od) >= 0) { cls->alias_cls[a] = p; break; }
     }
   }
 }

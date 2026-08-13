@@ -203,6 +203,7 @@ int ffi_find_writer(Compiler *c, const char *mod, const char *name);
 int infer_global_const_types(Compiler *c);
 int infer_multiwrite_const_types(Compiler *c);
 void resolve_parents(Compiler *c);
+void resolve_inherited_aliases(Compiler *c);
 void process_include_body(Compiler *c, int ci, int body_node);
 void register_includes(Compiler *c);
 void register_include_attrs(Compiler *c);
