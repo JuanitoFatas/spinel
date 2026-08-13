@@ -2277,6 +2277,25 @@ static int emit_complex_rational_call(Compiler *c, int id, Buf *b) {
     return 1;
   }
   if (recv < 0 && sp_streq(name, "Complex") && argc >= 1) {
+    /* `exception: false` asks for nil instead of a raise on an unparseable
+       argument. The keyword hash counted as a second positional, so the
+       String form was skipped and the parse read the string as a float
+       (#3869). spinel's Complex() never raises, so the flag only has to not
+       break the call. */
+    if (argc == 2 && nt_type(nt, argv[1]) &&
+        (sp_streq(nt_type(nt, argv[1]), "KeywordHashNode") ||
+         sp_streq(nt_type(nt, argv[1]), "HashNode"))) {
+      int kn = 0; nt_arr(nt, argv[1], "elements", &kn);
+      int only_exc = kn > 0;
+      for (int e = 0; e < kn && only_exc; e++) {
+        const int *els = nt_arr(nt, argv[1], "elements", &kn);
+        int key = els ? nt_ref(nt, els[e], "key") : -1;
+        const char *kt = key >= 0 ? nt_type(nt, key) : NULL;
+        const char *knm = (kt && sp_streq(kt, "SymbolNode")) ? nt_str(nt, key, "value") : NULL;
+        if (!knm || !sp_streq(knm, "exception")) only_exc = 0;
+      }
+      if (only_exc) argc = 1;
+    }
     /* Complex("2+3i"): parse like String#to_c */
     if (argc == 1 && comp_ntype(c, argv[0]) == TY_STRING) {
       Buf sb = expr_buf(c, argv[0]);
@@ -2309,6 +2328,23 @@ static int emit_complex_rational_call(Compiler *c, int id, Buf *b) {
     return 1;
   }
   if (recv < 0 && sp_streq(name, "Rational") && (argc == 1 || argc == 2)) {
+    /* `exception: false` asks for nil rather than a raise; the keyword hash
+       counted as the denominator and the result was built from its address
+       (#3869). spinel's Rational() does not raise, so dropping the keyword is
+       the whole of it. */
+    if (argc == 2 && nt_type(nt, argv[1]) &&
+        (sp_streq(nt_type(nt, argv[1]), "KeywordHashNode") ||
+         sp_streq(nt_type(nt, argv[1]), "HashNode"))) {
+      int kn = 0; const int *els = nt_arr(nt, argv[1], "elements", &kn);
+      int only_exc = kn > 0;
+      for (int e = 0; e < kn && only_exc; e++) {
+        int key = els ? nt_ref(nt, els[e], "key") : -1;
+        const char *kt = key >= 0 ? nt_type(nt, key) : NULL;
+        const char *knm = (kt && sp_streq(kt, "SymbolNode")) ? nt_str(nt, key, "value") : NULL;
+        if (!knm || !sp_streq(knm, "exception")) only_exc = 0;
+      }
+      if (only_exc) argc = 1;
+    }
     /* Rational(String): parse "n", "n/d", or "n.d" like String#to_r rather than
        reading the string pointer as an integer. */
     if (argc == 1 && comp_ntype(c, argv[0]) == TY_STRING) {
