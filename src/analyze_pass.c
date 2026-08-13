@@ -107,20 +107,31 @@ static int recv_has_array_write(Compiler *c, int recv) {
     if (rargc != 0 || !gname) return 0;
     char ivn[300];
     snprintf(ivn, sizeof ivn, "@%s", gname);
-    for (int k = 0; k < c->nclasses; k++) {
-      int rdcls = k;
-      if (!comp_reader_in_chain(c, k, gname, &rdcls)) continue;
-      if (rdcls < 0 || rdcls >= c->nclasses) continue;
-      if (comp_ivar_index(&c->classes[rdcls], ivn) < 0) continue;
-      for (int id = 0; id < nt->count; id++) {
-        if (nt_kind(nt, id) != NK_InstanceVariableWriteNode) continue;
-        const char *wnm = nt_str(nt, id, "name");
-        if (!wnm || !sp_streq(wnm, ivn)) continue;
-        Scope *ws = comp_scope_of(c, id);
-        if (!ws || ws->class_id != rdcls) continue;
-        int v = nt_ref(nt, id, "value");
-        if (v < 0) continue;
-        if (nt_kind(nt, v) == NK_ArrayNode || ty_is_array(infer_type(c, v))) return 1;
+    /* Drive from the WRITES to `@gname` (the name-keyed index above), not from
+       every class crossed with every node: the two loops asked one question --
+       is there an array write to the backing ivar in the class that defines
+       the reader -- and the writes are the small side of it. */
+    if (wrn_nt != nt || wrn_ntc != nt->count) wrn_build(c);
+    if (!wrn_buckets) return 0;
+    unsigned rb = wrn_key(ivn, -1) % (unsigned)wrn_buckets;
+    for (int id = wrn_head[rb]; id >= 0; id = wrn_next[id]) {
+      if (nt_kind(nt, id) != NK_InstanceVariableWriteNode) continue;
+      const char *wnm = nt_str(nt, id, "name");
+      if (!wnm || !sp_streq(wnm, ivn)) continue;
+      Scope *ws = comp_scope_of(c, id);
+      if (!ws) continue;
+      int wc = ws->class_id;
+      if (wc < 0 || wc >= c->nclasses) continue;
+      if (comp_ivar_index(&c->classes[wc], ivn) < 0) continue;
+      int v = nt_ref(nt, id, "value");
+      if (v < 0) continue;
+      if (nt_kind(nt, v) != NK_ArrayNode && !ty_is_array(infer_type(c, v))) continue;
+      /* The write only counts when some class really does reach this defining
+         class through a reader named `gname` (alias resolution is per-class,
+         so this asks every class, exactly as the outer loop did). */
+      for (int k = 0; k < c->nclasses; k++) {
+        int rdcls = k;
+        if (comp_reader_in_chain(c, k, gname, &rdcls) && rdcls == wc) return 1;
       }
     }
     return 0;
@@ -132,7 +143,12 @@ static int recv_has_array_write(Compiler *c, int recv) {
   if (!rnm) return 0;
   Scope *rscope = is_local ? comp_scope_of(c, recv) : NULL;
   const char *wkind = is_ivar ? "InstanceVariableWriteNode" : "LocalVariableWriteNode";
-  for (int id = 0; id < nt->count; id++) {
+  /* Same index, same query shape as recv_has_scalar_numeric_write above. */
+  if (wrn_nt != nt || wrn_ntc != nt->count) wrn_build(c);
+  if (!wrn_buckets) return 0;
+  int qscope = is_local ? (int)(rscope - c->scopes) : -1;
+  unsigned b = wrn_key(rnm, qscope) % (unsigned)wrn_buckets;
+  for (int id = wrn_head[b]; id >= 0; id = wrn_next[id]) {
     const char *ty = nt_type(nt, id);
     if (!ty || !sp_streq(ty, wkind)) continue;
     const char *wnm = nt_str(nt, id, "name");
