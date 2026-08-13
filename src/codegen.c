@@ -1172,6 +1172,8 @@ static TyKind pf_yield_ty(Compiler *c, int id, int *found) {
    body and few call sites gets the hint, which raises the C compiler's own
    limit for it without forcing anything: it still decides. Worth 3-4% on
    optcarrot for 0.6% of binary size and no measurable compile time. */
+static int  g_mih_limit_override = 0;  /* the force pass raises the body budget */
+static int  g_mih_callers_override = 0;
 static int *g_mih_nodes = NULL;      /* AST nodes per scope */
 static int  g_mih_nscopes = 0;
 static const NodeTable *g_mih_nt = NULL;
@@ -1195,15 +1197,176 @@ static int method_inline_hint(Compiler *c, Scope *s) {
   if (si < 0 || si >= g_mih_nscopes) return 0;
   int limit = 90;
   { const char *e = getenv("SPINEL_INLINE_NODES"); if (e && *e) limit = atoi(e); }
+  if (g_mih_limit_override > 0) limit = g_mih_limit_override;
   if (limit <= 0) return 0;
   if (g_mih_nodes[si] > limit) return 0;
   /* few enough call sites that expanding it cannot multiply the program */
+  int callmax = 12;
+  if (g_mih_callers_override > 0) callmax = g_mih_callers_override;
   int calls = 0;
   NT_FOREACH_KIND(nt, NK_CallNode, id) {
     const char *nm = nt_str(nt, id, "name");
-    if (nm && sp_streq(nm, s->name) && ++calls > 12) return 0;
+    if (nm && sp_streq(nm, s->name) && ++calls > callmax) return 0;
   }
   return calls > 0;
+}
+
+
+/* ---- forced inlining of small leaf methods -------------------------------
+   The `inline` hint above lets the C compiler decide, and for the method that
+   matters most it decides no: PPU#render_pixel is fifteen lines of Ruby and
+   1.4KB of machine code, so its eight call sites in the PPU loop keep paying a
+   call and a frame per pixel. Forcing it is worth 6% on optcarrot.
+
+   always_inline is not a hint, though: it is a hard C error on a recursion
+   cycle and on a body that uses setjmp. So the set is computed rather than
+   guessed. A method qualifies when it is already hint-eligible, contains
+   nothing the emitter lowers through setjmp (a rescue, a block -- which is how
+   break, catch, StopIteration and a proc return all arrive -- a yield or a
+   super), and does not lie on a cycle in the call graph restricted to the
+   other qualifying methods. A cycle needs every member to be forced, so
+   dropping every member of every cycle leaves a set that cannot recurse. */
+static unsigned char *g_fi_state = NULL;   /* 0 unknown, 1 forced, 2 not */
+static int g_fi_nscopes = 0;
+static const NodeTable *g_fi_nt = NULL;
+static int g_fi_ntcount = 0;
+
+/* Every user method a call could reach: by the receiver's class when it names
+   one, by the bare name when the receiver is boxed or absent. */
+static void fi_callees(Compiler *c, int callnode, int *out, int *n, int max) {
+  const NodeTable *nt = c->nt;
+  const char *nm = nt_str(nt, callnode, "name");
+  if (!nm) return;
+  int rcv = nt_ref(nt, callnode, "receiver");
+  int cid = -1;
+  if (rcv >= 0) {
+    TyKind rt = comp_ntype(c, rcv);
+    if (ty_is_object(rt)) cid = ty_object_class(rt);
+    else if (rt != TY_POLY && rt != TY_UNKNOWN && rt != TY_CLASS) return;  /* builtin */
+  }
+  for (int si = 0; si < c->nscopes && *n < max; si++) {
+    Scope *m = &c->scopes[si];
+    if (!m->name || !sp_streq(m->name, nm)) continue;
+    if (cid >= 0 && m->class_id != cid &&
+        comp_method_in_chain(c, cid, nm, NULL) != si) continue;
+    out[(*n)++] = si;
+  }
+}
+
+/* Anything in this subtree that the emitter lowers through setjmp, or that
+   reaches a user method through a route fi_callees cannot enumerate. */
+static int fi_body_unforceable(Compiler *c, int id, int depth) {
+  const NodeTable *nt = c->nt;
+  if (id < 0) return 0;              /* an absent optional child is nothing */
+  if (depth > 64) return 1;          /* deeper than we walked: assume it is */
+  switch (nt_kind(nt, id)) {
+    case NK_BlockNode: case NK_LambdaNode: case NK_BlockArgumentNode:
+    case NK_BeginNode: case NK_RescueNode: case NK_RescueModifierNode:
+    case NK_RetryNode: case NK_RedoNode: case NK_BreakNode: case NK_NextNode:
+    case NK_YieldNode: case NK_SuperNode: case NK_ForwardingSuperNode:
+      return 1;
+    default: break;
+  }
+  int nr = nt_num_refs(nt, id);
+  for (int i = 0; i < nr; i++)
+    if (fi_body_unforceable(c, nt_ref_at(nt, id, i), depth + 1)) return 1;
+  int na = nt_num_arrs(nt, id);
+  for (int i = 0; i < na; i++) {
+    int n = 0; const int *ids = nt_arr_at(nt, id, i, &n);
+    for (int j = 0; j < n; j++)
+      if (fi_body_unforceable(c, ids[j], depth + 1)) return 1;
+  }
+  return 0;
+}
+
+/* Collect every call node in a method's body subtree. */
+static void fi_collect_calls(Compiler *c, int id, int *out, int *n, int max, int depth) {
+  const NodeTable *nt = c->nt;
+  if (id < 0 || depth > 64 || *n >= max) return;
+  if (nt_kind(nt, id) == NK_CallNode) out[(*n)++] = id;
+  int nr = nt_num_refs(nt, id);
+  for (int i = 0; i < nr; i++) fi_collect_calls(c, nt_ref_at(nt, id, i), out, n, max, depth + 1);
+  int na = nt_num_arrs(nt, id);
+  for (int i = 0; i < na; i++) {
+    int cn = 0; const int *ids = nt_arr_at(nt, id, i, &cn);
+    for (int j = 0; j < cn; j++) fi_collect_calls(c, ids[j], out, n, max, depth + 1);
+  }
+}
+
+static int fi_reaches(Compiler *c, int from, int target, unsigned char *seen,
+                      unsigned char *cand, int depth) {
+  if (depth > 64) return 1;                      /* too deep: assume it does */
+  if (seen[from]) return 0;
+  seen[from] = 1;
+  int calls[512]; int nc = 0;
+  fi_collect_calls(c, c->scopes[from].body, calls, &nc, 512, 0);
+  for (int i = 0; i < nc; i++) {
+    int cal[32]; int n2 = 0;
+    fi_callees(c, calls[i], cal, &n2, 32);
+    for (int j = 0; j < n2; j++) {
+      if (!cand[cal[j]]) continue;               /* not forced: no cycle through it */
+      if (cal[j] == target) return 1;
+      if (fi_reaches(c, cal[j], target, seen, cand, depth + 1)) return 1;
+    }
+  }
+  return 0;
+}
+
+static void fi_build(Compiler *c) {
+  const NodeTable *nt = c->nt;
+  free(g_fi_state);
+  g_fi_state = (unsigned char *)calloc((size_t)(c->nscopes > 0 ? c->nscopes : 1), 1);
+  g_fi_nscopes = c->nscopes; g_fi_nt = nt; g_fi_ntcount = nt->count;
+  if (!g_fi_state) return;
+  unsigned char *cand = (unsigned char *)calloc((size_t)(c->nscopes > 0 ? c->nscopes : 1), 1);
+  if (!cand) return;
+  int ncand = 0;
+  for (int si = 0; si < c->nscopes; si++) {
+    Scope *m = &c->scopes[si];
+    /* Forcing is about the call, not the code size, so it takes its own
+       (larger) body budget: render_pixel is past the hint's, and it is
+       exactly the method worth forcing. */
+    int sv = g_mih_limit_override, sv2 = g_mih_callers_override;
+    { const char *e = getenv("SPINEL_INLINE_FORCE_NODES");
+      g_mih_limit_override = (e && *e) ? atoi(e) : 250;
+      const char *e2 = getenv("SPINEL_INLINE_FORCE_CALLERS");
+      g_mih_callers_override = (e2 && *e2) ? atoi(e2) : 12; }
+    int ok = (method_inline_hint(c, m) == 1);
+    g_mih_limit_override = sv; g_mih_callers_override = sv2;
+    if (!ok) continue;
+    if (fi_body_unforceable(c, m->body, 0)) continue;
+    cand[si] = 1; ncand++;
+  }
+  /* A whole-program cycle search is O(candidates * edges); on a program with
+     thousands of small methods that is not worth the compile time, and the
+     hint alone still applies. */
+  if (ncand > 0 && ncand <= 2048) {
+    unsigned char *seen = (unsigned char *)malloc((size_t)c->nscopes);
+    for (int si = 0; si < c->nscopes && seen; si++) {
+      if (!cand[si]) continue;
+      memset(seen, 0, (size_t)c->nscopes);
+      if (fi_reaches(c, si, si, seen, cand, 0)) cand[si] = 0;   /* on a cycle */
+    }
+    free(seen);
+  } else {
+    for (int si = 0; si < c->nscopes; si++) cand[si] = 0;
+  }
+  for (int si = 0; si < c->nscopes; si++) g_fi_state[si] = cand[si] ? 1 : 2;
+  free(cand);
+}
+
+static int method_inline_force(Compiler *c, Scope *s) {
+  { const char *e = getenv("SPINEL_INLINE_FORCE");
+    if (e && *e) { if (*e == '0') return 0; }
+    else if (!g_inline_hot) return 0; }
+  if (g_debug) return 0;
+  const NodeTable *nt = c->nt;
+  if (g_fi_nt != nt || g_fi_ntcount != nt->count || g_fi_nscopes != c->nscopes || !g_fi_state)
+    fi_build(c);
+  if (!g_fi_state) return 0;
+  int si = (int)(s - c->scopes);
+  if (si < 0 || si >= g_fi_nscopes) return 0;
+  return g_fi_state[si] == 1;
 }
 
 void emit_method_signature(Compiler *c, Scope *s, Buf *b) {
@@ -1222,7 +1385,8 @@ void emit_method_signature(Compiler *c, Scope *s, Buf *b) {
   const char *unused = (s->class_id >= 0 && !s->is_cmethod &&
                         !c->classes[s->class_id].instantiated)
                        ? "__attribute__((unused)) " : "";
-  const char *ihint = method_inline_hint(c, s) ? "inline " : "";
+  const char *ihint = method_inline_force(c, s) ? "inline __attribute__((always_inline)) "
+                    : (method_inline_hint(c, s) ? "inline " : "");
   if (method_is_void(s)) { buf_puts(b, stor); buf_puts(b, ihint); buf_puts(b, unused); buf_puts(b, "void "); }
   else { buf_puts(b, stor); buf_puts(b, ihint); buf_puts(b, unused); emit_ctype(c, s->ret, b); buf_puts(b, " "); }
   emit_method_cname(c, s, b);
@@ -1382,6 +1546,7 @@ static void gc_save_take_back(Buf *b, size_t off, size_t save_len) {
 /* Escape hatch: `--no-root-elision` keeps every root, so a suspected
    miscompile can be bisected against the same binary. */
 int g_no_root_elision = 0;
+int g_inline_hot = 0;   /* --inline-hot: force small leaf methods inline */
 /* Escape hatch: `--no-write-barrier` emits the stores bare, so a suspected
    miscompile can be bisected against the same binary. */
 int g_no_write_barrier = 0;

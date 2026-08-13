@@ -33,6 +33,7 @@
 #include <sys/wait.h>
 
 extern int g_no_root_elision;
+extern int g_inline_hot;
 extern int g_no_write_barrier;
 #define PATH_SEP '/'
 #define EXE_SUFFIX ""
@@ -191,6 +192,9 @@ static void usage(void) {
     "              and writes <out>.symbols.json (perf record -g ready)\n"
     "  --debug     Debug build: step through the .rb in gdb/lldb (#line, -g -O0)\n"
     "  --no-line-map  Suppress #line directives\n"
+    "  --inline-hot   Force small leaf methods inline: faster hot loops\n"
+    "                 (a sixth on optcarrot) for a bigger binary and about\n"
+    "                 twice the C compile time on a large program\n"
     "  --cc=CMD    C compiler (default: cc)\n"
     "  -e STR      Inline Ruby source (repeatable; joined with newlines)\n"
     "  --rbs DIR   Seed analyzer with RBS signatures from DIR (advisory)\n"
@@ -245,6 +249,9 @@ int main(int argc, char **argv) {
     /* keep every GC root, so a suspected miscompile can be bisected against
        the same binary rather than against a different build. */
     else if (sp_streq(a, "--no-root-elision")) { g_no_root_elision = 1; i++; }
+    /* Force the small leaf methods inline: worth 17% on optcarrot and about
+       twice the C compile time on a large program, so it is asked for. */
+    else if (sp_streq(a, "--inline-hot")) { g_inline_hot = 1; i++; }
     else if (sp_streq(a, "--no-write-barrier")) { g_no_write_barrier = 1; i++; }
     else if (sp_streq(a, "-c"))            { c_only = 1; i++; }
     else if (sp_streq(a, "-I"))            { if (++i < argc) sp_add_feature_root(argv[i]); i++; }

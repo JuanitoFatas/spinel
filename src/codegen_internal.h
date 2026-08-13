@@ -31,6 +31,7 @@ void buf_putn(Buf *b, const char *s, size_t n);
 void buf_puts(Buf *b, const char *s);
 void buf_erase(Buf *b, size_t off, size_t n);
 extern int g_no_root_elision;
+extern int g_inline_hot;
 extern int g_no_write_barrier;
 void buf_printf(Buf *b, const char *fmt, ...);
 
