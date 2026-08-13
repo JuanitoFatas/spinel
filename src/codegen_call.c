@@ -8554,8 +8554,13 @@ void emit_call(Compiler *c, int id, Buf *b) {
         nc2 == (sp_streq(nn2, "!") ? 0 : 1) && ty_is_object(comp_ntype(c, nr2))) {
       int nd = ty_object_class(comp_ntype(c, nr2)), ndef = nd;
       if (comp_method_in_chain(c, nd, nn2, &ndef) >= 0) {
-        buf_printf(b, "sp_%s_%s((sp_%s *)(", c->classes[ndef].c_name, mc(nn2),
-                   c->classes[ndef].c_name);
+        /* A value-type object is passed BY VALUE (sp_X, not sp_X *): casting
+           it to a pointer is not a conversion the C compiler accepts, so a
+           class with ivars that defines #! did not build (#3819). */
+        int nval = comp_ty_value_obj(c, comp_ntype(c, nr2));
+        buf_printf(b, "sp_%s_%s(", c->classes[ndef].c_name, mc(nn2));
+        if (!nval) buf_printf(b, "(sp_%s *)", c->classes[ndef].c_name);
+        buf_puts(b, "(");
         emit_expr(c, nr2, b);
         buf_puts(b, ")");
         if (nc2 == 1) { buf_puts(b, ", "); emit_expr(c, nv2[0], b); }
@@ -19415,6 +19420,20 @@ else { memcpy(dir, sf, n); dir[n] = 0; } }
   }
 
   if (sp_streq(name, "!") && recv >= 0 && argc == 0) {
+    /* A user-defined #! wins over truthiness. The generic arms below cast the
+       receiver to a pointer, which for a value-type object is not even a
+       conversion the C accepts (#3819). */
+    if (ty_is_object(rt)) {
+      int bmi = comp_method_in_chain(c, ty_object_class(rt), "!", NULL);
+      if (bmi >= 0) {
+        buf_puts(b, "(");
+        emit_method_cname(c, &c->scopes[bmi], b);
+        buf_puts(b, "(");
+        emit_expr(c, recv, b);
+        buf_puts(b, "))");
+        return;
+      }
+    }
     /* Ruby truthiness: only nil and false are falsy. `!x` negates the same
        per-type truthiness emit_cond uses -- a poly / nullable scalar / nullable
        pointer can be falsy, so the result is not unconditionally false. */
