@@ -8653,6 +8653,51 @@ void emit_call(Compiler *c, int id, Buf *b) {
     return;
   }
   const NodeTable *nt = c->nt;
+  /* An integer Range method handed a literal of the wrong kind: the pointer
+     went into the mrb_int slot and the C compiler was left to reject the whole
+     program (#3838). A membership predicate answers false for a value the
+     range cannot hold; a count/step argument raises the TypeError CRuby
+     raises. */
+  {
+    int rr2 = nt_ref(nt, id, "receiver");
+    const char *rn2 = nt_str(nt, id, "name");
+    int ra2 = nt_ref(nt, id, "arguments");
+    int rc2 = 0; const int *rv2 = ra2 >= 0 ? nt_arr(nt, ra2, "arguments", &rc2) : NULL;
+    if (rr2 >= 0 && rn2 && rc2 == 1 && rv2 && rv2[0] >= 0 &&
+        comp_ntype(c, rr2) == TY_RANGE && !user_defines_or_reads(c, rn2)) {
+      NodeKind ak = nt_kind(nt, rv2[0]);
+      const char *badcls = ak == NK_StringNode ? "String" :
+                           ak == NK_SymbolNode ? "Symbol" :
+                           ak == NK_ArrayNode  ? "Array"  :
+                           ak == NK_HashNode   ? "Hash"   : NULL;
+      int pred = sp_streq(rn2, "cover?") || sp_streq(rn2, "include?") ||
+                 sp_streq(rn2, "member?") || sp_streq(rn2, "===");
+      int wants_int = sp_streq(rn2, "first") || sp_streq(rn2, "last") ||
+                      sp_streq(rn2, "take") || sp_streq(rn2, "drop") ||
+                      sp_streq(rn2, "step") || sp_streq(rn2, "each_slice") ||
+                      sp_streq(rn2, "each_cons");
+      /* eql? is type-strict: an integer range never equals a float one. */
+      int float_range_arg = 0;
+      if (sp_streq(rn2, "eql?") && nt_kind(nt, rv2[0]) == NK_RangeNode) {
+        for (int e = 0; e < 2; e++) {
+          int b2 = nt_ref(nt, rv2[0], e ? "right" : "left");
+          if (b2 >= 0 && nt_kind(nt, b2) == NK_FloatNode) float_range_arg = 1;
+        }
+      }
+      if ((badcls && pred) || float_range_arg) {
+        buf_puts(b, "({ (void)("); emit_expr(c, rr2, b); buf_puts(b, "); FALSE; })");
+        return;
+      }
+      if (badcls && wants_int) {
+        TyKind rty4 = comp_ntype(c, id);
+        const char *dv4 = default_value(rty4);
+        buf_puts(b, "({ (void)("); emit_expr(c, rr2, b); buf_puts(b, "); ");
+        buf_printf(b, "sp_raise_cls(\"TypeError\", \"no implicit conversion of %s into Integer\"); ", badcls);
+        buf_printf(b, "%s; })", dv4 ? dv4 : "0");
+        return;
+      }
+    }
+  }
   /* An Array method handed a literal of the wrong kind: the pointer went into
      the mrb_int slot (or the reverse) and the C compiler was left to reject
      the program (#3831). CRuby raises TypeError naming the conversion. */
