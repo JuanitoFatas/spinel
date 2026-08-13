@@ -10648,7 +10648,11 @@ int emit_poly_call(Compiler *c, int id, Buf *b) {
     int str_conv_owned = user_defines_or_reads(c, name);
     if (!str_conv_owned) {
     if ((sp_streq(name, "succ") || sp_streq(name, "next")) && argc == 0) {
-      buf_puts(b, "sp_poly_case_conv("); emit_expr(c, recv, b); buf_puts(b, ", sp_str_succ)"); return 1;
+      /* per kind, not per string: an Integer counts up and an Enumerator pulls
+         its next value, where the string succ answered "" for both (#3843) */
+      buf_puts(b, "sp_poly_succ_m("); emit_expr(c, recv, b);
+      buf_printf(b, ", %d)", sp_streq(name, "next") ? 1 : 0);
+      return 1;
     }
     if (sp_streq(name, "upcase"))     { buf_puts(b, "sp_poly_case_conv("); emit_expr(c, recv, b); buf_puts(b, ", sp_str_upcase)"); return 1; }
     if (sp_streq(name, "downcase"))     { buf_puts(b, "sp_poly_case_conv("); emit_expr(c, recv, b); buf_puts(b, ", sp_str_downcase)"); return 1; }

@@ -2166,6 +2166,24 @@ SP_COLD static const char *sp_nomethod_msg(const char *m, sp_RbVal v) {
                 : sp_sprintf("an instance of %s", sp_poly_class_name(v));
   return sp_sprintf("undefined method '%s' for %s", m, d);
 }
+/* #succ / #next on a boxed receiver. Every kind that answers them has its own
+   answer: an Integer counts up, a String or Symbol takes the succ sequence,
+   and an Enumerator pulls its next value (#next only). Routing all of them
+   through the string succ answered "" for an Enumerator and a string for an
+   Integer (#3843). */
+static sp_RbVal sp_enum_next_boxed(sp_RbVal v);      /* defined below, after sp_enum.h */
+static sp_RbVal sp_poly_succ_m(sp_RbVal v, mrb_bool allow_enum) {
+  if (v.tag == SP_TAG_INT) return sp_box_int(v.v.i + 1);
+  if (v.tag == SP_TAG_BIGINT) return sp_box_bigint(sp_bigint_add((sp_Bigint *)v.v.p,
+                                                                 sp_bigint_new_int(1)));
+  if (v.tag == SP_TAG_STR) return sp_box_str(sp_str_succ(v.v.s));
+  if (v.tag == SP_TAG_SYM && sp_sym_name_fn && sp_json_sym_intern_fn)
+    return sp_box_sym(sp_json_sym_intern_fn(sp_str_succ(sp_sym_name_fn((sp_sym)v.v.i))));
+  if (allow_enum && v.tag == SP_TAG_OBJ && v.cls_id == SP_BUILTIN_ENUMERATOR && v.v.p)
+    return sp_enum_next_boxed(v);
+  sp_raise_nomethod(sp_nomethod_msg(allow_enum ? "next" : "succ", v));
+  return sp_box_nil();
+}
 /* Like sp_nomethod_msg, but also stages the failed call's argument list for
    NoMethodError#args (#2837). */
 SP_COLD static const char *sp_nomethod_msg_args(const char *m, sp_RbVal v, mrb_int n, sp_RbVal *args) {
@@ -6277,6 +6295,7 @@ static sp_RbVal sp_poly_sum_seed(sp_RbVal v, sp_RbVal seed) {
   return acc;
 }
 static sp_PolyArray *sp_poly_to_a_arr(sp_RbVal v);  /* defined below; hash -> pairs */
+static sp_PolyArray *sp_enum_to_a_boxed(sp_RbVal v);  /* defined below, after sp_enum.h */
 /* The count-taking reads of Array's surface, for a receiver carried in a poly
    slot -- an array read out of a nested Array or Hash answers Array to #class
    but had no arm for these, so they raised NoMethodError (#3464). Each is the
@@ -7839,6 +7858,9 @@ static sp_PolyArray *sp_poly_to_a_arr(sp_RbVal v) {
     if (h.tag == SP_TAG_OBJ && h.cls_id == SP_BUILTIN_SYM_POLY_HASH)
       return sp_SymPolyHash_values((sp_SymPolyHash *)h.v.p);
   }
+  /* an Enumerator read out of a container drains like the typed receiver does */
+  if (v.tag == SP_TAG_OBJ && v.cls_id == SP_BUILTIN_ENUMERATOR && v.v.p)
+    return sp_enum_to_a_boxed(v);
   /* a user class that includes Enumerable: its elements, through the
      materializer the generated to_a dispatch calls (#3761) */
   { sp_PolyArray *ue = sp_poly_user_elems(v);
@@ -8321,6 +8343,16 @@ sp_PolyArray *sp_Enumerator_take(sp_Enumerator *e, mrb_int n);
 /* Enumerator#to_a / #entries: drain the whole source into an array (a fresh run
    of the generator, independent of the #next cursor), matching CRuby. */
 sp_PolyArray *sp_Enumerator_to_a(sp_Enumerator *e);
+/* The boxed-receiver entry points the poly surface above forwards to: an
+   Enumerator read out of a container answers #to_a / #next like the typed
+   receiver does. Separate thunks because sp_Enumerator is only a type from
+   here down (#3843). */
+static sp_PolyArray *sp_enum_to_a_boxed(sp_RbVal v) {
+  return sp_Enumerator_to_a((sp_Enumerator *)v.v.p);
+}
+static sp_RbVal sp_enum_next_boxed(sp_RbVal v) {
+  return sp_Enumerator_next((sp_Enumerator *)v.v.p);
+}
 /* Universal proc return channel: every first-class proc publishes its result
    here, boxed, and the .call site unboxes it back to the call's inferred type
    (CRuby's uniform boxed-VALUE proc ABI). A file-static per TU, like the
