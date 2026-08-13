@@ -22552,7 +22552,11 @@ else { memcpy(dir, sf, n); dir[n] = 0; } }
           /* stage the receiver too (NoMethodError#receiver, #3068), but only when
              it is side-effect-free to re-emit: a bare local/self/ivar/const or a
              literal. A side-effecting receiver would be double-evaluated. */
-          const char *_rvty = recv >= 0 ? nt_type(nt, recv) : NULL;
+          /* through parentheses: `({a: 1}).nope` names the same literal, and
+             reading the ParenthesesNode's kind left the receiver unstaged so
+             NoMethodError#receiver answered nil (#3891) */
+          int _rvnode = recv >= 0 ? unwrap_parens(c, recv) : -1;
+          const char *_rvty = _rvnode >= 0 ? nt_type(nt, _rvnode) : NULL;
           int recv_stageable = _rvty && (sp_streq(_rvty, "LocalVariableReadNode") ||
               sp_streq(_rvty, "SelfNode") || sp_streq(_rvty, "InstanceVariableReadNode") ||
               sp_streq(_rvty, "ConstantReadNode") || sp_streq(_rvty, "GlobalVariableReadNode") ||
