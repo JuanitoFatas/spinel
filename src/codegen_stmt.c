@@ -1769,9 +1769,11 @@ static void emit_pm_array_cond(Compiler *c, int pat, const char *arr, Buf *b) {
   Buf dbuf; memset(&dbuf, 0, sizeof dbuf);
   buf_printf(&dbuf, "({ sp_RbVal _t%d = %s;"
                     " if (_t%d.tag == SP_TAG_OBJ && _t%d.cls_id >= 0"
-                    " && !sp_poly_is_array_kind(_t%d.cls_id) && sp_obj_to_a_fn)"
-                    " _t%d = sp_obj_to_a_fn(_t%d); _t%d; })",
-             tdc, arr, tdc, tdc, tdc, tdc, tdc, tdc);
+                    " && !sp_poly_is_array_kind(_t%d.cls_id)"
+                    " && (sp_obj_deconstruct_fn || sp_obj_to_a_fn))"
+                    " _t%d = sp_obj_deconstruct_fn ? sp_obj_deconstruct_fn(_t%d)"
+                    " : sp_obj_to_a_fn(_t%d); _t%d; })",
+             tdc, arr, tdc, tdc, tdc, tdc, tdc, tdc, tdc);
   int tda = ++g_tmp;
   buf_printf(b, "({ sp_RbVal _t%d = %s; ", tda, dbuf.p ? dbuf.p : arr);
   free(dbuf.p);

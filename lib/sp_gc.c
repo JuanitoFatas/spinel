@@ -52,6 +52,7 @@ sp_RbVal (*sp_obj_to_hash_fn)(sp_RbVal) = NULL;
 const char *(*sp_obj_to_json_fn)(sp_RbVal) = NULL;
 sp_RbVal (*sp_obj_to_h_fn)(sp_RbVal) = NULL;
 sp_RbVal (*sp_obj_to_a_fn)(sp_RbVal) = NULL;
+sp_RbVal (*sp_obj_deconstruct_fn)(sp_RbVal) = NULL;
 sp_RbVal (*sp_obj_with_fn)(sp_RbVal, sp_RbVal) = NULL;
 const char *(*sp_obj_inspect_fn)(int cls_id, void *p) = NULL;
 const char *(*sp_obj_to_s_fn)(int cls_id, void *p) = NULL;

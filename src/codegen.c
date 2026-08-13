@@ -4975,6 +4975,41 @@ static void emit_obj_to_a_dispatch(Compiler *c, Buf *b) {
    instantiated Data: construct a fresh instance whose members come from the
    symbol-keyed override hash `ov` where present, else copied from the receiver.
    Mirrors the typed Data#with emitter for a poly receiver (#2890). */
+/* User-object #deconstruct, installed as sp_obj_deconstruct_fn: what a
+   `case/in` array pattern matches a boxed element against. A Data answers
+   #deconstruct with its members but has no #to_a at all, so the to_a dispatch
+   deliberately skips it and a nested array sub-pattern never matched a Data
+   element (#3882). Everything else defers to that dispatch. */
+static int obj_deconstruct_any(Compiler *c) {
+  for (int i = 0; i < c->nclasses; i++)
+    if (c->classes[i].is_data && c->classes[i].instantiated && !c->classes[i].is_native_class)
+      return 1;
+  return 0;
+}
+static void emit_obj_deconstruct_dispatch(Compiler *c, Buf *b) {
+  if (!obj_deconstruct_any(c)) return;
+  buf_puts(b, "static sp_RbVal sp_obj_deconstruct(sp_RbVal v) {\n");
+  buf_puts(b, "  switch (v.cls_id) {\n");
+  for (int i = 0; i < c->nclasses; i++) {
+    ClassInfo *ci = &c->classes[i];
+    if (!ci->is_data || !ci->instantiated || ci->is_native_class) continue;
+    buf_printf(b, "    case %d: {\n", i);
+    buf_printf(b, "      sp_%s *o = (sp_%s *)v.v.p; (void)o;\n", ci->c_name, ci->c_name);
+    buf_puts(b, "      sp_PolyArray *_a = sp_PolyArray_new(); SP_GC_ROOT(_a);\n");
+    for (int j = 0; j < ci->nivars; j++) {
+      char fld[300];
+      snprintf(fld, sizeof fld, "o->iv_%s", iv_c(ci->ivars[j] + 1));
+      buf_puts(b, "      sp_PolyArray_push(_a, ");
+      Buf bx; memset(&bx, 0, sizeof bx);
+      emit_boxed_text(c, ci->ivar_types[j], fld, &bx);
+      buf_puts(b, bx.p ? bx.p : "sp_box_nil()"); free(bx.p);
+      buf_puts(b, ");\n");
+    }
+    buf_puts(b, "      return sp_box_poly_array(_a);\n    }\n");
+  }
+  buf_puts(b, "    default: return sp_obj_to_a_fn ? sp_obj_to_a_fn(v) : sp_box_nil();\n  }\n}\n");
+}
+
 static void emit_obj_with_dispatch(Compiler *c, Buf *b) {
   if (!g_gen_obj_with) return;
   buf_puts(b, "static sp_RbVal sp_obj_with(sp_RbVal v, sp_RbVal ov) {\n");
@@ -5949,6 +5984,8 @@ void emit_regex_section(Compiler *c, Buf *b) {
     buf_puts(b, "static sp_RbVal sp_obj_to_h(sp_RbVal v);\n");
   if (obj_to_a_any(c))
     buf_puts(b, "static sp_RbVal sp_obj_to_a(sp_RbVal v);\n");
+  if (obj_deconstruct_any(c))
+    buf_puts(b, "static sp_RbVal sp_obj_deconstruct(sp_RbVal v);\n");
   if (g_gen_obj_with)
     buf_puts(b, "static sp_RbVal sp_obj_with(sp_RbVal v, sp_RbVal ov);\n");
   if (g_gen_obj_hashkey)
@@ -6035,6 +6072,8 @@ void emit_regex_section(Compiler *c, Buf *b) {
     buf_puts(b, "  sp_obj_to_h_fn = sp_obj_to_h;\n");
   if (obj_to_a_any(c))
     buf_puts(b, "  sp_obj_to_a_fn = sp_obj_to_a;\n");
+  if (obj_deconstruct_any(c))
+    buf_puts(b, "  sp_obj_deconstruct_fn = sp_obj_deconstruct;\n");
   if (g_gen_obj_with)
     buf_puts(b, "  sp_obj_with_fn = sp_obj_with;\n");
   if (g_re_count > 0) {
@@ -7845,6 +7884,7 @@ char *codegen_program(const NodeTable *nt) {
   emit_obj_to_hash_dispatch(c, body);
   emit_obj_to_json_dispatch(c, body);
   emit_obj_to_h_dispatch(c, body);
+  emit_obj_deconstruct_dispatch(c, body);
   emit_obj_to_a_dispatch(c, body);
   emit_obj_with_dispatch(c, body);
   for (int s = 1; s < c->nscopes; s++) {

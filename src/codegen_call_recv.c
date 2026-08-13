@@ -7814,6 +7814,10 @@ int emit_object_call(Compiler *c, int id, Buf *b) {
       if (cn) { buf_printf(b, "sp_%s_%s((sp_%s *)", cn, name, cn); emit_expr(c, recv, b); buf_puts(b, ")"); return 1; }
     }
     int is_to_a = (sp_streq(name, "to_a") || sp_streq(name, "values") || sp_streq(name, "deconstruct"));
+    /* CRuby's Data has neither #to_a nor #values (Struct has both); only
+       #deconstruct answers its members, and asking for the others is a
+       NoMethodError rather than the member list. */
+    if (is_to_a && sc->is_data && !sp_streq(name, "deconstruct")) is_to_a = 0;
     if (is_to_a && argc == 0) {
       int t = ++g_tmp; int rt2 = ++g_tmp;
       Buf rb = expr_buf(c, recv);
