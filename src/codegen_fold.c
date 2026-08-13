@@ -5001,6 +5001,11 @@ int emit_enum_find_expr(Compiler *c, int id, Buf *b) {
   else if (block < 0 || !nt_type(nt, block) || !sp_streq(nt_type(nt, block), "BlockNode")) return 0;
   int recv = nt_ref(nt, id, "receiver");
   if (recv < 0 || comp_ntype(c, recv) != TY_ENUMERATOR) return 0;
+  /* find(ifnone) { }: the proc answers when nothing matched, exactly as the
+     array form serves it. Any other argument stays a loud reject. (#3814) */
+  int f_ifnone = !inc && !take && iargc == 1 && iargv &&
+                 comp_ntype(c, iargv[0]) == TY_PROC;
+  if (!inc && iargc > 0 && !f_ifnone) return 0;
   const char *p0_orig = inc ? NULL : block_param_name(c, block, 0);
   const char *p0 = p0_orig ? rename_local(p0_orig) : NULL;
   const char *p1_orig = inc ? NULL : block_param_name(c, block, 1);
@@ -5020,6 +5025,16 @@ int emit_enum_find_expr(Compiler *c, int id, Buf *b) {
   }
 
   int te = ++g_tmp, tres = ++g_tmp, tv = ++g_tmp, tg = ++g_tmp;
+  int tfn = f_ifnone ? ++g_tmp : -1;
+  if (f_ifnone) {
+    /* bound up front (CRuby evaluates arguments first); the found flag keeps a
+       matched nil element from calling the proc */
+    Buf nb; memset(&nb, 0, sizeof nb); emit_expr(c, iargv[0], &nb);
+    emit_indent(g_pre, g_indent);
+    buf_printf(g_pre, "sp_Proc *_t%d = %s; SP_GC_ROOT(_t%d); int _tf%d = 0;\n",
+               tfn, nb.p ? nb.p : "NULL", tfn, tfn);
+    free(nb.p);
+  }
   Buf rb; memset(&rb, 0, sizeof rb); emit_expr(c, recv, &rb);
   emit_indent(g_pre, g_indent);
   buf_printf(g_pre, "sp_Enumerator *_t%d = %s; SP_GC_ROOT(_t%d);\n", te, rb.p ? rb.p : "", te);
@@ -5084,6 +5099,9 @@ int emit_enum_find_expr(Compiler *c, int id, Buf *b) {
       if (take)
         buf_printf(g_pre, "if (!sp_poly_truthy(_t%d)) break;\n"
                           "        sp_PolyArray_push(_t%d, _t%d);\n", tt, tres, tv);
+      else if (f_ifnone)
+        buf_printf(g_pre, "if (sp_poly_truthy(_t%d)) { _t%d = _t%d; _tf%d = 1; break; }\n",
+                   tt, tres, tv, tfn);
       else
         buf_printf(g_pre, "if (sp_poly_truthy(_t%d)) { _t%d = _t%d; break; }\n", tt, tres, tv);
     }
@@ -5106,6 +5124,11 @@ int emit_enum_find_expr(Compiler *c, int id, Buf *b) {
   buf_puts(g_pre, "if (!sp_exc_cls_matches((const char *)sp_last_exc_cls, \"StopIteration\")) sp_raise_cls(sp_exc_cls[sp_exc_top], sp_exc_msg[sp_exc_top]);\n");
   emit_indent(g_pre, g_indent);
   buf_puts(g_pre, "}\n");
+  if (f_ifnone) {
+    emit_indent(g_pre, g_indent);
+    buf_printf(g_pre, "if (!_tf%d) _t%d = ((void)sp_proc_call(_t%d, 0, (mrb_int[16]){0}), _sp_proc_poly_ret);\n",
+               tfn, tres, tfn);
+  }
   buf_printf(b, "_t%d", tres);
   return 1;
 }
