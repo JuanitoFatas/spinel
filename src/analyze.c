@@ -431,6 +431,27 @@ void a_mark_subtree(Compiler *c, int id, char *inproc) {
   int na = nt_num_arrs(c->nt, id);
   for (int i = 0; i < na; i++) { int n = 0; const int *ids = nt_arr_at(c->nt, id, i, &n); for (int k = 0; k < n; k++) if (ids[k] >= 0) a_mark_subtree(c, ids[k], inproc); }
 }
+/* Count this subtree's nodes into `cnt` (one pass per proc body gives every
+   node the number of proc bodies covering it, i.e. its nesting depth). */
+static void a_count_subtree(Compiler *c, int id, int *cnt, int depth) {
+  if (id < 0 || depth > 400) return;
+  cnt[id]++;
+  int nr = nt_num_refs(c->nt, id);
+  for (int i = 0; i < nr; i++) { int ch = nt_ref_at(c->nt, id, i); if (ch >= 0) a_count_subtree(c, ch, cnt, depth + 1); }
+  int na = nt_num_arrs(c->nt, id);
+  for (int i = 0; i < na; i++) { int n = 0; const int *ids = nt_arr_at(c->nt, id, i, &n); for (int k = 0; k < n; k++) if (ids[k] >= 0) a_count_subtree(c, ids[k], cnt, depth + 1); }
+}
+
+/* Stamp every node in the subtree with `owner` (a proc-create node id). */
+static void a_stamp_subtree(Compiler *c, int id, int *owner_of, int owner, int depth) {
+  if (id < 0 || depth > 400) return;
+  owner_of[id] = owner;
+  int nr = nt_num_refs(c->nt, id);
+  for (int i = 0; i < nr; i++) { int ch = nt_ref_at(c->nt, id, i); if (ch >= 0) a_stamp_subtree(c, ch, owner_of, owner, depth + 1); }
+  int na = nt_num_arrs(c->nt, id);
+  for (int i = 0; i < na; i++) { int n = 0; const int *ids = nt_arr_at(c->nt, id, i, &n); for (int k = 0; k < n; k++) if (ids[k] >= 0) a_stamp_subtree(c, ids[k], owner_of, owner, depth + 1); }
+}
+
 /* Names used (read or written) anywhere in the proc/fiber body, INCLUDING
    nested blocks. A nested block (`Fiber.new { 3.times { |i| acc += i } }`) is
    inlined into the same flat C function as the body, so a use of an enclosing
@@ -666,6 +687,41 @@ void mark_proc_captures(Compiler *c) {
     if (a_proc_create_or_lifted(c, id) || a_block_forwarded_into_poly(c, id)) {
       int body = a_proc_body(c, id); if (body >= 0) a_mark_subtree(c, body, inproc); }
 
+  /* Which proc frame each node belongs to: the INNERMOST proc whose body
+     contains it, or -1 for the enclosing scope's own code. A local written in
+     the body of the proc that encloses this one lives in that frame and is
+     capturable from here, so asking only "is it inside some proc" refused a
+     lambda nested in another proc -- including the wrapper that
+     desugar_block_capture_wrap builds around an iteration block, which is why
+     a lambda capturing a block local alongside the block parameter was
+     rejected (#3912). Stamping outer procs first lets each inner one overwrite
+     its own region. */
+  int *procof = (int *)malloc(sizeof(int) * (size_t)nt->count);
+  int *pdepth = (int *)calloc((size_t)nt->count, sizeof(int));
+  if (procof && pdepth) {
+    for (int id = 0; id < nt->count; id++) procof[id] = -1;
+    /* nesting depth of each proc = how many proc bodies cover it, counted by
+       stamping every proc body once (O(nodes) per proc, not O(nodes) per pair) */
+    for (int id = 0; id < nt->count; id++) {
+      if (!a_proc_create_or_lifted(c, id) && !a_block_forwarded_into_poly(c, id)) continue;
+      int body = a_proc_body(c, id);
+      if (body >= 0) a_count_subtree(c, body, pdepth, 0);
+    }
+    int maxd = 0;
+    for (int id = 0; id < nt->count; id++) {
+      if (!a_proc_create_or_lifted(c, id) && !a_block_forwarded_into_poly(c, id)) continue;
+      pdepth[id] += 1;                /* 0 means "not a proc" */
+      if (pdepth[id] > maxd) maxd = pdepth[id];
+    }
+    for (int d = 1; d <= maxd; d++)
+      for (int id = 0; id < nt->count; id++) {
+        if (pdepth[id] != d) continue;
+        int body = a_proc_body(c, id);
+        if (body >= 0) a_stamp_subtree(c, body, procof, id, 0);
+      }
+  }
+  free(pdepth);
+
   for (int id = 0; id < nt->count; id++) {
     if (!a_proc_create_or_lifted(c, id) && !a_block_forwarded_into_poly(c, id)) continue;
     /* A fiber/generator only needs a cell for a *value-type* capture, where a
@@ -742,8 +798,10 @@ void mark_proc_captures(Compiler *c) {
       LocalVar *lv = scope_local(es, nm);
       if (!lv) continue;                              /* not an enclosing local */
       int owned = lv->is_param;
+      int myframe = procof ? procof[id] : -1;
       for (int w = 0; w < nt->count && !owned; w++) {
-        if (c->nscope[w] != encl || inproc[w]) continue;
+        if (c->nscope[w] != encl) continue;
+        if (procof ? procof[w] != myframe : inproc[w]) continue;
         if (!a_is_write_node(nt_type(nt, w))) continue;
         const char *wn = nt_str(nt, w, "name");
         if (wn && sp_streq(wn, nm)) owned = 1;
@@ -812,6 +870,7 @@ void mark_proc_captures(Compiler *c) {
     }
     free(params.v); free(used.v);
   }
+  free(procof);
   free(inproc);
 }
 
