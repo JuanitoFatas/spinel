@@ -130,6 +130,11 @@ void comp_free(Compiler *c) {
   for (int i = 0; i < c->nconsts; i++) free(c->consts[i].name);
   free(c->consts);
   free(c->toplevel_includes);
+  for (int i = 0; i < c->n_ffi_sources; i++) {
+    free(c->ffi_sources[i].mod);
+    free(c->ffi_sources[i].val);
+  }
+  free(c->ffi_sources);
   free(c->nscope);
   free(c->ntype);
   free(c->node_cbody);
