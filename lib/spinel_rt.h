@@ -6439,9 +6439,15 @@ static sp_RbVal sp_poly_first(sp_RbVal v) {
   if (v.tag != SP_TAG_OBJ) return sp_box_nil();
   { sp_PolyArray *ps = sp_poly_hash_pairs_or_null(v);
     if (ps) return ps->len > 0 ? ps->data[0] : sp_box_nil(); }
+  /* a user class that includes Enumerable answers from its own elements; the
+     array read below only knows containers, so it answered nil (#3875) */
+  { sp_PolyArray *ue = sp_poly_user_elems(v);
+    if (ue) return ue->len > 0 ? ue->data[0] : sp_box_nil(); }
   return sp_poly_arr_get(v, 0);
 }
 static sp_RbVal sp_poly_last(sp_RbVal v) {
+  { sp_PolyArray *ue = v.tag == SP_TAG_OBJ ? sp_poly_user_elems(v) : NULL;
+    if (ue) return ue->len > 0 ? ue->data[ue->len - 1] : sp_box_nil(); }
   mrb_int n = sp_poly_length(v);
   return n > 0 ? sp_poly_arr_get(v, n - 1) : sp_box_nil();
 }
