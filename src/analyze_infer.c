@@ -7514,6 +7514,17 @@ TyKind infer_type(Compiler *c, int id) {
      real type, and neither are the child types derived under it, so the cache
      must not record any of them -- leaving them in made the whole analysis
      order-sensitive (#3459). */
+  /* `x&.pred?` on a receiver that may be nil answers nil OR a boolean, and a
+     C bool has no nil: the two arms of the emitted guard then disagreed about
+     their type and the program did not build (#3899). Such a call is poly. */
+  if (t == TY_BOOL && nt_kind(c->nt, id) == NK_CallNode) {
+    const char *sn_op = nt_str(c->nt, id, "call_operator");
+    int sn_recv = nt_ref(c->nt, id, "receiver");
+    if (sn_op && sp_streq(sn_op, "&.") && sn_recv >= 0) {
+      TyKind srt = c->ntype && sn_recv < c->node_cap ? c->ntype[sn_recv] : TY_UNKNOWN;
+      if (srt == TY_POLY || srt == TY_NIL) t = TY_POLY;
+    }
+  }
   if (!an_builtin_only) c->ntype[id] = t;
   return t;
 }

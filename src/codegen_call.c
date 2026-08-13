@@ -9852,6 +9852,39 @@ void emit_call(Compiler *c, int id, Buf *b) {
         buf_puts(b, dv ? dv : "0");
         return;
       }
+      /* The poly builtins that answer an UNBOXED scalar: the safe-nav result is
+         poly (it may be nil), so the value arm has to be boxed to agree with
+         the nil arm -- otherwise the two ternary arms have different C types
+         and the program does not build (#3899). */
+      if (rrt == TY_POLY && comp_ntype(c, id) == TY_POLY && argc == 0 &&
+          g_sn_skip != id && nt_ref(nt, id, "block") < 0) {
+        static const char *const BOOLQ[] = {
+          "positive?", "negative?", "zero?", "nan?", "finite?", "even?", "odd?",
+          "empty?", "frozen?", "integer?", "eql?", NULL };
+        static const char *const INTQ[] = {
+          "bytesize", "ord", "bit_length", "numerator", "denominator",
+          "infinite?", NULL };
+        const char *boxfn = NULL;
+        for (int q = 0; BOOLQ[q] && !boxfn; q++) if (sp_streq(name, BOOLQ[q])) boxfn = "sp_box_bool";
+        for (int q = 0; INTQ[q] && !boxfn; q++) if (sp_streq(name, INTQ[q])) boxfn = "sp_box_int";
+        if (boxfn && !user_defines_or_reads(c, name)) {
+          int tsn = ++g_tmp;
+          buf_printf(b, "({ sp_RbVal _sn_%d = ", tsn); emit_expr(c, recv, b);
+          buf_printf(b, "; _sn_%d.tag == SP_TAG_NIL ? sp_box_nil() : %s(", tsn, boxfn);
+          if (g_n_argov < MAX_ARG_OVERRIDE) {
+            int slot3 = g_n_argov++;
+            g_argov_node[slot3] = recv;
+            snprintf(g_argov_text[slot3], sizeof g_argov_text[0], "_sn_%d", tsn);
+            int sv_skip3 = g_sn_skip; g_sn_skip = id;
+            emit_expr(c, id, b);
+            g_sn_skip = sv_skip3;
+            g_n_argov--;
+          }
+          else emit_expr(c, id, b);
+          buf_puts(b, "); })");
+          return;
+        }
+      }
       if (rrt == TY_POLY && (sp_streq(name, "length") || sp_streq(name, "size")) &&
           comp_ntype(c, id) == TY_POLY) {
         /* poly&.length/size: the poly builtin emits an unboxed mrb_int, but
