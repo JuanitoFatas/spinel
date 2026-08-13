@@ -19366,9 +19366,20 @@ else { memcpy(dir, sf, n); dir[n] = 0; } }
       buf_puts(pb, ";\n}\n");
       g_pre = sv_pre; g_indent = sv_ind; }
     int th = ++g_tmp;
+    /* An assignment's value in Ruby is the RIGHT-HAND SIDE: `h.default_proc = p`
+       answers the proc, not the hash. Answering the hash assigned a
+       sp_XHash * into whatever slot the expression fed -- a Proc * one here
+       (#3833). */
     buf_printf(b, "({ sp_%sHash *_t%d = ", hn2, th); emit_expr(c, recv, b);
-    buf_printf(b, "; _t%d->dproc = _sp_hash_dproc_%d; _t%d->dproc_self = NULL; _t%d; })",
-               th, dn, th, th);
+    buf_printf(b, "; _t%d->dproc = _sp_hash_dproc_%d; _t%d->dproc_self = NULL; ", th, dn, th);
+    { TyKind vt = comp_ntype(c, id);
+      if (vt == TY_PROC || vt == TY_POLY || vt == TY_UNKNOWN) {
+        /* the proc value the call site wrote; re-emitting a literal lambda is
+           side-effect-free */
+        if (argc >= 1) emit_expr(c, argv[0], b); else buf_printf(b, "(sp_Proc *)0");
+      }
+      else buf_printf(b, "_t%d", th); }
+    buf_puts(b, "; })");
     return;
   }
   /* value-position String#[]= (s[i] = v / s[i, n] = v / s[range] = v / s["sub"]
