@@ -4641,7 +4641,12 @@ int desugar_compose_method_operand(Compiler *c) {
     TyKind rt = infer_type(c, recv), at = infer_type(c, av[0]);
     int r_m = rt == TY_METHOD, a_m = at == TY_METHOD;
     if (!r_m && !a_m) continue;
-    if (!(rt == TY_METHOD || rt == TY_PROC) || !(at == TY_METHOD || at == TY_PROC)) continue;
+    /* The other operand may be a Proc read out of a container, which arrives
+       boxed: the composition arm unwraps it. Refusing the shape left a Method
+       composed with a container-read Proc unemittable (#3884). A poly `<<` is
+       unambiguous here -- the Method side says this is a composition. */
+    if (!(rt == TY_METHOD || rt == TY_PROC || rt == TY_POLY) ||
+        !(at == TY_METHOD || at == TY_PROC || at == TY_POLY)) continue;
     int a0 = av[0];
     int base = nt->count;
     if (r_m) {

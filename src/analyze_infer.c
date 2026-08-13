@@ -4711,6 +4711,15 @@ else {
           TyKind opt = infer_type(c, argv[argc - 1]);
           if (opt == TY_SYMBOL || opt == TY_POLY) return TY_POLY;
         }
+        /* `reduce(id, :>>)` composes callables: the fold runs through the
+           generic symbol-operator helper, whose result is boxed, so typing it
+           from the Proc seed left `.call` reading a boxed value as an
+           sp_Proc * (#3884). */
+        if (argc == 2 && nt_ref(nt, id, "block") < 0) {
+          const char *sv2 = sym_static_value(c, argv[1]);
+          if (sv2 && (sp_streq(sv2, ">>") || sp_streq(sv2, "<<")) &&
+              infer_type(c, argv[0]) == TY_PROC) return TY_POLY;
+        }
         const char *a0ty = nt_type(nt, argv[0]);
         /* a symbol literal, or a local statically holding one (s = :+) */
         int is_sym_op = argc == 1 && sym_static_value(c, argv[0]) != NULL;
