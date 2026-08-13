@@ -262,6 +262,13 @@ void emit_int_expr(Compiler *c, int node, Buf *b) {
     buf_puts(b, "sp_bigint_to_int("); emit_expr(c, node, b); buf_puts(b, ")");
     return;
   }
+  /* A Float in an mrb_int slot (a mixed Range literal like `0.5..5`, which is
+     deliberately carried on the integer representation) truncates; say so, or
+     clang warns that the literal changes value and the build reads as broken. */
+  if (comp_ntype(c, node) == TY_FLOAT) {
+    buf_puts(b, "(mrb_int)("); emit_scalar_operand(c, node, "0", b); buf_puts(b, ")");
+    return;
+  }
   emit_scalar_operand(c, node, "0", b);
 }
 
