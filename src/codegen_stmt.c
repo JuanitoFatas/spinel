@@ -5636,6 +5636,59 @@ static int emit_nullable_int_ternary(Compiler *c, int v, Buf *b) {
   return 1;
 }
 
+/* Emit the `switch` arms for `obj.x = v` where obj's class is only known at
+   run time. A class answers the write either through an attribute or through
+   an explicit `def x=`; both tables are consulted and the more-derived
+   definition wins, with a same-class tie going to the method, exactly as the
+   statically typed emitter arbitrates. `objp` is a C expression for the
+   receiver as a raw pointer, `src` the value temp, `at` its type. */
+static void emit_boxed_writer_arms(Compiler *c, const char *base, const char *nm,
+                                   const char *objp, const char *src, TyKind at, Buf *b) {
+  for (int k = 0; k < c->nclasses; k++) {
+    int wdc = -1, wmdc = -1;
+    int writer_wins = comp_writer_in_chain(c, k, base, &wdc);
+    int kmi = comp_method_in_chain(c, k, nm, &wmdc);
+    if (kmi >= 0 && !scope_has_callable_symbol(c, kmi)) kmi = -1;
+    if (writer_wins && kmi >= 0) {
+      for (int a = k; a >= 0; a = c->classes[a].parent) {
+        if (a == wmdc) { writer_wins = 0; break; }
+        if (a == wdc) { writer_wins = 1; break; }
+      }
+    }
+    if (!writer_wins && kmi < 0) continue;
+    if (!writer_wins) {
+      Scope *arm = &c->scopes[kmi];
+      TyKind pt = TY_POLY;
+      if (arm->pnames && arm->nparams >= 1 && arm->pnames[0]) {
+        LocalVar *pl = scope_local(arm, arm->pnames[0]);
+        pt = (pl && pl->type != TY_UNKNOWN) ? pl->type : TY_POLY;
+      }
+      buf_printf(b, " case %d: sp_%s_%s((sp_%s *)%s, ", k,
+                 c->classes[wmdc].c_name, mc(arm->name), c->classes[wmdc].c_name, objp);
+      if (pt == TY_POLY && at != TY_POLY && at != TY_UNKNOWN) emit_boxed_text(c, at, src, b);
+      else if (at == TY_POLY && pt != TY_POLY && pt != TY_UNKNOWN) emit_unbox_text(c, pt, src, b);
+      else buf_puts(b, src);
+      buf_puts(b, "); break;");
+      continue;
+    }
+    char ivn[256]; snprintf(ivn, sizeof ivn, "@%s", base);
+    int iv = comp_ivar_index(&c->classes[k], ivn);
+    TyKind ivt = iv >= 0 ? c->classes[k].ivar_types[iv] : at;
+    /* skip a class whose slot can't hold this concrete rhs (the runtime object
+       isn't that class anyway): a raw assignment between mismatched C types
+       would not compile */
+    if (at != ivt && at != TY_POLY && ivt != TY_POLY) continue;
+    buf_printf(b, " case %d: ", k);
+    { char opn[64]; snprintf(opn, sizeof opn, "((sp_%s *)%s)", c->classes[k].c_name, objp);
+      emit_frozen_obj_guard(c, k, opn, b); }
+    buf_printf(b, "((sp_%s *)%s)->iv_%s = ", c->classes[k].c_name, objp, iv_c(base));
+    if (ivt == TY_POLY && at != TY_POLY) emit_boxed_text(c, at, src, b);
+    else if (at == TY_POLY && ivt != TY_POLY) emit_unbox_text(c, ivt, src, b);
+    else buf_puts(b, src);
+    buf_puts(b, "; break;");
+  }
+}
+
 void emit_stmt_inner(Compiler *c, int id, Buf *b, int indent) {
   const NodeTable *nt = c->nt;
   const char *ty = nt_type(nt, id);
@@ -5959,21 +6012,10 @@ void emit_stmt_inner(Compiler *c, int id, Buf *b, int indent) {
                 emit_expr(c, argv[0], b); buf_puts(b, ";");
                 buf_printf(b, " switch (_t%d->cls_id) {", tp);
                 char src[32]; snprintf(src, sizeof src, "_t%d", tval);
-                for (int k = 0; k < c->nclasses; k++) {
-                  if (!comp_is_writer(&c->classes[k], base)) continue;
-                  char ivn[256]; snprintf(ivn, sizeof ivn, "@%s", base);
-                  int iv = comp_ivar_index(&c->classes[k], ivn);
-                  TyKind ivt = iv >= 0 ? c->classes[k].ivar_types[iv] : at;
-                  if (at != ivt && at != TY_POLY && ivt != TY_POLY) continue;
-                  buf_printf(b, " case %d: ", k);
-                  { char tpn[32]; snprintf(tpn, sizeof tpn, "_t%d", tp);
-                    emit_frozen_obj_guard(c, k, tpn, b); }
-                  buf_printf(b, "((sp_%s *)_t%d)->iv_%s = ", c->classes[k].c_name, tp, iv_c(base));
-                  if (ivt == TY_POLY && at != TY_POLY) emit_boxed_text(c, at, src, b);
-                  else if (at == TY_POLY && ivt != TY_POLY) emit_unbox_text(c, ivt, src, b);
-                  else buf_puts(b, src);
-                  buf_puts(b, "; break;");
-                }
+                char objp[32]; snprintf(objp, sizeof objp, "_t%d", tp);
+                emit_boxed_writer_arms(c, base, nm, objp, src, at, b);
+                buf_printf(b, " default: sp_raise_nomethod(sp_nomethod_msg(\"%s\", "
+                              "sp_box_obj((void *)_t%d, _t%d->cls_id))); break;", nm, tp, tp);
                 buf_puts(b, " } }\n");
                 return;
               }
@@ -6008,21 +6050,9 @@ else {
               }
               buf_printf(b, " switch (_t%d.cls_id) {", tv);
               char src[32]; snprintf(src, sizeof src, "_t%d", tval);
-              for (int k = 0; k < c->nclasses; k++) {
-                if (!comp_is_writer(&c->classes[k], base)) continue;
-                char ivn[256]; snprintf(ivn, sizeof ivn, "@%s", base);
-                int iv = comp_ivar_index(&c->classes[k], ivn);
-                TyKind ivt = iv >= 0 ? c->classes[k].ivar_types[iv] : at_eff;
-                /* skip a class whose slot can't hold this concrete rhs (the
-                   runtime object isn't that class anyway): a raw assignment
-                   between mismatched C types would not compile */
-                if (at_eff != ivt && at_eff != TY_POLY && ivt != TY_POLY) continue;
-                buf_printf(b, " case %d: ((sp_%s *)_t%d.v.p)->iv_%s = ", k, c->classes[k].c_name, tv, iv_c(base));
-                if (ivt == TY_POLY && at_eff != TY_POLY) emit_boxed_text(c, at_eff, src, b);
-                else if (at_eff == TY_POLY && ivt != TY_POLY) emit_unbox_text(c, ivt, src, b);
-                else buf_puts(b, src);
-                buf_puts(b, "; break;");
-              }
+              char objp[32]; snprintf(objp, sizeof objp, "_t%d.v.p", tv);
+              emit_boxed_writer_arms(c, base, nm, objp, src, at_eff, b);
+              buf_printf(b, " default: sp_raise_nomethod(sp_nomethod_msg(\"%s\", _t%d)); break;", nm, tv);
               buf_puts(b, " } }\n");
               return;
             }
