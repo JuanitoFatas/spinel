@@ -2946,6 +2946,37 @@ else {
       }
       if ((sp_streq(name, "all?") || sp_streq(name, "any?") || sp_streq(name, "none?") ||
            sp_streq(name, "one?") || sp_streq(name, "count")) &&
+          argc == 1 && nt_ref(nt, id, "block") < 0 &&
+          comp_ntype(c, argv[0]) == TY_CLASS) {
+        /* A class argument on a TYPED array: the predicates ask `Class === e`,
+           which for an int/float/string array is decided by the element type
+           alone, and #count asks `e == Class`, which no element of one can
+           satisfy. Emitting the class into the element slot did not even
+           compile (#3817). */
+        int cls_all = 0;
+        { const char *cn2 = isa_const_name(nt, argv[0]);
+          const char *want = rt == TY_INT_ARRAY ? "Integer" : rt == TY_FLOAT_ARRAY ? "Float"
+                           : rt == TY_STR_ARRAY ? "String" : NULL;
+          cls_all = (cn2 && want && (sp_streq(cn2, want) || sp_streq(cn2, "Object") ||
+                                     sp_streq(cn2, "Comparable") ||
+                                     (sp_streq(cn2, "Numeric") &&
+                                      (rt == TY_INT_ARRAY || rt == TY_FLOAT_ARRAY)))); }
+        int tlen = ++g_tmp;
+        buf_printf(b, "({ mrb_int _t%d = sp_%sArray_length(", tlen, k);
+        emit_expr(c, recv, b); buf_puts(b, ");");
+        if (sp_streq(name, "count")) buf_printf(b, " (void)_t%d; (mrb_int)0; })", tlen);
+        else if (sp_streq(name, "all?"))
+          buf_printf(b, cls_all ? " (void)_t%d; TRUE; })" : " _t%d == 0; })", tlen);
+        else if (sp_streq(name, "any?"))
+          buf_printf(b, cls_all ? " _t%d > 0; })" : " (void)_t%d; FALSE; })", tlen);
+        else if (sp_streq(name, "none?"))
+          buf_printf(b, cls_all ? " _t%d == 0; })" : " (void)_t%d; TRUE; })", tlen);
+        else
+          buf_printf(b, cls_all ? " _t%d == 1; })" : " (void)_t%d; FALSE; })", tlen);
+        return 1;
+      }
+      if ((sp_streq(name, "all?") || sp_streq(name, "any?") || sp_streq(name, "none?") ||
+           sp_streq(name, "one?") || sp_streq(name, "count")) &&
           argc == 1 && nt_ref(nt, id, "block") < 0) {
         /* array.all?(v)/any?(v)/none?(v)/one?(v)/count(v) -- compare by == */
         int ta = ++g_tmp, tv = ++g_tmp, tc = ++g_tmp, ti = ++g_tmp;
@@ -3512,7 +3543,12 @@ else {
         buf_printf(b, " sp_RbVal _t%d = ", tv); emit_boxed(c, argv[0], b); buf_puts(b, ";");
         buf_printf(b, " mrb_int _t%d = 0;", tc);
         buf_printf(b, " for (mrb_int _t%d = 0; _t%d < sp_PolyArray_length(_t%d); _t%d++)", ti, ti, ta, ti);
-        buf_printf(b, " if (sp_poly_case_eq(_t%d, sp_PolyArray_get(_t%d, _t%d))) _t%d++;", tv, ta, ti, tc);
+        /* #count is the exception: it counts elements EQUAL to its argument,
+           where the predicates match a PATTERN with === (#3817) */
+        if (sp_streq(name, "count"))
+          buf_printf(b, " if (sp_poly_eq(sp_PolyArray_get(_t%d, _t%d), _t%d)) _t%d++;", ta, ti, tv, tc);
+        else
+          buf_printf(b, " if (sp_poly_case_eq(_t%d, sp_PolyArray_get(_t%d, _t%d))) _t%d++;", tv, ta, ti, tc);
         if (sp_streq(name, "all?"))        buf_printf(b, " _t%d == sp_PolyArray_length(_t%d); })", tc, ta);
         else if (sp_streq(name, "any?"))   buf_printf(b, " _t%d > 0; })", tc);
         else if (sp_streq(name, "none?"))  buf_printf(b, " _t%d == 0; })", tc);
@@ -4177,8 +4213,11 @@ int emit_hash_call(Compiler *c, int id, Buf *b) {
       buf_printf(b, "; SP_GC_ROOT_RBVAL(_t%d); mrb_int _t%d = sp_poly_length(_t%d); mrb_int _t%d = 0;",
                  tv, tn, th, tc2);
       /* a CLASS pattern is a kind-of test, not equality: `h.any?(Array)`
-         compared each pair to the class value and answered false (#3565) */
-      if (comp_ntype(c, argv[0]) == TY_CLASS)
+         compared each pair to the class value and answered false (#3565).
+         #count is the exception: it counts elements EQUAL to its argument
+         (Enumerable#count uses ==, the predicates use ===), so a class
+         argument counts the class itself, not its instances (#3817). */
+      if (comp_ntype(c, argv[0]) == TY_CLASS && !sp_streq(name, "count"))
         buf_printf(b, " for (mrb_int _t%d = 0; _t%d < _t%d; _t%d++) {"
                       " sp_RbVal _t%d = sp_poly_each_elem(_t%d, _t%d);"
                       " if (sp_poly_is_a(_t%d, (sp_Class){(mrb_int)_t%d.v.i, NULL})) _t%d++; }",
