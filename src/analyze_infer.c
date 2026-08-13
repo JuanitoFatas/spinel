@@ -1044,6 +1044,17 @@ TyKind infer_call(Compiler *c, int id) {
   if (ty_is_hash(rt) && sp_streq(name, "each_with_index") &&
       nt_ref(nt, id, "block") >= 0) return rt;
   if (ty_is_hash(rt) && hash_enum_redispatch(c, id)) rt = TY_POLY_ARRAY;
+  /* `each_slice(n) { } / each_cons(n) { }` answer the receiver. When the
+     receiver is the marked `to_a` hop above, that is the original Hash or
+     Range, not the pair array the loop walked (#3842). */
+  if (recv >= 0 && argc == 1 && nt_ref(nt, id, "block") >= 0 &&
+      nt_type(nt, nt_ref(nt, id, "block")) &&
+      sp_streq(nt_type(nt, nt_ref(nt, id, "block")), "BlockNode") &&
+      (sp_streq(name, "each_slice") || sp_streq(name, "each_cons")) &&
+      nt_kind(nt, recv) == NK_CallNode && nt_str(nt, recv, "enum_recv")) {
+    int orecv = nt_ref(nt, recv, "receiver");
+    if (orecv >= 0) return infer_type(c, orecv);
+  }
   /* A block each-family call returns its receiver (each, each_value/each_key/
      each_pair, each_with_index, reverse_each), so the value form composes:
      r = arr.each { }; arr.each { }.map { }. Gated to receivers that define

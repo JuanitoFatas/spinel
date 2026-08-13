@@ -7300,6 +7300,11 @@ int desugar_enumerable_via_to_a(Compiler *c) {
     nt_node_set_str(nt, toa, "name", "to_a");
     nt_node_set_ref(nt, toa, "arguments", -1);
     nt_node_set_ref(nt, toa, "block", -1);
+    /* The with-block group answers the RECEIVER, not the pairs it walked, so
+       mark the synthesized hop: inference and the value emitter read it to
+       yield the original Hash / Range (#3842). A `to_a` the program wrote
+       itself carries no mark and keeps answering its array. */
+    if (how == 2) nt_node_set_str(nt, toa, "enum_recv", "1");
     nt_node_set_ref(nt, id, "receiver", toa);
     comp_grow_node_arrays(c);
     for (int j = base; j < nt->count; j++) c->nscope[j] = c->nscope[id];

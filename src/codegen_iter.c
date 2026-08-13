@@ -1741,6 +1741,12 @@ int emit_iter_value_expr(Compiler *c, int id, Buf *b) {
         sp_streq(name, "each_key") || sp_streq(name, "each_pair") ||
         sp_streq(name, "each_with_index") || sp_streq(name, "reverse_each") ||
         sp_streq(name, "each_entry") ||
+        /* each_slice / each_cons answer the receiver too; over a Hash or a
+           Range that receiver is the marked `to_a` hop's own receiver */
+        ((sp_streq(name, "each_slice") || sp_streq(name, "each_cons")) &&
+         nt_ref(nt, id, "receiver") >= 0 &&
+         nt_kind(nt, nt_ref(nt, id, "receiver")) == NK_CallNode &&
+         nt_str(nt, nt_ref(nt, id, "receiver"), "enum_recv")) ||
         /* `str.split(sep) { |piece| }` answers the receiver too; in value
            position the block was dropped and the split array returned */
         sp_streq(name, "split")))
@@ -1764,6 +1770,7 @@ int emit_iter_value_expr(Compiler *c, int id, Buf *b) {
   if (nt_type(nt, recv) && sp_streq(nt_type(nt, recv), "CallNode")) {
     const char *rnm = nt_str(nt, recv, "name");
     if (rnm && sp_streq(rnm, "__enum_to_a")) objn = nt_ref(nt, recv, "receiver");
+    else if (nt_str(nt, recv, "enum_recv")) objn = nt_ref(nt, recv, "receiver");
   }
   /* run the statement emitter against the temp into a scratch buffer first:
      splice only when it handles the shape, else leave the node to the
