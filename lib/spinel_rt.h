@@ -6208,9 +6208,14 @@ static sp_RbVal sp_poly_to_r_m(sp_RbVal v) {
   sp_raise_cls("NoMethodError", sp_sprintf("undefined method 'to_r' for %s", sp_poly_class_name(v)));
 }
 static sp_RbVal sp_poly_to_c_m(sp_RbVal v) {
-  if (v.tag == SP_TAG_NIL) { sp_Complex z; z.re = 0; z.im = 0; return sp_box_complex(z); }
+  /* fl carries the per-component int/float flag inspect renders from, so it has
+     to be set, not left as whatever the stack held. The typed path is the
+     oracle here: `n.to_c` emits `(sp_Complex){n, 0, <1 for a Float, 0 for an
+     Integer>}`, and a nil receiver answers the all-integer (0+0i). */
+  if (v.tag == SP_TAG_NIL) { sp_Complex z = {0, 0, 0}; return sp_box_complex(z); }
   if (v.tag == SP_TAG_INT || v.tag == SP_TAG_FLT) {
-    sp_Complex z; z.re = sp_poly_to_f(v); z.im = 0; return sp_box_complex(z);
+    sp_Complex z = {sp_poly_to_f(v), 0, (unsigned char)(v.tag == SP_TAG_FLT ? SP_CPLX_RE_F : 0)};
+    return sp_box_complex(z);
   }
   if (v.tag == SP_TAG_STR) return sp_box_complex(sp_str_to_c(v.v.s ? v.v.s : sp_str_empty));
   if (v.tag == SP_TAG_OBJ && v.cls_id == SP_BUILTIN_COMPLEX) return v;
