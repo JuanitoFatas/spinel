@@ -691,6 +691,9 @@ int hash_enum_redispatch(Compiler *c, int id) {
     return 1;
   /* blockless each_with_index: an external Enumerator of [[k, v], i] */
   if (block < 0 && sp_streq(name, "each_with_index")) return 1;
+  /* inject(:op) / reduce(:op): the Symbol-operator fold runs over the [k, v]
+     pairs, the same materialization the block form below rides (#3830) */
+  if (block < 0 && (sp_streq(name, "reduce") || sp_streq(name, "inject"))) return 1;
   /* pair-array Enumerables with no dedicated hash emitter: find_index, uniq,
      zip, tally, reverse_each ride the materialized redispatch, block or not
      (#2372) */
