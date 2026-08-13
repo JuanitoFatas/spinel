@@ -7284,6 +7284,15 @@ int desugar_enumerable_via_to_a(Compiler *c) {
     if (rnm && sp_streq(rnm, "to_a")) continue;
     TyKind rt = comp_ntype(c, recv);
     if (!ty_is_hash(rt) && rt != TY_RANGE) continue;
+    /* A blockless `.each` receiver is an Enumerator, whatever the chain rules
+       type it as; the with-block group answers that Enumerator, and routing it
+       through to_a answered the elements instead (#3857). */
+    { int er = recv;
+      if (er >= 0 && nt_kind(nt, er) == NK_CallNode && nt_ref(nt, er, "block") < 0) {
+        const char *ernm = nt_str(nt, er, "name");
+        if (ernm && (sp_streq(ernm, "each") || sp_streq(ernm, "each_with_index") ||
+                     sp_streq(ernm, "reverse_each"))) continue;
+      } }
     /* A one-sided Range cannot become an array at all, and find / detect /
        take_while have their own walk from the bounded end: routing them
        through to_a turned a working search into a RangeError (#3863). The

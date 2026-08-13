@@ -587,7 +587,17 @@ static int range_each_is_external(Compiler *c, int id) {
               /* Enumerator-only chains (Array has no such method): the each
                  must stay an Enumerator, not materialize to an int array (#3228) */
               sp_streq(m, "with_index") || sp_streq(m, "with_object") ||
-              sp_streq(m, "each_with_index") || sp_streq(m, "each_index"))) return 1;
+              sp_streq(m, "each_with_index") || sp_streq(m, "each_index") ||
+              /* the forms that answer the RECEIVER: materializing the each
+                 would answer the elements instead (#3857). each_entry is
+                 renamed to each, so the recorded self-result marks it. */
+              sp_streq(m, "each_entry") ||
+              ((sp_streq(m, "each_slice") || sp_streq(m, "each_cons")) &&
+               nt_ref(nt, n, "block") >= 0))) return 1;
+    if (nt_int(nt, n, "enum_self_result", -1) == id) return 1;
+    /* the drain a self-result rewrite interposed: the each stays an Enumerator
+       (the call answers it) and the drain reads its elements (#3857) */
+    if (m && sp_streq(m, "to_a") && nt_str(nt, n, "enum_recv")) return 1;
     return 0;   /* receiver of a collection method -> materialize to an array */
   }
   return 1;     /* standalone -> enumerator */

@@ -4432,9 +4432,33 @@ int desugar_enum_method_recv(Compiler *c) {
         else if (ty_is_array(ert) || ty_is_hash(ert) || ert == TY_RANGE ||
                  ert == TY_ENUMERATOR || ert == TY_DIR) {
           /* #each_entry answers the receiver, which #each does not do for an
-             Enumerator; record it before the name is gone (#3591) */
-          if (ert == TY_ENUMERATOR) nt_node_set_int(nt, id, "enum_self_result", erecv);
+             Enumerator; record it before the name is gone (#3591). A blockless
+             `.each` receiver IS that Enumerator however its own type settled --
+             over a Range it settles as the materialized element array, and the
+             call then answered those elements (#3857). */
+          int erecv_enum = ert == TY_ENUMERATOR;
+          if (!erecv_enum && nt_kind(nt, erecv) == NK_CallNode &&
+              nt_ref(nt, erecv, "block") < 0) {
+            const char *ernm = nt_str(nt, erecv, "name");
+            if (ernm && (sp_streq(ernm, "each") || sp_streq(ernm, "each_with_index") ||
+                         sp_streq(ernm, "reverse_each")))
+              erecv_enum = 1;
+          }
+          if (erecv_enum) nt_node_set_int(nt, id, "enum_self_result", erecv);
           nt_node_set_str(nt, id, "name", "each");
+          changed = 1;
+        }
+      }
+    }
+    /* The block forms of each_slice / each_cons answer the receiver too, and
+       over a blockless `.each` that receiver is the Enumerator (#3857). */
+    if (nm && (sp_streq(nm, "each_slice") || sp_streq(nm, "each_cons")) &&
+        nt_ref(nt, id, "block") >= 0 && nt_int(nt, id, "enum_self_result", -1) < 0) {
+      int srecv = nt_ref(nt, id, "receiver");
+      if (srecv >= 0 && nt_kind(nt, srecv) == NK_CallNode && nt_ref(nt, srecv, "block") < 0) {
+        const char *srnm = nt_str(nt, srecv, "name");
+        if (srnm && sp_streq(srnm, "each")) {
+          nt_node_set_int(nt, id, "enum_self_result", srecv);
           changed = 1;
         }
       }
@@ -5216,6 +5240,12 @@ int desugar_enum_method_recv(Compiler *c) {
            sp_streq(nm, "each_entry")))
         nt_node_set_int(nt, id, "enum_self_result", recv);
       int wrap = nt_new_node(nt, "CallNode");
+      /* When the call answers its receiving Enumerator, that receiver has to
+         STAY one: a blockless `.each` over a Range otherwise reads the to_a
+         hop as its consumer and settles as the materialized element array,
+         which the call then answered (#3857). */
+      if (nt_int(nt, id, "enum_self_result", -1) >= 0)
+        nt_node_set_str(nt, wrap, "enum_recv", "1");
       nt_node_set_str(nt, wrap, "name", "to_a");
       nt_node_set_ref(nt, wrap, "receiver", recv);
       nt_node_set_ref(nt, id, "receiver", wrap);
