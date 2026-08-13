@@ -5359,6 +5359,37 @@ static int desugar_yielder_block_arg(Compiler *c) {
     const char *yname = block_param_name(c, eblk, 0);
     int ebody = nt_ref(nt, eblk, "body");
     if (!yname || ebody < 0) continue;
+    /* `y.to_proc` names the same channel the yielder is: a call through it
+       pushes, and `&y.to_proc` is `&y`. Neither had an arm, so the explicit
+       spelling raised NoMethodError (#3844). Rewritten before the `&y` loop
+       below so the block-argument form rides it. */
+    for (int id = 0; id < n0; id++) {
+      if (nt_kind(nt, id) != NK_CallNode) continue;
+      const char *tnm = nt_str(nt, id, "name");
+      if (!tnm || !sp_streq(tnm, "to_proc")) continue;
+      int trecv = nt_ref(nt, id, "receiver");
+      if (trecv < 0 || nt_kind(nt, trecv) != NK_LocalVariableReadNode) continue;
+      const char *tvn = nt_str(nt, trecv, "name");
+      if (!tvn || !sp_streq(tvn, yname)) continue;
+      if (!a_subtree_contains(nt, ebody, id, 0)) continue;
+      /* `&y.to_proc` -> `&y` */
+      for (int ba = 0; ba < n0; ba++)
+        if (nt_kind(nt, ba) == NK_BlockArgumentNode && nt_ref(nt, ba, "expression") == id) {
+          nt_node_set_ref(nt, ba, "expression", trecv);
+          changed = 1;
+        }
+      /* `y.to_proc.call(v)` / `.()` / `[v]` -> `y << v` */
+      for (int cl = 0; cl < n0; cl++) {
+        if (nt_kind(nt, cl) != NK_CallNode || nt_ref(nt, cl, "receiver") != id) continue;
+        const char *cnm = nt_str(nt, cl, "name");
+        if (!cnm || (!sp_streq(cnm, "call") && !sp_streq(cnm, "()") && !sp_streq(cnm, "[]") &&
+                     !sp_streq(cnm, "yield"))) continue;
+        nt_node_set_str(nt, cl, "name", "<<");
+        nt_node_set_ref(nt, cl, "receiver", trecv);
+        nt_node_set_int(nt, cl, "yielder_push", 1);
+        changed = 1;
+      }
+    }
     /* every `&y` inside this generator body */
     for (int id = 0; id < n0; id++) {
       if (nt_kind(nt, id) != NK_CallNode) continue;
