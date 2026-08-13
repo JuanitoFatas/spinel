@@ -1321,7 +1321,7 @@ static void emit_poly_eq_ordered(Compiler *c, int recv, int arg, int eq, Buf *b)
    name its op kind; `adj_only` marks a stage that only works adjacent to the
    terminal (ops collect terminal-first, so that is nops == 0). */
 enum { OP_MAP, OP_FILTER, OP_TAKEWHILE, OP_DROPWHILE, OP_FILTERMAP, OP_FLATMAP,
-       OP_TAKE, OP_DROP, OP_EACHSLICE, OP_EACHCONS };
+       OP_TAKE, OP_DROP, OP_EACHSLICE, OP_EACHCONS, OP_WITHINDEX };
 static const struct { const char *nm; int kind; int negate; int adj_only; }
 LAZY_BLOCK_STAGE[] = {
   { "map",            OP_MAP,       0, 0 }, { "collect",        OP_MAP,       0, 0 },
@@ -1565,6 +1565,28 @@ int emit_lazy_pipeline_expr(Compiler *c, int id, Buf *b) {
     /* Blockless counter stages: `take(n)` limits the stream to n elements
        (break once reached), `drop(n)` skips the first n. Both stay lazy in
        CRuby, fusing straight into the loop. */
+    /* with_index / each_with_index with no block pairs each element with a
+       running counter. As a fused stage it indexes a chain over an endless
+       source, which materializing cannot do (#3840). */
+    if ((sp_streq(nm, "with_index") || sp_streq(nm, "each_with_index")) &&
+        nt_ref(nt, cur, "block") < 0) {
+      int ar = nt_ref(nt, cur, "arguments");
+      int ac = 0; const int *av = ar >= 0 ? nt_arr(nt, ar, "arguments", &ac) : NULL;
+      if (ac > 1 || nops >= 16) return 0;
+      if (ac == 1 && !sp_streq(nm, "with_index")) return 0;   /* no offset form */
+      ops[nops].kind = OP_WITHINDEX;
+      ops[nops].block = -1; ops[nops].negate = 0;
+      ops[nops].arg = (ac == 1 && av) ? av[0] : -1;
+      ops[nops].cnt = -1; ops[nops].lim = -1;
+      nops++;
+      cur = nt_ref(nt, cur, "receiver");
+      if (cur >= 0 && nt_type(nt, cur) && sp_streq(nt_type(nt, cur), "LocalVariableReadNode")) {
+        int a = lazy_alias_chain(c, cur);
+        if (a >= 0) cur = a;
+      }
+      else { int a = lazy_method_chain(c, cur); if (a >= 0) cur = a; }
+      continue;
+    }
     int cs = -1;
     for (int i = 0; LAZY_COUNTER_STAGE[i].nm; i++)
       if (sp_streq(nm, LAZY_COUNTER_STAGE[i].nm) &&
@@ -1605,6 +1627,16 @@ int emit_lazy_pipeline_expr(Compiler *c, int id, Buf *b) {
       if (a >= 0) cur = a;
     }
     else { int a = lazy_method_chain(c, cur); if (a >= 0) cur = a; }
+  }
+  /* An ENDLESS range is its own lazy source: there is no array to materialize,
+     so `(1..).each_cons(2).first(2)` has nowhere else to go and raised rather
+     than answering the leading windows (#3840). A bounded range keeps the
+     eager path, which the redispatch already serves. */
+  if (lazy_src < 0 && nops > 0 && cur >= 0) {
+    int rr = unwrap_parens(c, cur);
+    if (rr >= 0 && nt_type(nt, rr) && sp_streq(nt_type(nt, rr), "RangeNode") &&
+        nt_ref(nt, rr, "right") < 0 && nt_ref(nt, rr, "left") >= 0)
+      lazy_src = rr;
   }
   if (lazy_src < 0) return 0;
 
@@ -1657,6 +1689,14 @@ int emit_lazy_pipeline_expr(Compiler *c, int id, Buf *b) {
       /* 1 while still dropping; cleared at the first false predicate */
       ops[oi].cnt = ++g_tmp; emit_indent(g_pre, g_indent);
       buf_printf(g_pre, "int _t%d = 1;\n", ops[oi].cnt);
+      continue;
+    }
+    if (ops[oi].kind == OP_WITHINDEX) {
+      ops[oi].cnt = ++g_tmp; emit_indent(g_pre, g_indent);
+      Buf ob; memset(&ob, 0, sizeof ob);
+      if (ops[oi].arg >= 0) { Buf t = expr_buf(c, ops[oi].arg); buf_puts(&ob, t.p ? t.p : "0"); free(t.p); }
+      buf_printf(g_pre, "mrb_int _t%d = %s;\n", ops[oi].cnt, ob.p ? ob.p : "0");
+      free(ob.p);
       continue;
     }
     if (ops[oi].kind == OP_EACHSLICE || ops[oi].kind == OP_EACHCONS) {
@@ -1802,6 +1842,16 @@ int emit_lazy_pipeline_expr(Compiler *c, int id, Buf *b) {
       emit_indent(g_pre, g_indent + 1); buf_puts(g_pre, "}\n");
       emit_indent(g_pre, g_indent + 1);
       buf_puts(g_pre, "continue;\n");
+      continue;
+    }
+    if (ops[oi].kind == OP_WITHINDEX) {
+      emit_indent(g_pre, g_indent + 1);
+      buf_puts(g_pre, "{ sp_PolyArray *_w = sp_PolyArray_new(); SP_GC_ROOT(_w);\n");
+      emit_indent(g_pre, g_indent + 2);
+      buf_printf(g_pre, "sp_PolyArray_push(_w, %s); sp_PolyArray_push(_w, sp_box_int(_t%d++));\n",
+                 vbuf, ops[oi].cnt);
+      emit_indent(g_pre, g_indent + 2);
+      buf_printf(g_pre, "%s = sp_box_poly_array(_w); }\n", vbuf);
       continue;
     }
     if (ops[oi].kind == OP_EACHCONS) {

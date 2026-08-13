@@ -759,6 +759,11 @@ int range_enum_redispatch(Compiler *c, int id) {
   if (block < 0 && argc <= 1 &&
       (sp_streq(name, "all?") || sp_streq(name, "any?") ||
        sp_streq(name, "none?") || sp_streq(name, "one?"))) return 1;
+  /* blockless cycle(n) / each_entry: an Enumerator over the range's own ints,
+     which the materialized array yields identically (#3840). A countless
+     `cycle` never ends, so it keeps its own emitter. */
+  if (block < 0 && sp_streq(name, "cycle") && argc == 1) return 1;
+  if (block < 0 && sp_streq(name, "each_entry") && argc == 0) return 1;
   /* blockless select/reject/map: an Enumerator over the range's own ints,
      which the materialized array builds identically (#3062). */
   if (block < 0 && argc == 0 &&
@@ -5760,6 +5765,7 @@ else {
          the single integer argument). */
       if ((sp_streq(nm, "take") || sp_streq(nm, "drop") ||
            (sp_streq(nm, "each_slice") && cur == recv) ||
+           sp_streq(nm, "with_index") || sp_streq(nm, "each_with_index") ||
            sp_streq(nm, "each_cons")) &&
           nt_ref(nt, cur, "block") < 0) {
         saw_op = 1; cur = nt_ref(nt, cur, "receiver");
@@ -5781,6 +5787,20 @@ else {
         int a = lazy_alias_chain(c, cur);
         if (a >= 0) cur = a;
       }
+    }
+    /* An endless range needs no `.lazy` to be one: there is no array to
+       materialize, so the pipeline over it is the only well-defined reading
+       (#3840). */
+    if (ok && lazy_src < 0 && saw_op) {
+      int rr = cur;
+      while (rr >= 0 && nt_type(nt, rr) && sp_streq(nt_type(nt, rr), "ParenthesesNode")) {
+        int bd = nt_ref(nt, rr, "body"); int bn = 0;
+        const int *bl = bd >= 0 ? nt_arr(nt, bd, "body", &bn) : NULL;
+        rr = bn == 1 ? bl[0] : -1;
+      }
+      if (rr >= 0 && nt_type(nt, rr) && sp_streq(nt_type(nt, rr), "RangeNode") &&
+          nt_ref(nt, rr, "right") < 0 && nt_ref(nt, rr, "left") >= 0)
+        lazy_src = rr;
     }
     /* `first` needs no stage between it and the lazy source: `e.lazy.first(2)`
        is as well defined as `e.lazy.map { }.first(2)` (#3586) */

@@ -342,7 +342,8 @@ int chain_is_lazy_valued(Compiler *c, int node) {
   /* with_index / zip keep the VALUE lazy (so a chain ending in them is still
      a Lazy for recognition purposes) but the pipeline cannot fuse them, so
      they are not stages -- the write-suppression walk must not accept them. */
-  if (!lazy_stage_name(top) && !sp_streq(top, "with_index") && !sp_streq(top, "zip"))
+  if (!lazy_stage_name(top) && !sp_streq(top, "with_index") &&
+      !sp_streq(top, "each_with_index") && !sp_streq(top, "zip"))
     return 0;
   int hops = 0;
   for (int cur = node; cur >= 0; ) {
