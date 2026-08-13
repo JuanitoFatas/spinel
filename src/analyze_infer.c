@@ -1069,10 +1069,16 @@ TyKind infer_call(Compiler *c, int id) {
   /* `each_slice(n) { } / each_cons(n) { }` answer the receiver. When the
      receiver is the marked `to_a` hop above, that is the original Hash or
      Range, not the pair array the loop walked (#3842). */
-  if (recv >= 0 && argc == 1 && nt_ref(nt, id, "block") >= 0 &&
+  if (recv >= 0 && nt_ref(nt, id, "block") >= 0 &&
       nt_type(nt, nt_ref(nt, id, "block")) &&
       sp_streq(nt_type(nt, nt_ref(nt, id, "block")), "BlockNode") &&
-      (sp_streq(name, "each_slice") || sp_streq(name, "each_cons")) &&
+      ((argc == 1 && (sp_streq(name, "each_slice") || sp_streq(name, "each_cons"))) ||
+       /* each_entry answers the receiver too, and the value emitter yields it:
+          left on the pair array's type the two disagreed and the C compiler
+          was handed a hash where an array was declared (#3895) */
+       (argc == 0 && (sp_streq(name, "each_entry") ||
+                      /* each_entry is renamed to each before this point */
+                      sp_streq(name, "each")))) &&
       nt_kind(nt, recv) == NK_CallNode && nt_str(nt, recv, "enum_recv")) {
     int orecv = nt_ref(nt, recv, "receiver");
     if (orecv >= 0) return infer_type(c, orecv);
