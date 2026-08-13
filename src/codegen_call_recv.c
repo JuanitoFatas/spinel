@@ -4616,7 +4616,12 @@ int emit_hash_call(Compiler *c, int id, Buf *b) {
           else {
             buf_printf(b, " %s _t%d = ", c_type_name(kt), tk); emit_hash_key(c, argv[a], kt, b); buf_puts(b, ";");
           }
-          buf_printf(b, " if (sp_%sHash_has_key(_t%d, _t%d)) sp_PolyArray_push(_t%d, ", hn, th, tk, tr);
+          /* A boxed-value hash answers its default on a miss, and values_at
+             wants that default; only a typed-value hash needs the has_key
+             guard, whose zero would otherwise read as a real value. */
+          int use_default = !is_fetch && vt == TY_POLY;
+          if (!use_default) buf_printf(b, " if (sp_%sHash_has_key(_t%d, _t%d))", hn, th, tk);
+          buf_printf(b, " sp_PolyArray_push(_t%d, ", tr);
           char getexpr[128]; snprintf(getexpr, sizeof getexpr, "sp_%sHash_get(_t%d, _t%d)", hn, th, tk);
           if (vt == TY_POLY) buf_puts(b, getexpr);
           else emit_boxed_text(c, vt, getexpr, b);
@@ -4654,7 +4659,7 @@ int emit_hash_call(Compiler *c, int id, Buf *b) {
             emit_boxed_text(c, kt, keytmp, b);
             buf_puts(b, "); }");
           }
-          else buf_printf(b, " else sp_PolyArray_push(_t%d, sp_box_nil());", tr);
+          else if (!use_default) buf_printf(b, " else sp_PolyArray_push(_t%d, sp_box_nil());", tr);
           if (is_splat) buf_puts(b, " } }");
         }
         buf_printf(b, " _t%d; })", tr);

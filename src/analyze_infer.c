@@ -2721,9 +2721,18 @@ else {
          faithful PolyPoly variant boxes each key by value -- inspect then renders
          symbol keys as `a:`, string keys as `"a"=>`, etc., all correctly. */
       if (cn && sp_streq(cn, "Hash") && nt_ref(nt, id, "block") >= 0) return TY_POLY_POLY_HASH;
-      if (cn && sp_streq(cn, "Hash"))
+      if (cn && sp_streq(cn, "Hash")) {
         /* argument-position Hash.new was renamed: PolyPoly; else key usage decides */
-        return sp_streq(name, "__hash_new_default") ? TY_POLY_POLY_HASH : TY_UNKNOWN;
+        if (sp_streq(name, "__hash_new_default")) return TY_POLY_POLY_HASH;
+        /* A Hash.new called on DIRECTLY has no key usage to decide it, and
+           staying unknown made every method on it an unresolved call
+           ("undefined method 'fetch' for unknown", #3823). The faithful
+           variant is the one the argument position already uses. */
+        NT_FOREACH_KIND(nt, NK_CallNode, use) {
+          if (nt_ref(nt, use, "receiver") == id) return TY_POLY_POLY_HASH;
+        }
+        return TY_UNKNOWN;
+      }
       if (cn && sp_streq(cn, "Regexp")) return TY_REGEX;
       /* Builtin object types */
       if (cn && sp_streq(cn, "Fiber")) return TY_FIBER;
