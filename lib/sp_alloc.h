@@ -409,6 +409,9 @@ const char *sp_float_to_s(mrb_float f);
 #define SP_BUILTIN_TMS           (-39)  /* Process.times -> Process::Tms */
 #define SP_BUILTIN_ADDRINFO      (-40)  /* Addrinfo (sp_Addrinfo *) */
 #define SP_BUILTIN_SOCKOPT       (-41)  /* Socket::Option (sp_SockOpt *) */
+#define SP_BUILTIN_CURRY         (-44)  /* Proc#curry accumulator (sp_Curry *):
+                                           boxed so a curried proc survives a
+                                           poly slot, where it read as nil (#3885) */
 #define SP_BUILTIN_MATCHDATA     (-43)  /* MatchData (sp_MatchData *): boxed so
                                            a match can live in a container */
 

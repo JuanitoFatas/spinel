@@ -10300,13 +10300,15 @@ void emit_call(Compiler *c, int id, Buf *b) {
          ABI); evaluate for effect and read the boxed sp_RbVal intact, matching
          the Method branch's now-boxed result so the ternary's two arms are a
          single type. */
-      buf_printf(b, " : ((void)sp_proc_call((sp_Proc *)_t%d.v.p, %d, (mrb_int[16]){", t, argc);
+      /* through the callable helper, so a curried Proc in the slot takes its
+         arguments instead of being read as an sp_Proc (#3885) */
+      buf_printf(b, " : sp_poly_callable_call(_t%d, %d, (mrb_int[16]){", t, argc);
       for (int k = 0; k < argc; k++) {
         if (k) buf_puts(b, ", ");
         EMIT_POLY_CALL_SLOT(k);
       }
       if (argc == 0) buf_puts(b, "0");  /* C99: no empty initializer list */
-      buf_puts(b, "}), _sp_proc_poly_ret))");
+      buf_puts(b, "}))");
       #undef EMIT_POLY_CALL_SLOT
       free(aptmp);
       return;

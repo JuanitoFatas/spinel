@@ -1675,6 +1675,8 @@ static const char *sp_poly_class_name(sp_RbVal v) {
         case SP_BUILTIN_OBJECT: return SPL("Object");   /* a bare Object.new instance */
         case SP_BUILTIN_BASIC_OBJECT: return SPL("BasicObject");
         case SP_BUILTIN_PROC: return SPL("Proc");
+        /* a curried proc IS a Proc to Ruby (#3885) */
+        case SP_BUILTIN_CURRY: return SPL("Proc");
         case SP_BUILTIN_METHOD:
           return ((sp_BoundMethod *)v.v.p)->unbound ? SPL("UnboundMethod") : SPL("Method");   /* (#3692) */
         case SP_BUILTIN_ENUMERATOR: return SPL("Enumerator");
@@ -8864,6 +8866,21 @@ static sp_RbVal sp_curry_realize_poly(sp_Curry *c) {
   sp_curry_int_slots(c, slots);
   sp_curry_publish_args(c);
   sp_proc_call(c->target, c->nargs, slots);
+  return _sp_proc_poly_ret;
+}
+
+/* Call a boxed callable. A Proc runs; a curried Proc (which a poly slot now
+   carries, #3885) takes the arguments and realizes once it has them, the way
+   the typed `curry[x]` path does. */
+static sp_RbVal sp_poly_callable_call(sp_RbVal v, mrb_int n, const mrb_int *args) {
+  if (v.tag == SP_TAG_OBJ && v.cls_id == SP_BUILTIN_CURRY) {
+    sp_Curry *cy = (sp_Curry *)v.v.p;
+    for (mrb_int i = 0; i < n; i++) cy = sp_curry_apply(cy, _sp_proc_poly_args[i]);
+    return sp_curry_realize_poly(cy);
+  }
+  mrb_int slots[16];
+  for (mrb_int i = 0; i < n && i < 16; i++) slots[i] = args[i];
+  sp_proc_call((sp_Proc *)v.v.p, n, slots);
   return _sp_proc_poly_ret;
 }
 

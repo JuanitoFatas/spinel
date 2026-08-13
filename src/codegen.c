@@ -25,6 +25,7 @@ const char *ty_nullable_builtin_id(TyKind t) {
     case TY_SOCKOPT:    return "SP_BUILTIN_SOCKOPT";
     case TY_OPENSTRUCT: return "SP_BUILTIN_OPENSTRUCT";
     case TY_MATCHDATA:  return "SP_BUILTIN_MATCHDATA";
+    case TY_CURRY:      return "SP_BUILTIN_CURRY";
     /* TY_TMS is an unboxed VALUE type: it boxes by heap copy (sp_box_tms),
        never as a nullable pointer (#3132) */
     default:            return NULL;
