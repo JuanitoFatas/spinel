@@ -1027,6 +1027,11 @@ void emit_scope_decls(Compiler *c, Scope *s, Buf *b) {
       else if (needs_root(lv->type) && !comp_ty_value_obj(c, lv->type)) buf_printf(b, "    SP_GC_ROOT(lv_%s);\n", lv->name);
     }
     else {
+      /* A BLOCK parameter the analyzer never typed still needs storage: the
+         loop emitter binds it, and an empty literal receiver leaves no element
+         type to infer, so `[].each_with_index { |x, i| }` referenced an
+         undeclared lv_x (#3853). A boxed slot is what the binding writes. */
+      if (lv->type == TY_UNKNOWN && lv->is_block_param) lv->type = TY_POLY;
       int vol = has_begin && (all_vol || name_in(volnames, nvol, lv->name));
       declare_local(c, b, lv, vol);
     }
@@ -7550,6 +7555,21 @@ char *codegen_program(const NodeTable *nt) {
     buf_puts(&b, "static const char *sp_obj_inspect_sw(int cls_id, void *p) __attribute__((cold, noinline));\n");
     buf_puts(&b, "static const char *sp_obj_to_s_sw(int cls_id, void *p) __attribute__((cold, noinline));\n");
   }
+  /* The #message / #to_s dispatchers below call these bodies unconditionally,
+     so a program that defines an override without ever querying it left the
+     dispatcher calling an undeclared function (#3834). Mark them before the
+     prototypes are written. */
+  if (exc_has_user_msg_override(c)) {
+    for (int i = 0; i < c->nclasses; i++) {
+      if (!class_is_exc_subclass(c, i)) continue;
+      static const char *const fns[2] = { "message", "to_s" };
+      for (int k = 0; k < 2; k++) {
+        int mi = comp_method_in_chain(c, i, fns[k], NULL);
+        if (mi >= 0 && (TyKind)c->scopes[mi].ret == TY_STRING) c->scopes[mi].reachable = 1;
+      }
+    }
+  }
+
   /* method prototypes (scope 0 is top-level) */
   /* A proc form is named only by a poly dispatch, which is emitted later, so
      the reachability pass cannot see it. Emit it and let the C compiler drop
