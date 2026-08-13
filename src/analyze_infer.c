@@ -7578,6 +7578,17 @@ TyKind infer_uncached(Compiler *c, int id) {
          value, and the handler's type is the right answer for it. */
       if (bs3 && bn3 > 0 && nt_kind(nt, bs3[bn3 - 1]) == NK_LocalVariableReadNode)
         return TY_UNKNOWN;
+      /* A call ON such a local reads UNKNOWN for the same reason: `a << 2`
+         answers the array `a`, whose slot the write earlier in this very body
+         types only later in the walk. Taking the handler's type made the whole
+         begin a Class, and the boxed value was assigned to an sp_Class (#3867).
+         The two arms are a union, so poly is the honest answer -- and it is
+         also right for the unresolved call this shape covers, whose raise
+         leaves only the handler's (boxed-compatible) value. */
+      if (bs3 && bn3 > 0 && nt_kind(nt, bs3[bn3 - 1]) == NK_CallNode) {
+        int lrcv = nt_ref(nt, bs3[bn3 - 1], "receiver");
+        if (lrcv >= 0 && nt_kind(nt, lrcv) == NK_LocalVariableReadNode) r = TY_POLY;
+      }
     }
     int have = !(r == TY_UNKNOWN || r == TY_VOID);
     for (int rs = nt_ref(nt, id, "rescue_clause"); rs >= 0; rs = nt_ref(nt, rs, "subsequent")) {
