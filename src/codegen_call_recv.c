@@ -2207,23 +2207,17 @@ else {
           buf_printf(b, "sp_%sArray_get(", k); emit_expr(c, recv, b); buf_puts(b, ", "); emit_expr(c, argv[0], b); buf_puts(b, ")");
         }
         else {
-          /* multi-step: box the array as sp_RbVal, then chain sp_poly_arr_get */
-          buf_printf(b, "sp_poly_arr_get_hash(");
-          /* first step: box the typed array as obj, then get element i */
-          int is_int = (rt == TY_INT_ARRAY);
-          (void)is_int;
-          /* build chain from innermost outward */
-          for (int di = argc - 1; di >= 1; di--) {
-            buf_printf(b, "sp_poly_arr_get_hash(");
-          }
-          /* first access: typed get then box */
-          buf_printf(b, "sp_box_obj(");
+          /* multi-step: hand the whole key list to the runtime walk, which
+             stops at nil and raises TypeError on a step that cannot be dug.
+             Chaining index reads instead read the scalar the first step
+             answered as if it were an array, so `[1].dig(0, 0)` answered 1
+             where Ruby raises (#3825). */
+          buf_puts(b, "sp_poly_dig_n(sp_box_obj(");
           emit_expr(c, recv, b);
-          buf_printf(b, ", SP_BUILTIN_%s_ARRAY)", rt == TY_INT_ARRAY ? "INT" : rt == TY_FLOAT_ARRAY ? "FLT" : "STR");
-          buf_puts(b, ", "); emit_expr(c, argv[0], b); buf_puts(b, ")");
-          for (int di = 1; di < argc; di++) {
-            buf_puts(b, ", "); emit_expr(c, argv[di], b); buf_puts(b, ")");
-          }
+          buf_printf(b, ", SP_BUILTIN_%s_ARRAY), %d, (sp_RbVal[]){",
+                     rt == TY_INT_ARRAY ? "INT" : rt == TY_FLOAT_ARRAY ? "FLT" : "STR", argc);
+          for (int di = 0; di < argc; di++) { if (di) buf_puts(b, ", "); emit_boxed(c, argv[di], b); }
+          buf_puts(b, "})");
         }
         return 1;
       }
