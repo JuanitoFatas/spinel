@@ -8121,6 +8121,16 @@ int emit_object_call(Compiler *c, int id, Buf *b) {
             buf_puts(b, ", "); emit_boxed(c, argv[1], b); buf_puts(b, ")");
           }
         }
+        else if (argc >= 2) {
+          /* every other remaining key walks at run time: the arms above cover
+             one step into a member, and the rest were silently dropped, which
+             emitted the member itself where a dug value was wanted (#3881) */
+          buf_printf(b, "sp_poly_dig_n(");
+          emit_boxed_text(c, mt, fld, b);
+          buf_printf(b, ", %d, (sp_RbVal[]){", argc - 1);
+          for (int a = 1; a < argc; a++) { if (a > 1) buf_puts(b, ", "); emit_boxed(c, argv[a], b); }
+          buf_puts(b, "})");
+        }
         else buf_puts(b, fld);
         buf_puts(b, "; })");
         return 1;
