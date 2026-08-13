@@ -3164,6 +3164,15 @@ int emit_reduce_block_expr(Compiler *c, int id, Buf *b) {
              (bt == TY_RATIONAL || bt == TY_COMPLEX || bt == TY_POLY ||
               bt == TY_BIGINT))
       acc_ty = TY_POLY;
+    /* With no seed the accumulator starts at the first element and kept that
+       type however the block answered. A body that is an UNRESOLVED call --
+       `inject(:nope)`, whose value is the NoMethodError raise -- answers the
+       boxed token, and assigning it into the scalar slot did not build
+       (#3831). Codegen runs after inference settles, so an unknown body type
+       here means genuinely unresolved, not not-yet-inferred. */
+    else if (acc_ty != TY_POLY && init < 0 && ty_is_numeric(acc_ty) &&
+             (bt == TY_POLY || bt == TY_UNKNOWN))
+      acc_ty = TY_POLY;
   }
   /* A hash/array/object seed whose block body evaluates to a boxed poly value
      (e.g. a method returning poly because it is also folded in a poly context)
@@ -3204,6 +3213,15 @@ int emit_reduce_block_expr(Compiler *c, int id, Buf *b) {
     buf_puts(b, "; "); start = 0;
   }
   else if (nested) { buf_printf(b, "sp_PolyArray_length(_t%d) > 0 ? (sp_IntArray *)sp_PolyArray_get(_t%d, 0).v.p : sp_IntArray_new(); ", ta, ta); start = 1; }
+  else if (acc_ty == TY_POLY && et != TY_POLY) {
+    /* a boxed accumulator over a typed element array: box the first element,
+       or the two ternary arms disagree about their C type */
+    char first[96]; snprintf(first, sizeof first, "sp_%sArray_get(_t%d, 0)", k, ta);
+    buf_printf(b, "sp_%sArray_length(_t%d) > 0 ? ", k, ta);
+    emit_boxed_text(c, et, first, b);
+    buf_puts(b, " : sp_box_nil(); ");
+    start = 1;
+  }
   else { buf_printf(b, "sp_%sArray_length(_t%d) > 0 ? sp_%sArray_get(_t%d, 0) : %s; ", k, ta, k, ta,
                     acc_ty == TY_INT ? "SP_INT_NIL" : acc_ty == TY_FLOAT ? "sp_float_nil()"
                     : acc_ty == TY_STRING ? "NULL"

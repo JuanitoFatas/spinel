@@ -4815,6 +4815,12 @@ else {
              boxed slot the first element occupies. */
           if (bt != TY_UNKNOWN && bt != TY_POLY && ty_array_elem(rt) == TY_POLY) return TY_POLY;
           if (bt != TY_UNKNOWN) return bt;
+          /* Settled and still unknown: the body is an unresolved call, whose
+             value is the boxed NoMethodError raise (`inject(:nope)` desugars
+             to one). The element-typed accumulator cannot take that, and the
+             program did not build (#3831). While inference is still
+             optimistic this only means "not yet typed". */
+          if (!g_infer_optimistic) return TY_POLY;
         }
       }
       return ty_array_elem(rt);

@@ -8603,6 +8603,59 @@ void emit_call(Compiler *c, int id, Buf *b) {
     return;
   }
   const NodeTable *nt = c->nt;
+  /* An Array method handed a literal of the wrong kind: the pointer went into
+     the mrb_int slot (or the reverse) and the C compiler was left to reject
+     the program (#3831). CRuby raises TypeError naming the conversion. */
+  {
+    int ar = nt_ref(nt, id, "receiver");
+    const char *an2 = nt_str(nt, id, "name");
+    int aa = nt_ref(nt, id, "arguments");
+    int ac2 = 0; const int *av2 = aa >= 0 ? nt_arr(nt, aa, "arguments", &ac2) : NULL;
+    TyKind art = ar >= 0 ? comp_ntype(c, ar) : TY_UNKNOWN;
+    if (ar >= 0 && an2 && ac2 >= 1 && av2 && ty_is_array(art) &&
+        !user_defines_or_reads(c, an2)) {
+      /* which argument has to be an Integer, and which an Array */
+      int want_int = -1, want_arr = -1;
+      if (sp_streq(an2, "rotate")) want_int = 0;
+      else if (sp_streq(an2, "fill") && ac2 >= 2) want_int = 1;
+      /* Array#sum over a String or Array element list folds by concatenation,
+         and its seed is legitimately one of those: only a NUMERIC element list
+         wants an Integer seed. */
+      /* ... and a BLOCK decides what is summed (`a.sum("") { |x| x.to_s }`),
+         so only the blockless numeric form wants an Integer seed. */
+      else if (sp_streq(an2, "sum") && ty_is_numeric(ty_array_elem(art)) &&
+               nt_ref(nt, id, "block") < 0) want_int = 0;
+      else if (sp_streq(an2, "product")) want_arr = 0;
+      const char *badcls = NULL;
+      int check = want_int >= 0 ? want_int : want_arr;
+      if (check >= 0 && check < ac2 && av2[check] >= 0) {
+        NodeKind ak3 = nt_kind(nt, av2[check]);
+        if (want_int >= 0) {
+          if (ak3 == NK_StringNode) badcls = "String";
+          else if (ak3 == NK_SymbolNode) badcls = "Symbol";
+          else if (ak3 == NK_ArrayNode) badcls = "Array";
+          else if (ak3 == NK_HashNode) badcls = "Hash";
+        }
+        else {
+          if (ak3 == NK_IntegerNode) badcls = "Integer";
+          else if (ak3 == NK_StringNode) badcls = "String";
+          else if (ak3 == NK_SymbolNode) badcls = "Symbol";
+        }
+      }
+      if (badcls) {
+        TyKind rty3 = comp_ntype(c, id);
+        const char *dv3 = default_value(rty3);
+        buf_puts(b, "({ (void)("); emit_expr(c, ar, b); buf_puts(b, "); ");
+        if (want_int >= 0 && sp_streq(an2, "sum"))
+          buf_printf(b, "sp_raise_cls(\"TypeError\", \"%s can't be coerced into Integer\"); ", badcls);
+        else
+          buf_printf(b, "sp_raise_cls(\"TypeError\", \"no implicit conversion of %s into %s\"); ",
+                     badcls, want_int >= 0 ? "Integer" : "Array");
+        buf_printf(b, "%s; })", dv3 ? dv3 : "0");
+        return;
+      }
+    }
+  }
   /* `Integer.sqrt("x")`: the class-method form of the same coercion failure --
      the string pointer went into the mrb_int slot and the answer was computed
      from its address (#3862). */
