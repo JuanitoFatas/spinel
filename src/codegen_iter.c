@@ -1379,7 +1379,13 @@ void emit_iter_param_assign(Compiler *c, int block, const char *p0_orig,
                                    const char *src_expr, Buf *b, int indent) {
   Scope *sc = comp_scope_of(c, block);
   LocalVar *lv = sc ? scope_local(sc, p0_orig) : NULL;
-  TyKind pt = lv ? lv->type : src_type;
+  /* A parameter the analyzer never registered has no C declaration -- an
+     unused one over an empty literal, where there is no element type to infer
+     from. Binding it referenced an undeclared variable (#3853); skipping the
+     binding is what the instance_eval path already does with its unused
+     parameter, and an unbound name cannot be read. */
+  if (!lv || lv->type == TY_UNKNOWN) return;
+  TyKind pt = lv->type;
   emit_indent(b, indent);
   if (pt == TY_POLY && src_type != TY_POLY) {
     Buf bx; memset(&bx, 0, sizeof bx);
@@ -2371,6 +2377,13 @@ int emit_iteration_stmt(Compiler *c, int id, Buf *b, int indent) {
     emit_indent(b, indent);
     buf_printf(b, "for (mrb_int _t%d = 0; _t%d < sp_%sArray_length(", t, t, k);
     buf_puts(b, rb.p); buf_printf(b, "); _t%d++) {\n", t);
+    /* an unused parameter is pruned by liveness and has no declaration, so
+       binding it would name an undeclared C variable (#3853) */
+    { Scope *ewsc = comp_scope_of(c, block);
+      const char *p0o = block_param_name(c, block, 0);
+      if (p0 && (!ewsc || !p0o || !scope_local(ewsc, p0o))) p0 = NULL;
+      const char *p1o = block_param_name(c, block, 1);
+      if (p1 && (!ewsc || !p1o || !scope_local(ewsc, p1o))) p1 = NULL; }
     if (p0) {
       emit_indent(b, indent + 1);
       if (p0_box_poly) {
@@ -2810,8 +2823,15 @@ int emit_iteration_stmt(Compiler *c, int id, Buf *b, int indent) {
         did_destruct = 1;
       }
       if (!did_destruct) {
-        emit_indent(b, indent + 1);
-        buf_printf(b, "lv_%s = sp_PolyArray_get(_t%d, _t%d);\n", p0, ta, t);
+        /* an unregistered parameter has no C declaration (see
+           emit_iter_param_assign): binding it would name a variable that does
+           not exist (#3853) */
+        Scope *bsc = comp_scope_of(c, block);
+        LocalVar *plv = bsc ? scope_local(bsc, block_param_name(c, block, 0)) : NULL;
+        if (plv && plv->type != TY_UNKNOWN) {
+          emit_indent(b, indent + 1);
+          buf_printf(b, "lv_%s = sp_PolyArray_get(_t%d, _t%d);\n", p0, ta, t);
+        }
       }
     }
     emit_loop_body(c, body, b, indent + 1);
