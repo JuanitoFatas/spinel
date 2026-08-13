@@ -2710,10 +2710,14 @@ else {
         int ta = ++g_tmp, tr = ++g_tmp, tf = ++g_tmp, tn = ++g_tmp;
         buf_printf(b, "({ sp_%sArray *_t%d = ", k, ta); emit_expr(c, recv, b);
         buf_printf(b, "; sp_Range _t%d = ", tr); emit_expr(c, argv[0], b);
-        buf_printf(b, "; mrb_int _t%d = _t%d.first < 0 ? _t%d.first + (_t%d ? _t%d->len : 0) : _t%d.first;",
-                   tf, tr, tr, ta, ta, tr);
-        buf_printf(b, " mrb_int _t%d = (_t%d.last < 0 ? _t%d.last + (_t%d ? _t%d->len : 0) : _t%d.last) - _t%d + (_t%d.excl ? 0 : 1);",
-                   tn, tr, tr, ta, ta, tr, tf, tr);
+        /* a beginless bound starts at 0 and an endless one runs to the end,
+           the same sentinels Array#[] resolves (#3835) */
+        buf_printf(b, "; mrb_int _t%d = _t%d.first == INTPTR_MIN ? 0"
+                      " : (_t%d.first < 0 ? _t%d.first + (_t%d ? _t%d->len : 0) : _t%d.first);",
+                   tf, tr, tr, tr, ta, ta, tr);
+        buf_printf(b, " mrb_int _t%d = _t%d.last == INTPTR_MAX ? ((_t%d ? _t%d->len : 0) - _t%d)"
+                      " : ((_t%d.last < 0 ? _t%d.last + (_t%d ? _t%d->len : 0) : _t%d.last) - _t%d + (_t%d.excl ? 0 : 1));",
+                   tn, tr, ta, ta, tf, tr, tr, ta, ta, tr, tf, tr);
         buf_printf(b, " sp_%sArray_slice_bang(_t%d, _t%d, _t%d < 0 ? 0 : _t%d); })", k, ta, tf, tn, tn);
         return 1;
       }

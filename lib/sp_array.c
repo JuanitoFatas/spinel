@@ -606,7 +606,7 @@ sp_IntArray *sp_IntArray_slice_bang(sp_IntArray *a, mrb_int from, mrb_int n) {SP
      empty slice: only start == len answers [] (#3607) */
   if (from < 0) from += a->len;
   if (from < 0 || from > a->len) return NULL;
-  if (n < 0) n = 0;
+  if (n < 0) return NULL;   /* slice!(start, -1) is nil, not an empty slice */
   if (from + n > a->len) n = a->len - from;
   sp_IntArray *r = sp_IntArray_new();
   for (mrb_int i = 0; i < n; i++) sp_IntArray_push(r, a->data[a->start + from + i]);
@@ -627,7 +627,7 @@ sp_FloatArray *sp_FloatArray_slice_bang(sp_FloatArray *a, mrb_int from, mrb_int 
      empty slice: only start == len answers [] (#3607) */
   if (from < 0) from += a->len;
   if (from < 0 || from > a->len) return NULL;
-  if (n < 0) n = 0;
+  if (n < 0) return NULL;   /* slice!(start, -1) is nil, not an empty slice */
   if (from + n > a->len) n = a->len - from;
   sp_FloatArray *r = sp_FloatArray_new();
   for (mrb_int i = 0; i < n; i++) sp_FloatArray_push(r, a->data[from + i]);
@@ -642,7 +642,7 @@ sp_StrArray *sp_StrArray_slice_bang(sp_StrArray *a, mrb_int from, mrb_int n) {SP
      empty slice: only start == len answers [] (#3607) */
   if (from < 0) from += a->len;
   if (from < 0 || from > a->len) return NULL;
-  if (n < 0) n = 0;
+  if (n < 0) return NULL;   /* slice!(start, -1) is nil, not an empty slice */
   if (from + n > a->len) n = a->len - from;
   sp_StrArray *r = sp_StrArray_new();
   for (mrb_int i = 0; i < n; i++) sp_StrArray_push(r, a->data[from + i]);
@@ -657,7 +657,7 @@ sp_PtrArray *sp_PtrArray_slice_bang(sp_PtrArray *a, mrb_int from, mrb_int n) {SP
      empty slice: only start == len answers [] (#3607) */
   if (from < 0) from += a->len;
   if (from < 0 || from > a->len) return NULL;
-  if (n < 0) n = 0;
+  if (n < 0) return NULL;   /* slice!(start, -1) is nil, not an empty slice */
   if (from + n > a->len) n = a->len - from;
   sp_PtrArray *r = sp_PtrArray_new_scan(a->scan_elem);
   for (mrb_int i = 0; i < n; i++) sp_PtrArray_push(r, a->data[from + i]);

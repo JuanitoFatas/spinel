@@ -3330,7 +3330,7 @@ static sp_PolyArray *sp_PolyArray_slice_bang(sp_PolyArray *a, mrb_int from, mrb_
   /* a start past the end is nil, not an empty slice (#3607) */
   if (from < 0) from += a->len;
   if (from < 0 || from > a->len) return NULL;
-  if (n < 0) n = 0;
+  if (n < 0) return NULL;   /* slice!(start, -1) is nil, not an empty slice */
   if (from + n > a->len) n = a->len - from;
   sp_PolyArray *r = sp_PolyArray_new();
   for (mrb_int i = 0; i < n; i++) sp_PolyArray_push(r, a->data[from + i]);
