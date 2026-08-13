@@ -9365,6 +9365,58 @@ int emit_range_call(Compiler *c, int id, Buf *b) {
   /* range value methods (evaluate the range once into a temp) */
   if (recv >= 0 && rt == TY_RANGE) {
     int block = nt_ref(nt, id, "block");
+    /* find / detect / take_while over an ENDLESS Range: there is no array to
+       materialize, so walk up from the bounded end the way `each` does. A
+       search that never succeeds does not terminate in CRuby either (#3863). */
+    if (block >= 0 && argc == 0 && nt_type(nt, block) &&
+        sp_streq(nt_type(nt, block), "BlockNode") &&
+        (sp_streq(name, "find") || sp_streq(name, "detect") ||
+         sp_streq(name, "take_while"))) {
+      int rn8 = unwrap_parens(c, recv);
+      if (rn8 >= 0 && nt_type(nt, rn8) && !sp_streq(nt_type(nt, rn8), "RangeNode")) {
+        int sl8 = local_sole_range_node(c, rn8);
+        if (sl8 >= 0) rn8 = sl8;
+      }
+      int endless = rn8 >= 0 && nt_type(nt, rn8) && sp_streq(nt_type(nt, rn8), "RangeNode") &&
+                    nt_ref(nt, rn8, "right") < 0 && nt_ref(nt, rn8, "left") >= 0;
+      const char *bp8 = block_param_name(c, block, 0);
+      int body8 = nt_ref(nt, block, "body");
+      int bn8 = 0; const int *bb8 = body8 >= 0 ? nt_arr(nt, body8, "body", &bn8) : NULL;
+      if (endless && bp8 && bn8 >= 1) {
+        int want_take = sp_streq(name, "take_while");
+        Scope *bsc8 = comp_scope_of(c, block);
+        LocalVar *lv8 = bsc8 ? scope_local(bsc8, bp8) : NULL;
+        const char *bpr = rename_local(bp8);
+        int tr8 = ++g_tmp, ti8 = ++g_tmp, to8 = ++g_tmp;
+        emit_indent(g_pre, g_indent);
+        Buf rb8 = expr_buf(c, recv);
+        buf_printf(g_pre, "sp_Range _t%d = %s;\n", tr8, rb8.p ? rb8.p : "");
+        free(rb8.p);
+        emit_indent(g_pre, g_indent);
+        if (want_take)
+          buf_printf(g_pre, "sp_IntArray *_t%d = sp_IntArray_new(); SP_GC_ROOT(_t%d);\n", to8, to8);
+        else
+          buf_printf(g_pre, "mrb_int _t%d = SP_INT_NIL;\n", to8);
+        emit_indent(g_pre, g_indent);
+        buf_printf(g_pre, "for (mrb_int _t%d = _t%d.first; ; _t%d++) {\n", ti8, tr8, ti8);
+        emit_indent(g_pre, g_indent + 1);
+        if (lv8 && lv8->type == TY_POLY) buf_printf(g_pre, "lv_%s = sp_box_int(_t%d);\n", bpr, ti8);
+        else buf_printf(g_pre, "lv_%s = _t%d;\n", bpr, ti8);
+        for (int j = 0; j + 1 < bn8; j++) emit_stmt(c, bb8[j], g_pre, g_indent + 1);
+        Buf cb8; memset(&cb8, 0, sizeof cb8);
+        { int sv8 = g_indent; g_indent += 1; emit_cond(c, bb8[bn8 - 1], &cb8); g_indent = sv8; }
+        emit_indent(g_pre, g_indent + 1);
+        if (want_take)
+          buf_printf(g_pre, "if (!(%s)) break; sp_IntArray_push(_t%d, _t%d);\n",
+                     cb8.p ? cb8.p : "0", to8, ti8);
+        else
+          buf_printf(g_pre, "if (%s) { _t%d = _t%d; break; }\n", cb8.p ? cb8.p : "0", to8, ti8);
+        free(cb8.p);
+        emit_indent(g_pre, g_indent); buf_puts(g_pre, "}\n");
+        buf_printf(b, "_t%d", to8);
+        return 1;
+      }
+    }
     /* endless literal: size is infinite; take/first(n) count from the start
        (an endless range cannot materialize) */
     {

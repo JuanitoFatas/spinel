@@ -668,6 +668,12 @@ int range_enum_redispatch(Compiler *c, int id) {
   if (sp_streq(name, "filter_map") && block >= 0) return 1;
   /* min(n)/max(n)/minmax with a count return arrays of the range's ints */
   if ((sp_streq(name, "min") || sp_streq(name, "max")) && argc >= 1) return 1;
+  /* blockless all?/any?/none?/one?: a truthiness scan, which the materialized
+     int array performs identically (an int is always truthy) (#3859). The
+     pattern-argument forms scan the same elements with `===`. */
+  if (block < 0 && argc <= 1 &&
+      (sp_streq(name, "all?") || sp_streq(name, "any?") ||
+       sp_streq(name, "none?") || sp_streq(name, "one?"))) return 1;
   /* blockless select/reject/map: an Enumerator over the range's own ints,
      which the materialized array builds identically (#3062). */
   if (block < 0 && argc == 0 &&
@@ -1027,6 +1033,12 @@ TyKind infer_call(Compiler *c, int id) {
         return TY_FLOAT;   /* an endless range counts forever: Infinity (#3668) */
       if ((sp_streq(name, "take") || sp_streq(name, "first")) && argc == 1)
         return TY_INT_ARRAY;
+      /* the block forms that walk up from the bounded end rather than
+         materializing: the elements are the range's own ints (#3863) */
+      if (nt_ref(nt, id, "block") >= 0 && argc == 0) {
+        if (sp_streq(name, "find") || sp_streq(name, "detect")) return TY_INT;
+        if (sp_streq(name, "take_while")) return TY_INT_ARRAY;
+      }
     }
   }
   /* min(n) / max(n) on an Integer Range answer an Array of its ints, however

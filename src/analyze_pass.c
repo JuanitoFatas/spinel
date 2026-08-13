@@ -7284,6 +7284,21 @@ int desugar_enumerable_via_to_a(Compiler *c) {
     if (rnm && sp_streq(rnm, "to_a")) continue;
     TyKind rt = comp_ntype(c, recv);
     if (!ty_is_hash(rt) && rt != TY_RANGE) continue;
+    /* A one-sided Range cannot become an array at all, and find / detect /
+       take_while have their own walk from the bounded end: routing them
+       through to_a turned a working search into a RangeError (#3863). The
+       other names have no such walk and keep the (faithfully raising) hop. */
+    if (rt == TY_RANGE &&
+        (sp_streq(nm, "find") || sp_streq(nm, "detect") || sp_streq(nm, "take_while"))) {
+      int rn7 = recv;
+      while (rn7 >= 0 && nt_type(nt, rn7) && sp_streq(nt_type(nt, rn7), "ParenthesesNode")) {
+        int pb7 = nt_ref(nt, rn7, "body"); int pn7 = 0;
+        const int *pp7 = pb7 >= 0 ? nt_arr(nt, pb7, "body", &pn7) : NULL;
+        rn7 = pn7 == 1 ? pp7[0] : -1;
+      }
+      if (rn7 >= 0 && nt_type(nt, rn7) && sp_streq(nt_type(nt, rn7), "RangeNode") &&
+          nt_ref(nt, rn7, "right") < 0) continue;
+    }
     /* Only where the call found no arm at all. A form that IS wired -- a
        blockless each_slice answering an Enumerator, say -- has a type, and
        rerouting it through to_a would answer an Array instead. */
