@@ -20454,6 +20454,29 @@ else { memcpy(dir, sf, n); dir[n] = 0; } }
       return;
     }
   }
+  /* `Comparable === x` / `Enumerable === x`: the module names no class object
+     spinel carries, so the call fell through to the poly dispatch and raised
+     NoMethodError. It is the is_a? question with the operands swapped (#3871). */
+  if (recv >= 0 && argc == 1 && sp_streq(name, "===") &&
+      nt_kind(nt, recv) == NK_ConstantReadNode && nt_str(nt, recv, "name")) {
+    const char *mcn = nt_str(nt, recv, "name");
+    if ((sp_streq(mcn, "Comparable") || sp_streq(mcn, "Enumerable")) &&
+        comp_class_index(c, mcn) < 0) {
+      TyKind at = comp_ntype(c, argv[0]);
+      int yes;
+      if (ty_is_object(at))
+        yes = class_includes_module_named(c, ty_object_class(at), mcn);
+      else if (sp_streq(mcn, "Comparable"))
+        yes = at == TY_INT || at == TY_FLOAT || at == TY_BIGINT || at == TY_STRING ||
+              at == TY_SYMBOL || at == TY_TIME || at == TY_RATIONAL;
+      else
+        yes = ty_is_array(at) || ty_is_hash(at) || at == TY_RANGE ||
+              at == TY_FLOAT_RANGE || at == TY_STR_RANGE || at == TY_ENUMERATOR ||
+              at == TY_DIR;
+      buf_puts(b, "((void)("); emit_expr(c, argv[0], b); buf_printf(b, "), %d)", yes);
+      return;
+    }
+  }
   /* true/false receiver: equal?/eql?/=== are value identity */
   if (recv >= 0 && rt == TY_BOOL && argc == 1 &&
       (sp_streq(name, "equal?") || sp_streq(name, "eql?") || sp_streq(name, "==="))) {
