@@ -3807,7 +3807,30 @@ void emit_case(Compiler *c, int id, Buf *b, int indent) {
                 else buf_puts(b, sref); }
               buf_puts(b, ")");
             }
-            else { buf_printf(b, "(_t%d == ", t); emit_expr(c, conds[j], b); buf_puts(b, ")"); }
+            else if (ty_is_object(pt) && comp_ntype(c, conds[j]) == pt &&
+                 (comp_method_in_chain(c, ty_object_class(pt), "===", NULL) >= 0 ||
+                  comp_method_in_chain(c, ty_object_class(pt), "==", NULL) >= 0)) {
+          /* `case obj when other`: Ruby asks `other === obj`, which for a class
+             defining #== is that method. Comparing the C structs instead did
+             not compile for a value-type object and compared addresses for a
+             heap one (#3820). */
+          int ecid = ty_object_class(pt);
+          int emi = comp_method_in_chain(c, ecid, "===", NULL);
+          if (emi < 0) emi = comp_method_in_chain(c, ecid, "==", NULL);
+          Scope *ems = &c->scopes[emi];
+          LocalVar *eplv = ems->nparams > 0 ? scope_local(ems, ems->pnames[0]) : NULL;
+          TyKind pty = eplv ? eplv->type : TY_POLY;
+          buf_puts(b, "(");
+          emit_method_cname(c, ems, b);
+          buf_puts(b, "(");
+          emit_expr(c, conds[j], b);
+          buf_puts(b, ", ");
+          { char sref[32]; snprintf(sref, sizeof sref, "_t%d", t);
+            if (pty != pt && pt != TY_UNKNOWN) emit_boxed_text(c, pt, sref, b);
+            else buf_puts(b, sref); }
+          buf_puts(b, "))");
+        }
+        else { buf_printf(b, "(_t%d == ", t); emit_expr(c, conds[j], b); buf_puts(b, ")"); }
           }
           } /* close non-ConstantReadNode else */
           } /* close else { int reidx... } */
@@ -4077,6 +4100,29 @@ void emit_case_expr(Compiler *c, int id, Buf *b) {
         }
         else if (pt == TY_STRING) { buf_printf(b, "sp_str_eq(_t%d, ", t); emit_expr(c, conds[j], b); buf_puts(b, ")"); }
         else if (pt == TY_POLY) { buf_printf(b, "sp_poly_eq(_t%d, ", t); emit_boxed(c, conds[j], b); buf_puts(b, ")"); }
+        else if (ty_is_object(pt) && comp_ntype(c, conds[j]) == pt &&
+                 (comp_method_in_chain(c, ty_object_class(pt), "===", NULL) >= 0 ||
+                  comp_method_in_chain(c, ty_object_class(pt), "==", NULL) >= 0)) {
+          /* `case obj when other`: Ruby asks `other === obj`, which for a class
+             defining #== is that method. Comparing the C structs instead did
+             not compile for a value-type object and compared addresses for a
+             heap one (#3820). */
+          int ecid = ty_object_class(pt);
+          int emi = comp_method_in_chain(c, ecid, "===", NULL);
+          if (emi < 0) emi = comp_method_in_chain(c, ecid, "==", NULL);
+          Scope *ems = &c->scopes[emi];
+          LocalVar *eplv = ems->nparams > 0 ? scope_local(ems, ems->pnames[0]) : NULL;
+          TyKind pty = eplv ? eplv->type : TY_POLY;
+          buf_puts(b, "(");
+          emit_method_cname(c, ems, b);
+          buf_puts(b, "(");
+          emit_expr(c, conds[j], b);
+          buf_puts(b, ", ");
+          { char sref[32]; snprintf(sref, sizeof sref, "_t%d", t);
+            if (pty != pt && pt != TY_UNKNOWN) emit_boxed_text(c, pt, sref, b);
+            else buf_puts(b, sref); }
+          buf_puts(b, "))");
+        }
         else { buf_printf(b, "(_t%d == ", t); emit_expr(c, conds[j], b); buf_puts(b, ")"); }
         } /* close non-ConstantReadNode else */
       }

@@ -197,6 +197,21 @@ void compute_reachable(Compiler *c) {
     }
   }
 
+  /* A `case obj when other` arm calls the pattern's #=== (or #==, which Ruby's
+     default #=== is), and that call has no CallNode of its own -- the arm is a
+     WhenNode. Mark them reachable when any case has a when arm (#3820). */
+  {
+    int has_when = 0;
+    for (int id = 0; id < c->nt->count && !has_when; id++) {
+      const char *ty = nt_type(c->nt, id);
+      if (ty && sp_streq(ty, "WhenNode")) has_when = 1;
+    }
+    if (has_when) {
+      MARK_NAME("==="); MARK_NAME("==");
+      while (qhead < qtail) { int s = queue[qhead++]; for (int ni = 0; ni < sc_n[s]; ni++) MARK_NAME(scope_calls[s][ni]); }
+    }
+  }
+
   /* case/in array and hash patterns may call a user object's #deconstruct /
      #deconstruct_keys, which have no explicit call site in the AST. If any such
      pattern exists, mark those methods reachable (dead ones are stripped). */
