@@ -5410,7 +5410,13 @@ else {
       if (sp_streq(name, "resume") || sp_streq(name, "value") || sp_streq(name, "join"))
         return TY_POLY;
       if (sp_streq(name, "alive?") || sp_streq(name, "dead?") || sp_streq(name, "closed?") ||
-          sp_streq(name, "eof?")) return TY_BOOL;
+          sp_streq(name, "eof?") || sp_streq(name, "tty?") || sp_streq(name, "isatty"))
+        return TY_BOOL;
+      /* IO#winsize on a poly-carried handle: [rows, cols], same as the TY_IO
+         arm. Without this the call falls through to a plain poly result and the
+         `size[0]` that follows reads it as an untyped value. */
+      if (sp_streq(name, "winsize") && sp_feature_enabled("io/console"))
+        return TY_INT_ARRAY;
       if (sp_streq(name, "read") || sp_streq(name, "gets") ||
           sp_streq(name, "readline")) return TY_STRING;
       if (sp_streq(name, "write")) return TY_INT;   /* IO#write: the byte count */

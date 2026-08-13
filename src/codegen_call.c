@@ -12929,6 +12929,8 @@ void emit_call(Compiler *c, int id, Buf *b) {
           their own arms. */
        sp_streq(name, "puts") || sp_streq(name, "print") || sp_streq(name, "putc") ||
        sp_streq(name, "eof?") || sp_streq(name, "closed?") || sp_streq(name, "path") ||
+       sp_streq(name, "tty?") || sp_streq(name, "isatty") ||
+       (sp_streq(name, "winsize") && sp_feature_enabled("io/console")) ||
        sp_streq(name, "readlines") || sp_streq(name, "rewind") || sp_streq(name, "sync"))) {
     int iocand = 0;
     for (int k = 0; k < c->nclasses && !iocand; k++)
@@ -12980,6 +12982,9 @@ void emit_call(Compiler *c, int id, Buf *b) {
       }
       else if (sp_streq(name, "eof?")) buf_printf(b, "sp_File_eof_p(_t%d); })", tio2);
       else if (sp_streq(name, "closed?")) buf_printf(b, "sp_File_closed_p(_t%d); })", tio2);
+      else if (sp_streq(name, "tty?") || sp_streq(name, "isatty"))
+        buf_printf(b, "sp_File_tty_p(_t%d); })", tio2);
+      else if (sp_streq(name, "winsize")) buf_printf(b, "sp_File_winsize(_t%d); })", tio2);
       else if (sp_streq(name, "path")) buf_printf(b, "sp_File_path(_t%d); })", tio2);
       else if (sp_streq(name, "readlines")) buf_printf(b, "sp_File_readlines(_t%d); })", tio2);
       else if (sp_streq(name, "rewind")) buf_printf(b, "sp_File_rewind(_t%d); })", tio2);
