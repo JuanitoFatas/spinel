@@ -353,6 +353,7 @@ typedef struct { char *mod; char *name; FfiField *fields; int nfields; } FfiStru
 enum { FFI_SM_NONE = 0, FFI_SM_NEW, FFI_SM_GET, FFI_SM_SET };
 typedef struct { char *mod; char *names; } FfiLib;   /* names: ;-separated lib names, or "" */
 typedef struct { char *mod; char *val; } FfiCflag;   /* val: ;-separated cflags, or "" */
+typedef struct { char *mod; char *val; } FfiSource;  /* ffi_source inline C translation-unit fragment */
 
 /* One `native_func` declaration (typed static binding to carried C). Unlike
    FfiFunc, arg/ret specs are the spinel type language ("any"/"string"/"int"/
@@ -486,6 +487,10 @@ typedef struct {
   /* FFI cflags per module (semicolon-separated) */
   FfiCflag *ffi_cflags;
   int n_ffi_cflags, c_ffi_cflags;
+
+  /* FFI inline C source fragments, emitted into the generated translation unit */
+  FfiSource *ffi_sources;
+  int n_ffi_sources, c_ffi_sources;
 
   /* native-binding registry: native_func declarations (Path B) */
   NativeFunc *native_funcs;

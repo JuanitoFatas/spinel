@@ -6930,6 +6930,18 @@ char *codegen_program(const NodeTable *nt) {
       buf_printf(&b, "} sp_ffi_struct_%s_%s;\n",
                  cf->ffi_structs[si].mod, cf->ffi_structs[si].name);
     }
+    /* Inline C fragments are deliberately emitted after Spinel's generated FFI
+       declarations and storage, but before any generated function bodies. This
+       lets a single Ruby source carry a small adapter while normal ffi_func
+       declarations retain their usual type checking and call lowering. */
+    for (int si = 0; si < cf->n_ffi_sources; si++) {
+      buf_printf(&b, "\n/* ffi_source: %s */\n", cf->ffi_sources[si].mod);
+      buf_puts(&b, cf->ffi_sources[si].val);
+      if (cf->ffi_sources[si].val[0] &&
+          cf->ffi_sources[si].val[strlen(cf->ffi_sources[si].val) - 1] != '\n')
+        buf_puts(&b, "\n");
+      buf_puts(&b, "/* end ffi_source */\n");
+    }
   }
   if (g_emit_sym_rt) {
     int ns = c->nsymbols;

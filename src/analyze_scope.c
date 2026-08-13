@@ -2420,6 +2420,25 @@ void register_ffi_decls(Compiler *c) {
         continue;
       }
 
+      if (sp_streq(dname, "ffi_source")) {
+        if (an < 1) ffi_decl_error(c, s, "`ffi_source` needs a C source string");
+        char *source = ffi_fold_str(c, args[0]);
+        if (!source)
+          ffi_decl_error(c, s, "`ffi_source` expects a compile-time string "
+                               "(a literal, heredoc, adjacent literals, String#+, "
+                               "__dir__, or File.expand_path of those)");
+        if (c->n_ffi_sources >= c->c_ffi_sources) {
+          c->c_ffi_sources = c->c_ffi_sources ? c->c_ffi_sources * 2 : 4;
+          FfiSource *tmp = realloc(c->ffi_sources, sizeof(FfiSource) * (size_t)c->c_ffi_sources);
+          if (!tmp) { perror("realloc"); exit(1); }
+          c->ffi_sources = tmp;
+        }
+        c->ffi_sources[c->n_ffi_sources].mod = strdup(mname);
+        c->ffi_sources[c->n_ffi_sources].val = source;
+        c->n_ffi_sources++;
+        continue;
+      }
+
       if (sp_streq(dname, "ffi_func") || sp_streq(dname, "attach_function")) {
         /* ffi-gem compat: `attach_function :name, [types], :ret` is
            `ffi_func`; the gem's 4-arg rename form

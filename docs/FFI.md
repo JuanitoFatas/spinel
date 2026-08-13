@@ -53,6 +53,30 @@ ffi_cflags "-I/usr/local/include"
 ffi_cflags "-Wl,-rpath,/usr/local/lib"
 ```
 
+### `ffi_source "..."`
+
+Embeds a compile-time C source fragment directly into Spinel's generated
+translation unit. This is intended for small adapters that should travel in a
+single Ruby source file; normal package C should still use carried `.c` files so
+it can be compiled and cached independently.
+
+```ruby
+module Tiny
+  ffi_source <<~C
+    #include <stdint.h>
+    intptr_t tiny_double(intptr_t n) { return n * 2; }
+  C
+  ffi_func :tiny_double, [:long], :long
+end
+```
+
+The argument must be a compile-time string (a literal/heredoc, adjacent
+literals, `String#+`, `__dir__`, or `File.expand_path` over those forms). The
+fragment is emitted after `spinel_rt.h` and FFI declarations but before the
+generated program's function bodies. Use `ffi_cflags` and `ffi_lib` for any
+headers and libraries it needs. Because this is native C, it has the same trust
+and portability implications as a package-carried `.c` file.
+
 ### `ffi_func :name, [arg_types], ret_type`
 
 Declares a C function callable as `Module.name(...)`.
