@@ -6982,7 +6982,7 @@ void emit_args_filled(Compiler *c, int callee_idx, int argsNode, const char *lea
        sequenced into a temp -- including scalars, which need no root. */
     int last_se = -1, n_se = 0;
     for (int k = 0; k < pos_argc && k < m->nparams; k++)
-      if (subtree_has_side_effect(nt, argv[k])) { last_se = k; n_se++; }
+      if (subtree_has_side_effect(c, argv[k])) { last_se = k; n_se++; }
     for (int k = 0; k < pos_argc && k < m->nparams; k++) {
       if (g_n_argov >= MAX_ARG_OVERRIDE) break;
       TyKind at = comp_ntype(c, argv[k]);
@@ -6994,7 +6994,7 @@ void emit_args_filled(Compiler *c, int callee_idx, int argsNode, const char *lea
          slot below, which coerces it to the parameter's type. */
       int has_storage = ty_is_object(at) || c_type_name(at) != NULL;
       int seq = (has_storage && n_se >= 2 && k < last_se &&
-                 subtree_has_side_effect(nt, argv[k]));
+                 subtree_has_side_effect(c, argv[k]));
       int root = (at == TY_POLY || needs_root(at));
       if (!root && !seq) continue;
       const char *aty = nt_type(nt, argv[k]);

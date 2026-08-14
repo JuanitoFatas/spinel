@@ -108,23 +108,48 @@ int subtree_may_allocate(const NodeTable *nt, int id) {
    or an index read of a container someone else may write) or an assignment.
    Ruby fixes argument evaluation to left-to-right; C leaves a call's operand
    order unspecified, so such arguments have to be sequenced into temps. */
-int subtree_has_side_effect(const NodeTable *nt, int id) {
+/* A builtin operator over scalars (`x + i`, `n < 3`) computes a value and
+   touches nothing reachable, so no sibling argument can observe when it ran.
+   It is a CallNode all the same, and counting it as an effect sequenced
+   `cell_get(cells, x + ix, y + iy)` into temps for an ordering nobody can
+   see -- 12% on the life benchmark. Gated on both the result and the
+   receiver being scalar, so a user class's own `+` and `Array#<<` are
+   effects as before. */
+static int call_is_scalar_op(Compiler *c, int id) {
+  static const char *const OPS[] = {
+    "+","-","*","/","%","**","<",">","<=",">=","==","!=","<=>","&","|","^","<<",">>", NULL };
+  const char *nm = nt_str(c->nt, id, "name");
+  if (!nm) return 0;
+  int hit = 0;
+  for (int i = 0; OPS[i] && !hit; i++) if (sp_streq(nm, OPS[i])) hit = 1;
+  if (!hit) return 0;
+  if (nt_ref(c->nt, id, "block") >= 0) return 0;
+  int recv = nt_ref(c->nt, id, "receiver");
+  if (recv < 0) return 0;
+  TyKind rt = comp_ntype(c, recv), vt = comp_ntype(c, id);
+  int scalar_r = (rt == TY_INT || rt == TY_FLOAT || rt == TY_BOOL);
+  int scalar_v = (vt == TY_INT || vt == TY_FLOAT || vt == TY_BOOL);
+  return scalar_r && scalar_v;
+}
+
+int subtree_has_side_effect(Compiler *c, int id) {
+  const NodeTable *nt = c->nt;
   if (id < 0) return 0;
   const char *ty = nt_type(nt, id);
   if (!ty) return 0;
-  if (sp_streq(ty, "CallNode") || sp_streq(ty, "SuperNode") ||
-      sp_streq(ty, "ForwardingSuperNode") || sp_streq(ty, "YieldNode") ||
-      strstr(ty, "WriteNode"))
+  if (sp_streq(ty, "SuperNode") || sp_streq(ty, "ForwardingSuperNode") ||
+      sp_streq(ty, "YieldNode") || strstr(ty, "WriteNode"))
     return 1;
+  if (sp_streq(ty, "CallNode") && !call_is_scalar_op(c, id)) return 1;
   int nr = nt_num_refs(nt, id);
   for (int i = 0; i < nr; i++)
-    if (subtree_has_side_effect(nt, nt_ref_at(nt, id, i))) return 1;
+    if (subtree_has_side_effect(c, nt_ref_at(nt, id, i))) return 1;
   int na = nt_num_arrs(nt, id);
   for (int i = 0; i < na; i++) {
     int n = 0;
     const int *ids = nt_arr_at(nt, id, i, &n);
     for (int j = 0; j < n; j++)
-      if (subtree_has_side_effect(nt, ids[j])) return 1;
+      if (subtree_has_side_effect(c, ids[j])) return 1;
   }
   return 0;
 }

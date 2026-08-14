@@ -128,7 +128,7 @@ extern int  g_sn_skip;   /* safe-nav re-entry marker (see codegen_util.c) */
 extern int  g_pd_skip;
 extern int  g_cls_tag_skip;   /* poly-dispatch builtin-arm re-entry marker */
 int subtree_may_allocate(const NodeTable *nt, int id);
-int subtree_has_side_effect(const NodeTable *nt, int id);
+int subtree_has_side_effect(Compiler *c, int id);
 /* When a yielding method is inlined, g_yield_block_fallback holds the block
    that was active in the CALLER's context so nested `yield`s inside the
    passed block can chain back to the outermost caller's block. */

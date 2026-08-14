@@ -1986,7 +1986,7 @@ int emit_iteration_stmt(Compiler *c, int id, Buf *b, int indent) {
     /* The count is evaluated ONCE, so a receiver that can change (or change
        something) between rounds has to be hoisted: spliced into the loop
        condition, `rng.next_int(n).times` re-rolled the die every round. */
-    if (subtree_has_side_effect(nt, recv)) {
+    if (subtree_has_side_effect(c, recv)) {
       int tn = ++g_tmp;
       emit_indent(b, indent);
       buf_printf(b, "mrb_int _t%d = %s;\n", tn, rb.p ? rb.p : "0");
@@ -3150,7 +3150,7 @@ int emit_iteration_stmt(Compiler *c, int id, Buf *b, int indent) {
     int ti = ++g_tmp;
     /* the limit sits in the loop condition, so a side-effecting one would be
        re-evaluated every round: it is computed once in Ruby */
-    if (subtree_has_side_effect(nt, argv[0])) {
+    if (subtree_has_side_effect(c, argv[0])) {
       int th = ++g_tmp;
       emit_indent(b, indent);
       buf_printf(b, "mrb_int _t%d = %s;\n", th, hi.p ? hi.p : "0");
