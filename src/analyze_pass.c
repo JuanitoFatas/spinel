@@ -5716,6 +5716,17 @@ static void ple_build(Compiler *c) {
     int an = 0; const int *av = nt_arr(nt, ca, "arguments", &an);
     for (int k = 0; k < an; k++) ple_mark_escaped(c, av[k]);
   }
+  /* `m(&callable)`: a block argument rides the block slot rather than the
+     argument list, so this scan never saw it. Handed to a user method it is
+     invoked through the type-erased ABI like any other escaping proc, and
+     nothing on this side can say what it will be called with -- the int
+     default then met a String element and raised NoMethodError at run time.
+     A builtin iterator's `&callable` is desugared into a literal block whose
+     call site types the params exactly, and that runs before the default, so
+     the precise answer still wins where there is one. */
+  NT_FOREACH_KIND(nt, NK_BlockArgumentNode, ba) {
+    ple_mark_escaped(c, nt_ref(nt, ba, "expression"));
+  }
   /* A proc literal stored as a hash value or array element also escapes: it is
      read back as a boxed value and invoked through the type-erased ABI, so its
      args ride the boxed side-channel just like a proc passed as a call
