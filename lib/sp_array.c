@@ -33,6 +33,18 @@ sp_IntArray*sp_IntArray_from_range(mrb_int s,mrb_int e){sp_IntArray*a=sp_IntArra
    signed integer overflow is undefined behaviour in C. */
 sp_IntArray*sp_IntArray_from_range_step(mrb_int beg,mrb_int end,mrb_int step,mrb_int excl){
   if(step==0)sp_raise_cls("ArgumentError","step can't be 0");
+  /* An endless range reaches here as INTPTR_MAX, so the loop below walks the
+     whole integer line and the process hangs. The float variant already
+     refuses a span it cannot materialise; do the same here, counting in
+     unsigned arithmetic so the span of an endless range cannot overflow.
+     CRuby answers a lazy sequence, which spinel does not have. */
+  { int forward = step > 0 ? (beg < end || (!excl && beg == end))
+                           : (beg > end || (!excl && beg == end));
+    uintptr_t span = step > 0 ? (uintptr_t)end - (uintptr_t)beg
+                             : (uintptr_t)beg - (uintptr_t)end;
+    uintptr_t mag  = step > 0 ? (uintptr_t)step : -(uintptr_t)step;
+    if(forward && span / mag >= (uintptr_t)(1LL<<30))
+      sp_raise_cls("RangeError","range too large to materialize"); }
   sp_IntArray*a=sp_IntArray_new();
   if(step>0){
     for(mrb_int v=beg;v<end||(!excl&&v==end);){
