@@ -480,6 +480,15 @@ and further iteration all produce CRuby's values, but `p` on the unforced
 sequence prints the array and `.class` answers `Array`. An infinite stepped
 range therefore cannot be left unforced.
 
+Materializing at the call also decides *when* a bad stride is rejected. CRuby
+defers the check to the point the sequence is enumerated, so `(1..10).step("x")`
+returns an Enumerator, `.size` answers `nil`, and the `TypeError` arrives only
+on `to_a` / `each` / `first`. Spinel raises the same `TypeError`, with CRuby's
+message, at the call itself. A `String` stride on a String range differs
+further: since 3.4 CRuby steps a non-numeric range by repeated `+`, so
+`("a".."e").step("x")` diverges, while spinel takes every Nth element -- a
+stride a String cannot name -- and raises.
+
 #### Embedded NUL bytes: byte-exact core, C-string transforms
 
 Strings store embedded NUL bytes, and the byte-exact core matches CRuby:

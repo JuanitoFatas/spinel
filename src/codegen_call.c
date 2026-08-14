@@ -8635,6 +8635,44 @@ static int json_to_json_is_builtin(Compiler *c, int recv) {
   return 1;
 }
 
+/* A `Range#step` stride that cannot become the number the range steps by.
+   CRuby's message for a NUMERIC range is the coercion form ("X can't be
+   coerced into Integer"), not the conversion form the index-taking methods
+   use, and it spells a Symbol or a boolean by its inspect rather than by its
+   class. Emits the raise and reports 1; reports 0 when the stride is one the
+   range can use. `into` names the type in the message; `conv` selects the
+   conversion wording, which is what a String range's own comparison raises. */
+static int emit_range_step_bad_stride(Compiler *c, int id, int recv, int arg,
+                                      const char *into, int conv, Buf *b) {
+  TyKind at = comp_ntype(c, arg);
+  const char *cn = (at == TY_STRING || at == TY_STRBUF) ? "String" :
+                   at == TY_NIL ? "nil" :
+                   (ty_is_array(at) || ty_is_obj_array(at)) ? "Array" :
+                   ty_is_hash(at) ? "Hash" :
+                   (at == TY_RANGE || at == TY_FLOAT_RANGE || at == TY_STR_RANGE) ? "Range" : NULL;
+  /* The conversion form names a Symbol by its CLASS (a boolean still by its
+     inspect); the coercion form names both by inspect. */
+  if (conv && at == TY_SYMBOL) cn = "Symbol";
+  if (!cn && at != TY_SYMBOL && at != TY_BOOL) return 0;
+  TyKind rty = comp_ntype(c, id);
+  const char *dv = default_value(rty);
+  buf_puts(b, "({ (void)("); emit_expr(c, recv, b); buf_puts(b, "); ");
+  if ((at == TY_SYMBOL && !conv) || at == TY_BOOL) {
+    buf_puts(b, "sp_raise_cls(\"TypeError\", sp_sprintf(");
+    if (conv) buf_printf(b, "\"no implicit conversion of %%s into %s\", ", into);
+    else      buf_printf(b, "\"%%s can't be coerced into %s\", ", into);
+    if (at == TY_SYMBOL) { buf_puts(b, "sp_sym_inspect("); emit_expr(c, arg, b); buf_puts(b, ")"); }
+    else { buf_puts(b, "("); emit_expr(c, arg, b); buf_puts(b, ") ? \"true\" : \"false\""); }
+    buf_puts(b, ")); ");
+  }
+  else {
+    buf_puts(b, "(void)("); emit_expr(c, arg, b); buf_puts(b, "); ");
+    if (conv) buf_printf(b, "sp_raise_cls(\"TypeError\", \"no implicit conversion of %s into %s\"); ", cn, into);
+    else      buf_printf(b, "sp_raise_cls(\"TypeError\", \"%s can't be coerced into %s\"); ", cn, into);
+  }
+  buf_printf(b, "%s; })", dv ? dv : "0");
+  return 1;
+}
 void emit_call(Compiler *c, int id, Buf *b) {
   /* deep-return pickup (#3227 P6): a marked receiverless call to a method
      whose every return path yields a shared handle -- reset the side
@@ -8692,6 +8730,33 @@ void emit_call(Compiler *c, int id, Buf *b) {
         buf_printf(b, "%s; })", dv5 ? dv5 : "0");
         return;
       }
+    }
+  }
+  /* `Range#step` on a Float or String range. The integer-range guard below
+     never sees these receivers, so a stride that is not a number went into the
+     mrb_float / mrb_int slot: the C build failed on the Float range, and on the
+     String range the compiler read the string literal's ADDRESS as the stride
+     and the program silently answered from it (#3918).
+
+     CRuby raises for a Symbol, nil, Array or boolean stride on a String range
+     and for any non-numeric one on a Float range. It does NOT raise for a
+     String stride on a String range: since 3.4 a non-numeric range steps by
+     repeated `+`, so `("a".."e").step("x")` diverges. spinel steps a String
+     range by taking every Nth element, which a String cannot name at all, so
+     that one raises the Integer conversion rather than reading an address. */
+  {
+    int sr = nt_ref(nt, id, "receiver");
+    const char *sn2 = nt_str(nt, id, "name");
+    int sa2 = nt_ref(nt, id, "arguments"); int sc3 = 0;
+    const int *sv2 = sa2 >= 0 ? nt_arr(nt, sa2, "arguments", &sc3) : NULL;
+    TyKind srt = sr >= 0 ? comp_ntype(c, sr) : TY_UNKNOWN;
+    if (sr >= 0 && sn2 && sp_streq(sn2, "step") && sc3 == 1 && sv2 && sv2[0] >= 0 &&
+        (srt == TY_FLOAT_RANGE || srt == TY_STR_RANGE) && !user_defines_or_reads(c, sn2)) {
+      TyKind st = comp_ntype(c, sv2[0]);
+      const char *into = srt == TY_FLOAT_RANGE ? "Float" :
+                         (st == TY_STRING || st == TY_STRBUF) ? "Integer" : "String";
+      int conv = srt == TY_STR_RANGE;
+      if (emit_range_step_bad_stride(c, id, sr, sv2[0], into, conv, b)) return;
     }
   }
   /* An integer Range method handed a literal of the wrong kind: the pointer
@@ -8782,6 +8847,9 @@ void emit_call(Compiler *c, int id, Buf *b) {
           return;
         }
       }
+      if (sp_streq(rn2, "step") &&
+          emit_range_step_bad_stride(c, id, rr2, rv2[0], "Integer", 0, b))
+        return;
       if (badcls && wants_int) {
         TyKind rty4 = comp_ntype(c, id);
         const char *dv4 = default_value(rty4);
