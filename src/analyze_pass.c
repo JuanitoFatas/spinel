@@ -5108,6 +5108,42 @@ static int fwd_callable_def(Compiler *c, int ref, int *out_body, int *out_pn) {
   return *out_body >= 0;
 }
 
+/* Settle an each_with_object memo parameter on a seed type. A usage-derived
+   answer overrides the bare int-array guess (the no-evidence default the first
+   fixpoint round takes, before the pushed element is typed), so an early guess
+   cannot widen a later str/poly memo all the way to poly; otherwise unify. */
+static TyKind ewo_memo_settle(TyKind cur, TyKind at, int from_usage) {
+  if (from_usage && (cur == TY_UNKNOWN || cur == TY_INT_ARRAY)) return at;
+  return ty_unify(cur, at);
+}
+/* The type an `each_with_object` seed settles on when the seed is an EMPTY
+   literal, which carries no type of its own: from how the block fills the memo
+   (`memo << e`), then from a memo the block only hands to a callable, else the
+   bare int array -- and the general boxed hash for `{}`. TY_UNKNOWN when the
+   seed is not an empty literal. `from_usage` reports an answer derived from a
+   fill rather than the no-evidence default, so a caller can let it override an
+   earlier guess. */
+static TyKind ewo_empty_seed_type(Compiler *c, int callid, int seed, int *from_usage) {
+  const NodeTable *nt = c->nt;
+  const char *sty = seed >= 0 ? nt_type(nt, seed) : NULL;
+  int sn = 0;
+  if (!sty) return TY_UNKNOWN;
+  if (sp_streq(sty, "ArrayNode")) {
+    nt_arr(nt, seed, "elements", &sn);
+    if (sn != 0) return TY_UNKNOWN;
+    TyKind me = ewo_memo_elem_type(c, callid);
+    if (me != TY_UNKNOWN) { if (from_usage) *from_usage = 1; return ty_array_of(me); }
+    if (ewo_memo_passed_to_callable(c, callid)) { if (from_usage) *from_usage = 1; return TY_POLY_ARRAY; }
+    return TY_INT_ARRAY;
+  }
+  if (sp_streq(sty, "HashNode") || sp_streq(sty, "KeywordHashNode")) {
+    nt_arr(nt, seed, "elements", &sn);
+    if (sn != 0) return TY_UNKNOWN;
+    if (from_usage) *from_usage = 1;
+    return TY_POLY_POLY_HASH;
+  }
+  return TY_UNKNOWN;
+}
 /* Does the block of this each_with_object hand its memo parameter to a
    callable (`f.call(memo, ...)`) rather than filling it inline? Then no push
    is visible to type it from. */
@@ -7041,35 +7077,10 @@ int infer_block_params(Compiler *c) {
         if (ewobj_argc > 0 && ewobj_argv) {
           TyKind at = infer_type(c, ewobj_argv[0]);
           int from_usage = 0;
-          if (at == TY_UNKNOWN) {
-            const char *a0ty = nt_type(nt, ewobj_argv[0]);
-            int an0 = 0;
-            if (a0ty && sp_streq(a0ty, "ArrayNode")) nt_arr(nt, ewobj_argv[0], "elements", &an0);
-            if (a0ty && sp_streq(a0ty, "ArrayNode") && an0 == 0) {
-              /* empty `[]`: the accumulator element type comes from how the memo
-                 is filled (`memo << e`), following a forwarded callable's body. */
-              TyKind me = ewo_memo_elem_type(c, id);
-              if (me != TY_UNKNOWN) { at = ty_array_of(me); from_usage = 1; }
-              /* No fill anywhere: the block hands the memo to a callable
-                 instead. The bare int-array guess then mistypes every use of
-                 it, so answer the general boxed array (#3657). */
-              else if (ewo_memo_passed_to_callable(c, id)) { at = TY_POLY_ARRAY; from_usage = 1; }
-              else at = TY_INT_ARRAY;
-            }
-            /* an empty `{}` memo is the general boxed hash, for a literal
-               block exactly as for a forwarded callable (#3657) */
-            else if (a0ty && sp_streq(a0ty, "HashNode") &&
-                     (nt_arr(nt, ewobj_argv[0], "elements", &an0), an0 == 0)) {
-              at = TY_POLY_POLY_HASH; from_usage = 1;
-            }
-          }
+          if (at == TY_UNKNOWN) at = ewo_empty_seed_type(c, id, ewobj_argv[0], &from_usage);
           if (at != TY_UNKNOWN) {
             LocalVar *ap = scope_local_intern(es, p1_name); ap->is_block_param = 1;
-            /* A usage-derived type overrides the bare int_array guess (the
-               no-evidence default) so an early guess can't widen a later
-               str/poly memo to poly_array; otherwise unify. */
-            TyKind am = (from_usage && (ap->type == TY_UNKNOWN || ap->type == TY_INT_ARRAY))
-                        ? at : ty_unify(ap->type, at);
+            TyKind am = ewo_memo_settle(ap->type, at, from_usage);
             if (am != ap->type) { ap->type = am; changed = 1; }
           }
         }
@@ -7219,9 +7230,15 @@ int infer_block_params(Compiler *c) {
             const int *ewobj_argv = ewobj_args >= 0 ? nt_arr(nt, ewobj_args, "arguments", &ewobj_argc) : NULL;
             if (ewobj_argc > 0 && ewobj_argv) {
               TyKind at2 = infer_type(c, ewobj_argv[0]);
+              /* An empty seed types from the block's fill, exactly as on an
+                 array receiver. Left UNKNOWN the memo param never settles,
+                 and the seed, the memo and the call's own type each pick a
+                 different answer (#3922). */
+              int from_usage2 = 0;
+              if (at2 == TY_UNKNOWN) at2 = ewo_empty_seed_type(c, id, ewobj_argv[0], &from_usage2);
               if (at2 != TY_UNKNOWN) {
                 LocalVar *mp_lv = scope_local_intern(hs, mp); mp_lv->is_block_param = 1;
-                TyKind mm = ty_unify(mp_lv->type, at2);
+                TyKind mm = ewo_memo_settle(mp_lv->type, at2, from_usage2);
                 if (mm != mp_lv->type) { mp_lv->type = mm; changed = 1; }
               }
             }
@@ -7241,9 +7258,12 @@ int infer_block_params(Compiler *c) {
         int ewo_args = nt_ref(nt, id, "arguments"); int ewo_argc = 0;
         const int *ewo_argv = ewo_args >= 0 ? nt_arr(nt, ewo_args, "arguments", &ewo_argc) : NULL;
         TyKind accT = (ewo_argc > 0 && ewo_argv) ? infer_type(c, ewo_argv[0]) : TY_UNKNOWN;
+        int accU = 0;
+        if (accT == TY_UNKNOWN && ewo_argc > 0 && ewo_argv)
+          accT = ewo_empty_seed_type(c, id, ewo_argv[0], &accU);
         if (mp && accT != TY_UNKNOWN) {
           LocalVar *mlv = scope_local_intern(hs, mp); mlv->is_block_param = 1;
-          TyKind mm = ty_unify(mlv->type, accT);
+          TyKind mm = ewo_memo_settle(mlv->type, accT, accU);
           if (mm != mlv->type) { mlv->type = mm; changed = 1; }
         }
       }
