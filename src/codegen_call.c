@@ -8670,23 +8670,76 @@ void emit_call(Compiler *c, int id, Buf *b) {
                            ak == NK_SymbolNode ? "Symbol" :
                            ak == NK_ArrayNode  ? "Array"  :
                            ak == NK_HashNode   ? "Hash"   : NULL;
+      /* The argument does not have to be written in place: a variable or a
+         call whose type is statically one of these is the same mismatch, and
+         only the literal form was recognized (#3917). A poly or unknown
+         argument stays on the runtime path -- its class is not settled here. */
+      if (!badcls) {
+        TyKind at2 = comp_ntype(c, rv2[0]);
+        badcls = (at2 == TY_STRING || at2 == TY_STRBUF) ? "String" :
+                 at2 == TY_SYMBOL ? "Symbol" :
+                 (ty_is_array(at2) || ty_is_obj_array(at2)) ? "Array" :
+                 ty_is_hash(at2) ? "Hash" : NULL;
+      }
       int pred = sp_streq(rn2, "cover?") || sp_streq(rn2, "include?") ||
                  sp_streq(rn2, "member?") || sp_streq(rn2, "===");
       int wants_int = sp_streq(rn2, "first") || sp_streq(rn2, "last") ||
                       sp_streq(rn2, "take") || sp_streq(rn2, "drop") ||
                       sp_streq(rn2, "step") || sp_streq(rn2, "each_slice") ||
                       sp_streq(rn2, "each_cons");
-      /* eql? is type-strict: an integer range never equals a float one. */
+      /* eql? is type-strict: an integer range never equals a float one, whether
+         the operand is written in place or reached through a variable (#3917). */
       int float_range_arg = 0;
-      if (sp_streq(rn2, "eql?") && nt_kind(nt, rv2[0]) == NK_RangeNode) {
-        for (int e = 0; e < 2; e++) {
-          int b2 = nt_ref(nt, rv2[0], e ? "right" : "left");
-          if (b2 >= 0 && nt_kind(nt, b2) == NK_FloatNode) float_range_arg = 1;
+      if (sp_streq(rn2, "eql?")) {
+        if (comp_ntype(c, rv2[0]) == TY_FLOAT_RANGE || comp_ntype(c, rv2[0]) == TY_STR_RANGE)
+          float_range_arg = 1;
+        if (nt_kind(nt, rv2[0]) == NK_RangeNode) {
+          for (int e = 0; e < 2; e++) {
+            int b2 = nt_ref(nt, rv2[0], e ? "right" : "left");
+            if (b2 >= 0 && nt_kind(nt, b2) == NK_FloatNode) float_range_arg = 1;
+          }
         }
       }
-      if ((badcls && pred) || float_range_arg) {
+      /* cover?(Range) is containment, not membership -- the one predicate that
+         takes a Range operand (=== and include? answer false for one, which the
+         boxed case-equality below already gives). */
+      { TyKind art3 = comp_ntype(c, rv2[0]);
+        if (sp_streq(rn2, "cover?") && (art3 == TY_FLOAT_RANGE || art3 == TY_RANGE)) {
+          int tA = ++g_tmp, tR = ++g_tmp;
+          const char *aty = art3 == TY_FLOAT_RANGE ? "sp_FloatRange" : "sp_Range";
+          buf_printf(b, "({ %s _t%d = ", aty, tA); emit_expr(c, rv2[0], b);
+          buf_printf(b, "; sp_Range _t%d = ", tR); emit_expr(c, rr2, b);
+          /* Compare the largest value each range actually includes: an
+             exclusive INTEGER end is one less, while an exclusive float end
+             only approaches its bound and so compares the same. */
+          if (art3 == TY_FLOAT_RANGE)
+            buf_printf(b, "; (mrb_bool)(_t%d.first >= (mrb_float)_t%d.first && "
+                          "_t%d.last <= (mrb_float)(_t%d.excl ? _t%d.last - 1 : _t%d.last)); })",
+                       tA, tR, tA, tR, tR, tR);
+          else
+            buf_printf(b, "; (mrb_bool)(_t%d.first >= _t%d.first && "
+                          "(_t%d.excl ? _t%d.last - 1 : _t%d.last) <= "
+                          "(_t%d.excl ? _t%d.last - 1 : _t%d.last)); })",
+                       tA, tR, tA, tA, tA, tR, tR, tR);
+          return;
+        } }
+      if (float_range_arg) {
         buf_puts(b, "({ (void)("); emit_expr(c, rr2, b); buf_puts(b, "); FALSE; })");
         return;
+      }
+      /* A membership test against an integer Range answers for whatever it is
+         handed: an Integer or Float by comparison, anything else false. Only a
+         statically integral argument keeps the direct path; the rest go through
+         the boxed case-equality, which is the same rule the `when` arm uses and
+         needs no static class at all (#3838, #3917). */
+      if (pred) {
+        TyKind at3 = comp_ntype(c, rv2[0]);
+        if (at3 != TY_INT && at3 != TY_FLOAT && at3 != TY_BIGINT) {
+          buf_puts(b, "sp_poly_case_eq(sp_box_range(");
+          emit_expr(c, rr2, b); buf_puts(b, "), ");
+          emit_boxed(c, rv2[0], b); buf_puts(b, ")");
+          return;
+        }
       }
       if (badcls && wants_int) {
         TyKind rty4 = comp_ntype(c, id);
