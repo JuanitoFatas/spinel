@@ -1332,6 +1332,33 @@ static int fi_reaches(Compiler *c, int from, int target, unsigned char *seen,
   return 0;
 }
 
+/* A body that runs its own loop is not a "small leaf": the call it saves is
+   already negligible against the work inside, and absorbing a loop nest into a
+   bigger function costs register allocation. Forcing those cost matmul 2x,
+   nqueens 1.6x and sudoku 1.3x while buying nothing anywhere. */
+static int fi_body_has_loop(Compiler *c, int id, int depth) {
+  const NodeTable *nt = c->nt;
+  if (id < 0 || depth > 400) return 0;
+  NodeKind k = nt_kind(nt, id);
+  if (k == NK_WhileNode || k == NK_UntilNode || k == NK_ForNode) return 1;
+  /* an iteration block (`xs.each { }`) is a loop once the emitter fuses it */
+  if (k == NK_CallNode) {
+    int blk = nt_ref(nt, id, "block");
+    const char *bt = blk >= 0 ? nt_type(nt, blk) : NULL;
+    if (bt && sp_streq(bt, "BlockNode")) return 1;
+  }
+  int nr = nt_num_refs(nt, id);
+  for (int i = 0; i < nr; i++)
+    if (fi_body_has_loop(c, nt_ref_at(nt, id, i), depth + 1)) return 1;
+  int na = nt_num_arrs(nt, id);
+  for (int i = 0; i < na; i++) {
+    int n = 0; const int *ids = nt_arr_at(nt, id, i, &n);
+    for (int j = 0; j < n; j++)
+      if (fi_body_has_loop(c, ids[j], depth + 1)) return 1;
+  }
+  return 0;
+}
+
 /* True when the program can run user code on a fiber stack -- a Fiber, a green
    thread, or a generator Enumerator. SP_FIBER_STACK_SIZE is the ceiling only
    there; on the process stack the same frame has megabytes to sit in. */
@@ -1403,6 +1430,7 @@ static void fi_build(Compiler *c) {
     g_mih_limit_override = sv; g_mih_callers_override = sv2;
     if (!ok) continue;
     if (fi_body_unforceable(c, m->body, 0)) continue;
+    if (fi_body_has_loop(c, m->body, 0)) continue;
     cand[si] = 1; ncand++;
   }
   /* A whole-program cycle search is O(candidates * edges); on a program with
