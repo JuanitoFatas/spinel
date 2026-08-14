@@ -1745,8 +1745,11 @@ int emit_iter_value_expr(Compiler *c, int id, Buf *b) {
            Range that receiver is the marked `to_a` hop's own receiver */
         ((sp_streq(name, "each_slice") || sp_streq(name, "each_cons")) &&
          nt_ref(nt, id, "receiver") >= 0 &&
-         nt_kind(nt, nt_ref(nt, id, "receiver")) == NK_CallNode &&
-         nt_str(nt, nt_ref(nt, id, "receiver"), "enum_recv")) ||
+         ((nt_kind(nt, nt_ref(nt, id, "receiver")) == NK_CallNode &&
+           nt_str(nt, nt_ref(nt, id, "receiver"), "enum_recv")) ||
+          /* a Range receiver is materialized in place rather than through a
+             marked hop, and answered the int array it walked (#3920) */
+          comp_ntype(c, nt_ref(nt, id, "receiver")) == TY_RANGE)) ||
         /* `str.split(sep) { |piece| }` answers the receiver too; in value
            position the block was dropped and the split array returned */
         sp_streq(name, "split")))

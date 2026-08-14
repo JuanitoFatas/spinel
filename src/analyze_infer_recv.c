@@ -181,6 +181,16 @@ int infer_range_call(Compiler *c, int id, TyKind rt, TyKind *out) {
   if (rt == TY_RANGE && sp_streq(name, "sum") && argc == 1 &&
       nt_ref(nt, id, "block") < 0)
     { *out = infer_type(c, argv[0]) == TY_FLOAT ? TY_FLOAT : TY_INT; return 1; }
+  /* each_slice(n) { } / each_cons(n) { } answer the receiver, which the value
+     emitter yields; the materializing redispatch below would otherwise type
+     them as the int array it walks, and an assigned result then printed the
+     elements instead of the Range (#3920). */
+  if (rt == TY_RANGE && nt_ref(nt, id, "block") >= 0 &&
+      nt_type(nt, nt_ref(nt, id, "block")) &&
+      sp_streq(nt_type(nt, nt_ref(nt, id, "block")), "BlockNode") &&
+      ((argc == 1 && (sp_streq(name, "each_slice") || sp_streq(name, "each_cons"))) ||
+       (argc == 0 && (sp_streq(name, "reverse_each") || sp_streq(name, "each_with_index")))))
+    { *out = TY_RANGE; return 1; }
   return 0;
 }
 
