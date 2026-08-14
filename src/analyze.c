@@ -7463,26 +7463,43 @@ static void mark_empty_literal_tails(Compiler *c) {
       if (rs) has_ret[(int)(rs - c->scopes)] = 1;
     }
   }
+  /* Mark the empty literal that ends `stmts`, the body of something whose
+     value that literal is. */
+  #define MARK_EMPTY_TAIL(stmts) do { \
+    int bn_ = 0; const int *bb_ = nt_arr(nt, (stmts), "body", &bn_); \
+    if (bn_ > 0) { \
+      int last_ = bb_[bn_ - 1]; \
+      const char *lty_ = (last_ >= 0 && last_ < c->node_cap) ? nt_type(nt, last_) : NULL; \
+      int en_ = 0; \
+      if (lty_ && sp_streq(lty_, "ArrayNode")) { \
+        nt_arr(nt, last_, "elements", &en_); \
+        if (en_ == 0) c->empty_arr_recv[last_] = 1; \
+      } \
+      else if (lty_ && (sp_streq(lty_, "HashNode") || sp_streq(lty_, "KeywordHashNode"))) { \
+        nt_arr(nt, last_, "elements", &en_); \
+        if (en_ == 0) c->empty_hash_recv[last_] = 1; \
+      } \
+    } \
+  } while (0)
   for (int s = 1; s < c->nscopes; s++) {
     Scope *sc = &c->scopes[s];
     if (sc->body < 0 || (has_ret && has_ret[s])) continue;
     if (nt_kind(nt, sc->body) != NK_StatementsNode) continue;
-    int bn = 0; const int *bb = nt_arr(nt, sc->body, "body", &bn);
-    if (bn <= 0) continue;
-    int last = bb[bn - 1];
-    if (last < 0 || last >= c->node_cap) continue;
-    const char *lty = nt_type(nt, last);
-    if (!lty) continue;
-    int en = 0;
-    if (sp_streq(lty, "ArrayNode")) {
-      nt_arr(nt, last, "elements", &en);
-      if (en == 0) c->empty_arr_recv[last] = 1;
-    }
-    else if (sp_streq(lty, "HashNode") || sp_streq(lty, "KeywordHashNode")) {
-      nt_arr(nt, last, "elements", &en);
-      if (en == 0) c->empty_hash_recv[last] = 1;
-    }
+    MARK_EMPTY_TAIL(sc->body);
   }
+  /* A block's value is its tail the same way a method's is, but only a DEF
+     scope carries a body, so a block was never reached here: `x.then { [] }`
+     takes the block's value as its own and had none to take, which declared
+     the C temp `void` (#3930). A `return` inside leaves the method rather than
+     the block, so those are skipped exactly as a method's are. */
+  NT_FOREACH_KIND(nt, NK_BlockNode, blk) {
+    int bs = nt_ref(nt, blk, "body");
+    if (bs < 0 || nt_kind(nt, bs) != NK_StatementsNode) continue;
+    Scope *sc = comp_scope_of(c, blk);
+    if (has_ret && sc && has_ret[(int)(sc - c->scopes)]) continue;
+    MARK_EMPTY_TAIL(bs);
+  }
+  #undef MARK_EMPTY_TAIL
   free(has_ret);
 }
 /* An empty `{}` passed as an argument to a USER method (`m({})`) is an
