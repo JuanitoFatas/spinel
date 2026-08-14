@@ -1222,7 +1222,11 @@ int emit_flat_map_expr(Compiler *c, int id, Buf *b) {
   /* sp_enum_items_from, not sp_poly_to_poly_array: a boxed HASH receiver
      enumerates as its [key, value] pairs (#2927); an array is unchanged. */
   if (poly_recv) buf_printf(g_pre, " _t%d = sp_enum_items_from(%s); SP_GC_ROOT(_t%d);\n", ta, rb.p ? rb.p : "sp_box_nil()", ta);
-  else buf_printf(g_pre, " _t%d = %s;\n", ta, rb.p ? rb.p : "");
+  /* The loop reads from this array while the body allocates -- the result
+     array, each spliced element. A freshly built receiver (`...take(n)`) is
+     held by nothing, so a collection inside the loop freed the array being
+     walked and the walk stopped early (#3904). */
+  else buf_printf(g_pre, " _t%d = %s; SP_GC_ROOT(_t%d);\n", ta, rb.p ? rb.p : "", ta);
   free(rb.p);
   emit_indent(g_pre, g_indent); buf_printf(g_pre, "sp_%sArray *_t%d = sp_%sArray_new(); SP_GC_ROOT(_t%d);\n", bkr, tres, bkr, tres);
   emit_indent(g_pre, g_indent);
