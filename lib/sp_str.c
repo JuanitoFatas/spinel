@@ -39,11 +39,11 @@ static const char *sp_bytestr(const char *hay, size_t hn, const char *need, size
 int sp_utf8_set_has(const uint32_t*cps,size_t n,uint32_t cp){for(size_t i=0;i<n;i++)if(cps[i]==cp)return 1;return 0;}
 /* Case-insensitive byte comparison over the REAL lengths: stopping at the
    first NUL made two strings differing only after one compare equal (#3471). */
-mrb_int sp_str_casecmp(const char*a,const char*b){SP_GC_ROOT_STR(a);SP_GC_ROOT_STR(b);if(!a)sp_nil_recv("casecmp");if(!b)return 1;
+mrb_int sp_str_casecmp(const char*a,const char*b){if(!a)sp_nil_recv("casecmp");if(!b)return 1;
   size_t la=sp_str_byte_len(a),lb=sp_str_byte_len(b),n=la<lb?la:lb;
   for(size_t i=0;i<n;i++){int ca=tolower((unsigned char)a[i]),cb=tolower((unsigned char)b[i]);if(ca!=cb)return ca<cb?-1:1;}
   return la==lb?0:(la<lb?-1:1);}
-mrb_bool sp_str_valid_encoding(const char*s){SP_GC_ROOT_STR(s);if(!s)sp_nil_recv("valid_encoding?");const unsigned char*p=(const unsigned char*)s;while(*p){unsigned c=*p;if(c<0x80){p++;continue;}int extra;unsigned cp;unsigned min;if((c&0xE0)==0xC0){extra=1;cp=c&0x1F;min=0x80;}
+mrb_bool sp_str_valid_encoding(const char*s){if(!s)sp_nil_recv("valid_encoding?");const unsigned char*p=(const unsigned char*)s;while(*p){unsigned c=*p;if(c<0x80){p++;continue;}int extra;unsigned cp;unsigned min;if((c&0xE0)==0xC0){extra=1;cp=c&0x1F;min=0x80;}
 else if((c&0xF0)==0xE0){extra=2;cp=c&0x0F;min=0x800;}
 else if((c&0xF8)==0xF0){extra=3;cp=c&0x07;min=0x10000;}
 else return FALSE;p++;for(int i=0;i<extra;i++){if((*p&0xC0)!=0x80)return FALSE;cp=(cp<<6)|(*p&0x3F);p++;}if(cp<min)return FALSE;if(cp>=0xD800&&cp<=0xDFFF)return FALSE;if(cp>0x10FFFF)return FALSE;}return TRUE;}
@@ -86,9 +86,9 @@ void sp_nil_recv(const char*meth){SP_GC_ROOT_STR(meth);
   SP_GC_ROOT_STR(msg);
   sp_raise_cls("NoMethodError",msg);
 }
-mrb_int sp_str_length_m(const char*s){SP_GC_ROOT_STR(s);if(!s)sp_nil_recv("length");return sp_str_length(s);}
-mrb_int sp_str_bytesize_m(const char*s){SP_GC_ROOT_STR(s);if(!s)sp_nil_recv("bytesize");return (mrb_int)sp_str_byte_len(s);}
-mrb_bool sp_str_empty_p(const char*s){SP_GC_ROOT_STR(s);if(!s)sp_nil_recv("empty?");return *s==0;}
+mrb_int sp_str_length_m(const char*s){if(!s)sp_nil_recv("length");return sp_str_length(s);}
+mrb_int sp_str_bytesize_m(const char*s){if(!s)sp_nil_recv("bytesize");return (mrb_int)sp_str_byte_len(s);}
+mrb_bool sp_str_empty_p(const char*s){if(!s)sp_nil_recv("empty?");return *s==0;}
 const char*sp_str_plus(const char*a,const char*b){SP_GC_ROOT_STR(a);SP_GC_ROOT_STR(b);
   if(!a)sp_nil_recv("+");
   if(!b)sp_raise_cls("TypeError","no implicit conversion of nil into String");
@@ -321,12 +321,12 @@ const char*sp_str_chop(const char*s){SP_GC_ROOT_STR(s);if(!s)sp_nil_recv("chop")
 const char*sp_str_chr(const char*s){SP_GC_ROOT_STR(s);if(!s)sp_nil_recv("chr");if(*s==0)return sp_str_empty;int n=sp_utf8_advance(s);char*r=sp_str_alloc_raw((size_t)n+1);memcpy(r,s,(size_t)n);r[n]=0;sp_str_set_len(r,(size_t)n);return r;}
 /* The character index at byte offset `byteoff`; preserves -1 (no match) and 0.
    Used to report a regexp match position in characters, not bytes (#3056). */
-mrb_int sp_str_byte_to_char(const char*s,mrb_int byteoff){SP_GC_ROOT_STR(s);if(byteoff<=0||!s)return byteoff;mrb_int ci=0;for(mrb_int i=0;i<byteoff&&s[i];ci++)i+=sp_utf8_advance(s+i);return ci;}
+mrb_int sp_str_byte_to_char(const char*s,mrb_int byteoff){if(byteoff<=0||!s)return byteoff;mrb_int ci=0;for(mrb_int i=0;i<byteoff&&s[i];ci++)i+=sp_utf8_advance(s+i);return ci;}
 /* Issue #797: NULL guards on receiver + needle for the chunk of
    string functions that read directly into a non-checked strlen. */
-mrb_bool sp_str_include(const char*s,const char*sub){SP_GC_ROOT_STR(s);SP_GC_ROOT_STR(sub);if(!sub)sp_raise_cls("TypeError","no implicit conversion of nil into String");if(!s)sp_nil_recv("include?");return sp_bytestr(s,sp_str_byte_len(s),sub,sp_str_byte_len(sub))!=NULL;}
-mrb_bool sp_str_start_with(const char*s,const char*p){SP_GC_ROOT_STR(s);SP_GC_ROOT_STR(p);if(!p)sp_raise_cls("TypeError","no implicit conversion of nil into String");if(!s)sp_nil_recv("start_with?");return strncmp(s,p,strlen(p))==0;}
-mrb_bool sp_str_end_with(const char*s,const char*suf){SP_GC_ROOT_STR(s);SP_GC_ROOT_STR(suf);if(!suf)sp_raise_cls("TypeError","no implicit conversion of nil into String");if(!s)sp_nil_recv("end_with?");size_t ls=strlen(s),lsuf=strlen(suf);if(lsuf>ls)return FALSE;return strcmp(s+ls-lsuf,suf)==0;}
+mrb_bool sp_str_include(const char*s,const char*sub){if(!sub)sp_raise_cls("TypeError","no implicit conversion of nil into String");if(!s)sp_nil_recv("include?");return sp_bytestr(s,sp_str_byte_len(s),sub,sp_str_byte_len(sub))!=NULL;}
+mrb_bool sp_str_start_with(const char*s,const char*p){if(!p)sp_raise_cls("TypeError","no implicit conversion of nil into String");if(!s)sp_nil_recv("start_with?");return strncmp(s,p,strlen(p))==0;}
+mrb_bool sp_str_end_with(const char*s,const char*suf){if(!suf)sp_raise_cls("TypeError","no implicit conversion of nil into String");if(!s)sp_nil_recv("end_with?");size_t ls=strlen(s),lsuf=strlen(suf);if(lsuf>ls)return FALSE;return strcmp(s+ls-lsuf,suf)==0;}
 /* partition: [before, sep, after] at the first sep; no match -> [s, "", ""]. */
 /* partition: [before, sep, after] at the first sep; no match -> [s, "", ""]. */
 sp_StrArray *sp_str_partition(const char *s, const char *sep) {
@@ -506,7 +506,7 @@ static mrb_int sp_str_count_units(const char *s, size_t bl) {
   }
   return n;
 }
-mrb_int sp_str_length(const char*s){SP_GC_ROOT_STR(s);
+mrb_int sp_str_length(const char*s){
   if (!s) return 0;
   /* binary bytes are one unit each, whatever they happen to spell in UTF-8 */
   if (sp_str_is_binary(s)) return (mrb_int)sp_str_byte_len(s);
@@ -531,9 +531,9 @@ mrb_int sp_str_length(const char*s){SP_GC_ROOT_STR(s);
   sp_str_lcache[victim].char_len = n;
   return n;
 }
-mrb_int sp_str_ord(const char*s){SP_GC_ROOT_STR(s);if(!s)sp_nil_recv("ord");unsigned char m=((const unsigned char*)s)[-1];size_t blen;if(m==0xfe||m==0xfc){blen=(((const sp_str_hdr*)(s-1))-1)->len;if(blen==0)sp_raise_cls("ArgumentError","empty string");}
+mrb_int sp_str_ord(const char*s){if(!s)sp_nil_recv("ord");unsigned char m=((const unsigned char*)s)[-1];size_t blen;if(m==0xfe||m==0xfc){blen=(((const sp_str_hdr*)(s-1))-1)->len;if(blen==0)sp_raise_cls("ArgumentError","empty string");}
 else{blen=strlen(s);if(blen==0)sp_raise_cls("ArgumentError","empty string");}uint32_t cp;sp_utf8_decode(s,&cp);return(mrb_int)cp;}
-size_t sp_utf8_byte_offset(const char*s,mrb_int char_idx){SP_GC_ROOT_STR(s);
+size_t sp_utf8_byte_offset(const char*s,mrb_int char_idx){
   if (!s || char_idx <= 0) return 0;
   /* one unit per byte on a binary string, so indexing and slicing agree with
      the byte-counted #length */
@@ -900,23 +900,23 @@ const char*sp_str_gsub(const char*s,const char*pat,const char*rep){SP_GC_ROOT_ST
 }
 /* `s.index(sub)` — leftmost occurrence; returns a codepoint offset (not a
    byte offset), or -1 if not found. */
-mrb_int sp_str_index(const char*s,const char*sub){SP_GC_ROOT_STR(s);SP_GC_ROOT_STR(sub);if(!s)sp_nil_recv("index");if(!sub)sp_raise_cls("TypeError","no implicit conversion of nil into String");const char*f=sp_bytestr(s,sp_str_byte_len(s),sub,sp_str_byte_len(sub));if(!f)return -1;mrb_int n=0;const char*p=s;while(p<f){p+=sp_utf8_advance(p);n++;}return n;}
+mrb_int sp_str_index(const char*s,const char*sub){if(!s)sp_nil_recv("index");if(!sub)sp_raise_cls("TypeError","no implicit conversion of nil into String");const char*f=sp_bytestr(s,sp_str_byte_len(s),sub,sp_str_byte_len(sub));if(!f)return -1;mrb_int n=0;const char*p=s;while(p<f){p+=sp_utf8_advance(p);n++;}return n;}
 /* Issue #758: NULL guard + bound the start so a negative result from
    sp_str_index doesn't underflow the source pointer. */
-mrb_int sp_str_index_from(const char*s,const char*sub,mrb_int start){SP_GC_ROOT_STR(s);SP_GC_ROOT_STR(sub);if(!s)sp_nil_recv("index");mrb_int cl=sp_str_length(s);if(start<0)start+=cl;if(start<0)start=0;if(start>cl)return -1;size_t boff=sp_utf8_byte_offset(s,start);const char*f=sp_bytestr(s+boff,sp_str_byte_len(s)-boff,sub,sp_str_byte_len(sub));if(!f)return -1;mrb_int n=start;const char*p=s+boff;while(p<f){p+=sp_utf8_advance(p);n++;}return n;}
+mrb_int sp_str_index_from(const char*s,const char*sub,mrb_int start){if(!s)sp_nil_recv("index");mrb_int cl=sp_str_length(s);if(start<0)start+=cl;if(start<0)start=0;if(start>cl)return -1;size_t boff=sp_utf8_byte_offset(s,start);const char*f=sp_bytestr(s+boff,sp_str_byte_len(s)-boff,sub,sp_str_byte_len(sub));if(!f)return -1;mrb_int n=start;const char*p=s+boff;while(p<f){p+=sp_utf8_advance(p);n++;}return n;}
 /* `s.rindex(sub)` — rightmost occurrence of sub; returns a codepoint
    offset, or -1 if not found. Empty sub matches at the end. */
-mrb_int sp_str_rindex(const char*s,const char*sub){SP_GC_ROOT_STR(s);SP_GC_ROOT_STR(sub);if(!s)sp_nil_recv("rindex");if(!sub)sp_raise_cls("TypeError","no implicit conversion of nil into String");size_t sl=sp_str_byte_len(sub);if(sl==0)return sp_str_length(s);size_t hn=sp_str_byte_len(s);const char*end=s+hn;const char*last=NULL;const char*p=s;while(p<end){const char*f=sp_bytestr(p,(size_t)(end-p),sub,sl);if(!f)break;last=f;p=f+1;}if(!last)return -1;mrb_int n=0;const char*q=s;while(q<last){q+=sp_utf8_advance(q);n++;}return n;}
+mrb_int sp_str_rindex(const char*s,const char*sub){if(!s)sp_nil_recv("rindex");if(!sub)sp_raise_cls("TypeError","no implicit conversion of nil into String");size_t sl=sp_str_byte_len(sub);if(sl==0)return sp_str_length(s);size_t hn=sp_str_byte_len(s);const char*end=s+hn;const char*last=NULL;const char*p=s;while(p<end){const char*f=sp_bytestr(p,(size_t)(end-p),sub,sl);if(!f)break;last=f;p=f+1;}if(!last)return -1;mrb_int n=0;const char*q=s;while(q<last){q+=sp_utf8_advance(q);n++;}return n;}
 /* `s.rindex(sub, pos)` — rightmost occurrence at or before codepoint pos.
    Negative pos counts back from the char length; nil (SP_INT_NIL) on miss. */
-mrb_int sp_str_rindex_from(const char*s,const char*sub,mrb_int pos){SP_GC_ROOT_STR(s);SP_GC_ROOT_STR(sub);if(!s)sp_nil_recv("rindex");if(!sub)sp_raise_cls("TypeError","no implicit conversion of nil into String");mrb_int cl=sp_str_length(s);if(pos<0)pos=cl+pos;if(pos<0)return SP_INT_NIL;size_t sl=sp_str_byte_len(sub);if(sl==0){if(pos>=cl)return cl;return pos;}size_t hn=sp_str_byte_len(s);const char*end=s+hn;const char*p=s;mrb_int best=-1;const char*r=s;mrb_int cur_n=0;while(p<end){const char*f=sp_bytestr(p,(size_t)(end-p),sub,sl);if(!f)break;while(r<f){r+=sp_utf8_advance(r);cur_n++;}if(cur_n>pos)break;best=cur_n;p=f+1;}return best<0?SP_INT_NIL:best;}
+mrb_int sp_str_rindex_from(const char*s,const char*sub,mrb_int pos){if(!s)sp_nil_recv("rindex");if(!sub)sp_raise_cls("TypeError","no implicit conversion of nil into String");mrb_int cl=sp_str_length(s);if(pos<0)pos=cl+pos;if(pos<0)return SP_INT_NIL;size_t sl=sp_str_byte_len(sub);if(sl==0){if(pos>=cl)return cl;return pos;}size_t hn=sp_str_byte_len(s);const char*end=s+hn;const char*p=s;mrb_int best=-1;const char*r=s;mrb_int cur_n=0;while(p<end){const char*f=sp_bytestr(p,(size_t)(end-p),sub,sl);if(!f)break;while(r<f){r+=sp_utf8_advance(r);cur_n++;}if(cur_n>pos)break;best=cur_n;p=f+1;}return best<0?SP_INT_NIL:best;}
 /* byteindex/byterindex: like index/rindex but the result and the start/pos
    arguments are BYTE offsets, not codepoint indices. Byte-oriented throughout
    (sp_bytestr), so no utf8 walk is needed. nil (SP_INT_NIL) on miss. */
-mrb_int sp_str_byteindex(const char*s,const char*sub){SP_GC_ROOT_STR(s);SP_GC_ROOT_STR(sub);if(!s)sp_nil_recv("byteindex");if(!sub)sp_raise_cls("TypeError","no implicit conversion of nil into String");const char*f=sp_bytestr(s,sp_str_byte_len(s),sub,sp_str_byte_len(sub));return f?(mrb_int)(f-s):SP_INT_NIL;}
-mrb_int sp_str_byteindex_from(const char*s,const char*sub,mrb_int start){SP_GC_ROOT_STR(s);SP_GC_ROOT_STR(sub);if(!s)sp_nil_recv("byteindex");if(!sub)sp_raise_cls("TypeError","no implicit conversion of nil into String");mrb_int bl=(mrb_int)sp_str_byte_len(s);if(start<0)start+=bl;if(start<0||start>bl)return SP_INT_NIL;const char*f=sp_bytestr(s+start,(size_t)(bl-start),sub,sp_str_byte_len(sub));return f?(mrb_int)(f-s):SP_INT_NIL;}
-mrb_int sp_str_byterindex(const char*s,const char*sub){SP_GC_ROOT_STR(s);SP_GC_ROOT_STR(sub);if(!s)sp_nil_recv("byterindex");if(!sub)sp_raise_cls("TypeError","no implicit conversion of nil into String");size_t sl=sp_str_byte_len(sub);size_t hn=sp_str_byte_len(s);if(sl==0)return(mrb_int)hn;const char*end=s+hn;const char*last=NULL;const char*p=s;while(p<end){const char*f=sp_bytestr(p,(size_t)(end-p),sub,sl);if(!f)break;last=f;p=f+1;}return last?(mrb_int)(last-s):SP_INT_NIL;}
-mrb_int sp_str_byterindex_from(const char*s,const char*sub,mrb_int pos){SP_GC_ROOT_STR(s);SP_GC_ROOT_STR(sub);if(!s)sp_nil_recv("byterindex");if(!sub)sp_raise_cls("TypeError","no implicit conversion of nil into String");mrb_int bl=(mrb_int)sp_str_byte_len(s);if(pos<0)pos+=bl;if(pos<0)return SP_INT_NIL;if(pos>bl)pos=bl;size_t sl=sp_str_byte_len(sub);if(sl==0)return pos;const char*end=s+bl;const char*p=s;mrb_int best=-1;while(p<end){const char*f=sp_bytestr(p,(size_t)(end-p),sub,sl);if(!f)break;mrb_int off=(mrb_int)(f-s);if(off>pos)break;best=off;p=f+1;}return best<0?SP_INT_NIL:best;}
+mrb_int sp_str_byteindex(const char*s,const char*sub){if(!s)sp_nil_recv("byteindex");if(!sub)sp_raise_cls("TypeError","no implicit conversion of nil into String");const char*f=sp_bytestr(s,sp_str_byte_len(s),sub,sp_str_byte_len(sub));return f?(mrb_int)(f-s):SP_INT_NIL;}
+mrb_int sp_str_byteindex_from(const char*s,const char*sub,mrb_int start){if(!s)sp_nil_recv("byteindex");if(!sub)sp_raise_cls("TypeError","no implicit conversion of nil into String");mrb_int bl=(mrb_int)sp_str_byte_len(s);if(start<0)start+=bl;if(start<0||start>bl)return SP_INT_NIL;const char*f=sp_bytestr(s+start,(size_t)(bl-start),sub,sp_str_byte_len(sub));return f?(mrb_int)(f-s):SP_INT_NIL;}
+mrb_int sp_str_byterindex(const char*s,const char*sub){if(!s)sp_nil_recv("byterindex");if(!sub)sp_raise_cls("TypeError","no implicit conversion of nil into String");size_t sl=sp_str_byte_len(sub);size_t hn=sp_str_byte_len(s);if(sl==0)return(mrb_int)hn;const char*end=s+hn;const char*last=NULL;const char*p=s;while(p<end){const char*f=sp_bytestr(p,(size_t)(end-p),sub,sl);if(!f)break;last=f;p=f+1;}return last?(mrb_int)(last-s):SP_INT_NIL;}
+mrb_int sp_str_byterindex_from(const char*s,const char*sub,mrb_int pos){if(!s)sp_nil_recv("byterindex");if(!sub)sp_raise_cls("TypeError","no implicit conversion of nil into String");mrb_int bl=(mrb_int)sp_str_byte_len(s);if(pos<0)pos+=bl;if(pos<0)return SP_INT_NIL;if(pos>bl)pos=bl;size_t sl=sp_str_byte_len(sub);if(sl==0)return pos;const char*end=s+bl;const char*p=s;mrb_int best=-1;while(p<end){const char*f=sp_bytestr(p,(size_t)(end-p),sub,sl);if(!f)break;mrb_int off=(mrb_int)(f-s);if(off>pos)break;best=off;p=f+1;}return best<0?SP_INT_NIL:best;}
 /* start/len are codepoint indices/counts. */
 /* `s[start, len]` char-indexed slice (UTF-8 aware). Negative start counts
    back from the char length. CRuby's nil contract: start past the length
