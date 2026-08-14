@@ -7417,7 +7417,25 @@ static void mark_empty_array_receivers(Compiler *c) {
     const char *rty = nt_type(nt, recv);
     if (!rty || !sp_streq(rty, "ArrayNode")) continue;
     int en = 0; nt_arr(nt, recv, "elements", &en);
-    if (en == 0) c->empty_arr_recv[recv] = 1;
+    if (en != 0) continue;
+    c->empty_arr_recv[recv] = 1;
+    /* The marking gives the receiver an element type, but a block parameter is
+       interned only where something reads it. With neither -- `[].map { |x| 1 }`
+       -- no slot exists at all, while the element loop binds `lv_x` anyway and
+       named an undeclared identifier (#3921). The element of a marked empty
+       literal is boxed, so claim the slot here. */
+    { int bp = nt_ref(nt, id, "block");
+      int pn = bp >= 0 ? nt_ref(nt, bp, "parameters") : -1;
+      int pp = pn >= 0 ? nt_ref(nt, pn, "parameters") : -1;
+      int rn = 0; const int *reqs = pp >= 0 ? nt_arr(nt, pp, "requireds", &rn) : NULL;
+      Scope *bs = reqs ? comp_scope_of(c, bp) : NULL;
+      for (int k = 0; bs && k < rn; k++) {
+        const char *pnm = nt_str(nt, reqs[k], "name");
+        if (!pnm || scope_local(bs, pnm)) continue;
+        LocalVar *plv = scope_local_intern(bs, pnm);
+        if (plv) { plv->type = TY_POLY; plv->is_block_param = 1; }
+      }
+    }
   }
 }
 /* A direct empty `{}` literal receiver of a block method (`{}.select { }`)
