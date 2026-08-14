@@ -12,7 +12,12 @@
 #include "sp_fiber_ctx.h"
 
 
+/* A green thread's whole C stack. Overridable at build time (-DSP_FIBER_STACK_SIZE=...)
+   for a program whose request path collapses into one deep frame; the default
+   stays small because every fiber pays it. */
+#ifndef SP_FIBER_STACK_SIZE
 #define SP_FIBER_STACK_SIZE (64*1024)
+#endif
 
 /* ThreadSanitizer support: the asm context switch swaps stacks without TSan's
    knowledge, so a fiber program reports spurious "unexpected memory mapping"

@@ -1364,6 +1364,46 @@ static void fi_build(Compiler *c) {
   } else {
     for (int si = 0; si < c->nscopes; si++) cand[si] = 0;
   }
+  /* Bound the DEPTH of the forced set, not just its size. always_inline
+     collapses a whole path through it into one C frame, and every GC-visible
+     local in that frame is address-taken (SP_GC_ROOT pushes &v), so the C
+     compiler has little room to share slots between the absorbed bodies. A
+     green thread runs on SP_FIBER_STACK_SIZE bytes, which a few hundred
+     absorbed bodies overran straight into the guard page (#3913). Clearing the
+     TOP of a too-long chain shortens every path through it while leaving the
+     small leaves -- the ones worth forcing -- alone. */
+  {
+    const char *de = getenv("SPINEL_INLINE_FORCE_DEPTH");
+    int dlimit = (de && *de) ? atoi(de) : 6;
+    if (dlimit > 0 && ncand > 0 && ncand <= 2048) {
+      int *dep = (int *)calloc((size_t)(c->nscopes > 0 ? c->nscopes : 1), sizeof(int));
+      if (dep) {
+        /* iterate to a fixpoint: depth is 1 + the deepest forced callee */
+        /* depth is monotone across rounds, so dlimit+1 of them is enough to
+           separate "within the limit" from "deeper than it" */
+        for (int round = 0; round <= dlimit; round++) {
+          int changed = 0;
+          for (int si = 0; si < c->nscopes; si++) {
+            if (!cand[si]) { dep[si] = 0; continue; }
+            int calls[512]; int nc = 0;
+            fi_collect_calls(c, c->scopes[si].body, calls, &nc, 512, 0);
+            int deepest = 0;
+            for (int i = 0; i < nc; i++) {
+              int cal[32]; int n2 = 0;
+              fi_callees(c, calls[i], cal, &n2, 32);
+              for (int j = 0; j < n2; j++)
+                if (cand[cal[j]] && dep[cal[j]] > deepest) deepest = dep[cal[j]];
+            }
+            if (dep[si] != deepest + 1) { dep[si] = deepest + 1; changed = 1; }
+          }
+          if (!changed) break;
+        }
+        for (int si = 0; si < c->nscopes; si++)
+          if (cand[si] && dep[si] > dlimit) cand[si] = 0;
+        free(dep);
+      }
+    }
+  }
   for (int si = 0; si < c->nscopes; si++) g_fi_state[si] = cand[si] ? 1 : 2;
   free(cand);
 }
