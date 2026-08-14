@@ -470,15 +470,28 @@ snapshot-frozen on store, exactly CRuby's dup-and-freeze. Strings never
 mutated in place, or mutated but never aliased, keep the plain value
 representation (no cost).
 
-#### `Range#step` / `Range#%` return a materialized Array, not an ArithmeticSequence
+#### `Range#step`, `Range#%` and `Numeric#step` return a materialized Array, not an ArithmeticSequence
 
-CRuby's blockless `(1..10).step(2)` and `(1..10) % 2` return an
-`Enumerator::ArithmeticSequence` (lazy, with its own `inspect` like
-`((1..10).%(2))`). Spinel has no ArithmeticSequence class and materializes
-the stepped values eagerly as an Array, so enumeration, `to_a`, indexing,
-and further iteration all produce CRuby's values, but `p` on the unforced
-sequence prints the array and `.class` answers `Array`. An infinite stepped
-range therefore cannot be left unforced.
+CRuby's blockless `(1..10).step(2)`, `(1..10) % 2` and `1.step(5)` all return
+an `Enumerator::ArithmeticSequence`: a lazy object with its own `inspect`
+(`((1..10).%(2))`) and its own readers. Spinel has no ArithmeticSequence class
+and materializes the stepped values at the call, as an Array. The values are
+CRuby's, and so is everything computed from them: `to_a`, `each`, `map`,
+`select`, `first`, `first(n)`, `size`, `sum`, `include?`, `each_slice`,
+`reverse_each` and `==` all agree.
+
+What differs is the object, not the values. `.class` answers `Array`, `p` on
+the unforced sequence prints the array rather than `((1..10).%(2))`, and the
+readers only an ArithmeticSequence has -- `begin`, `end`, `step`,
+`exclude_end?`, `with_index` -- are not Array methods, so they raise
+`NoMethodError` naming Array. A sequence that has to be described rather than
+enumerated should be asked of the source range, which is unchanged.
+
+Materializing also bounds what can be stepped at all. CRuby's sequence is lazy,
+so `(1..).step(2).first(3)` and `(1..3_000_000_000).step(2).size` cost it
+nothing; spinel would have to build every element, and refuses past 2**30 of
+them with `RangeError: range too large to materialize`. An endless range hits
+the same limit, its end being the largest representable integer.
 
 Materializing at the call also decides *when* a bad stride is rejected. CRuby
 defers the check to the point the sequence is enumerated, so `(1..10).step("x")`
