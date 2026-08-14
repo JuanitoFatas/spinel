@@ -1096,6 +1096,10 @@ int desugar_array_at(Compiler *c) {
     TyKind rt = infer_type(c, recv);
     /* Time#at and a Struct's own member reader are different methods */
     if (rt == TY_TIME || rt == TY_CLASS || ty_is_object(rt)) continue;
+    /* Array#at takes an index, never a Range: rewriting it to #[] handed the
+       slice form a call CRuby answers with a TypeError (#3924). */
+    { TyKind aat = infer_type(c, argv[0]);
+      if (aat == TY_RANGE || aat == TY_FLOAT_RANGE || aat == TY_STR_RANGE) continue; }
     nt_node_set_str(nt, id, "name", "[]");
     changed = 1;
   }

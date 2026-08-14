@@ -8653,6 +8653,68 @@ void emit_call(Compiler *c, int id, Buf *b) {
     return;
   }
   const NodeTable *nt = c->nt;
+  /* An index-taking Array method handed something that is not an index. Ruby
+     converts a Float through #to_int and takes a Range where the method has a
+     slice form, but a String, Symbol, Array, Hash, nil or boolean is a
+     TypeError -- where the pointer went into the mrb_int slot and either
+     aborted the C build or was absorbed into a plausible-looking answer
+     (#3923, #3924). A poly argument stays on the runtime path: its class is
+     not settled here. */
+  {
+    int ir = nt_ref(nt, id, "receiver");
+    const char *inm = nt_str(nt, id, "name");
+    int ia = nt_ref(nt, id, "arguments");
+    int ic = 0; const int *iv = ia >= 0 ? nt_arr(nt, ia, "arguments", &ic) : NULL;
+    TyKind irt = ir >= 0 ? comp_ntype(c, ir) : TY_UNKNOWN;
+    if (ir >= 0 && inm && ic >= 1 && iv && iv[0] >= 0 &&
+        (ty_is_array(irt) || ty_is_obj_array(irt)) && !user_defines_or_reads(c, inm)) {
+      static const char *const IDX[] = { "at", "fetch", "first", "last", "take",
+                                         "drop", "insert", "dig", "values_at",
+                                         "rotate", "[]", "slice", "[]=", NULL };
+      static const char *const SLICE_OK[] = { "[]", "slice", "[]=", "values_at", NULL };
+      int is_idx = 0, range_ok = 0;
+      for (int k = 0; IDX[k]; k++) if (sp_streq(inm, IDX[k])) { is_idx = 1; break; }
+      for (int k = 0; SLICE_OK[k]; k++) if (sp_streq(inm, SLICE_OK[k])) { range_ok = 1; break; }
+      TyKind at4 = is_idx ? comp_ntype(c, iv[0]) : TY_UNKNOWN;
+      const char *badc = NULL;
+      if (is_idx) {
+        if (at4 == TY_STRING || at4 == TY_STRBUF) badc = "String";
+        else if (at4 == TY_SYMBOL) badc = "Symbol";
+        else if (ty_is_array(at4) || ty_is_obj_array(at4)) badc = "Array";
+        else if (ty_is_hash(at4)) badc = "Hash";
+        else if (at4 == TY_NIL) badc = "nil";
+        else if (at4 == TY_BOOL) badc = "Boolean";
+        else if ((at4 == TY_RANGE || at4 == TY_FLOAT_RANGE || at4 == TY_STR_RANGE) && !range_ok)
+          badc = "Range";
+      }
+      if (badc) {
+        TyKind rty5 = comp_ntype(c, id);
+        const char *dv5 = default_value(rty5);
+        /* A mutator checks frozen BEFORE it coerces its arguments, so a frozen
+           receiver raises FrozenError however ill-typed the index is
+           (core/array/element_set_spec: `a[:foo] = 1` on a frozen array). */
+        int mutates = sp_streq(inm, "[]=") || sp_streq(inm, "insert");
+        const char *bid = irt == TY_INT_ARRAY   ? "SP_BUILTIN_INT_ARRAY" :
+                          irt == TY_FLOAT_ARRAY ? "SP_BUILTIN_FLT_ARRAY" :
+                          irt == TY_STR_ARRAY   ? "SP_BUILTIN_STR_ARRAY" :
+                          irt == TY_POLY_ARRAY  ? "SP_BUILTIN_POLY_ARRAY" : NULL;
+        if (mutates && bid) {
+          int tf5 = ++g_tmp;
+          buf_printf(b, "({ "); emit_ctype(c, irt, b);
+          buf_printf(b, " _t%d = ", tf5); emit_expr(c, ir, b);
+          buf_printf(b, "; if (_t%d && _t%d->frozen) sp_raise_frozen_array_at(_t%d, %s); ",
+                     tf5, tf5, tf5, bid);
+        }
+        else { buf_puts(b, "({ (void)("); emit_expr(c, ir, b); buf_puts(b, "); "); }
+        if (sp_streq(badc, "nil"))
+          buf_puts(b, "sp_raise_cls(\"TypeError\", \"no implicit conversion from nil to integer\"); ");
+        else
+          buf_printf(b, "sp_raise_cls(\"TypeError\", \"no implicit conversion of %s into Integer\"); ", badc);
+        buf_printf(b, "%s; })", dv5 ? dv5 : "0");
+        return;
+      }
+    }
+  }
   /* An integer Range method handed a literal of the wrong kind: the pointer
      went into the mrb_int slot and the C compiler was left to reject the whole
      program (#3838). A membership predicate answers false for a value the
