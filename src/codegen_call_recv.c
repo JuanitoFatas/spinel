@@ -9483,6 +9483,47 @@ int emit_range_call(Compiler *c, int id, Buf *b) {
         return 1;
       }
     }
+    /* reverse_each { } over a BEGINLESS Range: there is no array to
+       materialize and no lower bound to stop at, so count down from the
+       bounded end the way CRuby does -- a `break` in the block is what ends
+       it (#3914). */
+    if (block >= 0 && argc == 0 && nt_type(nt, block) &&
+        sp_streq(nt_type(nt, block), "BlockNode") && sp_streq(name, "reverse_each")) {
+      int rn7 = unwrap_parens(c, recv);
+      if (rn7 >= 0 && nt_type(nt, rn7) && !sp_streq(nt_type(nt, rn7), "RangeNode")) {
+        int sl7 = local_sole_range_node(c, rn7);
+        if (sl7 >= 0) rn7 = sl7;
+      }
+      int beginless = rn7 >= 0 && nt_type(nt, rn7) && sp_streq(nt_type(nt, rn7), "RangeNode") &&
+                      nt_ref(nt, rn7, "left") < 0 && nt_ref(nt, rn7, "right") >= 0;
+      const char *bp7 = block_param_name(c, block, 0);
+      int body7 = nt_ref(nt, block, "body");
+      int bn7 = 0; const int *bb7 = body7 >= 0 ? nt_arr(nt, body7, "body", &bn7) : NULL;
+      if (beginless && bp7 && bn7 >= 1) {
+        Scope *bsc7 = comp_scope_of(c, block);
+        LocalVar *lv7 = bsc7 ? scope_local(bsc7, bp7) : NULL;
+        const char *bpr7 = rename_local(bp7);
+        int tr7 = ++g_tmp, ti7 = ++g_tmp;
+        emit_indent(g_pre, g_indent);
+        Buf rb7 = expr_buf(c, recv);
+        buf_printf(g_pre, "sp_Range _t%d = %s;\n", tr7, rb7.p ? rb7.p : "");
+        free(rb7.p);
+        emit_indent(g_pre, g_indent);
+        buf_printf(g_pre, "for (mrb_int _t%d = _t%d.last - (_t%d.excl ? 1 : 0); ; _t%d--) {\n",
+                   ti7, tr7, tr7, ti7);
+        emit_indent(g_pre, g_indent + 1);
+        if (lv7 && lv7->type == TY_POLY) buf_printf(g_pre, "lv_%s = sp_box_int(_t%d);\n", bpr7, ti7);
+        else buf_printf(g_pre, "lv_%s = _t%d;\n", bpr7, ti7);
+        /* a real C loop, so a `break` in the body lowers to a C break */
+        g_c_loop_depth++;
+        for (int j = 0; j < bn7; j++) emit_stmt(c, bb7[j], g_pre, g_indent + 1);
+        g_c_loop_depth--;
+        emit_indent(g_pre, g_indent); buf_puts(g_pre, "}\n");
+        /* #reverse_each answers its receiver */
+        buf_printf(b, "_t%d", tr7);
+        return 1;
+      }
+    }
     /* endless literal: size is infinite; take/first(n) count from the start
        (an endless range cannot materialize) */
     {
