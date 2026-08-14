@@ -14258,6 +14258,13 @@ else { memcpy(dir, sf, n); dir[n] = 0; } }
            (ty_is_object(comp_ntype(c, argv[0])) &&
             class_is_exc_subclass(c, ty_object_class(comp_ntype(c, argv[0])))))))) {
       if (sp_streq(name, "exception")) {
+        /* #exception answers an instance of the RECEIVER's class -- a payload
+           copy, so a user subclass keeps its own fields -- and inference types
+           it that way. The helper is declared on the base, so name the class
+           back or the assignment is an incompatible pointer (#3915). */
+        { TyKind xrt = comp_ntype(c, recv);
+          if (ty_is_object(xrt))
+            buf_printf(b, "(sp_%s *)", c->classes[ty_object_class(xrt)].c_name); }
         buf_puts(b, "sp_exc_exception((sp_Exception *)(");
         emit_expr(c, recv, b); buf_puts(b, "), ");
         if (comp_ntype(c, argv[0]) == TY_STRING) emit_expr(c, argv[0], b);
@@ -14403,6 +14410,13 @@ else { memcpy(dir, sf, n); dir[n] = 0; } }
     if (sp_streq(name, "exception")) {
       if (argc == 0) { emit_expr(c, recv, b); return; }
       if (argc == 1) {
+        /* #exception answers an instance of the RECEIVER's class -- a payload
+           copy, so a user subclass keeps its own fields -- and inference types
+           it that way. The helper is declared on the base, so name the class
+           back or the assignment is an incompatible pointer (#3915). */
+        { TyKind xrt = comp_ntype(c, recv);
+          if (ty_is_object(xrt))
+            buf_printf(b, "(sp_%s *)", c->classes[ty_object_class(xrt)].c_name); }
         buf_puts(b, "sp_exc_exception((sp_Exception *)(");
         emit_expr(c, recv, b); buf_puts(b, "), ");
         if (comp_ntype(c, argv[0]) == TY_STRING) emit_expr(c, argv[0], b);
