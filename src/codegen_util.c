@@ -163,10 +163,26 @@ int  g_block_id = -1;
    call site -- a second site whose block answers another class was compiled
    as the first one's (#3784). Installed by codegen_main; NULL elsewhere. */
 int (*sp_yield_site_type_hook)(const Compiler *c, int id, TyKind *out) = NULL;
+/* `blk.call(...)` on the enclosing method's own block parameter, which the
+   inliner splices exactly as it splices a `yield`. Its cached type is the one
+   the proc form has -- a Proc call answers poly -- but the spliced form
+   computes whatever the caller's literal block computes, so the two emissions
+   of the one node want different types (#3916). */
+static int blk_param_call(const Compiler *c, int id) {
+  if (!g_block_param_name || !g_block_param_name[0]) return 0;
+  const char *nm = nt_str(c->nt, id, "name");
+  if (!nm || !sp_streq(nm, "call")) return 0;
+  int r = nt_ref(c->nt, id, "receiver");
+  if (r < 0 || nt_kind(c->nt, r) != NK_LocalVariableReadNode) return 0;
+  const char *rn = nt_str(c->nt, r, "name");
+  return rn && sp_streq(rn, g_block_param_name);
+}
 int sp_yield_site_type(const Compiler *c, int id, TyKind *out) {
   if (g_block_id < 0 || id < 0) return 0;
   const char *ty = nt_type(c->nt, id);
-  if (!ty || !sp_streq(ty, "YieldNode")) return 0;
+  if (!ty) return 0;
+  if (!sp_streq(ty, "YieldNode") &&
+      !(sp_streq(ty, "CallNode") && blk_param_call(c, id))) return 0;
   int bbody = nt_ref(c->nt, g_block_id, "body");
   int bn = 0;
   const int *bb = bbody >= 0 ? nt_arr(c->nt, bbody, "body", &bn) : NULL;
