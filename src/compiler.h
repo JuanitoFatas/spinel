@@ -412,7 +412,7 @@ typedef struct {
   char *empty_arr_recv; /* [node_cap] empty `[]` used as a safe-iterator receiver -> TY_POLY_ARRAY */
   char *empty_hash_recv; /* [node_cap] empty `{}` used as a hash block-method receiver -> TY_STR_POLY_HASH */
   char *empty_hash_arg;  /* [node_cap] empty `{}` passed as a user-method arg -> TY_POLY_POLY_HASH */
-  TyKind *empty_hash_want; /* [node_cap] variant an empty `{}` should take from its use context (#3040) */
+  TyKind *hash_want; /* [node_cap] variant a hash literal should take from its use context (#3040) */
   TyKind *poly_builtin_ty; /* [node_cap] for a container read on a poly receiver a
                               user class also owns: the type the builtin surface
                               alone would give, so codegen can shape its arm (#3459) */

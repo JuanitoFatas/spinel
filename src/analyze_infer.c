@@ -2525,6 +2525,9 @@ else {
       if (cn && sp_streq(cn, "Hash")) {
         /* argument-position Hash.new was renamed: PolyPoly; else key usage decides */
         if (sp_streq(name, "__hash_new_default")) return TY_POLY_POLY_HASH;
+        /* keys of more than one class are written into it (#3927) */
+        if (c->hash_want && id < c->node_cap && c->hash_want[id] == TY_POLY_POLY_HASH)
+          return TY_POLY_POLY_HASH;
         /* A Hash.new called on DIRECTLY has no key usage to decide it, and
            staying unknown made every method on it an unresolved call
            ("undefined method 'fetch' for unknown", #3823). The faithful
@@ -7040,10 +7043,14 @@ TyKind infer_uncached(Compiler *c, int id) {
          parameter naming different C structs for the same object (#3386). */
       int eh_arg = c->empty_hash_arg && id < c->node_cap && c->empty_hash_arg[id];
       if (eh_arg) return TY_POLY_POLY_HASH;
-      if (c->empty_hash_want && id < c->node_cap && ty_is_hash(c->empty_hash_want[id]))
-        return c->empty_hash_want[id];
+      if (c->hash_want && id < c->node_cap && ty_is_hash(c->hash_want[id]))
+        return c->hash_want[id];
       return TY_UNKNOWN;
     }
+    /* A literal whose local is later given a key of another type has to hold
+       both, exactly as a mixed-key literal does (#3927). */
+    if (c->hash_want && id < c->node_cap && c->hash_want[id] == TY_POLY_POLY_HASH)
+      return TY_POLY_POLY_HASH;
     TyKind kt = TY_UNKNOWN, vt = TY_UNKNOWN;
     for (int k = 0; k < n; k++) {
       const char *aty = nt_type(nt, els[k]);

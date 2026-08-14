@@ -7641,7 +7641,7 @@ static void mark_empty_literal_args(Compiler *c) {
    instead of collapsing to a constant false (#3040). The literal carries no
    keys of its own, so adopting the peer's variant loses nothing. */
 static void mark_empty_hash_cmp_peers(Compiler *c) {
-  if (!c->empty_hash_want) return;
+  if (!c->hash_want) return;
   const NodeTable *nt = c->nt;
   for (int id = 0; id < nt->count; id++) {
     if (nt_kind(nt, id) != NK_CallNode) continue;
@@ -7660,9 +7660,136 @@ static void mark_empty_hash_cmp_peers(Compiler *c) {
       int en = 0; nt_arr(nt, lit, "elements", &en);
       if (en != 0) continue;
       TyKind pt = infer_type(c, peer);
-      if (ty_is_hash(pt)) c->empty_hash_want[lit] = pt;
+      if (ty_is_hash(pt)) c->hash_want[lit] = pt;
     }
   }
+}
+/* The key class a literal AST node names, as a bit: a hash whose keys are not
+   all one class needs the general boxed variant. 0 for anything else, which
+   makes the caller decline rather than guess. */
+static unsigned hash_key_bit(Compiler *c, int id) {
+  const NodeTable *nt = c->nt;
+  const char *t = id >= 0 ? nt_type(nt, id) : NULL;
+  if (!t) return 0;
+  if (sp_streq(t, "StringNode") || sp_streq(t, "InterpolatedStringNode")) return 1u;
+  if (sp_streq(t, "SymbolNode")) return 2u;
+  if (sp_streq(t, "IntegerNode")) return 4u;
+  /* `k = "x"; h[k] = 9`: a local key names its class through its writes, and
+     only when every one of them agrees. */
+  if (sp_streq(t, "LocalVariableReadNode")) {
+    const char *kn = nt_str(nt, id, "name");
+    const Scope *ks = comp_scope_of(c, id);
+    unsigned b = 0;
+    if (!kn || !ks) return 0;
+    for (int w = 0; w < nt->count; w++) {
+      if (nt_kind(nt, w) != NK_LocalVariableWriteNode) continue;
+      const char *wn = nt_str(nt, w, "name");
+      if (!wn || !sp_streq(wn, kn) || comp_scope_of(c, w) != ks) continue;
+      int wv = nt_ref(nt, w, "value");
+      const char *wt = wv >= 0 ? nt_type(nt, wv) : NULL;
+      unsigned wb = 0;
+      if (wt && (sp_streq(wt, "StringNode") || sp_streq(wt, "InterpolatedStringNode"))) wb = 1u;
+      else if (wt && sp_streq(wt, "SymbolNode")) wb = 2u;
+      else if (wt && sp_streq(wt, "IntegerNode")) wb = 4u;
+      if (!wb) return 0;
+      b |= wb;
+    }
+    return (b && !(b & (b - 1))) ? b : 0;
+  }
+  return 0;
+}
+/* A hash literal assigned to a local the program later indexes with a key of
+   another class. The variant came from the literal alone, so the write went in
+   under the WRONG key type -- a Symbol stored into a String-keyed hash became a
+   String, into an Integer-keyed one became its symbol id -- or the two sides
+   named different C structs for the same object and the build failed. The
+   mixed-key literal already answers with the general boxed hash; give this
+   literal the same answer, before the fixpoint so every use agrees (#3927). */
+typedef struct { const Scope *sc; const char *nm; unsigned bits; } HashKeyUse;
+/* The key classes a call writes into its local receiver, or 0 when the call is
+   not such a write or its key class is not settled in the AST. */
+static unsigned hash_key_write_bits(Compiler *c, int id, const Scope **sc, const char **nm) {
+  const NodeTable *nt = c->nt;
+  if (nt_kind(nt, id) != NK_CallNode) return 0;
+  const char *wn = nt_str(nt, id, "name");
+  if (!wn) return 0;
+  int set = sp_streq(wn, "[]=") || sp_streq(wn, "store");
+  int upd = sp_streq(wn, "update") || sp_streq(wn, "merge!");
+  if (!set && !upd) return 0;
+  int wr = nt_ref(nt, id, "receiver");
+  if (wr < 0 || nt_kind(nt, wr) != NK_LocalVariableReadNode) return 0;
+  int wa = nt_ref(nt, id, "arguments"); int wc = 0;
+  const int *wv = wa >= 0 ? nt_arr(nt, wa, "arguments", &wc) : NULL;
+  if (!wv || wc < 1) return 0;
+  unsigned b = 0;
+  if (set) { if (wc != 2) return 0; b = hash_key_bit(c, wv[0]); }
+  else {
+    /* `h.update({ "x" => 9 })`: the merged literal's keys land in h. */
+    for (int k = 0; k < wc; k++) {
+      if (!nt_type(nt, wv[k]) || !sp_streq(nt_type(nt, wv[k]), "HashNode")) return 0;
+      int hn = 0; const int *hels = nt_arr(nt, wv[k], "elements", &hn);
+      for (int e = 0; e < hn; e++) {
+        if (!nt_type(nt, hels[e]) || !sp_streq(nt_type(nt, hels[e]), "AssocNode")) return 0;
+        unsigned eb = hash_key_bit(c, nt_ref(nt, hels[e], "key"));
+        if (!eb) return 0;
+        b |= eb;
+      }
+    }
+  }
+  if (!b) return 0;
+  *sc = comp_scope_of(c, wr);
+  *nm = nt_str(nt, wr, "name");
+  return (*sc && *nm) ? b : 0;
+}
+static void mark_mixed_key_hash_locals(Compiler *c) {
+  if (!c->hash_want) return;
+  const NodeTable *nt = c->nt;
+  HashKeyUse *uses = NULL; int nu = 0, cap = 0;
+  for (int id = 0; id < nt->count; id++) {
+    const Scope *sc = NULL; const char *nm = NULL;
+    unsigned b = hash_key_write_bits(c, id, &sc, &nm);
+    if (!b) continue;
+    int f = -1;
+    for (int k = 0; k < nu; k++) if (uses[k].sc == sc && sp_streq(uses[k].nm, nm)) { f = k; break; }
+    if (f >= 0) { uses[f].bits |= b; continue; }
+    if (nu >= cap) {
+      cap = cap ? cap * 2 : 16;
+      uses = realloc(uses, sizeof(*uses) * (size_t)cap);
+      if (!uses) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+    }
+    uses[nu].sc = sc; uses[nu].nm = nm; uses[nu].bits = b; nu++;
+  }
+  if (!nu) { free(uses); return; }
+  for (int id = 0; id < nt->count; id++) {
+    if (nt_kind(nt, id) != NK_LocalVariableWriteNode) continue;
+    int val = nt_ref(nt, id, "value");
+    const char *vt = val >= 0 ? nt_type(nt, val) : NULL;
+    int hash_new = 0;
+    if (vt && sp_streq(vt, "CallNode") && nt_str(nt, val, "name") &&
+        sp_streq(nt_str(nt, val, "name"), "new")) {
+      int hr = nt_ref(nt, val, "receiver");
+      hash_new = hr >= 0 && nt_kind(nt, hr) == NK_ConstantReadNode &&
+                 nt_str(nt, hr, "name") && sp_streq(nt_str(nt, hr, "name"), "Hash");
+    }
+    if (!vt || (!sp_streq(vt, "HashNode") && !hash_new) || val >= c->node_cap) continue;
+    const char *lname = nt_str(nt, id, "name");
+    const Scope *ls = comp_scope_of(c, id);
+    if (!lname || !ls) continue;
+    unsigned mask = 0;
+    for (int k = 0; k < nu; k++)
+      if (uses[k].sc == ls && sp_streq(uses[k].nm, lname)) { mask = uses[k].bits; break; }
+    if (!mask) continue;
+    int en = 0; const int *els = hash_new ? NULL : nt_arr(nt, val, "elements", &en);
+    for (int k = 0; k < en; k++) {
+      if (!nt_type(nt, els[k]) || !sp_streq(nt_type(nt, els[k]), "AssocNode")) { mask = 0; break; }
+      unsigned b = hash_key_bit(c, nt_ref(nt, els[k], "key"));
+      if (!b) { mask = 0; break; }
+      mask |= b;
+    }
+    /* more than one key class in play: only the boxed variant holds them all */
+    if (mask && (mask & (mask - 1))) c->hash_want[val] = TY_POLY_POLY_HASH;
+  }
+  free(uses);
 }
 /* A bare `{}` indexed or fetched with a statically-typed key takes the variant
    that key selects, instead of the StrPolyHash fallback that would coerce a
@@ -7670,7 +7797,7 @@ static void mark_empty_hash_cmp_peers(Compiler *c) {
    (#3029). Values stay poly: the empty literal says nothing about them. */
 static int mark_empty_hash_key_ctx(Compiler *c) {
   int changed = 0;
-  if (!c->empty_hash_want) return 0;
+  if (!c->hash_want) return 0;
   const NodeTable *nt = c->nt;
   for (int id = 0; id < nt->count; id++) {
     NodeKind idk = nt_kind(nt, id);
@@ -7691,7 +7818,7 @@ static int mark_empty_hash_key_ctx(Compiler *c) {
     if (direct) {
       int en = 0; nt_arr(nt, recv, "elements", &en);
       if (en != 0) continue;
-      if (ty_is_hash(c->empty_hash_want[recv])) continue;   /* an earlier context won */
+      if (ty_is_hash(c->hash_want[recv])) continue;   /* an earlier context won */
     }
     else if (rk != NK_LocalVariableReadNode && rk != NK_InstanceVariableReadNode) continue;
     int anode = nt_ref(nt, id, "arguments");
@@ -7720,7 +7847,7 @@ static int mark_empty_hash_key_ctx(Compiler *c) {
        hand the boxed value to a const char * slot and segfault */
     else if (kt == TY_POLY) want = TY_POLY_POLY_HASH;
     if (!ty_is_hash(want)) continue;
-    if (direct) { c->empty_hash_want[recv] = want; changed = 1; continue; }
+    if (direct) { c->hash_want[recv] = want; changed = 1; continue; }
     /* `@h = {}` in initialize, indexed with a typed key elsewhere in the same
        class: carry the context to the ivar's own empty literal, or the slot
        stays typeless and the index-write has no hash to emit against */
@@ -7741,8 +7868,8 @@ static int mark_empty_hash_key_ctx(Compiler *c) {
         int wv = nt_ref(nt, w, "value");
         if (wv < 0 || wv >= c->node_cap || nt_kind(nt, wv) != NK_HashNode) continue;
         int en2 = 0; nt_arr(nt, wv, "elements", &en2);
-        if (en2 != 0 || ty_is_hash(c->empty_hash_want[wv])) continue;
-        c->empty_hash_want[wv] = want;
+        if (en2 != 0 || ty_is_hash(c->hash_want[wv])) continue;
+        c->hash_want[wv] = want;
         changed = 1;
       }
       continue;
@@ -7762,8 +7889,8 @@ static int mark_empty_hash_key_ctx(Compiler *c) {
       if (dn < 0 || dn >= c->node_cap) break;
       if (nt_kind(nt, dn) != NK_HashNode && nt_kind(nt, dn) != NK_KeywordHashNode) break;
       int den = 0; nt_arr(nt, dn, "elements", &den);
-      if (den != 0 || ty_is_hash(c->empty_hash_want[dn])) break;
-      c->empty_hash_want[dn] = want;
+      if (den != 0 || ty_is_hash(c->hash_want[dn])) break;
+      c->hash_want[dn] = want;
       changed = 1;
       break;
     }
@@ -7778,8 +7905,8 @@ static int mark_empty_hash_key_ctx(Compiler *c) {
       if (!wn || !sp_streq(wn, ln) || comp_scope_of(c, w) != sc) continue;
       int wv = nt_ref(nt, w, "value");
       if (wv >= 0 && wv < c->node_cap && nt_kind(nt, wv) == NK_HashNode &&
-          !ty_is_hash(c->empty_hash_want[wv])) {
-        c->empty_hash_want[wv] = want;
+          !ty_is_hash(c->hash_want[wv])) {
+        c->hash_want[wv] = want;
         changed = 1;
       }
     }
@@ -7791,7 +7918,7 @@ static int mark_empty_hash_key_ctx(Compiler *c) {
    and every read raised "uninitialized constant". Derive the variant from the
    constant's index-writes (#2879). */
 static void mark_empty_hash_const_writes(Compiler *c) {
-  if (!c->empty_hash_want) return;
+  if (!c->hash_want) return;
   const NodeTable *nt = c->nt;
   for (int id = 0; id < nt->count; id++) {
     if (nt_kind(nt, id) != NK_ConstantWriteNode) continue;
@@ -7800,7 +7927,7 @@ static void mark_empty_hash_const_writes(Compiler *c) {
     if (!cn || v < 0 || v >= c->node_cap) continue;
     if (nt_kind(nt, v) != NK_HashNode && nt_kind(nt, v) != NK_KeywordHashNode) continue;
     int en = 0; nt_arr(nt, v, "elements", &en);
-    if (en != 0 || ty_is_hash(c->empty_hash_want[v])) continue;
+    if (en != 0 || ty_is_hash(c->hash_want[v])) continue;
     TyKind kt = TY_UNKNOWN, vt = TY_UNKNOWN;
     for (int w = 0; w < nt->count; w++) {
       if (nt_kind(nt, w) != NK_CallNode) continue;
@@ -7821,7 +7948,7 @@ static void mark_empty_hash_const_writes(Compiler *c) {
     TyKind want = (kt == TY_SYMBOL) ? TY_SYM_POLY_HASH
                 : (kt == TY_UNKNOWN) ? TY_POLY_POLY_HASH : ty_hash_of(kt, vt);
     if (!ty_is_hash(want)) want = (kt == TY_STRING) ? TY_STR_POLY_HASH : TY_POLY_POLY_HASH;
-    c->empty_hash_want[v] = want;
+    c->hash_want[v] = want;
   }
 }
 /* An Enumerable method called on a LOCAL that only ever holds a bare `{}`:
@@ -10790,6 +10917,7 @@ void analyze_program(Compiler *c) {
   /* after the arg/receiver marks: a bare `{}` with no other context takes its
      variant from the peer it is compared against (#3040) or from the key it is
      indexed with (#3028, #3029) */
+  mark_mixed_key_hash_locals(c);
   mark_empty_hash_cmp_peers(c);
   (void)mark_empty_hash_key_ctx(c);
   mark_empty_hash_const_writes(c);
@@ -11528,7 +11656,7 @@ void analyze_program(Compiler *c) {
          see this key -- it runs during the fixpoint, and a key that is a
          block's return value has no type yet -- but here, post-fixpoint, it
          does (#3397). */
-      TyKind want = (c->empty_hash_want && v < c->node_cap) ? c->empty_hash_want[v] : TY_UNKNOWN;
+      TyKind want = (c->hash_want && v < c->node_cap) ? c->hash_want[v] : TY_UNKNOWN;
       if (!ty_is_hash(want)) {
         int nkw = 0;
         TyKind kt = local_aset_key_type(c, s, nm, &nkw);

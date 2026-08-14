@@ -57,7 +57,7 @@ Compiler *comp_new(const NodeTable *nt) {
   c->empty_arr_recv = calloc((size_t)n, 1);
   c->empty_hash_recv = calloc((size_t)n, 1);
   c->empty_hash_arg = calloc((size_t)n, 1);
-  c->empty_hash_want = calloc((size_t)n, sizeof(TyKind));
+  c->hash_want = calloc((size_t)n, sizeof(TyKind));
   c->poly_builtin_ty = calloc((size_t)n, sizeof(TyKind));
   c->node_cap = n;
   return c;
@@ -76,9 +76,9 @@ void comp_grow_node_arrays(Compiler *c) {
   c->empty_arr_recv = realloc(c->empty_arr_recv, (size_t)n);
   c->empty_hash_recv = realloc(c->empty_hash_recv, (size_t)n);
   c->empty_hash_arg = realloc(c->empty_hash_arg, (size_t)n);
-  c->empty_hash_want = realloc(c->empty_hash_want, sizeof(TyKind) * (size_t)n);
+  c->hash_want = realloc(c->hash_want, sizeof(TyKind) * (size_t)n);
   c->poly_builtin_ty = realloc(c->poly_builtin_ty, sizeof(TyKind) * (size_t)n);
-  for (int i = c->node_cap; i < n; i++) { c->ntype[i] = TY_UNKNOWN; c->nilnarrow[i] = TY_UNKNOWN; c->nscope[i] = 0; c->node_cbody[i] = -1; c->empty_arr_recv[i] = 0; c->empty_hash_recv[i] = 0; c->empty_hash_arg[i] = 0; c->empty_hash_want[i] = TY_UNKNOWN; c->poly_builtin_ty[i] = TY_UNKNOWN; c->strbuf_box[i] = 0; }
+  for (int i = c->node_cap; i < n; i++) { c->ntype[i] = TY_UNKNOWN; c->nilnarrow[i] = TY_UNKNOWN; c->nscope[i] = 0; c->node_cbody[i] = -1; c->empty_arr_recv[i] = 0; c->empty_hash_recv[i] = 0; c->empty_hash_arg[i] = 0; c->hash_want[i] = TY_UNKNOWN; c->poly_builtin_ty[i] = TY_UNKNOWN; c->strbuf_box[i] = 0; }
   c->node_cap = n;
 }
 
@@ -140,7 +140,7 @@ void comp_free(Compiler *c) {
   free(c->node_cbody);
   free(c->empty_arr_recv);
   free(c->empty_hash_recv);
-  free(c->empty_hash_want);
+  free(c->hash_want);
   free(c->poly_builtin_ty);
   free(c);
 }
