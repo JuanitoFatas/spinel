@@ -151,69 +151,77 @@ for the supported subset.
 
 ## Benchmarks
 
-2,566 tests pass. 59 benchmarks pass.
-Geometric mean: **~6.1x faster** than Ruby 4.0.4 with `--yjit` across
-the 28 benchmarks below (~10.8x against the interpreter). Baseline is
+2,990 tests pass. 61 benchmarks pass.
+Geometric mean: **~7.4x faster** than Ruby 4.0.4 with `--yjit` across
+the 28 benchmarks below (~13.2x against the interpreter). Baseline is
 CRuby 4.0.4 (stable), run with `--disable-gems` and with `--yjit` for
 the JIT column. Each timing is the mean of five wall-clock runs under
-`perf stat -r 5`, which held every cell inside ±1%; sub-10 ms cells are
-dominated by interpreter / runtime startup and should be read as
-"noise floor."
+`perf stat -r 5`, which held every cell inside ±1%. A compiled binary
+starts in about 0.8 ms, so a sub-10 ms Spinel cell is mostly process
+startup and its ratio should be read as a lower bound on the machine,
+not as a measurement of the loop.
 
 ### Computation
 
 | Benchmark | Spinel | Ruby 4.0.4 | + YJIT | Speedup vs YJIT |
 |---|---|---|---|---|
-| mandelbrot | 16 ms | 925 ms | 926 ms | 56.2x |
-| matmul | 6 ms | 200 ms | 197 ms | 33.7x |
-| nqueens | 6 ms | 152 ms | 153 ms | 24.7x |
-| partial_sums | 54 ms | 872 ms | 878 ms | 16.2x |
-| sieve | 20 ms | 271 ms | 271 ms | 13.5x |
-| life (Conway's GoL) | 18 ms | 513 ms | 226 ms | 12.8x |
-| sudoku | 3 ms | 64 ms | 32 ms | 9.5x |
-| fannkuch | 1 ms | 9 ms | 9 ms | 7.9x |
-| fasta (DNA seq gen) | 1 ms | 8 ms | 9 ms | 6.5x |
-| fib (recursive) | 19 ms | 382 ms | 49 ms | 2.5x |
-| ackermann | 20 ms | 287 ms | 38 ms | 1.9x |
-| tak | 25 ms | 320 ms | 47 ms | 1.8x |
-| tarai | 21 ms | 258 ms | 38 ms | 1.8x |
+| mandelbrot | 17 ms | 1_106 ms | 1_136 ms | 67.7x |
+| fib (recursive) | 1.3 ms | 388 ms | 49 ms | 36.6x |
+| matmul | 6.0 ms | 203 ms | 206 ms | 34.0x |
+| nqueens | 6.2 ms | 190 ms | 191 ms | 30.8x |
+| sieve | 17 ms | 266 ms | 301 ms | 18.1x |
+| partial_sums | 55 ms | 884 ms | 874 ms | 15.8x |
+| life (Conway's GoL) | 19 ms | 533 ms | 231 ms | 12.1x |
+| sudoku | 3.6 ms | 65 ms | 33 ms | 9.3x |
+| fannkuch | 1.2 ms | 9.7 ms | 9.8 ms | 8.5x |
+| fasta (DNA seq gen) | 1.4 ms | 9.5 ms | 9.8 ms | 6.8x |
+| tak | 8.1 ms | 324 ms | 47 ms | 5.8x |
+| ackermann | 7.0 ms | 291 ms | 39 ms | 5.6x |
+| tarai | 7.1 ms | 262 ms | 37 ms | 5.2x |
 
 ### Data Structures & GC
 
 | Benchmark | Spinel | Ruby 4.0.4 | + YJIT | Speedup vs YJIT |
 |---|---|---|---|---|
-| so_lists | 17 ms | 256 ms | 161 ms | 9.4x |
-| huffman (encoding) | 6 ms | 36 ms | 38 ms | 6.0x |
-| linked_list | 41 ms | 187 ms | 163 ms | 4.0x |
-| splay tree | 10 ms | 118 ms | 38 ms | 3.8x |
-| rbtree (red-black tree) | 18 ms | 352 ms | 65 ms | 3.6x |
-| binary_trees | 3 ms | 23 ms | 13 ms | 3.6x |
-| gcbench | 319 ms | 2_180 ms | 957 ms | 3.0x |
+| so_lists | 17 ms | 262 ms | 164 ms | 9.5x |
+| huffman (encoding) | 7.4 ms | 37 ms | 38 ms | 5.1x |
+| linked_list | 41 ms | 192 ms | 156 ms | 3.8x |
+| rbtree (red-black tree) | 18 ms | 352 ms | 67 ms | 3.7x |
+| splay tree | 11 ms | 114 ms | 38 ms | 3.5x |
+| binary_trees | 3.8 ms | 23 ms | 13 ms | 3.3x |
+| gcbench | 340 ms | 2_128 ms | 967 ms | 2.8x |
 
 ### Real-World Programs
 
 | Benchmark | Spinel | Ruby 4.0.4 | + YJIT | Speedup vs YJIT |
 |---|---|---|---|---|
-| str_concat | 1 ms | 6 ms | 7 ms | 7.4x |
-| ao_render (ray tracer) | 85 ms | 1_654 ms | 608 ms | 7.2x |
-| pidigits (bigint) | 1 ms | 6 ms | 6 ms | 7.1x |
-| bigint_fib (1000 digits) | 1 ms | 6 ms | 6 ms | 6.0x |
-| template engine | 62 ms | 485 ms | 328 ms | 5.3x |
-| json_parse | 30 ms | 198 ms | 132 ms | 4.4x |
-| csv_process | 150 ms | 469 ms | 395 ms | 2.6x |
-| io_wordcount | 25 ms | 47 ms | 44 ms | 1.7x |
+| bigint_fib (1000 digits) | 0.8 ms | 6.3 ms | 6.6 ms | 8.2x |
+| ao_render (ray tracer) | 82 ms | 1_792 ms | 612 ms | 7.4x |
+| pidigits (bigint) | 1.0 ms | 6.1 ms | 6.3 ms | 6.6x |
+| str_concat | 1.1 ms | 6.4 ms | 6.3 ms | 5.8x |
+| template engine | 84 ms | 500 ms | 331 ms | 4.0x |
+| json_parse | 44 ms | 211 ms | 133 ms | 3.0x |
+| csv_process | 158 ms | 466 ms | 389 ms | 2.5x |
+| io_wordcount | 27 ms | 51 ms | 45 ms | 1.6x |
 
 A few notes on what YJIT does and doesn't change. On some integer-loop
 workloads (mandelbrot, nqueens, matmul, partial_sums, sieve) YJIT's
 numbers are essentially identical to interpreted Ruby; the benchmark
 is bound by integer / float operations that the interpreter already
-runs at native speed. On call-heavy code (ackermann, fib, tarai, tak,
-rbtree) YJIT gives a real 5-8x lift, but Spinel still wins by ahead-
-of-time specialization. The narrowest margins are the tiny recursive
-kernels (`ackermann`, `tarai`, `tak`, `fib`), where YJIT inlines the
-recursive call site so well that Spinel's compiled C wins by only
-1.8-2.5x, and `io_wordcount`, which is bound by line reading and hash
-updates rather than by anything either compiler can specialize.
+runs at native speed. On call-heavy code (ackermann, tarai, tak, rbtree)
+YJIT gives a real 5-8x lift over the interpreter, which is why those
+rows carry Spinel's smaller multiples.
+
+One row deserves a caveat rather than a boast. `fib` is not 36x faster
+per call: its whole call tree is a pure function of a literal, so the C
+compiler collapses most of it at build time -- `fib(42)` retires 231M
+instructions where the recursion itself would make 866M calls. Read it
+as "the C compiler got to see the whole program," which is the point of
+compiling ahead of time, but not as a per-call number.
+
+The genuinely narrow cells are `io_wordcount`, bound by line reading and
+hash updates that neither compiler can specialize, and `csv_process` and
+`gcbench`, bound by allocation.
 
 ## Supported Ruby Features
 
@@ -371,8 +379,8 @@ src/main.c            CLI driver: pipeline + cc invocation
 lib/spinel_rt.h       Runtime library header (GC, arrays, hashes, strings)
 lib/sp_*.c            Out-of-line runtime (bigint, GC, fiber, I/O, time, ...)
 lib/regexp/           Built-in regexp engine; all linked into libspinel_rt.a
-test/                 2,538 feature tests
-benchmark/            59 benchmarks
+test/                 2,959 feature tests
+benchmark/            61 benchmarks
 docs/                 User docs (require, FFI, RBS, limitations); internals/ for compiler structure
 Makefile              Build automation
 ```
