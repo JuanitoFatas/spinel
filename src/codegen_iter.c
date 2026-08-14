@@ -155,7 +155,17 @@ int emit_inline_call_x(Compiler *c, int id, Buf *b, int indent, int as_expr) {
                      ? nt_str(nt, fexpr, "name") : NULL;
     Scope *encl = pn ? comp_scope_of(c, id) : NULL;
     LocalVar *plv = encl ? scope_local(encl, pn) : NULL;
-    if (g_block_id < 0 && plv && plv->type == TY_PROC) {
+    /* `def outer(&b); inner(&b); end`: the name is the ENCLOSING inlined
+       method's own block parameter, which has no local of its own -- the
+       inliner skips it as a virtual slot. It is the proc reference this
+       inline is already running under, and reading it as a local named an
+       undeclared `lv_b`. */
+    if (g_block_id < 0 && pn && g_yield_proc_ref &&
+        g_block_param_name && sp_streq(pn, g_block_param_name)) {
+      snprintf(yprocbuf, sizeof yprocbuf, "%s", g_yield_proc_ref);
+      fwd_yield_proc = yprocbuf;
+    }
+    else if (g_block_id < 0 && plv && plv->type == TY_PROC) {
       snprintf(yprocbuf, sizeof yprocbuf, "lv_%s", rename_local(pn));
       fwd_yield_proc = yprocbuf;
     }
