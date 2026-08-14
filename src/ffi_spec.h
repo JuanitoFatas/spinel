@@ -21,4 +21,11 @@ typedef struct {
 /* The row for `spec`, or NULL if the token is not part of the vocabulary. */
 const FfiSpecInfo *ffi_spec_lookup(const char *spec);
 
+/* The C type an `ffi_read_<kind>` / `ffi_write_<kind>` suffix names, or NULL
+   when the suffix is not a scalar one ("ptr", or a typo). Kept beside the spec
+   table for the same reason: the declaration side validates the suffix and the
+   emitter picks the load width from one answer, so a suffix cannot be accepted
+   under one width and read at another. */
+const char *ffi_scalar_ctype(const char *kind);
+
 #endif /* FFI_SPEC_H */

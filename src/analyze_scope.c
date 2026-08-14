@@ -2549,7 +2549,11 @@ void register_ffi_decls(Compiler *c) {
         if (!rname) continue;  /* non-literal name: tolerate */
         int roff = ffi_arg_int(nt, args[1]);
         if (roff < 0) roff = 0;  /* non-literal or negative offset: clamp (pre-existing) */
-        const char *kind = dname + 9;  /* "u32", "i32", "ptr" */
+        const char *kind = dname + 9;  /* a scalar width, or "ptr" */
+        /* Reject a typoed or unsupported suffix rather than registering it and
+           reading some default width at codegen, which is what the write side
+           has always done (#3928). */
+        if (!sp_streq(kind, "ptr") && !ffi_scalar_ctype(kind)) continue;
         if (c->n_ffi_readers >= c->c_ffi_readers) {
           c->c_ffi_readers = c->c_ffi_readers ? c->c_ffi_readers * 2 : 8;
           FfiReader *tmp = realloc(c->ffi_readers, sizeof(FfiReader) * (size_t)c->c_ffi_readers);
@@ -2641,10 +2645,10 @@ void register_ffi_decls(Compiler *c) {
         if (!wname) continue;
         int woff = ffi_arg_int(nt, args[1]);
         if (woff < 0) woff = 0;
-        const char *kind = dname + 10;  /* "u32", "i32", "ptr" */
+        const char *kind = dname + 10;  /* a scalar width, or "ptr" */
         /* reject a typoed/unsupported suffix rather than silently registering
            it and falling back to some default store at codegen. */
-        if (!sp_streq(kind, "u32") && !sp_streq(kind, "i32") && !sp_streq(kind, "ptr")) continue;
+        if (!sp_streq(kind, "ptr") && !ffi_scalar_ctype(kind)) continue;
         if (c->n_ffi_writers >= c->c_ffi_writers) {
           c->c_ffi_writers = c->c_ffi_writers ? c->c_ffi_writers * 2 : 8;
           FfiReader *grown = realloc(c->ffi_writers, sizeof(FfiReader) * (size_t)c->c_ffi_writers);

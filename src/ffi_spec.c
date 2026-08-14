@@ -43,6 +43,24 @@ static const FfiSpecInfo FFI_SPECS[] = {
   { "uint64",      TY_INT,         "uint64_t"        },
 };
 
+/* The `ffi_read_*` / `ffi_write_*` suffixes. A separate vocabulary from the
+   spec tokens above (`u8` here, `uint8` there) because it is the surface
+   syntax of a different declaration, but the same rule holds: one table, so
+   the width a suffix promises is the width that is loaded and stored. */
+static const struct { const char *kind; const char *c_type; } FFI_SCALAR_KINDS[] = {
+  { "u8",  "uint8_t"  }, { "i8",  "int8_t"  },
+  { "u16", "uint16_t" }, { "i16", "int16_t" },
+  { "u32", "uint32_t" }, { "i32", "int32_t" },
+  { "u64", "uint64_t" }, { "i64", "int64_t" },
+};
+
+const char *ffi_scalar_ctype(const char *kind) {
+  if (!kind) return NULL;
+  for (unsigned i = 0; i < sizeof(FFI_SCALAR_KINDS) / sizeof(FFI_SCALAR_KINDS[0]); i++)
+    if (sp_streq(FFI_SCALAR_KINDS[i].kind, kind)) return FFI_SCALAR_KINDS[i].c_type;
+  return NULL;
+}
+
 const FfiSpecInfo *ffi_spec_lookup(const char *spec) {
   if (!spec) return NULL;
   for (unsigned i = 0; i < sizeof(FFI_SPECS) / sizeof(FFI_SPECS[0]); i++)

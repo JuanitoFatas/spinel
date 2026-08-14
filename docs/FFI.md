@@ -156,12 +156,22 @@ db = SQL.read_ptr(SQL.db_out)  # the actual sqlite3 *
 
 Lifetime: static. The buffer lives for the whole program.
 
-### `ffi_read_u32 :name, <offset>` / `ffi_read_i32` / `ffi_read_ptr`
+### `ffi_read_<width> :name, <offset>` / `ffi_read_ptr`
 
 Declares a field reader: `Module.name(buf)` returns the value at
 `offset` bytes into `buf`. Handy for poking into C structs when you
 only need a few fields, or for reading back what a C function wrote
 into a buffer you handed it.
+
+The width suffix is one of `u8`, `u16`, `u32`, `u64`, `i8`, `i16`,
+`i32`, `i64`, and it is the width of the load: `ffi_read_u8` reads one
+byte, not four. A signed suffix sign-extends. `ffi_read_ptr` reads a
+`void *`. Any other suffix is refused at the call site rather than
+guessed at.
+
+`ffi_write_<width> :name, <offset>` / `ffi_write_ptr` is the mirror
+image: `Module.name(buf, val)` stores `val` at `offset` and returns it,
+with the same suffixes and the same widths.
 
 ```ruby
 # sqlite3_open(path, ppDb) writes the new db handle into *ppDb.
@@ -223,8 +233,6 @@ raw byte buffers, and simple struct-field reads. Not supported yet:
 - **No callbacks / Ruby-to-C function pointers.**
 - **No variadic C functions** (`printf(...)`). Use Spinel's built-in
   `printf` if you want formatted output.
-- **No `ffi_write_*`** — can't write struct fields from Ruby. Pass a
-  buffer to a C function that writes it for you.
 - **Pointers can't enter polymorphic values.** Don't put a `:ptr` into
   a `poly_array` or a generic `Hash`; keep them as plain locals or
   wrap them in a class with a `ptr`-typed ivar.

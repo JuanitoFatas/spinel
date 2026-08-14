@@ -18326,8 +18326,12 @@ else { memcpy(dir, sf, n); dir[n] = 0; } }
         if (ri >= 0 && argc >= 1) {
           const char *kind = c->ffi_readers[ri].kind;
           int off = c->ffi_readers[ri].offset;
-          const char *ctype = "uint32_t";
-          if (kind && sp_streq(kind, "i32")) ctype = "int32_t";
+          /* The suffix names the load width; taking every one but i32 as a
+             32-bit unsigned read meant a declared 1- or 2-byte field pulled in
+             its neighbours, and a read at the last bytes of a buffer ran off
+             the end of it (#3928). */
+          const char *ctype = ffi_scalar_ctype(kind);
+          if (!ctype) ctype = "uint32_t";
           if (argc >= 1) {
             if (kind && sp_streq(kind, "ptr")) {
               int rt3 = ++g_tmp;
@@ -18423,7 +18427,8 @@ else { memcpy(dir, sf, n); dir[n] = 0; } }
             buf_printf(b, " + %d) = _t%d; sp_box_foreign_ptr(_t%d); })", off, tv, tv);
           }
           else {
-            const char *ctype = (kind && sp_streq(kind, "i32")) ? "int32_t" : "uint32_t";
+            const char *ctype = ffi_scalar_ctype(kind);
+            if (!ctype) ctype = "uint32_t";
             buf_printf(b, "({ %s _t%d = (%s)(", ctype, tv, ctype);
             emit_int_expr(c, argv[1], b);
             buf_printf(b, "); *(%s *)((char *)(", ctype);
