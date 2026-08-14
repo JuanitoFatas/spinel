@@ -1429,6 +1429,40 @@ int exc_has_nonstring_msg_override(Compiler *c) {
   return 0;
 }
 
+/* The class an index-taking Array method was handed instead of an index, or
+   NULL when the argument can serve as one. Ruby converts a Float through
+   #to_int and takes a Range where the method has a slice form; a String,
+   Symbol, Array, Hash, nil or boolean is a TypeError. A poly argument stays on
+   the runtime path: its class is not settled here (#3923, #3924, #3925). */
+const char *array_index_bad_class(Compiler *c, int id) {
+  const NodeTable *nt = c->nt;
+  int ir = nt_ref(nt, id, "receiver");
+  const char *inm = nt_str(nt, id, "name");
+  int ia = nt_ref(nt, id, "arguments");
+  int ic = 0; const int *iv = ia >= 0 ? nt_arr(nt, ia, "arguments", &ic) : NULL;
+  TyKind irt = ir >= 0 ? comp_ntype(c, ir) : TY_UNKNOWN;
+  if (ir < 0 || !inm || ic < 1 || !iv || iv[0] < 0) return NULL;
+  if (!(ty_is_array(irt) || ty_is_obj_array(irt))) return NULL;
+  if (user_defines_or_reads(c, inm)) return NULL;
+  static const char *const IDX[] = { "at", "fetch", "first", "last", "take",
+                                     "drop", "insert", "dig", "values_at",
+                                     "rotate", "[]", "slice", "[]=", NULL };
+  static const char *const SLICE_OK[] = { "[]", "slice", "[]=", "values_at", NULL };
+  int is_idx = 0, range_ok = 0;
+  for (int k = 0; IDX[k]; k++) if (sp_streq(inm, IDX[k])) { is_idx = 1; break; }
+  if (!is_idx) return NULL;
+  for (int k = 0; SLICE_OK[k]; k++) if (sp_streq(inm, SLICE_OK[k])) { range_ok = 1; break; }
+  TyKind at4 = comp_ntype(c, iv[0]);
+  if (at4 == TY_STRING || at4 == TY_STRBUF) return "String";
+  if (at4 == TY_SYMBOL) return "Symbol";
+  if (ty_is_array(at4) || ty_is_obj_array(at4)) return "Array";
+  if (ty_is_hash(at4)) return "Hash";
+  if (at4 == TY_NIL) return "nil";
+  if (at4 == TY_BOOL) return "Boolean";
+  if ((at4 == TY_RANGE || at4 == TY_FLOAT_RANGE || at4 == TY_STR_RANGE) && !range_ok)
+    return "Range";
+  return NULL;
+}
 const char *mc(const char *name) {
   static char buf[256];
   int j = 0;

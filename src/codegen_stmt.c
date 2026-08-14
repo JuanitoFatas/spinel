@@ -9801,6 +9801,13 @@ int emit_array_mutate_stmt(Compiler *c, int id, Buf *b, int indent) {
   const char *k = array_kind(rt);
   if (!k) return 0;
 
+  /* An index that is not one raises a TypeError, which the expression form
+     already emits: decline here so the statement falls back to it. Handled
+     directly, `a["x"] = 9` put the pointer in the mrb_int slot -- the C build
+     aborted on a String, and a Symbol or nil was absorbed into a write to
+     element 0 (#3925, #3926). */
+  if (array_index_bad_class(c, id)) return 0;
+
   if (sp_streq(name, "[]=") && argc == 2) {
     /* a splatted index (`recv[*args] = v`) has runtime arity; see the guard
        on the other []= arm. */

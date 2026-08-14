@@ -5931,6 +5931,11 @@ static sp_RbVal sp_poly_arr_set_hash(sp_RbVal v, mrb_int idx, sp_RbVal val) {
 /* poly_val[str_key] = val: runtime dispatch for poly recv `[]=` with string key. */
 static sp_RbVal sp_poly_set_str(sp_RbVal v, const char *key, sp_RbVal val) {
   if (v.tag != SP_TAG_OBJ) return val;
+  /* An Array indexed by a String is a TypeError, not a write to be dropped:
+     the static path raises it, and a boxed receiver reaching the same call
+     used to absorb the assignment instead (#3925). */
+  if (sp_poly_is_array_kind(v.cls_id))
+    sp_raise_cls("TypeError", SPL("no implicit conversion of String into Integer"));
   switch (v.cls_id) {
     case SP_BUILTIN_STR_POLY_HASH: sp_StrPolyHash_set((sp_StrPolyHash*)v.v.p, key, val); break;
     case SP_BUILTIN_STR_STR_HASH:
@@ -5984,6 +5989,8 @@ static void sp_poly_hash_merge_into(sp_RbVal dst, sp_RbVal src) {
 /* poly_val[sym_key] = val: runtime dispatch for poly recv `[]=` with symbol key. */
 static sp_RbVal sp_poly_set_sym(sp_RbVal v, sp_sym key, sp_RbVal val) {
   if (v.tag != SP_TAG_OBJ) return val;
+  if (sp_poly_is_array_kind(v.cls_id))
+    sp_raise_cls("TypeError", SPL("no implicit conversion of Symbol into Integer"));
   switch (v.cls_id) {
     case SP_BUILTIN_SYM_POLY_HASH:  sp_SymPolyHash_set((sp_SymPolyHash*)v.v.p, key, val); break;
     case SP_BUILTIN_POLY_POLY_HASH: sp_PolyPolyHash_set((sp_PolyPolyHash*)v.v.p, sp_box_sym(key), val); break;
@@ -6051,6 +6058,17 @@ static sp_RbVal sp_poly_arr_widen_and_set(sp_RbVal v, mrb_int idx, sp_RbVal val)
 /* poly_val[poly_key] = val: fully dynamic dispatch for poly recv + poly key. */
 static sp_RbVal sp_poly_set_poly(sp_RbVal v, sp_RbVal key, sp_RbVal val) {
   if (v.tag != SP_TAG_OBJ) return val;
+  /* Every array arm below wants an integer index. A Float converts through
+     #to_int, and anything else is the TypeError the static path raises rather
+     than a write to drop on the floor (#3926). */
+  if (sp_poly_is_array_kind(v.cls_id)) {
+    if (key.tag == SP_TAG_FLT) key = sp_box_int((mrb_int)key.v.f);
+    else if (key.tag != SP_TAG_INT)
+      sp_raise_cls("TypeError", key.tag == SP_TAG_NIL
+                   ? SPL("no implicit conversion from nil to integer")
+                   : sp_sprintf("no implicit conversion of %s into Integer",
+                                sp_poly_class_name(key)));
+  }
   switch (v.cls_id) {
     case SP_BUILTIN_STR_POLY_HASH:
       if (key.tag == SP_TAG_STR) sp_StrPolyHash_set((sp_StrPolyHash*)v.v.p, key.v.s, val);
