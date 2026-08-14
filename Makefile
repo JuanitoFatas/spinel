@@ -148,7 +148,7 @@ SPINEL_HDRS = src/node_table.h src/codegen.h src/codegen_internal.h src/types.h 
 SPINEL_OBJ  = build/csrc/node_table.o build/csrc/types.o build/csrc/compiler.o \
                build/csrc/ffi_spec.o \
                build/csrc/analyze.o build/csrc/analyze_util.o build/csrc/analyze_infer.o \
-               build/csrc/analyze_scope.o build/csrc/analyze_pass.o build/csrc/codegen.o build/csrc/codegen_util.o \
+               build/csrc/analyze_scope.o build/csrc/analyze_pass.o build/csrc/analyze_desugar.o build/csrc/codegen.o build/csrc/codegen_util.o \
                build/csrc/codegen_fold.o build/csrc/codegen_call.o build/csrc/codegen_call_recv.o build/csrc/codegen_iter.o \
                build/csrc/codegen_expr.o build/csrc/codegen_stmt.o build/csrc/main.o
 
