@@ -23,28 +23,6 @@ int ffi_find_reader(Compiler *c, const char *mod, const char *name);
 int ffi_find_writer(Compiler *c, const char *mod, const char *name);
 
 
-
-/* Returns 1 if user class ci (or any ancestor in user chain) has a builtin
-   exception as direct superclass (per its ClassNode superclass field). */
-
-
-/* ---- operator classification ---- */
-
-
-/* ---- call inference ---- */
-
-/* Resolve a struct member from a literal key node: a SymbolNode names a
-   member; an IntegerNode is a positional index. Returns the member index
-   (0-based, matching ivar order) or -1. */
-
-/* Last statement of a scope's body, or -1. */
-
-/* The return type of a call to method `mi`. A method whose body is just a
-   bare `yield` returns the block's value -- and since it inlines per call
-   site, use THIS site's block value type rather than the unified return. */
-/* 1 if `node` is `<&block-param>.call(...)` / .() / [] for method mi -- the
-   explicit-call equivalent of `yield`, inlined the same way. */
-
 /* Re-entrancy guard for yield_value_type: prevents infinite recursion when a
    recursive method forwards its block to itself (e.g. countdown { blk.call }). */
 #define MAX_YVT_DEPTH 32
@@ -65,31 +43,6 @@ extern int g_cbody_class_id;
    recognized identically by analyze and codegen. */
 extern int g_cbody_direct;
 
-/* Scan a subtree for BreakNode values and return their unified type.
-   Stops at DefNode/BlockNode boundaries (inner blocks have their own break scope). */
-
-/* Unify the value types of every `throw <tag>, <val>` inside a catch block.
-   A nested inner BlockNode is still scanned because `throw` is dynamic. */
-
-/* The value type of `yield` / a `<&block-param>.call` inside method mi: the
-   block-body value type at a (any) call site of mi. Polymorphic, resolved from
-   the first matching caller -- matches how the rewrite inlines per call site. */
-
-
-/* 1 if `id` is a proc/lambda literal: `proc {}` / `lambda {}` (CallNode with
-   no receiver and a block) or `Proc.new {}`. */
-
-/* 1 if `id` is any proc-creating literal: a proc/lambda/Proc.new call (above)
-   or a `->(){}` LambdaNode. */
-
-/* The body return type of a proc-creating node (proc/lambda CallNode literal,
-   or a LambdaNode). The last statement of the block/lambda body is the value. */
-
-/* The body return type (`#call`'s result) of a proc-valued expression, or
-   TY_UNKNOWN if not statically known. Resolves a literal directly, a local's
-   recorded proc_ret, and a method call's recorded ret_proc_ret. */
-
-/* The return type of a proc-typed expression's `.call`; poly when unknown. */
 
 /* method(:sym) helpers (defined in analyze_util.c, shared with codegen) */
 const char *method_sym_arg(Compiler *c, int node);
@@ -130,11 +83,24 @@ int bind_coerce_operator_params(Compiler *c);
 int is_cmp_op(const char *op);
 int is_eq_op(const char *op);
 int is_void_call(const char *name);
+/* Resolve a struct member from a literal key node: a SymbolNode names a
+   member; an IntegerNode is a positional index. Returns the member index
+   (0-based, matching ivar order) or -1. */
 int struct_member_idx(Compiler *c, ClassInfo *sc, int keynode);
+/* Last statement of a scope's body, or -1. */
 int scope_body_last(Compiler *c, int mi);
+/* 1 if `node` is `<&block-param>.call(...)` / .() / [] for method mi -- the
+   explicit-call equivalent of `yield`, inlined the same way. */
 int is_blk_param_call(Compiler *c, int node, int mi);
+/* Scan a subtree for BreakNode values and return their unified type.
+   Stops at DefNode/BlockNode boundaries (inner blocks have their own break scope). */
 TyKind scan_break_type(Compiler *c, int id, int depth);
+/* Unify the value types of every `throw <tag>, <val>` inside a catch block.
+   A nested inner BlockNode is still scanned because `throw` is dynamic. */
 TyKind scan_throw_type(Compiler *c, const char *tag);
+/* The value type of `yield` / a `<&block-param>.call` inside method mi: the
+   block-body value type at a (any) call site of mi. Polymorphic, resolved from
+   the first matching caller -- matches how the rewrite inlines per call site. */
 TyKind yield_value_type(Compiler *c, int mi);
 /* Tail expressions of the blocks reaching `mi`'s yield (see analyze_util.c). */
 int yield_block_tails(Compiler *c, int mi, int *out, int max);
@@ -144,8 +110,13 @@ int yield_value_diverges(Compiler *c, int mi);
 TyKind yield_aware_elem_ty(Compiler *c, int node);
 int an_user_defines_method(Compiler *c, const char *name);
 extern int g_yvt_unify_all;
+/* The return type of a call to method `mi`. A method whose body is just a
+   bare `yield` returns the block's value -- and since it inlines per call
+   site, use THIS site's block value type rather than the unified return. */
 TyKind method_call_ret(Compiler *c, int mi, int call_id);
 /* is_proc_constant / is_proc_literal are declared in analyze.h (codegen needs them). */
+/* 1 if `id` is any proc-creating literal: a proc/lambda/Proc.new call (above)
+   or a `->(){}` LambdaNode. */
 int is_proc_create(Compiler *c, int id);
 
 /* Shared cached local-write index (analyze_pass.c): bucket walk over
@@ -161,8 +132,14 @@ int lw_shared_next(int rec);
 int ivw_shared_first(Compiler *c, const char *name);
 int ivw_shared_node(int rec);
 int ivw_shared_next(int rec);
+/* The body return type of a proc-creating node (proc/lambda CallNode literal,
+   or a LambdaNode). The last statement of the block/lambda body is the value. */
 TyKind proc_node_ret(Compiler *c, int create);
+/* The body return type (`#call`'s result) of a proc-valued expression, or
+   TY_UNKNOWN if not statically known. Resolves a literal directly, a local's
+   recorded proc_ret, and a method call's recorded ret_proc_ret. */
 TyKind proc_ret_of(Compiler *c, int node);
+/* The return type of a proc-typed expression's `.call`; poly when unknown. */
 TyKind proc_call_ret(Compiler *c, int recv);
 TyKind infer_call(Compiler *c, int id);
 TyKind infer_uncached(Compiler *c, int id);

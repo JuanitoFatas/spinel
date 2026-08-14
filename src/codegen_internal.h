@@ -299,17 +299,6 @@ extern int g_fiber_counter;
 extern char **g_re_src;
 extern int *g_re_flg;
 extern int g_re_count, g_re_cap;
-/* Map Prism regex flag bits (IGNORE_CASE=4, EXTENDED=8, MULTI_LINE=16) to the
-   engine's RE_FLAG_* (IGNORECASE=1, MULTILINE=2, DOTALL=4, EXTENDED=8); Ruby's
-   /m means dot-matches-newline -> MULTILINE|DOTALL = 6. */
-/* True if a regex source contains a capturing group: an unescaped '(' that
-   isn't the start of a non-capturing/extension group '(?...'. scan returns
-   nested arrays for capturing patterns, which the str_array path can't model. */
-
-/* Find or add a RegularExpressionNode literal; returns its table index, or
-   -1 if the node isn't a static regex literal. */
-/* The unescaped source of a regex literal or a constant bound to one (for
-   capture detection). Returns NULL when nid is not a resolvable regex. */
 
 
 /* A set of local names (borrowed pointers into the node table). */
@@ -361,48 +350,7 @@ extern int g_re_init_needed;
 
 const char *rename_local(const char *nm);
 
-/* Emit the C lvalue for local `name` in the current emission context: a
-   captured var inside a proc body -> the cell in _cap; a cell local in its
-   enclosing scope -> `(*_cell_x)`; otherwise the plain `lv_x`. Reads and
-   writes share this (a cell deref is a valid lvalue). */
 
-/* Emit `sp_Proc *` reference to the synthetic __yblk__ param of a lowered
-   self-recursive yield method.  If we are inside an inner proc literal that
-   captures __yblk__ via a cell, cast back from the mrb_int cell slot. */
-
-/* Emit the lead of a tail value: `return ` or `<result> = `. */
-
-
-/* ---- diagnostics ---- */
-
-
-/* ---- builtin class IDs (negative, distinct from user cls_ids >= 0) ---- */
-/* Returns a negative cls_id for well-known builtin class/module names,
-   or 0 if the name is not a recognized builtin class. */
-
-/* ---- type -> C ---- */
-
-/* Map an FFI type spec string to the C type used in extern prototypes.
-   Uses standard C types to avoid conflicting with system headers. */
-
-/* Append the C type name for `t` to `b` (objects need the class name). */
-
-/* Emit the boxing prefix/suffix to convert a typed value to sp_RbVal.
-   Call as: emit_box_open(t, b); emit_expr(c, node, b); emit_box_close(t, b). */
-
-/* "Int" / "Str" / "Float" for the sp_<K>Array_* runtime family. */
-
-/* ---- C string literals ---- */
-
-
-
-/* Emit a Ruby string literal. len is the true byte count (may exceed strlen
-   when the string contains embedded NUL bytes). */
-
-
-/* Emit a catch/throw tag (a Symbol or String literal) as a `const char *`.
-   The same literal text is produced for both catch and throw sites so the
-   runtime's strcmp tag match succeeds. Falls back to a runtime string expr. */
 void emit_expr(Compiler *c, int id, Buf *b);
 
 /* ---- forward decls ---- */
@@ -420,7 +368,6 @@ const char *obj_str_cname(Compiler *c, int cid, int want_inspect);
 int obj_str_ret_poly(Compiler *c, int cid, int want_inspect);
 const char *exc_builtin_parent(Compiler *c, int ci);
 void emit_method_cname(Compiler *c, Scope *s, Buf *b);
-void emit_expr(Compiler *c, int id, Buf *b);
 void emit_stmt(Compiler *c, int id, Buf *b, int indent);
 void emit_stmts(Compiler *c, int id, Buf *b, int indent);
 void emit_stmts_tail(Compiler *c, int id, Buf *b, int indent);
@@ -446,7 +393,6 @@ void emit_rat_coerce(Compiler *c, int node, Buf *b);
 void emit_super(Compiler *c, int id, Buf *b);
 int  emit_super_inline(Compiler *c, int id, Buf *b, int indent, int as_expr);
 void emit_args_filled(Compiler *c, int callee_idx, int argsNode, const char *lead, Buf *out);
-void emit_boxed(Compiler *c, int node, Buf *b);
 /* Emit a hash key, unboxing a poly value to the typed-hash's key type. */
 void emit_hash_key(Compiler *c, int key, TyKind kt, Buf *b);
 void emit_boxed_text(Compiler *c, TyKind t, const char *expr, Buf *b);
@@ -484,46 +430,42 @@ void emit_proc_call_args(Compiler *c, int argc, const int *argv, Buf *b, int for
 void emit_proc_ret_unbox(Compiler *c, TyKind rty, Buf *b);
 void emit_case_expr(Compiler *c, int id, Buf *b);
 
-/* Strip ParenthesesNode wrappers to reach the inner expression. */
-
-/* ---- calls ---- */
-
-
-/* Mangle a Ruby method name into a C identifier: `?`->_p, `!`->_bang,
-   `=`->_set, anything else non-identifier -> `_`. Returns a static buffer
-   (one live result at a time -- fine since each use is consumed inline). */
-
-/* A class method scope is shadowed (and must not be emitted) when a later
-   scope redefines the same (class, name, is_cmethod) -- a reopened class
-   where the last definition wins, matching comp_method_in_class. */
-
-/* Value node for keyword `name` inside a KeywordHashNode, or -1. */
-
-/* Value-equality family: operands in the same nonzero family compare by value;
-   different nonzero families are never == (Ruby does no cross-type coercion,
-   except int/float which share family 1). 0 = not a simple comparable type. */
-
-/* Compile-time `is_a?` for a concrete builtin receiver type: 1 yes, 0 no,
-   -1 not determinable here. `exact` is instance_of? (no ancestor match). */
-
 
 /* ---- cross-part function declarations (generated by the split) ---- */
 /* buf_putn / buf_puts / buf_printf are declared earlier (next to Buf),
    so the inline emit_indent can use buf_puts. */
+/* Map Prism regex flag bits (IGNORE_CASE=4, EXTENDED=8, MULTI_LINE=16) to the
+   engine's RE_FLAG_* (IGNORECASE=1, MULTILINE=2, DOTALL=4, EXTENDED=8); Ruby's
+   /m means dot-matches-newline -> MULTILINE|DOTALL = 6. */
 int re_engine_flags(int pf);
+/* True if a regex source contains a capturing group: an unescaped '(' that
+   isn't the start of a non-capturing/extension group '(?...'. scan returns
+   nested arrays for capturing patterns, which the str_array path can't model. */
 int re_has_captures(const char *src);
+/* Find or add a RegularExpressionNode literal; returns its table index, or
+   -1 if the node isn't a static regex literal. */
 int re_lit_index(Compiler *c, int nid);
 int re_lit_node(Compiler *c, int nid);
+/* The unescaped source of a regex literal or a constant bound to one (for
+   capture detection). Returns NULL when nid is not a resolvable regex. */
 const char *re_lit_src(Compiler *c, int nid);
 int re_lit_flags(Compiler *c, int nid);
 void emit_interp(Compiler *c, int id, Buf *b);
 int emit_regex_pat_to_buf(Compiler *c, int nid, Buf *b);
 int nameset_has(NameSet *s, const char *nm);
 void nameset_add(NameSet *s, const char *nm);
+/* Emit the C lvalue for local `name` in the current emission context: a
+   captured var inside a proc body -> the cell in _cap; a cell local in its
+   enclosing scope -> `(*_cell_x)`; otherwise the plain `lv_x`. Reads and
+   writes share this (a cell deref is a valid lvalue). */
 void emit_local_ref(Compiler *c, int scope_node, const char *name, Buf *b);
 void emit_block_locals_reset(Compiler *c, int blk, Buf *b, int indent);
 const char *resolve_class_alias(Compiler *c, const char *cname);
+/* Emit `sp_Proc *` reference to the synthetic __yblk__ param of a lowered
+   self-recursive yield method.  If we are inside an inner proc literal that
+   captures __yblk__ via a cell, cast back from the mrb_int cell slot. */
 void emit_yblk_ref(Buf *b);
+/* Emit the lead of a tail value: `return ` or `<result> = `. */
 void emit_tail_lead(Buf *b);
 const char *rename_local(const char *nm);
 /* `unsupported` never returns: normal mode exits; SP_COLLECT_ERRORS mode
@@ -537,12 +479,16 @@ extern int g_unsup_armed;          /* nonzero while a recovery point is live */
 extern int g_unsup_probe;          /* silent emittability probe (drop a dynamic-send arm) */
 __attribute__((noreturn)) void unsupported(Compiler *c, int id, const char *what);
 __attribute__((noreturn)) void unsupported_feature(Compiler *c, int id, const char *msg);
+/* Returns a negative cls_id for well-known builtin class/module names,
+   or 0 if the name is not a recognized builtin class. */
 int builtin_class_id(const char *name);
 int is_builtin_class_name(const char *n);
 int is_builtin_exception_name(const char *n);
 const char *c_type_name(TyKind t);
 int is_scalar_ret(TyKind t);
 const char *ffi_c_type(const char *spec);
+/* Map an FFI type spec string to the C type used in extern prototypes.
+   Uses standard C types to avoid conflicting with system headers. */
 const char *ffi_cb_arg_ctype(const char *spec);
 int ty_is_struct_valued(TyKind t);   /* see codegen_util.c: struct passed by value */
 const char *native_c_type(const char *spec);
@@ -551,9 +497,13 @@ void emit_bigint_operand_ext(Compiler *c, int node, Buf *b);
 const char *nil_value(TyKind t);
 const char *local_init_value(Compiler *c, LocalVar *lv);
 int local_nil_test(Compiler *c, LocalVar *lv, const char *ref, Buf *out);
+/* Append the C type name for `t` to `b` (objects need the class name). */
 void emit_ctype(Compiler *c, TyKind t, Buf *b);
+/* Emit the boxing prefix/suffix to convert a typed value to sp_RbVal.
+   Call as: emit_box_open(t, b); emit_expr(c, node, b); emit_box_close(t, b). */
 void emit_box_open(Compiler *c, TyKind t, Buf *b);
 void emit_box_close(Compiler *c, TyKind t, Buf *b);
+/* "Int" / "Str" / "Float" for the sp_<K>Array_* runtime family. */
 const char *array_kind(TyKind t);
 void emit_c_escaped_n(Buf *b, const char *s, size_t len);
 void emit_c_escaped(Buf *b, const char *s);
@@ -563,16 +513,28 @@ void emit_c_escaped(Buf *b, const char *s);
 int emit_poly_rhs_coerced(Compiler *c, TyKind slot, int v, Buf *b);
 int emit_frozen_literal_open(Buf *b, size_t raw_len);
 void emit_frozen_literal_close(Buf *b, int id);
+/* Emit a Ruby string literal. len is the true byte count (may exceed strlen
+   when the string contains embedded NUL bytes). */
 void emit_str_literal_n(Buf *b, const char *content, size_t len, int frozen);
 void emit_str_literal(Buf *b, const char *content);
 void emit_str_literal_src(Buf *b, const char *content, size_t len, int frozen);
+/* Emit a catch/throw tag (a Symbol or String literal) as a `const char *`.
+   The same literal text is produced for both catch and throw sites so the
+   runtime's strcmp tag match succeeds. Falls back to a runtime string expr. */
 int emit_catch_tag(Compiler *c, int id, Buf *b);
 void emit_hash_key(Compiler *c, int key, TyKind kt, Buf *b);
+/* Strip ParenthesesNode wrappers to reach the inner expression. */
 int unwrap_parens(Compiler *c, int id);
 const char *int_arith_fn(const char *op);
 const char *bigint_arith_fn(const char *op);
+/* Mangle a Ruby method name into a C identifier: `?`->_p, `!`->_bang,
+   `=`->_set, anything else non-identifier -> `_`. Returns a static buffer
+   (one live result at a time -- fine since each use is consumed inline). */
 const char *mc(const char *name);
 const char *iv_c(const char *name);  /* ivar/member name -> valid C field id (#3110) */
+/* A class method scope is shadowed (and must not be emitted) when a later
+   scope redefines the same (class, name, is_cmethod) -- a reopened class
+   where the last definition wins, matching comp_method_in_class. */
 int scope_is_shadowed(Compiler *c, int s);
 #define SP_MAX_PROC_FORM 4096
 extern int g_pf_emitting;   /* inside a proc-form body (#3399) */
@@ -586,7 +548,12 @@ int scope_has_callable_symbol(Compiler *c, int s);
 int scope_toplevel_included(Compiler *c, int s);
 int emit_forwarded_proc_arg(Compiler *c, int blk_node, Buf *b);
 int struct_kwarg_value(Compiler *c, int kwh, const char *name);
+/* Value-equality family: operands in the same nonzero family compare by value;
+   different nonzero families are never == (Ruby does no cross-type coercion,
+   except int/float which share family 1). 0 = not a simple comparable type. */
 int eq_family(TyKind t);
+/* Compile-time `is_a?` for a concrete builtin receiver type: 1 yes, 0 no,
+   -1 not determinable here. `exact` is instance_of? (no ancestor match). */
 int ty_matches_class(TyKind t, const char *cn, int exact);
 void emit_method_call(Compiler *c, int id, Buf *b);
 /* Resolve a forwarded `&blk` (a BlockArgumentNode handing on the active block
@@ -650,6 +617,7 @@ int opt_before_required(Scope *m);
 /* `(sp_Parent *)` when an object value flows into an ancestor-typed slot; the
    layouts match by construction, but C needs the cast spelled (#3418). */
 void emit_obj_upcast_prefix(Compiler *c, TyKind slot, TyKind val, Buf *b);
+/* Value node for keyword `name` inside a KeywordHashNode, or -1. */
 int kwh_lookup(const NodeTable *nt, int kwh, const char *kname);
 int callee_has_kwarg(Compiler *c, Scope *m, const char *name);
 int emit_ds_hash_materialize(Compiler *c, int kwh, TyKind *out_type);
@@ -668,7 +636,6 @@ void emit_rest_pack_kwh(Compiler *c, int from, int pos_argc, const int *argv, in
 int rest_kwh_tail(Compiler *c, Scope *m, int kwh);
 void emit_array_elem_at(TyKind at, int tmp, int elem_idx, Buf *b);
 void emit_rest_from_splat_and_argv(int tmp, TyKind at, int from_idx, Compiler *c, int argv_from, int pos_argc, const int *argv, Buf *b);
-void emit_args_filled(Compiler *c, int callee_idx, int argsNode, const char *lead, Buf *out);
 int is_descendant(Compiler *c, int k, int anc);
 int dispatch_impl_count(Compiler *c, int cid, const char *name);
 void emit_dispatch(Compiler *c, int cid, const char *name, const char *selfptr, int argsNode, int blk_node, Buf *b);
@@ -721,7 +688,6 @@ int subtree_has_own_redo(const NodeTable *nt, int id);
 void emit_loop_body(Compiler *c, int body, Buf *b, int indent);
 int emit_iteration_stmt(Compiler *c, int id, Buf *b, int indent);
 void emit_interp(Compiler *c, int id, Buf *b);
-void emit_expr(Compiler *c, int id, Buf *b);
 void emit_puts_one(Compiler *c, int arg, Buf *b, int indent);
 void emit_print_one(Compiler *c, int arg, Buf *b, int indent);
 void emit_p_one(Compiler *c, int arg, Buf *b, int indent);
@@ -760,9 +726,7 @@ int needs_root(TyKind t);
 /* Root a temp of an inferred type, picking the rbval macro for boxed poly. */
 void emit_gc_root_tmp(Compiler *c, TyKind t, int tmp, Buf *b);
 const char *hash_box_cls(TyKind t);
-void emit_boxed_text(Compiler *c, TyKind t, const char *expr, Buf *b);
 void emit_unbox_text(Compiler *c, TyKind t, const char *expr, Buf *b);
-void emit_boxed(Compiler *c, int node, Buf *b);
 TyKind yield_site_type(Compiler *c, int node);
 void emit_int_expr(Compiler *c, int node, Buf *b);
 void emit_str_expr(Compiler *c, int node, Buf *b);
