@@ -426,7 +426,22 @@ int lazy_stage_name(const char *nm) {
   return 0;
 }
 
+static int chain_is_lazy_valued_1(Compiler *c, int node);
+/* lazy_alias_chain resolves an alias by calling back in here, so the hop bound
+   inside has to span the RECURSION and not just one call's own walk: on a
+   self-referential write (`s = s.take(n)`) the two alternate, every new frame
+   started the counter again, and the compiler ran out of stack. #3324 bounded
+   the walk; this bounds the mutual recursion (#3929). */
 int chain_is_lazy_valued(Compiler *c, int node) {
+  static int depth = 0;
+  int r;
+  if (depth > 8) return 0;
+  depth++;
+  r = chain_is_lazy_valued_1(c, node);
+  depth--;
+  return r;
+}
+static int chain_is_lazy_valued_1(Compiler *c, int node) {
   const NodeTable *nt = c->nt;
   if (node < 0 || !nt_type(nt, node) || !sp_streq(nt_type(nt, node), "CallNode")) return 0;
   const char *top = nt_str(nt, node, "name");
