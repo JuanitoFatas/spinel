@@ -181,8 +181,51 @@ ffi_read_ptr :read_ptr, 0
 db = SQL.read_ptr(SQL.db_out)
 ```
 
-No `ffi_write_*` in the MVP — the assumption is that a C function is
-the one writing into the buffer; Ruby just reads back.
+### `ffi_struct :Name, [[:field, :spec], ...]`
+
+Declares a named C struct and generates its accessors: `Module.Name_new`
+allocates one and returns a boxed pointer, `Module.Name_get_<field>(ptr)`
+reads a field and `Module.Name_set_<field>(ptr, val)` writes one. The C
+compiler owns the layout, so the accessors are plain member access and the
+offsets are whatever the target ABI says -- unlike `ffi_buffer` +
+`ffi_read_*`, where you supply the offsets yourself.
+
+```ruby
+module M
+  ffi_struct :Point, [[:x, :long], [:y, :long]]
+end
+
+pt = M.Point_new
+M.Point_set_x(pt, 3)
+puts M.Point_get_x(pt)     # => 3
+```
+
+A struct pointer is a `:ptr`, so it can be handed to any `ffi_func`
+argument declared that way -- which is how a C function fills one in.
+
+### `ffi_callback :name, [arg_types], ret_type`
+
+Declares a C function-pointer type usable as an `ffi_func` argument spec.
+Passing `method(:some_method)` to an argument of that type compiles a
+trampoline that converts the C arguments, calls the method, and converts the
+result back, so a Ruby method can be handed to a C API that takes a callback.
+
+```ruby
+module L
+  ffi_callback :cmp,   [:ptr, :ptr], :int
+  ffi_func     :qsort, [:int_array, :size_t, :size_t, :cmp], :void
+  ffi_read_i32 :val,   0
+end
+
+def cmp(a, b) = L.val(a) <=> L.val(b)
+
+L.qsort(nums, nums.size, 8, method(:cmp))
+```
+
+A function that takes a callback has its `extern` skipped and the header
+prototype called directly: the per-argument `const` qualification of such a
+prototype (`qsort` takes `void *base`, `bsearch` a `const void *`) is not
+something the declaration can reproduce.
 
 ## Pointer semantics
 
@@ -225,12 +268,9 @@ yourself.
 
 ## Limitations
 
-The MVP covers scalars, strings, opaque pointers, integer constants,
-raw byte buffers, and simple struct-field reads. Not supported yet:
+Scalars, strings, opaque pointers, integer constants, raw byte buffers,
+struct declarations and callbacks are covered. Not supported yet:
 
-- **No struct declarations.** Use `ffi_buffer` + `ffi_read_*` for the
-  handful of fields you need.
-- **No callbacks / Ruby-to-C function pointers.**
 - **No variadic C functions** (`printf(...)`). Use Spinel's built-in
   `printf` if you want formatted output.
 - **Pointers can't enter polymorphic values.** Don't put a `:ptr` into
