@@ -1254,7 +1254,14 @@ int emit_flat_map_expr(Compiler *c, int id, Buf *b) {
       LocalVar *lv = scope_local(comp_scope_of(c, block), pn);
       TyKind pt = lv ? lv->type : TY_POLY;
       char src[96]; snprintf(src, sizeof src, "sp_poly_index_poly(_t%d, sp_box_int(%d))", te, pj);
-      emit_indent(g_pre, g_indent + 1); buf_printf(g_pre, "lv_%s = ", pnr);
+      emit_indent(g_pre, g_indent + 1);
+      /* A param the scope never typed has no declaration in the prologue, so a
+         bare assignment referenced an undeclared name and the build stopped
+         (`arr.each_with_index.flat_map { |(k, v), i| }` types the pair but not
+         the index). Declare it here; a block param needs no life beyond this
+         iteration. */
+      if (!lv || lv->type == TY_UNKNOWN) buf_puts(g_pre, "sp_RbVal ");
+      buf_printf(g_pre, "lv_%s = ", pnr);
       Buf cv; memset(&cv, 0, sizeof cv); flatmap_coerce_from_poly(pt, src, &cv);
       buf_puts(g_pre, cv.p ? cv.p : src); free(cv.p); buf_puts(g_pre, ";\n");
     }
