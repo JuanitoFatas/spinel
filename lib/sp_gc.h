@@ -336,6 +336,10 @@ extern sp_RbVal (*sp_obj_to_a_fn)(sp_RbVal);
 /* The array a `case/in` array pattern matches a user object against. Separate
    from #to_a: a Data answers #deconstruct but has no #to_a at all. */
 extern sp_RbVal (*sp_obj_deconstruct_fn)(sp_RbVal);
+/* 1 when cls_id is a Data class. Data defines no #dig, so a dig that lands on
+   one is the TypeError CRuby raises rather than a member read; Struct, which
+   does define #dig, is unaffected. */
+extern int (*sp_obj_is_data_fn)(int cls_id);
 /* Data#with copy-update for a poly receiver: (value, symbol-keyed overrides). (#2890) */
 extern sp_RbVal (*sp_obj_with_fn)(sp_RbVal, sp_RbVal);
 /* default Object#inspect for user objects: the generated TU installs a

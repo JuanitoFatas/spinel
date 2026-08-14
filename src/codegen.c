@@ -5208,6 +5208,19 @@ static void emit_obj_deconstruct_dispatch(Compiler *c, Buf *b) {
   buf_puts(b, "    default: return sp_obj_to_a_fn ? sp_obj_to_a_fn(v) : sp_box_nil();\n  }\n}\n");
 }
 
+/* Which cls_ids are Data classes. Data defines no #dig, and the runtime's dig
+   walk has to tell one from a Struct, which does (#3919). */
+static void emit_obj_is_data(Compiler *c, Buf *b) {
+  if (!obj_deconstruct_any(c)) return;
+  buf_puts(b, "static int sp_obj_is_data(int cls_id) {\n  switch (cls_id) {\n");
+  for (int i = 0; i < c->nclasses; i++) {
+    ClassInfo *ci = &c->classes[i];
+    if (!ci->is_data || !ci->instantiated || ci->is_native_class) continue;
+    buf_printf(b, "    case %d:\n", i);
+  }
+  buf_puts(b, "      return 1;\n    default: return 0;\n  }\n}\n");
+}
+
 static void emit_obj_with_dispatch(Compiler *c, Buf *b) {
   if (!g_gen_obj_with) return;
   buf_puts(b, "static sp_RbVal sp_obj_with(sp_RbVal v, sp_RbVal ov) {\n");
@@ -6182,8 +6195,10 @@ void emit_regex_section(Compiler *c, Buf *b) {
     buf_puts(b, "static sp_RbVal sp_obj_to_h(sp_RbVal v);\n");
   if (obj_to_a_any(c))
     buf_puts(b, "static sp_RbVal sp_obj_to_a(sp_RbVal v);\n");
-  if (obj_deconstruct_any(c))
+  if (obj_deconstruct_any(c)) {
     buf_puts(b, "static sp_RbVal sp_obj_deconstruct(sp_RbVal v);\n");
+    buf_puts(b, "static int sp_obj_is_data(int cls_id);\n");
+  }
   if (g_gen_obj_with)
     buf_puts(b, "static sp_RbVal sp_obj_with(sp_RbVal v, sp_RbVal ov);\n");
   if (g_gen_obj_hashkey)
@@ -6270,8 +6285,10 @@ void emit_regex_section(Compiler *c, Buf *b) {
     buf_puts(b, "  sp_obj_to_h_fn = sp_obj_to_h;\n");
   if (obj_to_a_any(c))
     buf_puts(b, "  sp_obj_to_a_fn = sp_obj_to_a;\n");
-  if (obj_deconstruct_any(c))
+  if (obj_deconstruct_any(c)) {
     buf_puts(b, "  sp_obj_deconstruct_fn = sp_obj_deconstruct;\n");
+    buf_puts(b, "  sp_obj_is_data_fn = sp_obj_is_data;\n");
+  }
   if (g_gen_obj_with)
     buf_puts(b, "  sp_obj_with_fn = sp_obj_with;\n");
   if (g_re_count > 0) {
@@ -8134,6 +8151,7 @@ char *codegen_program(const NodeTable *nt) {
   emit_obj_to_json_dispatch(c, body);
   emit_obj_to_h_dispatch(c, body);
   emit_obj_deconstruct_dispatch(c, body);
+  emit_obj_is_data(c, body);
   emit_obj_to_a_dispatch(c, body);
   emit_obj_with_dispatch(c, body);
   for (int s = 1; s < c->nscopes; s++) {

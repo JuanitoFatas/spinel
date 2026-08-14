@@ -8141,6 +8141,17 @@ int emit_object_call(Compiler *c, int id, Buf *b) {
       buf_puts(b, "); })");
       return 1;
     }
+    /* CRuby's Data defines no #dig at all (Struct does), so digging into one
+       is a NoMethodError on a direct call and a TypeError through an
+       intermediate -- not a member read (#3919). */
+    if (sp_streq(name, "dig") && sc->is_data) {
+      TyKind dgr = comp_ntype(c, id);
+      const char *dgv = default_value(dgr);
+      buf_puts(b, "({ (void)("); emit_expr(c, recv, b);
+      buf_printf(b, "); sp_raise_nomethod(sp_nomethod_msg(\"dig\", sp_box_obj((void *)0, %d))); %s; })",
+                 ty_object_class(rt), dgv ? dgv : "0");
+      return 1;
+    }
     if (sp_streq(name, "dig") && argc >= 1) {
       /* literal key resolves a member at compile time */
       int mi = -1;

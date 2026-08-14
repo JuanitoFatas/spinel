@@ -5467,7 +5467,8 @@ static sp_RbVal sp_poly_dig_step_key(sp_RbVal a, sp_RbVal k) {
   if (a.tag == SP_TAG_NIL) return sp_box_nil();
   if (a.tag == SP_TAG_OBJ && a.v.p &&
       (sp_poly_is_array_kind(a.cls_id) || sp_poly_is_hash_kind(a.cls_id) ||
-       (a.cls_id >= 0 && sp_obj_to_h_fn)))
+       (a.cls_id >= 0 && sp_obj_to_h_fn &&
+        !(sp_obj_is_data_fn && sp_obj_is_data_fn(a.cls_id)))))   /* Data has no #dig (#3919) */
     return sp_poly_index_poly(a, k);
   sp_raise_cls("TypeError",
                sp_sprintf("%s does not have #dig method", sp_poly_class_name(a)));
@@ -5628,6 +5629,8 @@ static sp_RbVal sp_poly_delete_key(sp_RbVal recv, sp_RbVal key) {
    runtime models as one of those. A String or a number has no #dig. */
 static int sp_poly_diggable(sp_RbVal v) {
   if (v.tag != SP_TAG_OBJ) return 0;
+  if (v.cls_id >= 0 && sp_obj_is_data_fn && sp_obj_is_data_fn(v.cls_id))
+    return 0;              /* Data defines no #dig (Struct does) (#3919) */
   return sp_poly_is_hash_kind(v.cls_id) || sp_poly_is_array_kind(v.cls_id) ||
          v.cls_id >= 0;   /* a user object: its own #dig answers, or NoMethodError does */
 }
