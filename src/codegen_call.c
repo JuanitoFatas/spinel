@@ -9419,7 +9419,7 @@ void emit_call(Compiler *c, int id, Buf *b) {
       int bblk = nt_ref(nt, id, "block");
       int bbd = bblk >= 0 ? nt_ref(nt, bblk, "body") : -1;
       int bbn = 0; const int *bbb = bbd >= 0 ? nt_arr(nt, bbd, "body", &bbn) : NULL;
-      if (bl >= 0 && br >= 0 && bbn >= 1 && infer_type(c, bbb[bbn - 1]) != TY_INT)
+      if (bl >= 0 && br >= 0 && bbn >= 1 && comp_ntype(c, bbb[bbn - 1]) != TY_INT)
         bsearch_float_ok = 1;
       /* a distinct-typed float range bsearch (variable or literal) bisects too */
       if (rcv >= 0 && comp_ntype(c, rcv) == TY_FLOAT_RANGE) bsearch_float_ok = 1;

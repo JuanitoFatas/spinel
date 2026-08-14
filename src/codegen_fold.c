@@ -250,7 +250,7 @@ static char *emit_hash_block_eval(Compiler *c, int block, TyKind rt, const char 
   }
   if (ns0 && p0_lv) p0_lv->type = p0_actual;
   if (ns1 && p1_lv) p1_lv->type = p1_actual;
-  TyKind bret = (bb && bn > 0) ? infer_type(c, bb[bn - 1]) : TY_UNKNOWN;
+  TyKind bret = (bb && bn > 0) ? comp_ntype(c, bb[bn - 1]) : TY_UNKNOWN;
   /* A value-carrying next widens the block value past the tail, so the temp is
      boxed when a next yields a different type than the tail expression. */
   TyKind bnt = ie_block_break_next_ty(c, body);
@@ -988,7 +988,7 @@ int emit_bsearch_expr(Compiler *c, int id, Buf *b) {
       for (int j = 0; j < bn - 1; j++) emit_stmt(c, bb[j], g_pre, g_indent + 1);
       int save = g_indent; g_indent++;
       Buf cb; memset(&cb, 0, sizeof cb); emit_expr(c, bb[bn - 1], &cb); g_indent = save;
-      TyKind bt = infer_type(c, bb[bn - 1]);
+      TyKind bt = comp_ntype(c, bb[bn - 1]);
       if (bt == TY_INT || bt == TY_FLOAT) {
         /* find-any (CRuby: a Numeric block is `target <=> x`): 0 found,
            positive means the target sorts after the probe, negative before.
@@ -1045,7 +1045,7 @@ int emit_bsearch_expr(Compiler *c, int id, Buf *b) {
   /* an Integer-typed block is CRuby's find-any mode (0 found, positive means
      the target sorts after the probe, negative before); a truthy block is
      find-minimum mode */
-  int find_any = infer_type(c, bb[bn - 1]) == TY_INT;
+  int find_any = comp_ntype(c, bb[bn - 1]) == TY_INT;
   Buf rb; memset(&rb, 0, sizeof rb); emit_expr(c, recv, &rb);
   emit_indent(g_pre, g_indent); buf_printf(g_pre, "sp_Range _t%d = ", tr); buf_puts(g_pre, rb.p ? rb.p : ""); buf_puts(g_pre, ";\n"); free(rb.p);
   emit_indent(g_pre, g_indent); buf_printf(g_pre, "mrb_int _t%d = _t%d.first;\n", tlo, tr);
@@ -1068,7 +1068,7 @@ int emit_bsearch_expr(Compiler *c, int id, Buf *b) {
     emit_indent(g_pre, g_indent + 1);
     buf_printf(g_pre, "else { _t%d = _t%d - 1; }\n", thi, tmid);
   }
-  else if (infer_type(c, bb[bn - 1]) == TY_POLY) {
+  else if (comp_ntype(c, bb[bn - 1]) == TY_POLY) {
     /* a mixed block (int-or-nil ternary) is CRuby's combined dispatch: an
        Integer is find-any (0 found, positive right, negative left), any
        other truthy value is find-minimum, nil/false searches right */
@@ -1414,7 +1414,7 @@ int emit_minmax_by_expr(Compiler *c, int id, Buf *b) {
   int body = nt_ref(nt, block, "body");
   int bn = 0; const int *bb = body >= 0 ? nt_arr(nt, body, "body", &bn) : NULL;
   if (bn < 1) return 0;
-  TyKind bvt = infer_type(c, bb[bn - 1]);
+  TyKind bvt = comp_ntype(c, bb[bn - 1]);
   /* An unresolved block value -- a symbol-proc naming a method the element
      does not have -- lowers to the raising token, which is a boxed value.
      Fold it as poly so the call compiles and raises NoMethodError at run
@@ -1823,7 +1823,7 @@ int emit_gsub_block_expr(Compiler *c, int id, Buf *b) {
   int save = g_indent; g_indent++;
   /* CRuby stringifies a non-string block value (gsub { 2 } -> "2"): box a
      concretely non-string result and render it through sp_poly_to_s. */
-  TyKind gvt = infer_type(c, bb[bn - 1]);
+  TyKind gvt = comp_ntype(c, bb[bn - 1]);
   Buf vb; memset(&vb, 0, sizeof vb);
   if (gvt == TY_POLY) { buf_puts(&vb, "sp_poly_to_s("); emit_expr(c, bb[bn - 1], &vb); buf_puts(&vb, ")"); }
   else if (gvt != TY_STRING && gvt != TY_UNKNOWN) {
@@ -2039,8 +2039,21 @@ int emit_sum_block_expr(Compiler *c, int id, Buf *b) {
     }
     free(inner.p); free(valb.p);
   }
-  if (acct == TY_FLOAT) buf_printf(b, "; } _t%d + _t%d; })", tacc, tc);
-  else buf_printf(b, "; } _t%d; })", tacc);
+  /* The expression has to carry the type the CALL was inferred at, the way the
+     general fold does. A block-forwarding method is inlined per call site, so
+     the site handed a real Proc accumulates boxed while the site handed a
+     literal block accumulates concretely -- one node, one inferred type, and
+     the concrete accumulator went into the boxed slot the method's return
+     type declared (#3916). */
+  {
+    char accn[48];
+    if (acct == TY_FLOAT) snprintf(accn, sizeof accn, "_t%d + _t%d", tacc, tc);
+    else snprintf(accn, sizeof accn, "_t%d", tacc);
+    buf_puts(b, "; } ");
+    if (comp_ntype(c, id) == TY_POLY) emit_boxed_text(c, acct, accn, b);
+    else buf_puts(b, accn);
+    buf_puts(b, "; })");
+  }
   return 1;
 }
 
@@ -3856,7 +3869,7 @@ int emit_sort_cmp_expr(Compiler *c, int id, Buf *b) {
   /* the comparator answers the <=> sign; a boxed answer -- a poly element, or
      a user <=> anywhere in the program -- is unwrapped (#3622) */
   if (bn < 1) return 0;
-  TyKind cmp_ty = infer_type(c, bb[bn - 1]);
+  TyKind cmp_ty = comp_ntype(c, bb[bn - 1]);
   if (cmp_ty != TY_INT && cmp_ty != TY_POLY) return 0;
   const char *cmp_o = cmp_ty == TY_POLY ? "sp_poly_to_i(" : "(";
   int trv = ++g_tmp, tr = ++g_tmp, tn = ++g_tmp, ti = ++g_tmp, tj = ++g_tmp, ta = ++g_tmp, tb = ++g_tmp;
@@ -4025,7 +4038,7 @@ int emit_minmax_cmp_expr(Compiler *c, int id, Buf *b) {
   /* the comparator answers the <=> sign; a boxed answer -- a poly element, or
      a user <=> anywhere in the program -- is unwrapped (#3622) */
   if (bn < 1) return 0;
-  TyKind cmp_ty = infer_type(c, bb[bn - 1]);
+  TyKind cmp_ty = comp_ntype(c, bb[bn - 1]);
   if (cmp_ty != TY_INT && cmp_ty != TY_POLY) return 0;
   const char *cmp_o = cmp_ty == TY_POLY ? "sp_poly_to_i(" : "(";
   int trv = ++g_tmp, tn = ++g_tmp, tmin = ++g_tmp, tmax = ++g_tmp, ti = ++g_tmp, te = ++g_tmp, tres = ++g_tmp;
@@ -5646,7 +5659,7 @@ int emit_grep_expr(Compiler *c, int id, Buf *b) {
     bb = body >= 0 ? nt_arr(nt, body, "body", &bn) : NULL;
     if (!p0n || bn < 1) return 0;
     p0 = rename_local(p0n);
-    bt = infer_type(c, bb[bn - 1]);
+    bt = comp_ntype(c, bb[bn - 1]);
     ok = bt == TY_INT ? "Int" : bt == TY_FLOAT ? "Float"
        : bt == TY_STRING ? "Str" : "Poly";
   }
