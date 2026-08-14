@@ -1,76 +1,168 @@
 #include "analyze_internal.h"
 #include <limits.h>
 
-int is_builtin_class_name(const char *n) {
-  if (!n) return 0;
-  static const char *const CL[] = {
-    "Integer","Float","String","Symbol","Array","Hash","Range","Time",
-    "Module","Class","NilClass","TrueClass","FalseClass","Numeric",
-    "Comparable","Enumerable","Object","BasicObject","Proc","Kernel",
-    "IO","File","Exception","StandardError","RuntimeError","TypeError",
-    "ArgumentError","NameError","NoMethodError","StopIteration","Math",
-    "Complex","Rational","Encoding","Method","UnboundMethod","Fiber",
-    "Thread","Mutex","Queue","SizedQueue","ConditionVariable",
-    "GC","ObjectSpace","Signal","Process","Regexp",
-    "MatchData","Enumerator","Struct","Data",
-    /* exception classes as first-class values (raise_error matchers,
-       e.class comparisons); raise/rescue position resolves by name. */
-    "IndexError","KeyError","RangeError","FloatDomainError",
-    "ZeroDivisionError","FrozenError","IOError","LocalJumpError",
-    "NotImplementedError","ScriptError","SyntaxError","SecurityError",
-    "RegexpError","EncodingError","SignalException","Interrupt",
-    "ThreadError","FiberError","ClosedQueueError","UncaughtThrowError",
-    "NoMatchingPatternError","NoMatchingPatternKeyError","EOFError",
-    "SystemExit","Dir",NULL
-  };
-  /* the socket classes are constants only after `require "socket"` (CRuby
-     defines them there too), so they are checked separately */
-  if (sp_feature_required("socket")) {
-    static const char *const SOCK[] = {
-      "BasicSocket","IPSocket","TCPSocket","TCPServer",
-      "UDPSocket","UNIXSocket","UNIXServer","Socket",NULL };
-    for (int i = 0; SOCK[i]; i++) if (sp_streq(n, SOCK[i])) return 1;
+/* One table for the builtin class/module/exception names. These four
+   predicates were four independent lists that had to be kept in step by hand,
+   and the code has a comment noting where they already disagree. A row now
+   carries every fact about one name: the flags say which predicate accepts it,
+   and `id` is its negative cls_id (0 when codegen has none). Adding a name is
+   one row instead of four edits.
+
+   The rows are exactly the union of the old lists, flags included, so every
+   predicate answers what it answered before -- what the table changes is that
+   the answers can no longer drift apart. It also makes the existing gaps
+   visible rather than implicit: six names are classes with no cls_id
+   (Encoding, GC, Method, ObjectSpace, Process, UnboundMethod), seven have a
+   cls_id but are not bare constants (the Thread:: / Process:: / Math::
+   qualified forms), and fourteen exception names have no id. Each is a
+   deliberate answer today; closing any of them is a behavior change and does
+   not belong in the same commit as the table.
+
+   The `CRUBY_KNOWN` list in codegen_call.c is a fifth list, for a different
+   question (names CRuby defines that spinel does not implement), and is left
+   alone here. */
+enum { BC_CLASS = 1, BC_MODULE = 2, BC_EXCEPTION = 4, BC_SOCKET = 8 };
+typedef struct { const char *name; int id; unsigned flags; } BuiltinClass;
+static const BuiltinClass BUILTIN_CLASSES[] = {
+  { "Integer",                      -100,  BC_CLASS },
+  { "Float",                        -101,  BC_CLASS },
+  { "String",                       -102,  BC_CLASS },
+  { "Symbol",                       -103,  BC_CLASS },
+  { "Array",                        -104,  BC_CLASS },
+  { "Hash",                         -105,  BC_CLASS },
+  { "Range",                        -106,  BC_CLASS },
+  { "Time",                         -107,  BC_CLASS },
+  { "Module",                       -108,  BC_CLASS },
+  { "Class",                        -109,  BC_CLASS },
+  { "NilClass",                     -110,  BC_CLASS },
+  { "TrueClass",                    -111,  BC_CLASS },
+  { "FalseClass",                   -112,  BC_CLASS },
+  { "Numeric",                      -113,  BC_CLASS },
+  { "Comparable",                   -114,  BC_CLASS | BC_MODULE },
+  { "Enumerable",                   -115,  BC_CLASS | BC_MODULE },
+  { "Object",                       -116,  BC_CLASS },
+  { "BasicObject",                  -117,  BC_CLASS },
+  { "Proc",                         -118,  BC_CLASS },
+  { "Kernel",                       -119,  BC_CLASS | BC_MODULE },
+  { "IO",                           -120,  BC_CLASS },
+  { "File",                         -121,  BC_CLASS },
+  { "Exception",                    -122,  BC_CLASS | BC_EXCEPTION },
+  { "StandardError",                -123,  BC_CLASS | BC_EXCEPTION },
+  { "RuntimeError",                 -124,  BC_CLASS | BC_EXCEPTION },
+  { "TypeError",                    -125,  BC_CLASS | BC_EXCEPTION },
+  { "ArgumentError",                -126,  BC_CLASS | BC_EXCEPTION },
+  { "NameError",                    -127,  BC_CLASS | BC_EXCEPTION },
+  { "NoMethodError",                -128,  BC_CLASS | BC_EXCEPTION },
+  { "StopIteration",                -129,  BC_CLASS | BC_EXCEPTION },
+  { "Math",                         -130,  BC_CLASS | BC_MODULE },
+  { "Complex",                      -131,  BC_CLASS },
+  { "IndexError",                   -132,  BC_CLASS | BC_EXCEPTION },
+  { "KeyError",                     -133,  BC_CLASS | BC_EXCEPTION },
+  { "RangeError",                   -134,  BC_CLASS | BC_EXCEPTION },
+  { "FloatDomainError",             -135,  BC_CLASS | BC_EXCEPTION },
+  { "ZeroDivisionError",            -136,  BC_CLASS | BC_EXCEPTION },
+  { "FrozenError",                  -137,  BC_CLASS | BC_EXCEPTION },
+  { "IOError",                      -138,  BC_CLASS | BC_EXCEPTION },
+  { "LocalJumpError",               -139,  BC_CLASS | BC_EXCEPTION },
+  { "NotImplementedError",          -140,  BC_CLASS | BC_EXCEPTION },
+  { "ScriptError",                  -141,  BC_CLASS | BC_EXCEPTION },
+  { "Rational",                     -142,  BC_CLASS },
+  { "Regexp",                       -143,  BC_CLASS },
+  { "Enumerator",                   -144,  BC_CLASS },
+  { "Struct",                       -145,  BC_CLASS },
+  { "Data",                         -146,  BC_CLASS },
+  { "SyntaxError",                  -147,  BC_CLASS | BC_EXCEPTION },
+  { "SecurityError",                -148,  BC_CLASS | BC_EXCEPTION },
+  { "RegexpError",                  -149,  BC_CLASS | BC_EXCEPTION },
+  { "EncodingError",                -150,  BC_CLASS | BC_EXCEPTION },
+  { "SignalException",              -151,  BC_CLASS | BC_EXCEPTION },
+  { "Interrupt",                    -152,  BC_CLASS | BC_EXCEPTION },
+  { "ThreadError",                  -153,  BC_CLASS | BC_EXCEPTION },
+  { "FiberError",                   -154,  BC_CLASS | BC_EXCEPTION },
+  { "ClosedQueueError",             -155,  BC_CLASS | BC_EXCEPTION },
+  { "UncaughtThrowError",           -156,  BC_CLASS | BC_EXCEPTION },
+  { "NoMatchingPatternError",       -157,  BC_CLASS | BC_EXCEPTION },
+  { "NoMatchingPatternKeyError",    -158,  BC_CLASS | BC_EXCEPTION },
+  { "EOFError",                     -159,  BC_CLASS | BC_EXCEPTION },
+  { "Math::DomainError",            -160,  BC_EXCEPTION },
+  { "SystemExit",                   -161,  BC_CLASS | BC_EXCEPTION },
+  { "Signal",                       -162,  BC_CLASS | BC_MODULE },
+  { "Process::Status",              -163,  0 },
+  { "Process::Tms",                 -164,  0 },
+  { "Dir",                          -165,  BC_CLASS },
+  { "BasicSocket",                  -166,  BC_CLASS | BC_SOCKET },
+  { "IPSocket",                     -167,  BC_CLASS | BC_SOCKET },
+  { "TCPSocket",                    -168,  BC_CLASS | BC_SOCKET },
+  { "TCPServer",                    -169,  BC_CLASS | BC_SOCKET },
+  { "UDPSocket",                    -170,  BC_CLASS | BC_SOCKET },
+  { "UNIXSocket",                   -171,  BC_CLASS | BC_SOCKET },
+  { "UNIXServer",                   -172,  BC_CLASS | BC_SOCKET },
+  { "Socket",                       -173,  BC_CLASS | BC_SOCKET },
+  { "Thread",                       -174,  BC_CLASS },
+  { "Mutex",                        -175,  BC_CLASS },
+  { "Thread::Mutex",                -175,  0 },
+  { "Queue",                        -176,  BC_CLASS },
+  { "Thread::Queue",                -176,  0 },
+  { "SizedQueue",                   -177,  BC_CLASS },
+  { "Thread::SizedQueue",           -177,  0 },
+  { "ConditionVariable",            -178,  BC_CLASS },
+  { "Thread::ConditionVariable",    -178,  0 },
+  { "Fiber",                        -179,  BC_CLASS },
+  { "MatchData",                    -180,  BC_CLASS },
+  { "Encoding",                     0,     BC_CLASS },
+  { "Errno::ENOENT",                0,     BC_EXCEPTION },
+  { "GC",                           0,     BC_CLASS | BC_MODULE },
+  { "IO::EAGAINWaitReadable",       0,     BC_EXCEPTION },
+  { "IO::EAGAINWaitWritable",       0,     BC_EXCEPTION },
+  { "IO::EINPROGRESSWaitReadable",  0,     BC_EXCEPTION },
+  { "IO::EINPROGRESSWaitWritable",  0,     BC_EXCEPTION },
+  { "IO::EWOULDBLOCKWaitReadable",  0,     BC_EXCEPTION },
+  { "IO::EWOULDBLOCKWaitWritable",  0,     BC_EXCEPTION },
+  { "IO::WaitReadable",             0,     BC_EXCEPTION },
+  { "IO::WaitWritable",             0,     BC_EXCEPTION },
+  { "LoadError",                    0,     BC_EXCEPTION },
+  { "Method",                       0,     BC_CLASS },
+  { "NoMemoryError",                0,     BC_EXCEPTION },
+  { "ObjectSpace",                  0,     BC_CLASS | BC_MODULE },
+  { "Process",                      0,     BC_CLASS | BC_MODULE },
+  { "StringScanner_Error",          0,     BC_EXCEPTION },
+  { "SystemCallError",              0,     BC_EXCEPTION },
+  { "SystemStackError",             0,     BC_EXCEPTION },
+  { "UnboundMethod",                0,     BC_CLASS },
+};
+#define BUILTIN_CLASS_N ((int)(sizeof BUILTIN_CLASSES / sizeof BUILTIN_CLASSES[0]))
+
+/* A socket row is a constant only after `require "socket"`, as in CRuby. */
+static const BuiltinClass *builtin_row(const char *n) {
+  if (!n) return NULL;
+  for (int i = 0; i < BUILTIN_CLASS_N; i++) {
+    if (!sp_streq(n, BUILTIN_CLASSES[i].name)) continue;
+    if ((BUILTIN_CLASSES[i].flags & BC_SOCKET) && !sp_feature_required("socket")) return NULL;
+    return &BUILTIN_CLASSES[i];
   }
-  for (int i = 0; CL[i]; i++) if (sp_streq(n, CL[i])) return 1;
-  return 0;
+  return NULL;
 }
-/* Builtin constants that are MODULES in CRuby: `module Kernel` reopens them
-   legally, while `module String` (a class) is CRuby's TypeError. */
+
+int is_builtin_class_name(const char *n) {
+  const BuiltinClass *r = builtin_row(n);
+  return r && (r->flags & BC_CLASS);
+}
 int is_builtin_module_name(const char *n) {
-  if (!n) return 0;
-  static const char *const MODS[] = {
-    "Comparable","Enumerable","Kernel","Math","GC","ObjectSpace",
-    "Signal","Process", NULL
-  };
-  for (int i = 0; MODS[i]; i++) if (sp_streq(n, MODS[i])) return 1;
-  return 0;
+  const BuiltinClass *r = builtin_row(n);
+  return r && (r->flags & BC_MODULE);
 }
 int is_builtin_exception_name(const char *n) {
-  if (!n) return 0;
-  static const char *const EXC[] = {
-    "Exception", "StandardError", "RuntimeError", "ArgumentError",
-    "TypeError", "NameError", "NoMethodError", "IndexError",
-    "KeyError", "RangeError", "IOError", "EOFError", "Errno::ENOENT",
-    "ZeroDivisionError", "NotImplementedError", "StopIteration",
-    "FloatDomainError", "FrozenError", "EncodingError", "LoadError",
-    "SystemExit", "Interrupt", "ScriptError", "SyntaxError",
-    "RegexpError", "SecurityError", "SignalException", "ThreadError",
-    "FiberError", "ClosedQueueError", "UncaughtThrowError",
-    "NoMatchingPatternError", "NoMatchingPatternKeyError",
-    "LocalJumpError", "Math::DomainError", "SystemCallError",
-    "StringScanner_Error", "NoMemoryError", "SystemStackError",
-    /* the non-blocking readiness family: two modules plus their Errno
-       subclasses, so `rescue IO::WaitReadable` walks the hierarchy */
-    "IO::WaitReadable", "IO::WaitWritable",
-    "IO::EAGAINWaitReadable", "IO::EAGAINWaitWritable",
-    "IO::EWOULDBLOCKWaitReadable", "IO::EWOULDBLOCKWaitWritable",
-    "IO::EINPROGRESSWaitReadable", "IO::EINPROGRESSWaitWritable", NULL
-  };
-  for (int i = 0; EXC[i]; i++) if (sp_streq(n, EXC[i])) return 1;
+  const BuiltinClass *r = builtin_row(n);
+  if (r && (r->flags & BC_EXCEPTION)) return 1;
   /* the Errno:: family is open -- the runtime picks a name from errno -- so
      any qualified Errno name is an exception class (#2922 follow-up) */
-  if (strncmp(n, "Errno::", 7) == 0) return 1;
-  return 0;
+  return n && strncmp(n, "Errno::", 7) == 0;
+}
+/* Defined here rather than in codegen_util.c so the id and the name
+   predicates cannot disagree; codegen_internal.h still declares it. */
+int builtin_class_id(const char *name) {
+  const BuiltinClass *r = builtin_row(name);
+  return r ? r->id : 0;
 }
 int class_inherits_builtin_exception(Compiler *c, int ci) {
   for (int k = ci; k >= 0; k = c->classes[k].parent) {
