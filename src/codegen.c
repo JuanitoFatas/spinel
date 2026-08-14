@@ -1292,10 +1292,17 @@ static int fi_body_unforceable(Compiler *c, int id, int depth) {
   return 0;
 }
 
+/* Set when the walk below stopped early. A truncated call list under-counts,
+   and every user of it is deciding whether something FITS, so the callers
+   treat a truncated answer as "does not fit" rather than trusting the short
+   count (a 350-arm elsif chain nests one level per arm, #3913). */
+static int g_fi_trunc;
+
 /* Collect every call node in a method's body subtree. */
 static void fi_collect_calls(Compiler *c, int id, int *out, int *n, int max, int depth) {
   const NodeTable *nt = c->nt;
-  if (id < 0 || depth > 64 || *n >= max) return;
+  if (id < 0) return;
+  if (depth > 4096 || *n >= max) { g_fi_trunc = 1; return; }
   if (nt_kind(nt, id) == NK_CallNode) out[(*n)++] = id;
   int nr = nt_num_refs(nt, id);
   for (int i = 0; i < nr; i++) fi_collect_calls(c, nt_ref_at(nt, id, i), out, n, max, depth + 1);
@@ -1323,6 +1330,54 @@ static int fi_reaches(Compiler *c, int from, int target, unsigned char *seen,
     }
   }
   return 0;
+}
+
+/* True when the program can run user code on a fiber stack -- a Fiber, a green
+   thread, or a generator Enumerator. SP_FIBER_STACK_SIZE is the ceiling only
+   there; on the process stack the same frame has megabytes to sit in. */
+int fi_fiber_stack_risk(Compiler *c) {
+  const NodeTable *nt = c->nt;
+  for (int i = 0; i < nt->count; i++) {
+    const char *ty = nt_type(nt, i);
+    if (!ty) continue;
+    if (sp_streq(ty, "ConstantReadNode")) {
+      const char *nm = nt_str(nt, i, "name");
+      if (nm && (sp_streq(nm, "Fiber") || sp_streq(nm, "Thread") || sp_streq(nm, "Enumerator") ||
+                 sp_streq(nm, "Queue") || sp_streq(nm, "SizedQueue") || sp_streq(nm, "Mutex") ||
+                 sp_streq(nm, "Monitor") || sp_streq(nm, "ConditionVariable")))
+        return 1;
+    }
+    else if (sp_streq(ty, "CallNode")) {
+      const char *nm = nt_str(nt, i, "name");
+      /* an external enumerator's body runs on a generator fiber too */
+      if (nm && (sp_streq(nm, "to_enum") || sp_streq(nm, "enum_for"))) return 1;
+    }
+  }
+  return 0;
+}
+
+/* An estimate of the C frame a body contributes once it is absorbed into its
+   caller. A local costs its own slot, and one that carries a GC root costs the
+   padded cleanup int beside it as well; because the root takes the local's
+   ADDRESS, the C compiler cannot share either slot with another absorbed body.
+   8 and 16 bytes respectively, measured on gcc/amd64. */
+static long fi_own_frame(Compiler *c, int si) {
+  if (si < 0 || si >= c->nscopes) return 0;
+  Scope *m = &c->scopes[si];
+  long f = 32;
+  for (int i = 0; i < m->nlocals; i++) {
+    TyKind t = m->locals[i].type;
+    /* Only a local carrying a GC root costs stack: SP_GC_ROOT takes its
+       ADDRESS, which pins it to a slot the C compiler cannot share with
+       another absorbed body, and adds the padded cleanup int beside it. A
+       scalar stays in a register or shares a spill slot and costs nothing
+       measurable -- counting those put optcarrot's estimate ten times over
+       its real frame and trimmed forcing it wants. */
+    int rooted = (t == TY_POLY || t == TY_STRING || t == TY_STRBUF || t == TY_PROC ||
+                  ty_is_array(t) || ty_is_obj_array(t) || ty_is_hash(t) || ty_is_object(t));
+    if (rooted) f += 16;
+  }
+  return f;
 }
 
 static void fi_build(Compiler *c) {
@@ -1402,6 +1457,81 @@ static void fi_build(Compiler *c) {
           if (cand[si] && dep[si] > dlimit) cand[si] = 0;
         free(dep);
       }
+    }
+  }
+  /* Bound the BREADTH too. Mutually exclusive calls reuse one stack region --
+     each returns before the next -- but absorbed they become siblings in one
+     frame, and the address-taken roots stop the C compiler sharing their slots,
+     so the frame becomes the SUM over the arms rather than the max. A 350-arm
+     router one level deep overran the 64K fiber stack with every arm forced,
+     which the depth bound cannot see (#3913). Charge each forced candidate the
+     frame it contributes, accumulate that at every call site, and stop forcing
+     once a caller's absorbed total passes the budget. */
+  {
+    const char *fe = getenv("SPINEL_INLINE_FORCE_FRAME");
+    long fbudget = (fe && *fe) ? atol(fe) : 64 * 1024;   /* SP_FIBER_STACK_SIZE */
+    int report = getenv("SPINEL_INLINE_FORCE_REPORT") != NULL;
+    /* The budget exists for SP_FIBER_STACK_SIZE. A program that runs no user
+       code on a fiber stack has the process stack (megabytes) to spend, and
+       bounding it there costs real throughput -- optcarrot's hot path absorbs
+       a frame far past this budget and wants to. */
+    if (!fi_fiber_stack_risk(c)) fbudget = 0;
+    if (fbudget > 0 && ncand > 0 && ncand <= 2048) {
+      long *cost = (long *)calloc((size_t)(c->nscopes > 0 ? c->nscopes : 1), sizeof(long));
+      enum { FI_CALLS_MAX = 8192 };
+      int *calls = (int *)malloc(sizeof(int) * FI_CALLS_MAX);
+      int cal[32];
+      if (!calls) { free(cost); cost = NULL; }
+      if (cost) for (int round = 0; round < 8; round++) {
+        /* what each forced candidate carries: its own frame plus everything it
+           absorbs in turn (acyclic -- the cycle pass above cleared the rest) */
+        for (int it = 0; it < 32; it++) {
+          int ch = 0;
+          for (int si = 0; si < c->nscopes; si++) {
+            long v = 0;
+            if (cand[si]) {
+              v = fi_own_frame(c, si);
+              int nc = 0;
+              g_fi_trunc = 0;
+              fi_collect_calls(c, c->scopes[si].body, calls, &nc, FI_CALLS_MAX, 0);
+              for (int i = 0; i < nc; i++) {
+                int n2 = 0;
+                fi_callees(c, calls[i], cal, &n2, 32);
+                for (int j = 0; j < n2; j++) if (cand[cal[j]]) v += cost[cal[j]];
+              }
+            }
+            if (cost[si] != v) { cost[si] = v; ch = 1; }
+          }
+          if (!ch) break;
+        }
+        /* every scope, forced or not, has to fit: the caller that absorbs a
+           wide fan-out is usually too big to be a candidate itself */
+        int trimmed = 0;
+        for (int si = 0; si < c->nscopes; si++) {
+          long tot = fi_own_frame(c, si);
+          int nc = 0;
+          g_fi_trunc = 0;
+          fi_collect_calls(c, c->scopes[si].body, calls, &nc, FI_CALLS_MAX, 0);
+          /* a truncated list cannot say the total fits: stop forcing here */
+          int over = g_fi_trunc;
+          for (int i = 0; i < nc; i++) {
+            int n2 = 0;
+            fi_callees(c, calls[i], cal, &n2, 32);
+            for (int j = 0; j < n2; j++) {
+              if (!cand[cal[j]]) continue;
+              if (!over && tot + cost[cal[j]] <= fbudget) { tot += cost[cal[j]]; continue; }
+              /* past the budget: this and every later arm keeps its call */
+              over = 1; cand[cal[j]] = 0; trimmed = 1;
+            }
+          }
+          if (over && report)
+            fprintf(stderr, "inline-force: %s absorbed past %ld bytes, trimmed\n",
+                    c->scopes[si].name ? c->scopes[si].name : "(top)", fbudget);
+        }
+        if (!trimmed) break;
+      }
+      free(calls);
+      free(cost);
     }
   }
   for (int si = 0; si < c->nscopes; si++) g_fi_state[si] = cand[si] ? 1 : 2;
@@ -7150,6 +7280,11 @@ char *codegen_program(const NodeTable *nt) {
      the byte-identical single-threaded archive. Emitted only when the program
      references Thread/Mutex/Queue/... -- so it must follow the feature scan. */
   if (g_uses_threads) buf_puts(&b, "/* SPINEL_USES_THREADS */\n");
+  /* Ask the C compiler for a brake the frame estimate cannot provide: on a
+     program that runs user code on a fiber stack, any frame past that stack is
+     a guard-page crash waiting for the right input, so it is worth a warning
+     rather than a silent SIGSEGV (#3913). */
+  if (fi_fiber_stack_risk(c)) buf_puts(&b, "/* SPINEL_FIBER_FRAME_GUARD */\n");
   if (g_needs_class_machinery) {
   /* sp_cls_is_module[i]: 1 if user class i was defined as a module, 0 if class */
   if (c->nclasses > 0) {

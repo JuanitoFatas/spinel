@@ -486,6 +486,10 @@ int main(int argc, char **argv) {
      byte-identical single-threaded archive. See codegen's SPINEL_USES_THREADS
      marker and the two-variant build in the Makefile. */
   int uses_threads = strstr(csrc, "/* SPINEL_USES_THREADS */") != NULL;
+  /* A frame past the fiber stack crashes on the guard page rather than
+     overflowing detectably, and always_inline bypasses the C compiler's own
+     large-frame brake -- ask for the warning back (#3913). */
+  int fiber_frame_guard = strstr(csrc, "/* SPINEL_FIBER_FRAME_GUARD */") != NULL;
   const char *rt_lib = uses_threads ? "libspinel_rt_mt.a" : "libspinel_rt.a";
   free(csrc);
 
@@ -508,6 +512,7 @@ int main(int argc, char **argv) {
   s_add(&cmd, " ");
   snprintf(tmp, sizeof tmp, "-O%s ", opt_level); s_add(&cmd, tmp);
   s_add(&cmd, "-Wno-all -ffunction-sections -fdata-sections ");
+  if (fiber_frame_guard) s_add(&cmd, "-Wframe-larger-than=65536 ");
   snprintf(tmp, sizeof tmp, "-I\"%s\" -I\"%s%cregexp\" ", lib_dir, lib_dir, PATH_SEP); s_add(&cmd, tmp);
   /* Compile the generated TU with the same threading define as the mt runtime
      archive it links, so the per-worker SP_TLS globals (sp_gc_roots, ...) it
