@@ -7375,7 +7375,11 @@ static int empty_arr_iter_ok(const char *nm) {
     "partition", "take_while", "drop_while", "each_with_index",
     /* the cycling block forms, which were refused for the same reason: an
        empty literal receiver has no array kind for the loop (#3852) */
-    "cycle", "each_slice", "each_cons", "each_entry", NULL };
+    "cycle", "each_slice", "each_cons", "each_entry",
+    /* tap / then yield the receiver itself rather than an element, but they
+       need its kind for the same reason: without one the block parameter had
+       no type and the binding declared a `void` temp (#3929). */
+    "tap", "then", "yield_self", NULL };
   for (int i = 0; ok[i]; i++) if (sp_streq(nm, ok[i])) return 1;
   return 0;
 }
