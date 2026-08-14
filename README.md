@@ -152,8 +152,8 @@ for the supported subset.
 ## Benchmarks
 
 2,990 tests pass. 61 benchmarks pass.
-Geometric mean: **~7.4x faster** than Ruby 4.0.4 with `--yjit` across
-the 28 benchmarks below (~13.2x against the interpreter). Baseline is
+Geometric mean: **~7.5x faster** than Ruby 4.0.4 with `--yjit` across
+the 28 benchmarks below (~13.5x against the interpreter). Baseline is
 CRuby 4.0.4 (stable), run with `--disable-gems` and with `--yjit` for
 the JIT column. Each timing is the mean of five wall-clock runs under
 `perf stat -r 5`, which held every cell inside ±1%. A compiled binary
@@ -165,44 +165,44 @@ not as a measurement of the loop.
 
 | Benchmark | Spinel | Ruby 4.0.4 | + YJIT | Speedup vs YJIT |
 |---|---|---|---|---|
-| mandelbrot | 17 ms | 1_106 ms | 1_136 ms | 67.7x |
-| fib (recursive) | 1.3 ms | 388 ms | 49 ms | 36.6x |
-| matmul | 6.0 ms | 203 ms | 206 ms | 34.0x |
-| nqueens | 6.2 ms | 190 ms | 191 ms | 30.8x |
-| sieve | 17 ms | 266 ms | 301 ms | 18.1x |
-| partial_sums | 55 ms | 884 ms | 874 ms | 15.8x |
-| life (Conway's GoL) | 19 ms | 533 ms | 231 ms | 12.1x |
-| sudoku | 3.6 ms | 65 ms | 33 ms | 9.3x |
-| fannkuch | 1.2 ms | 9.7 ms | 9.8 ms | 8.5x |
-| fasta (DNA seq gen) | 1.4 ms | 9.5 ms | 9.8 ms | 6.8x |
-| tak | 8.1 ms | 324 ms | 47 ms | 5.8x |
-| ackermann | 7.0 ms | 291 ms | 39 ms | 5.6x |
-| tarai | 7.1 ms | 262 ms | 37 ms | 5.2x |
+| mandelbrot | 16 ms | 1_089 ms | 1_087 ms | 66.0x |
+| fib (recursive) | 1.1 ms | 380 ms | 49 ms | 43.4x |
+| matmul | 5.9 ms | 206 ms | 203 ms | 34.5x |
+| nqueens | 6.0 ms | 184 ms | 185 ms | 30.9x |
+| sieve | 17 ms | 283 ms | 266 ms | 15.8x |
+| partial_sums | 55 ms | 864 ms | 862 ms | 15.7x |
+| life (Conway's GoL) | 19 ms | 527 ms | 226 ms | 12.0x |
+| sudoku | 3.3 ms | 64 ms | 33 ms | 9.9x |
+| fannkuch | 1.2 ms | 9.5 ms | 9.1 ms | 7.7x |
+| fasta (DNA seq gen) | 1.4 ms | 8.7 ms | 9.0 ms | 6.7x |
+| tak | 8.1 ms | 320 ms | 46 ms | 5.6x |
+| ackermann | 7.1 ms | 286 ms | 39 ms | 5.5x |
+| tarai | 6.9 ms | 253 ms | 37 ms | 5.4x |
 
 ### Data Structures & GC
 
 | Benchmark | Spinel | Ruby 4.0.4 | + YJIT | Speedup vs YJIT |
 |---|---|---|---|---|
-| so_lists | 17 ms | 262 ms | 164 ms | 9.5x |
-| huffman (encoding) | 7.4 ms | 37 ms | 38 ms | 5.1x |
-| linked_list | 41 ms | 192 ms | 156 ms | 3.8x |
-| rbtree (red-black tree) | 18 ms | 352 ms | 67 ms | 3.7x |
-| splay tree | 11 ms | 114 ms | 38 ms | 3.5x |
-| binary_trees | 3.8 ms | 23 ms | 13 ms | 3.3x |
-| gcbench | 340 ms | 2_128 ms | 967 ms | 2.8x |
+| so_lists | 17 ms | 255 ms | 158 ms | 9.5x |
+| huffman (encoding) | 6.7 ms | 37 ms | 37 ms | 5.6x |
+| rbtree (red-black tree) | 17 ms | 344 ms | 66 ms | 3.9x |
+| linked_list | 41 ms | 189 ms | 153 ms | 3.7x |
+| splay tree | 10 ms | 115 ms | 36 ms | 3.5x |
+| binary_trees | 3.9 ms | 23 ms | 13 ms | 3.3x |
+| gcbench | 317 ms | 2_148 ms | 952 ms | 3.0x |
 
 ### Real-World Programs
 
 | Benchmark | Spinel | Ruby 4.0.4 | + YJIT | Speedup vs YJIT |
 |---|---|---|---|---|
-| bigint_fib (1000 digits) | 0.8 ms | 6.3 ms | 6.6 ms | 8.2x |
-| ao_render (ray tracer) | 82 ms | 1_792 ms | 612 ms | 7.4x |
-| pidigits (bigint) | 1.0 ms | 6.1 ms | 6.3 ms | 6.6x |
-| str_concat | 1.1 ms | 6.4 ms | 6.3 ms | 5.8x |
-| template engine | 84 ms | 500 ms | 331 ms | 4.0x |
-| json_parse | 44 ms | 211 ms | 133 ms | 3.0x |
-| csv_process | 158 ms | 466 ms | 389 ms | 2.5x |
-| io_wordcount | 27 ms | 51 ms | 45 ms | 1.6x |
+| ao_render (ray tracer) | 82 ms | 1_700 ms | 600 ms | 7.3x |
+| str_concat | 0.9 ms | 5.9 ms | 6.2 ms | 6.8x |
+| bigint_fib (1000 digits) | 0.9 ms | 5.7 ms | 5.9 ms | 6.7x |
+| pidigits (bigint) | 1.0 ms | 6.1 ms | 6.0 ms | 6.3x |
+| template engine | 75 ms | 497 ms | 342 ms | 4.5x |
+| json_parse | 38 ms | 210 ms | 132 ms | 3.5x |
+| csv_process | 156 ms | 457 ms | 392 ms | 2.5x |
+| io_wordcount | 26 ms | 50 ms | 43 ms | 1.7x |
 
 A few notes on what YJIT does and doesn't change. On some integer-loop
 workloads (mandelbrot, nqueens, matmul, partial_sums, sieve) YJIT's
@@ -212,7 +212,7 @@ runs at native speed. On call-heavy code (ackermann, tarai, tak, rbtree)
 YJIT gives a real 5-8x lift over the interpreter, which is why those
 rows carry Spinel's smaller multiples.
 
-One row deserves a caveat rather than a boast. `fib` is not 36x faster
+One row deserves a caveat rather than a boast. `fib` is not 43x faster
 per call: its whole call tree is a pure function of a literal, so the C
 compiler collapses most of it at build time -- `fib(42)` retires 231M
 instructions where the recursion itself would make 866M calls. Read it
