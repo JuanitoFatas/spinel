@@ -2245,7 +2245,16 @@ void register_ffi_decls(Compiler *c) {
     }
     /* Pre-scan for `native_struct "Name", "sp_CStruct"[, "free_sym"]`: registers
        Name as a native (C-backed) class so native_new/native_method below can
-       bind to its class index, regardless of declaration order. */
+       bind to its class index, regardless of declaration order.
+
+       Every declaration in the module is registered, not just the first: with
+       two of them the second class did not exist at all, and its `native_new`
+       and `native_method` bound to the first one's index -- the emitted extern
+       gave `sp_Second_new` the return type of `sp_First`. `native_cid` seeds
+       from the FIRST, which is what a `native_new` written ahead of its own
+       `native_struct` binds to; the walk below re-points it as each
+       declaration is passed, so several classes in one module bind in
+       declaration order. */
     int native_cid = -1;
     for (int k = 0; k < sn; k++) {
       int s = stmts[k];
@@ -2257,19 +2266,20 @@ void register_ffi_decls(Compiler *c) {
       int a = nt_ref(nt, s, "arguments");
       int na = 0;
       const int *av = a >= 0 ? nt_arr(nt, a, "arguments", &na) : NULL;
-      if (na < 2) break;
+      if (na < 2) continue;
       const char *clsname = ffi_arg_str(nt, av[0]);
       const char *cstruct = ffi_arg_str(nt, av[1]);
       const char *freesym = na >= 3 ? ffi_arg_str(nt, av[2]) : NULL;
-      if (!clsname || !cstruct) break;
+      if (!clsname || !cstruct) continue;
       int ex = comp_class_index(c, clsname);
-      if (ex >= 0) native_cid = ex;
-      else { comp_class_new(c, clsname, -1); native_cid = c->nclasses - 1; }
-      ClassInfo *nc = &c->classes[native_cid];
+      int cid;
+      if (ex >= 0) cid = ex;
+      else { comp_class_new(c, clsname, -1); cid = c->nclasses - 1; }
+      if (native_cid < 0) native_cid = cid;
+      ClassInfo *nc = &c->classes[cid];
       nc->is_native_class = 1;
       free(nc->c_struct); nc->c_struct = strdup(cstruct);
       if (freesym) { free(nc->native_free); nc->native_free = strdup(freesym); }
-      break;
     }
     for (int k = 0; k < sn; k++) {
       int s = stmts[k];
@@ -2347,8 +2357,15 @@ void register_ffi_decls(Compiler *c) {
         c->native_methods[mi].nargs = en;
         continue;
       }
-      /* native_struct is handled in the pre-scan above; skip it here. */
-      if (sp_streq(dname, "native_struct")) continue;
+      /* The classes themselves are registered in the pre-scan above; what this
+         pass takes from a `native_struct` is which class the declarations that
+         follow it belong to. */
+      if (sp_streq(dname, "native_struct")) {
+        const char *sname = an >= 1 ? ffi_arg_str(nt, args[0]) : NULL;
+        int scid = sname ? comp_class_index(c, sname) : -1;
+        if (scid >= 0) native_cid = scid;
+        continue;
+      }
 
       /* native_obj_reflect: the package consumes the generic object->hash
          reflection (sp_obj_to_hash); codegen installs it when Structs exist. */
