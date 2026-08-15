@@ -6845,12 +6845,19 @@ else {
         NativeMethod *nwm = &c->native_methods[wrm];
         int nint = sp_streq(nrm->ret, "int") && nwm->nargs == 1 && sp_streq(nwm->args[0], "int");
         int nflt = sp_streq(nrm->ret, "float") && nwm->nargs == 1 && sp_streq(nwm->args[0], "float");
-        /* only a numeric pair can take an operator here: anything else would
-           put the C operator on a pointer or a boxed value */
-        if (!nint && !nflt)
-          unsupported(c, id, "call operator write (native attribute that is not numeric)");
+        int nstr = sp_streq(nrm->ret, "string") && nwm->nargs == 1 && sp_streq(nwm->args[0], "string");
+        int nany = sp_streq(nrm->ret, "any") && nwm->nargs == 1 && sp_streq(nwm->args[0], "any");
+        /* the pair has to name a representation the operator exists for: a
+           nullable string return, a `self` return and the container specs
+           would put the C operator on a pointer that cannot take one */
+        if (!nint && !nflt && !nstr && !nany)
+          unsupported(c, id, "call operator write (native attribute the operator has no form for)");
         if (nflt && bitop)
           unsupported(c, id, "call operator write (bitwise operator on a float attribute)");
+        if (nstr && !(op && sp_streq(op, "+")))
+          unsupported(c, id, "call operator write (operator other than + on a string attribute)");
+        if (nany && !cpf && !bitop)
+          unsupported(c, id, "call operator write (operator on a boxed attribute)");
         int trecv = ++g_tmp;
         emit_indent(b, indent);
         emit_ctype(c, rt, b);
@@ -6859,13 +6866,35 @@ else {
            expression may allocate */
         emit_indent(b, indent); buf_printf(b, "SP_GC_ROOT(_t%d);\n", trecv);
         emit_indent(b, indent);
-        buf_printf(b, "%s(_t%d, %s(_t%d) %s ", nwm->csym, trecv, nrm->csym, trecv, op);
-        if (rhst == TY_POLY) {
-          buf_puts(b, nint ? "sp_poly_to_i(" : "sp_poly_to_f(");
-          emit_expr(c, val, b); buf_puts(b, ")");
+        if (nstr) {
+          /* the reader answers a value, so the concat builds a new string and
+             the writer stores it -- the same shape the string ivar slot takes */
+          buf_printf(b, "%s(_t%d, sp_str_concat(%s(_t%d), ", nwm->csym, trecv, nrm->csym, trecv);
+          if (rhst == TY_POLY) { buf_puts(b, "sp_poly_to_s("); emit_expr(c, val, b); buf_puts(b, ")"); }
+          else emit_expr(c, val, b);
+          buf_puts(b, "));\n");
         }
-        else emit_expr(c, val, b);
-        buf_puts(b, ");\n");
+        else if (nany && cpf) {
+          buf_printf(b, "%s(_t%d, %s(%s(_t%d), ", nwm->csym, trecv, cpf, nrm->csym, trecv);
+          emit_boxed(c, val, b); buf_puts(b, "));\n");
+        }
+        else if (nany) {
+          /* bitwise on a boxed attribute: coerce to int, re-box */
+          buf_printf(b, "%s(_t%d, sp_box_int(sp_poly_to_i(%s(_t%d)) %s (",
+                     nwm->csym, trecv, nrm->csym, trecv, op);
+          if (rhst == TY_POLY) { buf_puts(b, "sp_poly_to_i("); emit_expr(c, val, b); buf_puts(b, ")"); }
+          else emit_expr(c, val, b);
+          buf_puts(b, ")));\n");
+        }
+        else {
+          buf_printf(b, "%s(_t%d, %s(_t%d) %s ", nwm->csym, trecv, nrm->csym, trecv, op);
+          if (rhst == TY_POLY) {
+            buf_puts(b, nint ? "sp_poly_to_i(" : "sp_poly_to_f(");
+            emit_expr(c, val, b); buf_puts(b, ")");
+          }
+          else emit_expr(c, val, b);
+          buf_puts(b, ");\n");
+        }
         return;
       }
     }
