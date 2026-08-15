@@ -8673,24 +8673,13 @@ static int emit_range_step_bad_stride(Compiler *c, int id, int recv, int arg,
   buf_printf(b, "%s; })", dv ? dv : "0");
   return 1;
 }
-void emit_call(Compiler *c, int id, Buf *b) {
-  /* deep-return pickup (#3227 P6): a marked receiverless call to a method
-     whose every return path yields a shared handle -- reset the side
-     channel, run the ordinary call (its shared-slot tail read publishes),
-     then take the handle (falling back to a fresh wrap of the returned
-     copy if a path did not publish). */
-  if (c->strbuf_box[id] && nt_ref(c->nt, id, "receiver") < 0 &&
-      nt_ref(c->nt, id, "block") < 0) {
-    int tvD = ++g_tmp;
-    buf_printf(b, "({ _sp_ret_strbuf = NULL; const char *_v%d = ", tvD);
-    c->strbuf_box[id] = 0;
-    emit_call(c, id, b);
-    c->strbuf_box[id] = 1;
-    buf_printf(b, "; _sp_ret_strbuf ? (sp_String *)_sp_ret_strbuf"
-                  " : sp_String_new_shared(_v%d); })", tvD);
-    return;
-  }
+/* An argument whose static class the method cannot take: the guards that raise CRuby's TypeError instead of putting a pointer in a numeric slot (#3831, #3838, #3862, #3923).
+   Split out of emit_call; pure code movement, no logic change. Called at the
+   point these arms occupied, and declining (0) falls through to the arms that
+   followed them. */
+int emit_arg_type_guards(Compiler *c, int id, Buf *b) {
   const NodeTable *nt = c->nt;
+  (void)nt;
   /* An index-taking Array method handed something that is not an index. Ruby
      converts a Float through #to_int and takes a Range where the method has a
      slice form, but a String, Symbol, Array, Hash, nil or boolean is a
@@ -8728,7 +8717,7 @@ void emit_call(Compiler *c, int id, Buf *b) {
         else
           buf_printf(b, "sp_raise_cls(\"TypeError\", \"no implicit conversion of %s into Integer\"); ", badc);
         buf_printf(b, "%s; })", dv5 ? dv5 : "0");
-        return;
+        return 1;
       }
     }
   }
@@ -8756,7 +8745,7 @@ void emit_call(Compiler *c, int id, Buf *b) {
       const char *into = srt == TY_FLOAT_RANGE ? "Float" :
                          (st == TY_STRING || st == TY_STRBUF) ? "Integer" : "String";
       int conv = srt == TY_STR_RANGE;
-      if (emit_range_step_bad_stride(c, id, sr, sv2[0], into, conv, b)) return;
+      if (emit_range_step_bad_stride(c, id, sr, sv2[0], into, conv, b)) return 1;
     }
   }
   /* An integer Range method handed a literal of the wrong kind: the pointer
@@ -8827,11 +8816,11 @@ void emit_call(Compiler *c, int id, Buf *b) {
                           "(_t%d.excl ? _t%d.last - 1 : _t%d.last) <= "
                           "(_t%d.excl ? _t%d.last - 1 : _t%d.last)); })",
                        tA, tR, tA, tA, tA, tR, tR, tR);
-          return;
+          return 1;
         } }
       if (float_range_arg) {
         buf_puts(b, "({ (void)("); emit_expr(c, rr2, b); buf_puts(b, "); FALSE; })");
-        return;
+        return 1;
       }
       /* A membership test against an integer Range answers for whatever it is
          handed: an Integer or Float by comparison, anything else false. Only a
@@ -8844,19 +8833,19 @@ void emit_call(Compiler *c, int id, Buf *b) {
           buf_puts(b, "sp_poly_case_eq(sp_box_range(");
           emit_expr(c, rr2, b); buf_puts(b, "), ");
           emit_boxed(c, rv2[0], b); buf_puts(b, ")");
-          return;
+          return 1;
         }
       }
       if (sp_streq(rn2, "step") &&
           emit_range_step_bad_stride(c, id, rr2, rv2[0], "Integer", 0, b))
-        return;
+        return 1;
       if (badcls && wants_int) {
         TyKind rty4 = comp_ntype(c, id);
         const char *dv4 = default_value(rty4);
         buf_puts(b, "({ (void)("); emit_expr(c, rr2, b); buf_puts(b, "); ");
         buf_printf(b, "sp_raise_cls(\"TypeError\", \"no implicit conversion of %s into Integer\"); ", badcls);
         buf_printf(b, "%s; })", dv4 ? dv4 : "0");
-        return;
+        return 1;
       }
     }
   }
@@ -8909,7 +8898,7 @@ void emit_call(Compiler *c, int id, Buf *b) {
           buf_printf(b, "sp_raise_cls(\"TypeError\", \"no implicit conversion of %s into %s\"); ",
                      badcls, want_int >= 0 ? "Integer" : "Array");
         buf_printf(b, "%s; })", dv3 ? dv3 : "0");
-        return;
+        return 1;
       }
     }
   }
@@ -8932,7 +8921,7 @@ void emit_call(Compiler *c, int id, Buf *b) {
         const char *dv2 = default_value(rty2);
         buf_printf(b, "({ sp_raise_cls(\"TypeError\", \"%s can't be coerced into Integer\"); %s; })",
                    ak2 == NK_NilNode ? "nil" : "String", dv2 ? dv2 : "0");
-        return;
+        return 1;
       }
     }
   }
@@ -8990,10 +8979,34 @@ void emit_call(Compiler *c, int id, Buf *b) {
           buf_printf(b, "sp_raise_cls(\"TypeError\", \"%s can't be coerced into %s\"); ",
                      bad_arg ? "String" : "nil", cn);
         buf_printf(b, "%s; })", dv ? dv : "0");
-        return;
+        return 1;
       }
     }
   }
+  return 0;
+}
+
+
+void emit_call(Compiler *c, int id, Buf *b) {
+  /* deep-return pickup (#3227 P6): a marked receiverless call to a method
+     whose every return path yields a shared handle -- reset the side
+     channel, run the ordinary call (its shared-slot tail read publishes),
+     then take the handle (falling back to a fresh wrap of the returned
+     copy if a path did not publish). */
+  if (c->strbuf_box[id] && nt_ref(c->nt, id, "receiver") < 0 &&
+      nt_ref(c->nt, id, "block") < 0) {
+    int tvD = ++g_tmp;
+    buf_printf(b, "({ _sp_ret_strbuf = NULL; const char *_v%d = ", tvD);
+    c->strbuf_box[id] = 0;
+    emit_call(c, id, b);
+    c->strbuf_box[id] = 1;
+    buf_printf(b, "; _sp_ret_strbuf ? (sp_String *)_sp_ret_strbuf"
+                  " : sp_String_new_shared(_v%d); })", tvD);
+    return;
+  }
+  const NodeTable *nt = c->nt;
+  /* An argument whose static class the method cannot take: the guards that raise CRuby's TypeError instead of putting a pointer in a numeric slot (#3831, #3838, #3862, #3923). (above). */
+  if (emit_arg_type_guards(c, id, b)) return;
   /* Proc#=== calls the proc; a Proc read out of a container arrives boxed,
      where a value comparison would just answer false (#3683). */
   {
