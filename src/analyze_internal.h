@@ -207,7 +207,12 @@ int poly_expr_flows_container(Compiler *c, int node);
 int reconcile_locals_reading_ivars(Compiler *c);
 int infer_param_hash_value(Compiler *c);
 int bind_call_params(Compiler *c, int call_id, int mi);
+/* The type a READ of ivar slot `iv` yields (a shared-mutable string slot
+   reads as a plain String). Shared with the receiver-face helpers. */
+TyKind ivar_value_ty(ClassInfo *ci, int iv);
 int infer_range_call(Compiler *c, int id, TyKind rt, TyKind *out);
+int infer_poly_call(Compiler *c, int id, TyKind rt, TyKind *out);
+int infer_object_call(Compiler *c, int id, TyKind rt, TyKind *out);
 int infer_array_call(Compiler *c, int id, TyKind rt, TyKind *out);
 int infer_hash_call(Compiler *c, int id, TyKind rt, TyKind *out);
 int infer_numeric_call(Compiler *c, int id, TyKind rt, TyKind *out);
