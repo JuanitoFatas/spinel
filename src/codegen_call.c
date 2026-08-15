@@ -8673,7 +8673,9 @@ static int emit_range_step_bad_stride(Compiler *c, int id, int recv, int arg,
   buf_printf(b, "%s; })", dv ? dv : "0");
   return 1;
 }
-/* An argument whose static class the method cannot take: the guards that raise CRuby's TypeError instead of putting a pointer in a numeric slot (#3831, #3838, #3862, #3923).
+/* The guards for an argument whose static class the method cannot take: raise
+   the TypeError CRuby raises rather than put a pointer in a numeric slot
+   (#3831, #3838, #3862, #3923).
    Split out of emit_call; pure code movement, no logic change. Called at the
    point these arms occupied, and declining (0) falls through to the arms that
    followed them. */
@@ -8987,7 +8989,11 @@ int emit_arg_type_guards(Compiler *c, int id, Buf *b) {
 }
 
 
-/* A blockless iterator answers an external Enumerator rather than iterating: the wrappers for each, reverse_each, each_with_index, each_index, each_char, each_line, each_slice, each_cons, cycle, slice_before/after, the hash faces, and with_index.
+/* A blockless iterator answers an external Enumerator rather than iterating:
+   the wrappers for each, reverse_each, each_with_index, each_index, each_char,
+   each_line, each_slice, each_cons, cycle, slice_before/after, the two hash
+   faces, and with_index. The Enumerator INSTANCE methods are a separate
+   theme and stay in emit_call.
    Split out of emit_call; pure code movement, no logic change. Called at the
    point these arms occupied, and declining (0) falls through to the arms that
    followed them. */
@@ -9227,6 +9233,376 @@ int emit_blockless_enumerator(Compiler *c, int id, Buf *b) {
 }
 
 
+/* The NoMethodError gate: a call nothing above resolved. A dynamically-typed
+   receiver yields a typed placeholder, or the runtime raise the gate selects,
+   rather than aborting the build.
+   Split out of emit_call; pure code movement, no logic change. Called at the
+   point these arms occupied, and declining (0) falls through to the arms that
+   followed them. */
+int emit_unresolved_call(Compiler *c, int id, Buf *b) {
+  const NodeTable *nt = c->nt;
+  const char *name = nt_str(nt, id, "name");
+  int recv = nt_ref(nt, id, "receiver");
+  int argc;
+  const int *argv = call_args(nt, id, &argc);
+  (void)nt; (void)argv; (void)recv; (void)argc;
+  if (!name) return 0;
+  /* NoMethodError gate: an unresolved call on a dynamically-typed receiver
+     (poly/nil/int/unknown -- no user class defines the method and no builtin
+     matches) yields a typed nil/0 placeholder instead of aborting. In practice
+     such a call is guarded by a runtime-nil receiver (e.g. an optional hook that
+     is never installed), so it never executes; emitting the inferred-type
+     default keeps codegen going without changing observable behaviour.
+
+     TY_STRING is included for the same reason: a String is a builtin with a
+     closed method table, so an unresolved call on it (e.g. `s.each`, which is a
+     real NoMethodError in Ruby) is the String analogue of the poly/int case,
+     not a user-class typo. The motivating shape is a `String|Hash` parameter
+     that this closed-world program only ever calls with a String: the
+     `if x.is_a?(String) ... else x.each end` Hash branch is then statically
+     dead, and CRuby never reaches its NoMethodError, so a runtime-nil stub
+     matches observable behaviour (#1434). A concrete user-object receiver still
+     errors -- that is a genuine missing method worth catching at compile time. */
+  /* A bare unresolved identifier (Prism variable-call: no receiver, no args, no
+     parens) is CRuby's *runtime* NameError, so a surrounding rescue must be
+     able to catch it -- aborting the build here makes that unwritable (#3037).
+     The same gate switch that governs unresolved calls covers this. */
+  if (recv < 0 && nt_int(nt, id, "vcall", 0) && nt_ref(nt, id, "block") < 0 &&
+      g_gate_raise) {
+    int vac = 0; call_args(nt, id, &vac);
+    if (vac == 0) {
+      const char *vnm = nt_str(nt, id, "name");
+      TyKind vret = comp_ntype(c, id);
+      const char *vcn = g_emitting_class_id >= 0 ? class_ruby_name(c, g_emitting_class_id) : NULL;
+      buf_printf(b, "(sp_raise_cls(\"NameError\", \"undefined local variable or method '%s' for %s%s\"), %s)",
+                 vnm ? vnm : "?", vcn ? "an instance of " : "main", vcn ? vcn : "",
+                 (is_scalar_ret(vret) && vret != TY_UNKNOWN) ? default_value(vret) : "sp_box_nil()");
+      return 1;
+    }
+  }
+  if (recv >= 0) {
+    TyKind grt = comp_ntype(c, recv);
+    /* compare_by_identity? on a poly-carried value resolves here, not at the
+       gate: every spinel hash is value-keyed (the mutating variant is a
+       compile error), so a hash answers false and anything else raises
+       CRuby's NoMethodError -- accurate in both gate modes. */
+    if ((grt == TY_POLY || grt == TY_UNKNOWN) &&
+        nt_str(nt, id, "name") && sp_streq(nt_str(nt, id, "name"), "compare_by_identity?")) {
+      buf_puts(b, "sp_poly_cbi_p(");
+      emit_boxed(c, recv, b);
+      buf_puts(b, ")");
+      return 1;
+    }
+    /* A BUILTIN class constant has a closed method table, so an unresolved
+       class method on it is a real NoMethodError, not a typo worth failing the
+       build over -- and a `rescue` around it must be able to catch it. A USER
+       class keeps the hard compile error: there the missing method is a genuine
+       gap in the program's own code. */
+    int grt_builtin_cls = 0;
+    if (grt == TY_CLASS && nt_type(nt, recv) &&
+        sp_streq(nt_type(nt, recv), "ConstantReadNode")) {
+      const char *rcn = nt_str(nt, recv, "name");
+      grt_builtin_cls = rcn && comp_class_index(c, rcn) < 0 && builtin_class_id(rcn) != 0;
+    }
+    /* A Hash that arrives boxed -- a Fiber#resume value, a seedless
+       Array#reduce, a container read -- keeps its whole read-only
+       Hash/Enumerable face. Nothing above claimed the name, so normalize the
+       receiver to the general boxed-key/value hash and re-dispatch against the
+       typed emitter; inference typed the call by the same pretence, so the
+       result slot already fits. A receiver that is not a hash at runtime raises
+       exactly the NoMethodError this site would have raised (#3449). */
+    /* `xs.map(&f)` / `xs.select(&f)` on a receiver known only at run time: a
+       forwarded proc has no block body for the loop emitters to splice, so
+       nothing above claimed the call. Drive the proc through the enumerable
+       helper, ahead of the hash-face coercion below -- which would turn an
+       Array receiver into a NoMethodError. */
+    { const char *fpn = nt_str(nt, id, "name");
+      int fpb = nt_ref(nt, id, "block");
+      const char *fpop = fpn ? poly_enum_op_for(fpn) : NULL;
+      if (fpop && recv >= 0 && grt == TY_POLY && fpb >= 0 && nt_type(nt, fpb) &&
+          sp_streq(nt_type(nt, fpb), "BlockArgumentNode")) {
+        Buf fpp; memset(&fpp, 0, sizeof fpp);
+        if (emit_forwarded_proc_arg(c, fpb, &fpp)) {
+          int fpt = ++g_tmp;
+          Buf fpr; memset(&fpr, 0, sizeof fpr); emit_boxed(c, recv, &fpr);
+          char fcall[600];
+          snprintf(fcall, sizeof fcall,
+                   "({ sp_Proc *_t%d = %s; SP_GC_ROOT(_t%d); sp_poly_enum_proc(%s, %s, _t%d); })",
+                   fpt, fpp.p ? fpp.p : "NULL", fpt,
+                   fpr.p ? fpr.p : "sp_box_nil()", fpop, fpt);
+          free(fpr.p); free(fpp.p);
+          TyKind fret = comp_ntype(c, id);
+          if (fret == TY_POLY || fret == TY_UNKNOWN) buf_puts(b, fcall);
+          else emit_unbox_text(c, fret, fcall, b);
+          return 1;
+        }
+        free(fpp.p);
+      }
+    }
+    if (grt == TY_POLY && ty_poly_hash_face_name(nt_str(nt, id, "name")) &&
+        g_n_argov < MAX_ARG_OVERRIDE) {
+      const char *hnm = nt_str(nt, id, "name");
+      int thv = ++g_tmp;
+      Buf hrb; memset(&hrb, 0, sizeof hrb); emit_boxed(c, recv, &hrb);
+      emit_indent(g_pre, g_indent);
+      buf_printf(g_pre, "sp_PolyPolyHash *_t%d = sp_poly_as_pp_hash(%s, \"%s\"); SP_GC_ROOT(_t%d);\n",
+                 thv, hrb.p ? hrb.p : "sp_box_nil()", hnm, thv);
+      free(hrb.p);
+      g_argov_node[g_n_argov] = recv;
+      snprintf(g_argov_text[g_n_argov], sizeof g_argov_text[0], "_t%d", thv);
+      g_n_argov++;
+      TyKind svh = c->ntype[recv]; c->ntype[recv] = TY_POLY_POLY_HASH;
+      int hren = sp_streq(hnm, "each_entry");   /* same yield as each_pair */
+      if (hren) nt_node_set_str((NodeTable *)nt, id, "name", "each_pair");
+      emit_call(c, id, b);
+      if (hren) nt_node_set_str((NodeTable *)nt, id, "name", "each_entry");
+      c->ntype[recv] = svh;
+      g_n_argov--;
+      return 1;
+    }
+    /* Every builtin container and scalar has a closed method table, so an
+       unresolved call on one is a real NoMethodError rather than a typo worth
+       failing the build over -- and CRuby's is rescuable, which a compile
+       abort makes unwritable (#3811). A user object joins them: the method is
+       genuinely missing, and saying so at run time with the receiver named is
+       what CRuby does. */
+    if (grt == TY_POLY || grt == TY_NIL || grt == TY_INT || grt == TY_UNKNOWN ||
+        grt == TY_STRING || grt == TY_FLOAT || grt == TY_BOOL ||
+        grt == TY_COMPLEX || grt == TY_RATIONAL || grt_builtin_cls ||
+        grt == TY_SYMBOL || grt == TY_RANGE || grt == TY_FLOAT_RANGE ||
+        ty_is_array(grt) || ty_is_hash(grt) || ty_is_object(grt)) {
+      TyKind ret = comp_ntype(c, id);
+      /* An unresolved call raises NoMethodError by default, matching CRuby
+         (a dead poly-dispatch arm still emits nothing; a live one raising here
+         is exactly what CRuby would do). SPINEL_WARN_UNRESOLVED lists every
+         such site at compile time for auditing a port; SPINEL_GATE_RAISE=0 is
+         the transition escape hatch back to the old silent typed default. The
+         coercion paths the raise value flows through (return slots, string/int
+         receiver+arg slots, ...) recognize the sp_raise_nomethod token and
+         keep the side-effect -- see the staged groundwork notes below. */
+      const char *nm = nt_str(nt, id, "name");
+      /* A poly receiver may hold a Class at runtime, where `nm` is a class
+         method (`def self.nm`) -- e.g. an untyped `model` in `model.table_name`.
+         Dispatch on the class tag + cls_id before falling through to
+         NoMethodError, rather than raising unconditionally (#3215). Gated on a
+         genuinely poly receiver (a concrete non-class static type can never be a
+         Class) and a poly result slot (dflt nil), the shape this arises in. */
+      if (grt == TY_POLY && nm && (ret == TY_POLY || ret == TY_UNKNOWN) &&
+          g_cls_tag_skip != id) {
+        int ccls[64], cmi[64], cdef[64], nc = 0;
+        int cargc = 0;
+        { int ca = nt_ref(nt, id, "arguments");
+          if (ca >= 0) nt_arr(nt, ca, "arguments", &cargc); }
+        for (int k = 0; k < c->nclasses && nc < 64; k++) {
+          int dc = -1;
+          int mi = comp_cmethod_in_chain(c, k, nm, &dc);
+          if (mi < 0 || !scope_has_callable_symbol(c, mi)) continue;
+          /* A class method that cannot take this call's arguments is not a
+             candidate: emitting its arm put the arity raise in the prelude,
+             where it fired before the tag was even tested (#3520). */
+          { Scope *cs4 = &c->scopes[mi];
+            if (cs4->rest_idx < 0 &&
+                (cargc > cs4->nparams || cargc < cs4->nrequired)) continue; }
+          ccls[nc] = k; cmi[nc] = mi; cdef[nc] = dc; nc++;
+        }
+        if (nc > 0) {
+          int tv = ++g_tmp, argsN = nt_ref(nt, id, "arguments");
+          char raise[256];
+          snprintf(raise, sizeof raise,
+                   "sp_raise_nomethod(sp_nomethod_msg_args(\"%s\", _t%d, 0, (sp_RbVal[]){sp_box_nil()}))",
+                   nm, tv);
+          buf_printf(b, "({ sp_RbVal _t%d = ", tv); emit_boxed(c, recv, b);
+          buf_printf(b, "; (_t%d.tag == SP_TAG_CLASS) ? (", tv);
+          for (int k = 0; k < nc; k++) {
+            buf_printf(b, "_t%d.cls_id == %d ? ", tv, ccls[k]);
+            Buf cb; memset(&cb, 0, sizeof cb);
+            buf_printf(&cb, "sp_%s_s_%s(", c->classes[cdef[k]].c_name, mc(c->scopes[cmi[k]].name));
+            const char *leadk = emit_cmethod_self_cls_arg(c, cmi[k], ccls[k], &cb);
+            emit_args_filled(c, cmi[k], argsN, leadk, &cb);
+            emit_cmethod_block_arg(c, id, &c->scopes[cmi[k]], -1, &cb);
+            buf_puts(&cb, ")");
+            TyKind mret = (TyKind)c->scopes[cmi[k]].ret;
+            if (mret == TY_POLY) buf_puts(b, cb.p ? cb.p : "sp_box_nil()");
+            else emit_boxed_text(c, mret, cb.p ? cb.p : "0", b);
+            free(cb.p);
+            buf_puts(b, " : ");
+          }
+          /* Not a Class at run time: this is whatever the call would have
+             compiled to with no class method of the name in the program -- a
+             String receiver takes the String method. Raising here instead made
+             `k.downcase` on a String bind to an unrelated `def self.downcase`
+             and fail with that method's arity (#3520). */
+          Buf eb2; memset(&eb2, 0, sizeof eb2);
+          if (g_n_argov < MAX_ARG_OVERRIDE) {
+            int slot2 = g_n_argov++;
+            g_argov_node[slot2] = recv;
+            snprintf(g_argov_text[slot2], sizeof g_argov_text[0], "_t%d", tv);
+            int sv2 = g_cls_tag_skip;
+            g_cls_tag_skip = id;
+            emit_boxed(c, id, &eb2);
+            g_cls_tag_skip = sv2;
+            g_n_argov--;
+          }
+          buf_printf(b, "%s) : %s; })", raise,
+                     (eb2.p && eb2.p[0]) ? eb2.p : raise);
+          free(eb2.p);
+          return 1;
+        }
+      }
+      if (warn_unresolved_pos(c, id)) {
+        fprintf(stderr, "unresolved call '%s' on %s receiver -> %s\n",
+                nm ? nm : "?", ty_name(grt),
+                g_gate_raise ? "NoMethodError (matching CRuby)" : "nil (CRuby would raise NoMethodError)");
+      }
+      const char *dflt = (is_scalar_ret(ret) && ret != TY_UNKNOWN) ? default_value(ret) : "sp_box_nil()";
+      if (g_gate_raise) {
+        /* Scalar slot: the comma-expr yields a typed default the surrounding C
+           accepts directly. Poly slot: emit the recognizable sp_raise_nomethod
+           token (returns sp_RbVal) so coercion sites keep the raise side-effect
+           rather than text-discarding a bare sp_box_nil(). Both diverge before
+           the value is used. */
+        /* CRuby-shaped receiver text: a poly receiver names its runtime class
+           through sp_nomethod_msg (evaluating the receiver once, as CRuby
+           does before raising); statically-typed receivers get the static
+           equivalent. TY_UNKNOWN keeps the old lattice name -- its receiver
+           expression may not be independently emittable. */
+        char rdesc[128];
+        if (grt == TY_NIL) snprintf(rdesc, sizeof rdesc, "nil");
+        else if (grt == TY_INT) snprintf(rdesc, sizeof rdesc, "an instance of Integer");
+        else if (grt == TY_STRING) snprintf(rdesc, sizeof rdesc, "an instance of String");
+        else if (grt == TY_FLOAT) snprintf(rdesc, sizeof rdesc, "an instance of Float");
+        else if (grt == TY_COMPLEX) snprintf(rdesc, sizeof rdesc, "an instance of Complex");
+        else if (grt == TY_RATIONAL) snprintf(rdesc, sizeof rdesc, "an instance of Rational");
+        else if (ty_is_object(grt)) {
+          const char *ocn = class_ruby_name(c, ty_object_class(grt));
+          snprintf(rdesc, sizeof rdesc, "an instance of %s",
+                   ocn ? ocn : c->classes[ty_object_class(grt)].name);
+        }
+        else if (ty_is_array(grt)) snprintf(rdesc, sizeof rdesc, "an instance of Array");
+        else if (ty_is_hash(grt)) snprintf(rdesc, sizeof rdesc, "an instance of Hash");
+        else if (grt == TY_SYMBOL) snprintf(rdesc, sizeof rdesc, "an instance of Symbol");
+        else if (grt == TY_RANGE || grt == TY_FLOAT_RANGE)
+          snprintf(rdesc, sizeof rdesc, "an instance of Range");
+        else snprintf(rdesc, sizeof rdesc, "%s", ty_name(grt));
+        /* a class constant receiver names the class, as CRuby does ("undefined
+           method 'x' for class Dir"); the static type of a bare builtin
+           constant is UNKNOWN, which otherwise leaks "for unknown" */
+        if (recv >= 0 && nt_type(nt, recv) && sp_streq(nt_type(nt, recv), "ConstantReadNode")) {
+          const char *rcn = nt_str(nt, recv, "name");
+          if (rcn && (comp_class_index(c, rcn) >= 0 || builtin_class_id(rcn) != 0))
+            snprintf(rdesc, sizeof rdesc, "class %s", rcn);
+        }
+        if (grt == TY_POLY || grt == TY_BOOL) {
+          /* The RESULT slot is sized by the call's own type (ret), not the
+             receiver's: a poly receiver whose unresolved call is typed to a
+             concrete scalar (`poly.strftime` -> String) must yield that scalar,
+             not the sp_RbVal token, or the token lands unconverted in a typed
+             slot (#2451). Only a genuinely poly/unknown result keeps the bare
+             token so the recognized-token coercion sites can still see it. */
+          int ret_scalar = is_scalar_ret(ret) && ret != TY_UNKNOWN &&
+                           ret != TY_POLY && ret != TY_VOID && ret != TY_NIL;
+          /* stage the call's positional args for NoMethodError#args (#2837);
+             a splat/block/kwarg shape keeps the plain message */
+          int gac = 0; const int *gav = call_args(nt, id, &gac);
+          int gstage = 1;
+          for (int gk = 0; gk < gac; gk++) {
+            const char *gty = nt_type(nt, gav[gk]);
+            if (gty && (sp_streq(gty, "SplatNode") || sp_streq(gty, "BlockArgumentNode") ||
+                        sp_streq(gty, "KeywordHashNode"))) gstage = 0;
+          }
+          #define EMIT_GATE_ARGS() do { \
+            buf_printf(b, ", %d, (sp_RbVal[]){", gac); \
+            for (int gk = 0; gk < gac; gk++) { if (gk) buf_puts(b, ", "); emit_boxed(c, gav[gk], b); } \
+            if (gac == 0) buf_puts(b, "sp_box_nil()"); \
+            buf_puts(b, "}"); \
+          } while (0)
+          if (sp_streq(dflt, "sp_box_nil()") && !ret_scalar) {
+            buf_printf(b, "sp_raise_nomethod(sp_nomethod_msg%s(\"%s\", ",
+                       gstage ? "_args" : "", nm ? nm : "?");
+            emit_boxed(c, recv, b);
+            if (gstage) EMIT_GATE_ARGS();
+            buf_puts(b, "))");
+          }
+          else {
+            buf_printf(b, "(sp_raise_cls(\"NoMethodError\", sp_nomethod_msg%s(\"%s\", ",
+                       gstage ? "_args" : "", nm ? nm : "?");
+            emit_boxed(c, recv, b);
+            if (gstage) EMIT_GATE_ARGS();
+            buf_printf(b, ")), %s)", ret_scalar ? default_value(ret) : dflt);
+          }
+          return 1;
+        }
+        {
+          int gac = 0; const int *gav = call_args(nt, id, &gac);
+          int gstage = 1;
+          for (int gk = 0; gk < gac; gk++) {
+            const char *gty = nt_type(nt, gav[gk]);
+            if (gty && (sp_streq(gty, "SplatNode") || sp_streq(gty, "BlockArgumentNode") ||
+                        sp_streq(gty, "KeywordHashNode"))) gstage = 0;
+          }
+          /* stage the receiver too (NoMethodError#receiver, #3068), but only when
+             it is side-effect-free to re-emit: a bare local/self/ivar/const or a
+             literal. A side-effecting receiver would be double-evaluated. */
+          /* through parentheses: `({a: 1}).nope` names the same literal, and
+             reading the ParenthesesNode's kind left the receiver unstaged so
+             NoMethodError#receiver answered nil (#3891) */
+          int _rvnode = recv >= 0 ? unwrap_parens(c, recv) : -1;
+          const char *_rvty = _rvnode >= 0 ? nt_type(nt, _rvnode) : NULL;
+          int recv_stageable = _rvty && (sp_streq(_rvty, "LocalVariableReadNode") ||
+              sp_streq(_rvty, "SelfNode") || sp_streq(_rvty, "InstanceVariableReadNode") ||
+              sp_streq(_rvty, "ConstantReadNode") || sp_streq(_rvty, "GlobalVariableReadNode") ||
+              sp_streq(_rvty, "ClassVariableReadNode") || sp_streq(_rvty, "IntegerNode") ||
+              sp_streq(_rvty, "FloatNode") || sp_streq(_rvty, "StringNode") ||
+              sp_streq(_rvty, "SymbolNode") ||
+              /* a container literal is side-effect-free to re-emit too, and it
+                 is what `[1].nope` hands NoMethodError#receiver (#3811) */
+              sp_streq(_rvty, "ArrayNode") || sp_streq(_rvty, "HashNode") ||
+              sp_streq(_rvty, "KeywordHashNode"));
+          #define EMIT_GATE_MSG() do { \
+            const char *_stagefn = gstage ? "sp_stage_recv_args_msg" : "sp_stage_recv_msg"; \
+            if (recv_stageable) { \
+              buf_printf(b, "%s(\"undefined method '%s' for %s\", ", _stagefn, nm ? nm : "?", rdesc); \
+              emit_boxed(c, recv, b); \
+              if (gstage) { \
+                buf_printf(b, ", %d, (sp_RbVal[]){", gac); \
+                for (int gk = 0; gk < gac; gk++) { if (gk) buf_puts(b, ", "); emit_boxed(c, gav[gk], b); } \
+                if (gac == 0) buf_puts(b, "sp_box_nil()"); \
+                buf_puts(b, "}"); \
+              } \
+              buf_puts(b, ")"); \
+            } \
+            else if (gstage) { \
+              buf_printf(b, "sp_stage_args_msg(\"undefined method '%s' for %s\", %d, (sp_RbVal[]){", \
+                         nm ? nm : "?", rdesc, gac); \
+              for (int gk = 0; gk < gac; gk++) { if (gk) buf_puts(b, ", "); emit_boxed(c, gav[gk], b); } \
+              if (gac == 0) buf_puts(b, "sp_box_nil()"); \
+              buf_puts(b, "})"); \
+            } \
+            else buf_printf(b, "\"undefined method '%s' for %s\"", nm ? nm : "?", rdesc); \
+          } while (0)
+          if (sp_streq(dflt, "sp_box_nil()")) {
+            buf_puts(b, "sp_raise_nomethod(");
+            EMIT_GATE_MSG();
+            buf_puts(b, ")");
+          }
+          else {
+            buf_puts(b, "(sp_raise_cls(\"NoMethodError\", ");
+            EMIT_GATE_MSG();
+            buf_printf(b, "), %s)", dflt);
+          }
+          #undef EMIT_GATE_MSG
+          #undef EMIT_GATE_ARGS
+        }
+        return 1;
+      }
+      buf_puts(b, dflt);
+      return 1;
+    }
+  }
+  return 0;
+}
+
+
 void emit_call(Compiler *c, int id, Buf *b) {
   /* deep-return pickup (#3227 P6): a marked receiverless call to a method
      whose every return path yields a shared handle -- reset the side
@@ -9245,7 +9621,7 @@ void emit_call(Compiler *c, int id, Buf *b) {
     return;
   }
   const NodeTable *nt = c->nt;
-  /* An argument whose static class the method cannot take: the guards that raise CRuby's TypeError instead of putting a pointer in a numeric slot (#3831, #3838, #3862, #3923). (above). */
+  /* An argument whose static class the method cannot take (defined above). */
   if (emit_arg_type_guards(c, id, b)) return;
   /* Proc#=== calls the proc; a Proc read out of a container arrives boxed,
      where a value comparison would just answer false (#3683). */
@@ -12206,7 +12582,7 @@ void emit_call(Compiler *c, int id, Buf *b) {
 
   if (emit_concurrency_call(c, id, b)) return;
 
-  /* A blockless iterator answers an external Enumerator rather than iterating: the wrappers for each, reverse_each, each_with_index, each_index, each_char, each_line, each_slice, each_cons, cycle, slice_before/after, the hash faces, and with_index. (above). */
+  /* A blockless iterator answers an Enumerator instead (defined above). */
   if (emit_blockless_enumerator(c, id, b)) return;
   /* Enumerator instance methods: #next / #peek (raise StopIteration past the
      end), #rewind (reset, returns self), #size. */
@@ -22777,357 +23153,7 @@ else { memcpy(dir, sf, n); dir[n] = 0; } }
     }
   }
 
-  /* NoMethodError gate: an unresolved call on a dynamically-typed receiver
-     (poly/nil/int/unknown -- no user class defines the method and no builtin
-     matches) yields a typed nil/0 placeholder instead of aborting. In practice
-     such a call is guarded by a runtime-nil receiver (e.g. an optional hook that
-     is never installed), so it never executes; emitting the inferred-type
-     default keeps codegen going without changing observable behaviour.
-
-     TY_STRING is included for the same reason: a String is a builtin with a
-     closed method table, so an unresolved call on it (e.g. `s.each`, which is a
-     real NoMethodError in Ruby) is the String analogue of the poly/int case,
-     not a user-class typo. The motivating shape is a `String|Hash` parameter
-     that this closed-world program only ever calls with a String: the
-     `if x.is_a?(String) ... else x.each end` Hash branch is then statically
-     dead, and CRuby never reaches its NoMethodError, so a runtime-nil stub
-     matches observable behaviour (#1434). A concrete user-object receiver still
-     errors -- that is a genuine missing method worth catching at compile time. */
-  /* A bare unresolved identifier (Prism variable-call: no receiver, no args, no
-     parens) is CRuby's *runtime* NameError, so a surrounding rescue must be
-     able to catch it -- aborting the build here makes that unwritable (#3037).
-     The same gate switch that governs unresolved calls covers this. */
-  if (recv < 0 && nt_int(nt, id, "vcall", 0) && nt_ref(nt, id, "block") < 0 &&
-      g_gate_raise) {
-    int vac = 0; call_args(nt, id, &vac);
-    if (vac == 0) {
-      const char *vnm = nt_str(nt, id, "name");
-      TyKind vret = comp_ntype(c, id);
-      const char *vcn = g_emitting_class_id >= 0 ? class_ruby_name(c, g_emitting_class_id) : NULL;
-      buf_printf(b, "(sp_raise_cls(\"NameError\", \"undefined local variable or method '%s' for %s%s\"), %s)",
-                 vnm ? vnm : "?", vcn ? "an instance of " : "main", vcn ? vcn : "",
-                 (is_scalar_ret(vret) && vret != TY_UNKNOWN) ? default_value(vret) : "sp_box_nil()");
-      return;
-    }
-  }
-  if (recv >= 0) {
-    TyKind grt = comp_ntype(c, recv);
-    /* compare_by_identity? on a poly-carried value resolves here, not at the
-       gate: every spinel hash is value-keyed (the mutating variant is a
-       compile error), so a hash answers false and anything else raises
-       CRuby's NoMethodError -- accurate in both gate modes. */
-    if ((grt == TY_POLY || grt == TY_UNKNOWN) &&
-        nt_str(nt, id, "name") && sp_streq(nt_str(nt, id, "name"), "compare_by_identity?")) {
-      buf_puts(b, "sp_poly_cbi_p(");
-      emit_boxed(c, recv, b);
-      buf_puts(b, ")");
-      return;
-    }
-    /* A BUILTIN class constant has a closed method table, so an unresolved
-       class method on it is a real NoMethodError, not a typo worth failing the
-       build over -- and a `rescue` around it must be able to catch it. A USER
-       class keeps the hard compile error: there the missing method is a genuine
-       gap in the program's own code. */
-    int grt_builtin_cls = 0;
-    if (grt == TY_CLASS && nt_type(nt, recv) &&
-        sp_streq(nt_type(nt, recv), "ConstantReadNode")) {
-      const char *rcn = nt_str(nt, recv, "name");
-      grt_builtin_cls = rcn && comp_class_index(c, rcn) < 0 && builtin_class_id(rcn) != 0;
-    }
-    /* A Hash that arrives boxed -- a Fiber#resume value, a seedless
-       Array#reduce, a container read -- keeps its whole read-only
-       Hash/Enumerable face. Nothing above claimed the name, so normalize the
-       receiver to the general boxed-key/value hash and re-dispatch against the
-       typed emitter; inference typed the call by the same pretence, so the
-       result slot already fits. A receiver that is not a hash at runtime raises
-       exactly the NoMethodError this site would have raised (#3449). */
-    /* `xs.map(&f)` / `xs.select(&f)` on a receiver known only at run time: a
-       forwarded proc has no block body for the loop emitters to splice, so
-       nothing above claimed the call. Drive the proc through the enumerable
-       helper, ahead of the hash-face coercion below -- which would turn an
-       Array receiver into a NoMethodError. */
-    { const char *fpn = nt_str(nt, id, "name");
-      int fpb = nt_ref(nt, id, "block");
-      const char *fpop = fpn ? poly_enum_op_for(fpn) : NULL;
-      if (fpop && recv >= 0 && grt == TY_POLY && fpb >= 0 && nt_type(nt, fpb) &&
-          sp_streq(nt_type(nt, fpb), "BlockArgumentNode")) {
-        Buf fpp; memset(&fpp, 0, sizeof fpp);
-        if (emit_forwarded_proc_arg(c, fpb, &fpp)) {
-          int fpt = ++g_tmp;
-          Buf fpr; memset(&fpr, 0, sizeof fpr); emit_boxed(c, recv, &fpr);
-          char fcall[600];
-          snprintf(fcall, sizeof fcall,
-                   "({ sp_Proc *_t%d = %s; SP_GC_ROOT(_t%d); sp_poly_enum_proc(%s, %s, _t%d); })",
-                   fpt, fpp.p ? fpp.p : "NULL", fpt,
-                   fpr.p ? fpr.p : "sp_box_nil()", fpop, fpt);
-          free(fpr.p); free(fpp.p);
-          TyKind fret = comp_ntype(c, id);
-          if (fret == TY_POLY || fret == TY_UNKNOWN) buf_puts(b, fcall);
-          else emit_unbox_text(c, fret, fcall, b);
-          return;
-        }
-        free(fpp.p);
-      }
-    }
-    if (grt == TY_POLY && ty_poly_hash_face_name(nt_str(nt, id, "name")) &&
-        g_n_argov < MAX_ARG_OVERRIDE) {
-      const char *hnm = nt_str(nt, id, "name");
-      int thv = ++g_tmp;
-      Buf hrb; memset(&hrb, 0, sizeof hrb); emit_boxed(c, recv, &hrb);
-      emit_indent(g_pre, g_indent);
-      buf_printf(g_pre, "sp_PolyPolyHash *_t%d = sp_poly_as_pp_hash(%s, \"%s\"); SP_GC_ROOT(_t%d);\n",
-                 thv, hrb.p ? hrb.p : "sp_box_nil()", hnm, thv);
-      free(hrb.p);
-      g_argov_node[g_n_argov] = recv;
-      snprintf(g_argov_text[g_n_argov], sizeof g_argov_text[0], "_t%d", thv);
-      g_n_argov++;
-      TyKind svh = c->ntype[recv]; c->ntype[recv] = TY_POLY_POLY_HASH;
-      int hren = sp_streq(hnm, "each_entry");   /* same yield as each_pair */
-      if (hren) nt_node_set_str((NodeTable *)nt, id, "name", "each_pair");
-      emit_call(c, id, b);
-      if (hren) nt_node_set_str((NodeTable *)nt, id, "name", "each_entry");
-      c->ntype[recv] = svh;
-      g_n_argov--;
-      return;
-    }
-    /* Every builtin container and scalar has a closed method table, so an
-       unresolved call on one is a real NoMethodError rather than a typo worth
-       failing the build over -- and CRuby's is rescuable, which a compile
-       abort makes unwritable (#3811). A user object joins them: the method is
-       genuinely missing, and saying so at run time with the receiver named is
-       what CRuby does. */
-    if (grt == TY_POLY || grt == TY_NIL || grt == TY_INT || grt == TY_UNKNOWN ||
-        grt == TY_STRING || grt == TY_FLOAT || grt == TY_BOOL ||
-        grt == TY_COMPLEX || grt == TY_RATIONAL || grt_builtin_cls ||
-        grt == TY_SYMBOL || grt == TY_RANGE || grt == TY_FLOAT_RANGE ||
-        ty_is_array(grt) || ty_is_hash(grt) || ty_is_object(grt)) {
-      TyKind ret = comp_ntype(c, id);
-      /* An unresolved call raises NoMethodError by default, matching CRuby
-         (a dead poly-dispatch arm still emits nothing; a live one raising here
-         is exactly what CRuby would do). SPINEL_WARN_UNRESOLVED lists every
-         such site at compile time for auditing a port; SPINEL_GATE_RAISE=0 is
-         the transition escape hatch back to the old silent typed default. The
-         coercion paths the raise value flows through (return slots, string/int
-         receiver+arg slots, ...) recognize the sp_raise_nomethod token and
-         keep the side-effect -- see the staged groundwork notes below. */
-      const char *nm = nt_str(nt, id, "name");
-      /* A poly receiver may hold a Class at runtime, where `nm` is a class
-         method (`def self.nm`) -- e.g. an untyped `model` in `model.table_name`.
-         Dispatch on the class tag + cls_id before falling through to
-         NoMethodError, rather than raising unconditionally (#3215). Gated on a
-         genuinely poly receiver (a concrete non-class static type can never be a
-         Class) and a poly result slot (dflt nil), the shape this arises in. */
-      if (grt == TY_POLY && nm && (ret == TY_POLY || ret == TY_UNKNOWN) &&
-          g_cls_tag_skip != id) {
-        int ccls[64], cmi[64], cdef[64], nc = 0;
-        int cargc = 0;
-        { int ca = nt_ref(nt, id, "arguments");
-          if (ca >= 0) nt_arr(nt, ca, "arguments", &cargc); }
-        for (int k = 0; k < c->nclasses && nc < 64; k++) {
-          int dc = -1;
-          int mi = comp_cmethod_in_chain(c, k, nm, &dc);
-          if (mi < 0 || !scope_has_callable_symbol(c, mi)) continue;
-          /* A class method that cannot take this call's arguments is not a
-             candidate: emitting its arm put the arity raise in the prelude,
-             where it fired before the tag was even tested (#3520). */
-          { Scope *cs4 = &c->scopes[mi];
-            if (cs4->rest_idx < 0 &&
-                (cargc > cs4->nparams || cargc < cs4->nrequired)) continue; }
-          ccls[nc] = k; cmi[nc] = mi; cdef[nc] = dc; nc++;
-        }
-        if (nc > 0) {
-          int tv = ++g_tmp, argsN = nt_ref(nt, id, "arguments");
-          char raise[256];
-          snprintf(raise, sizeof raise,
-                   "sp_raise_nomethod(sp_nomethod_msg_args(\"%s\", _t%d, 0, (sp_RbVal[]){sp_box_nil()}))",
-                   nm, tv);
-          buf_printf(b, "({ sp_RbVal _t%d = ", tv); emit_boxed(c, recv, b);
-          buf_printf(b, "; (_t%d.tag == SP_TAG_CLASS) ? (", tv);
-          for (int k = 0; k < nc; k++) {
-            buf_printf(b, "_t%d.cls_id == %d ? ", tv, ccls[k]);
-            Buf cb; memset(&cb, 0, sizeof cb);
-            buf_printf(&cb, "sp_%s_s_%s(", c->classes[cdef[k]].c_name, mc(c->scopes[cmi[k]].name));
-            const char *leadk = emit_cmethod_self_cls_arg(c, cmi[k], ccls[k], &cb);
-            emit_args_filled(c, cmi[k], argsN, leadk, &cb);
-            emit_cmethod_block_arg(c, id, &c->scopes[cmi[k]], -1, &cb);
-            buf_puts(&cb, ")");
-            TyKind mret = (TyKind)c->scopes[cmi[k]].ret;
-            if (mret == TY_POLY) buf_puts(b, cb.p ? cb.p : "sp_box_nil()");
-            else emit_boxed_text(c, mret, cb.p ? cb.p : "0", b);
-            free(cb.p);
-            buf_puts(b, " : ");
-          }
-          /* Not a Class at run time: this is whatever the call would have
-             compiled to with no class method of the name in the program -- a
-             String receiver takes the String method. Raising here instead made
-             `k.downcase` on a String bind to an unrelated `def self.downcase`
-             and fail with that method's arity (#3520). */
-          Buf eb2; memset(&eb2, 0, sizeof eb2);
-          if (g_n_argov < MAX_ARG_OVERRIDE) {
-            int slot2 = g_n_argov++;
-            g_argov_node[slot2] = recv;
-            snprintf(g_argov_text[slot2], sizeof g_argov_text[0], "_t%d", tv);
-            int sv2 = g_cls_tag_skip;
-            g_cls_tag_skip = id;
-            emit_boxed(c, id, &eb2);
-            g_cls_tag_skip = sv2;
-            g_n_argov--;
-          }
-          buf_printf(b, "%s) : %s; })", raise,
-                     (eb2.p && eb2.p[0]) ? eb2.p : raise);
-          free(eb2.p);
-          return;
-        }
-      }
-      if (warn_unresolved_pos(c, id)) {
-        fprintf(stderr, "unresolved call '%s' on %s receiver -> %s\n",
-                nm ? nm : "?", ty_name(grt),
-                g_gate_raise ? "NoMethodError (matching CRuby)" : "nil (CRuby would raise NoMethodError)");
-      }
-      const char *dflt = (is_scalar_ret(ret) && ret != TY_UNKNOWN) ? default_value(ret) : "sp_box_nil()";
-      if (g_gate_raise) {
-        /* Scalar slot: the comma-expr yields a typed default the surrounding C
-           accepts directly. Poly slot: emit the recognizable sp_raise_nomethod
-           token (returns sp_RbVal) so coercion sites keep the raise side-effect
-           rather than text-discarding a bare sp_box_nil(). Both diverge before
-           the value is used. */
-        /* CRuby-shaped receiver text: a poly receiver names its runtime class
-           through sp_nomethod_msg (evaluating the receiver once, as CRuby
-           does before raising); statically-typed receivers get the static
-           equivalent. TY_UNKNOWN keeps the old lattice name -- its receiver
-           expression may not be independently emittable. */
-        char rdesc[128];
-        if (grt == TY_NIL) snprintf(rdesc, sizeof rdesc, "nil");
-        else if (grt == TY_INT) snprintf(rdesc, sizeof rdesc, "an instance of Integer");
-        else if (grt == TY_STRING) snprintf(rdesc, sizeof rdesc, "an instance of String");
-        else if (grt == TY_FLOAT) snprintf(rdesc, sizeof rdesc, "an instance of Float");
-        else if (grt == TY_COMPLEX) snprintf(rdesc, sizeof rdesc, "an instance of Complex");
-        else if (grt == TY_RATIONAL) snprintf(rdesc, sizeof rdesc, "an instance of Rational");
-        else if (ty_is_object(grt)) {
-          const char *ocn = class_ruby_name(c, ty_object_class(grt));
-          snprintf(rdesc, sizeof rdesc, "an instance of %s",
-                   ocn ? ocn : c->classes[ty_object_class(grt)].name);
-        }
-        else if (ty_is_array(grt)) snprintf(rdesc, sizeof rdesc, "an instance of Array");
-        else if (ty_is_hash(grt)) snprintf(rdesc, sizeof rdesc, "an instance of Hash");
-        else if (grt == TY_SYMBOL) snprintf(rdesc, sizeof rdesc, "an instance of Symbol");
-        else if (grt == TY_RANGE || grt == TY_FLOAT_RANGE)
-          snprintf(rdesc, sizeof rdesc, "an instance of Range");
-        else snprintf(rdesc, sizeof rdesc, "%s", ty_name(grt));
-        /* a class constant receiver names the class, as CRuby does ("undefined
-           method 'x' for class Dir"); the static type of a bare builtin
-           constant is UNKNOWN, which otherwise leaks "for unknown" */
-        if (recv >= 0 && nt_type(nt, recv) && sp_streq(nt_type(nt, recv), "ConstantReadNode")) {
-          const char *rcn = nt_str(nt, recv, "name");
-          if (rcn && (comp_class_index(c, rcn) >= 0 || builtin_class_id(rcn) != 0))
-            snprintf(rdesc, sizeof rdesc, "class %s", rcn);
-        }
-        if (grt == TY_POLY || grt == TY_BOOL) {
-          /* The RESULT slot is sized by the call's own type (ret), not the
-             receiver's: a poly receiver whose unresolved call is typed to a
-             concrete scalar (`poly.strftime` -> String) must yield that scalar,
-             not the sp_RbVal token, or the token lands unconverted in a typed
-             slot (#2451). Only a genuinely poly/unknown result keeps the bare
-             token so the recognized-token coercion sites can still see it. */
-          int ret_scalar = is_scalar_ret(ret) && ret != TY_UNKNOWN &&
-                           ret != TY_POLY && ret != TY_VOID && ret != TY_NIL;
-          /* stage the call's positional args for NoMethodError#args (#2837);
-             a splat/block/kwarg shape keeps the plain message */
-          int gac = 0; const int *gav = call_args(nt, id, &gac);
-          int gstage = 1;
-          for (int gk = 0; gk < gac; gk++) {
-            const char *gty = nt_type(nt, gav[gk]);
-            if (gty && (sp_streq(gty, "SplatNode") || sp_streq(gty, "BlockArgumentNode") ||
-                        sp_streq(gty, "KeywordHashNode"))) gstage = 0;
-          }
-          #define EMIT_GATE_ARGS() do { \
-            buf_printf(b, ", %d, (sp_RbVal[]){", gac); \
-            for (int gk = 0; gk < gac; gk++) { if (gk) buf_puts(b, ", "); emit_boxed(c, gav[gk], b); } \
-            if (gac == 0) buf_puts(b, "sp_box_nil()"); \
-            buf_puts(b, "}"); \
-          } while (0)
-          if (sp_streq(dflt, "sp_box_nil()") && !ret_scalar) {
-            buf_printf(b, "sp_raise_nomethod(sp_nomethod_msg%s(\"%s\", ",
-                       gstage ? "_args" : "", nm ? nm : "?");
-            emit_boxed(c, recv, b);
-            if (gstage) EMIT_GATE_ARGS();
-            buf_puts(b, "))");
-          }
-          else {
-            buf_printf(b, "(sp_raise_cls(\"NoMethodError\", sp_nomethod_msg%s(\"%s\", ",
-                       gstage ? "_args" : "", nm ? nm : "?");
-            emit_boxed(c, recv, b);
-            if (gstage) EMIT_GATE_ARGS();
-            buf_printf(b, ")), %s)", ret_scalar ? default_value(ret) : dflt);
-          }
-          return;
-        }
-        {
-          int gac = 0; const int *gav = call_args(nt, id, &gac);
-          int gstage = 1;
-          for (int gk = 0; gk < gac; gk++) {
-            const char *gty = nt_type(nt, gav[gk]);
-            if (gty && (sp_streq(gty, "SplatNode") || sp_streq(gty, "BlockArgumentNode") ||
-                        sp_streq(gty, "KeywordHashNode"))) gstage = 0;
-          }
-          /* stage the receiver too (NoMethodError#receiver, #3068), but only when
-             it is side-effect-free to re-emit: a bare local/self/ivar/const or a
-             literal. A side-effecting receiver would be double-evaluated. */
-          /* through parentheses: `({a: 1}).nope` names the same literal, and
-             reading the ParenthesesNode's kind left the receiver unstaged so
-             NoMethodError#receiver answered nil (#3891) */
-          int _rvnode = recv >= 0 ? unwrap_parens(c, recv) : -1;
-          const char *_rvty = _rvnode >= 0 ? nt_type(nt, _rvnode) : NULL;
-          int recv_stageable = _rvty && (sp_streq(_rvty, "LocalVariableReadNode") ||
-              sp_streq(_rvty, "SelfNode") || sp_streq(_rvty, "InstanceVariableReadNode") ||
-              sp_streq(_rvty, "ConstantReadNode") || sp_streq(_rvty, "GlobalVariableReadNode") ||
-              sp_streq(_rvty, "ClassVariableReadNode") || sp_streq(_rvty, "IntegerNode") ||
-              sp_streq(_rvty, "FloatNode") || sp_streq(_rvty, "StringNode") ||
-              sp_streq(_rvty, "SymbolNode") ||
-              /* a container literal is side-effect-free to re-emit too, and it
-                 is what `[1].nope` hands NoMethodError#receiver (#3811) */
-              sp_streq(_rvty, "ArrayNode") || sp_streq(_rvty, "HashNode") ||
-              sp_streq(_rvty, "KeywordHashNode"));
-          #define EMIT_GATE_MSG() do { \
-            const char *_stagefn = gstage ? "sp_stage_recv_args_msg" : "sp_stage_recv_msg"; \
-            if (recv_stageable) { \
-              buf_printf(b, "%s(\"undefined method '%s' for %s\", ", _stagefn, nm ? nm : "?", rdesc); \
-              emit_boxed(c, recv, b); \
-              if (gstage) { \
-                buf_printf(b, ", %d, (sp_RbVal[]){", gac); \
-                for (int gk = 0; gk < gac; gk++) { if (gk) buf_puts(b, ", "); emit_boxed(c, gav[gk], b); } \
-                if (gac == 0) buf_puts(b, "sp_box_nil()"); \
-                buf_puts(b, "}"); \
-              } \
-              buf_puts(b, ")"); \
-            } \
-            else if (gstage) { \
-              buf_printf(b, "sp_stage_args_msg(\"undefined method '%s' for %s\", %d, (sp_RbVal[]){", \
-                         nm ? nm : "?", rdesc, gac); \
-              for (int gk = 0; gk < gac; gk++) { if (gk) buf_puts(b, ", "); emit_boxed(c, gav[gk], b); } \
-              if (gac == 0) buf_puts(b, "sp_box_nil()"); \
-              buf_puts(b, "})"); \
-            } \
-            else buf_printf(b, "\"undefined method '%s' for %s\"", nm ? nm : "?", rdesc); \
-          } while (0)
-          if (sp_streq(dflt, "sp_box_nil()")) {
-            buf_puts(b, "sp_raise_nomethod(");
-            EMIT_GATE_MSG();
-            buf_puts(b, ")");
-          }
-          else {
-            buf_puts(b, "(sp_raise_cls(\"NoMethodError\", ");
-            EMIT_GATE_MSG();
-            buf_printf(b, "), %s)", dflt);
-          }
-          #undef EMIT_GATE_MSG
-          #undef EMIT_GATE_ARGS
-        }
-        return;
-      }
-      buf_puts(b, dflt);
-      return;
-    }
-  }
+  /* The NoMethodError gate for a call nothing above resolved (defined above). */
+  if (emit_unresolved_call(c, id, b)) return;
   unsupported(c, id, "call");
 }
