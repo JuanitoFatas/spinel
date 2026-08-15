@@ -3702,6 +3702,10 @@ void emit_case(Compiler *c, int id, Buf *b, int indent) {
              not Module#=== -- treating it as a class name folded every
              arm of doom's Menu#render state dispatch to `if (0)`. */
           if (cn2 && ({ LocalVar *_wv = comp_const(c, cn2); _wv && _wv->type != TY_UNKNOWN && _wv->type != TY_CLASS; })) cn2 = NULL;
+        /* An `ffi_const` is a value too, and it lives in its own table
+           rather than the constant one: read as a class name the arm folded
+           to a constant false and the branch was never taken. */
+        if (cn2 && comp_ffi_const_at(c, conds[j], NULL)) cn2 = NULL;
           if (cn2 && pt == TY_POLY) {
             char tmp[32]; snprintf(tmp, sizeof tmp, "_t%d", t);
             if (!emit_poly_class_when(c, conds[j], tmp, b))
@@ -4006,6 +4010,10 @@ void emit_case_expr(Compiler *c, int id, Buf *b) {
                          ? nt_str(nt, conds[j], "name") : NULL;
         /* value constant in `when`: equality, not a class test (see above) */
         if (cn2 && ({ LocalVar *_wv = comp_const(c, cn2); _wv && _wv->type != TY_UNKNOWN && _wv->type != TY_CLASS; })) cn2 = NULL;
+        /* An `ffi_const` is a value too, and it lives in its own table
+           rather than the constant one: read as a class name the arm folded
+           to a constant false and the branch was never taken. */
+        if (cn2 && comp_ffi_const_at(c, conds[j], NULL)) cn2 = NULL;
         if (cn2 && pt == TY_POLY) {
           char tmp[32]; snprintf(tmp, sizeof tmp, "_t%d", t);
           if (!emit_poly_class_when(c, conds[j], tmp, b)) buf_puts(b, "0");

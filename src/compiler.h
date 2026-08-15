@@ -548,6 +548,10 @@ Scope *comp_scope_of(Compiler *c, int node_id);        /* owning scope */
 int comp_lvw_first(Compiler *c, const char *name);
 int comp_lvw_next(const Compiler *c, int w);
 int    comp_method_index(Compiler *c, const char *name); /* -1 if none */
+/* 1 iff `node` is a constant path naming an `ffi_const` declaration, with its
+   value in *out. Such a name is a VALUE, not a class, wherever the two are
+   told apart. */
+int    comp_ffi_const_at(Compiler *c, int node, int *out);
 int    comp_included_method_index(Compiler *c, const char *name);
 
 /* Locals within a scope. */

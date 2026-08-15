@@ -983,6 +983,25 @@ TyKind native_spec_to_ty(const char *spec) {
 /* Find a native method binding on a class: kind 0 = instance method, 1 =
    constructor. Arity-keyed -- prefer an exact nargs==argc match, else the first
    same-name binding. Returns the index in c->native_methods, or -1. */
+int comp_ffi_const_at(Compiler *c, int node, int *out) {
+  const NodeTable *nt = c->nt;
+  if (node < 0) return 0;
+  const char *ty = nt_type(nt, node);
+  if (!ty || !sp_streq(ty, "ConstantPathNode")) return 0;
+  const char *leaf = nt_str(nt, node, "name");
+  int par = nt_ref(nt, node, "parent");
+  const char *pty = par >= 0 ? nt_type(nt, par) : NULL;
+  const char *mod = (pty && (sp_streq(pty, "ConstantReadNode") || sp_streq(pty, "ConstantPathNode")))
+                    ? nt_str(nt, par, "name") : NULL;
+  if (!leaf || !mod) return 0;
+  for (int i = 0; i < c->n_ffi_consts; i++) {
+    if (sp_streq(c->ffi_consts[i].mod, mod) && sp_streq(c->ffi_consts[i].name, leaf)) {
+      if (out) *out = c->ffi_consts[i].val;
+      return 1;
+    }
+  }
+  return 0;
+}
 int comp_native_method_find(Compiler *c, int class_id, const char *name, int argc, int kind) {
   return comp_native_method_find_typed(c, class_id, name, argc, kind, NULL);
 }
