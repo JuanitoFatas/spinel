@@ -317,24 +317,28 @@ int emit_array_call(Compiler *c, int id, Buf *b) {
   if (recv >= 0 && ty_is_ptr_array(rt)) {
     int is_ia = (rt == TY_INT_ARRAY_ARRAY);
     int ecls = is_ia ? -1 : ty_obj_array_class(rt);
-    /* element c-type stem: `sp_<ecn> *` is the indexed pointer type. For an
-       int-array-array the element is an sp_IntArray*; for an object array it
-       is the class's own struct. */
-    const char *ecn = is_ia ? "IntArray" : c->classes[ecls].name;
+    /* element C type: the indexed pointer type. For an int-array-array the
+       element is an sp_IntArray*; for an object array it is the class's own
+       struct, which for a native class is the name its `native_struct`
+       declared rather than one derived from the Ruby name. Copied out of
+       class_ctype's rotating buffer, since it is held across emit calls. */
+    char ecbuf[192];
+    snprintf(ecbuf, sizeof ecbuf, "%s", is_ia ? "sp_IntArray" : class_ctype(c, ecls));
+    const char *ecn = ecbuf;
     if ((sp_streq(name, "[]") || sp_streq(name, "at")) && argc == 1) {
-      buf_printf(b, "((sp_%s *)sp_PtrArray_get(", ecn);
+      buf_printf(b, "((%s *)sp_PtrArray_get(", ecn);
       emit_expr(c, recv, b); buf_puts(b, ", "); emit_int_expr(c, argv[0], b); buf_puts(b, "))");
       return 1;
     }
     if ((sp_streq(name, "first") || sp_streq(name, "last")) && argc == 0) {
-      buf_printf(b, "((sp_%s *)sp_PtrArray_get(", ecn);
+      buf_printf(b, "((%s *)sp_PtrArray_get(", ecn);
       emit_expr(c, recv, b);
       buf_puts(b, sp_streq(name, "first") ? ", 0))" : ", -1))");
       return 1;
     }
     if (sp_streq(name, "[]=") && argc == 2) {
       int tv = ++g_tmp;
-      buf_printf(b, "({ sp_%s *_t%d = ", ecn, tv); emit_expr(c, argv[1], b);
+      buf_printf(b, "({ %s *_t%d = ", ecn, tv); emit_expr(c, argv[1], b);
       buf_puts(b, "; sp_PtrArray_set("); emit_expr(c, recv, b); buf_puts(b, ", ");
       emit_int_expr(c, argv[0], b); buf_printf(b, ", _t%d); _t%d; })", tv, tv);
       return 1;
@@ -372,7 +376,7 @@ int emit_array_call(Compiler *c, int id, Buf *b) {
     }
     if (!is_ia && (sp_streq(name, "min") || sp_streq(name, "max")) && argc == 0 &&
         nt_ref(nt, id, "block") < 0) {
-      buf_printf(b, "((sp_%s *)sp_PtrArray_minmax_obj(", ecn);
+      buf_printf(b, "((%s *)sp_PtrArray_minmax_obj(", ecn);
       emit_expr(c, recv, b);
       buf_printf(b, ", %d, %d))", ecls, sp_streq(name, "max") ? 1 : 0);
       return 1;

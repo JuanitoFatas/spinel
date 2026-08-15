@@ -1118,11 +1118,26 @@ const char *default_value(TyKind t) {
     default:        return (ty_is_hash(t) || ty_is_object(t) || ty_is_obj_array(t)) ? "NULL" : "0";
   }
 }
+/* The C type of class `cid`'s instances. A `native_struct` carries the name
+   its declaration gave -- which need not be derived from the Ruby class name
+   (`native_struct "Store", "sp_X509_Store"`) -- and every other class is the
+   `sp_<c_name>` struct the generator defines for it. Four rotating buffers so
+   one format string can name two classes. */
+const char *class_ctype(Compiler *c, int cid) {
+  static char bufs[4][160];
+  static int turn = 0;
+  if (cid < 0 || cid >= c->nclasses) return "void";
+  ClassInfo *ci = &c->classes[cid];
+  if (ci->is_native_class && ci->c_struct) return ci->c_struct;
+  char *out = bufs[turn++ & 3];
+  snprintf(out, sizeof bufs[0], "sp_%s", ci->c_name ? ci->c_name : "");
+  return out;
+}
 void emit_ctype(Compiler *c, TyKind t, Buf *b) {
   if (ty_is_object(t)) {
     int cid = ty_object_class(t);
     /* value-type classes are stored inline (sp_X); others are heap pointers */
-    buf_printf(b, "sp_%s %s", c->classes[cid].c_name, c->classes[cid].is_value_type ? "" : "*");
+    buf_printf(b, "%s %s", class_ctype(c, cid), c->classes[cid].is_value_type ? "" : "*");
   }
   else {
     const char *n = c_type_name(t);
@@ -1153,7 +1168,7 @@ void emit_box_open(Compiler *c, TyKind t, Buf *b) {
     int cid = ty_object_class(t);
     /* the struct typedef is sp_<c_name>; a bare `(<Name> *)` would never
        have compiled, so this arm was effectively unreachable as written */
-    buf_printf(b, "sp_box_obj((sp_%s *)( ", c->classes[cid].c_name);
+    buf_printf(b, "sp_box_obj((%s *)( ", class_ctype(c, cid));
   }
   /* TY_POLY: already sp_RbVal, no prefix */
 }

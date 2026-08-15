@@ -498,6 +498,7 @@ const char *nil_value(TyKind t);
 const char *local_init_value(Compiler *c, LocalVar *lv);
 int local_nil_test(Compiler *c, LocalVar *lv, const char *ref, Buf *out);
 /* Append the C type name for `t` to `b` (objects need the class name). */
+const char *class_ctype(Compiler *c, int cid);
 void emit_ctype(Compiler *c, TyKind t, Buf *b);
 /* Emit the boxing prefix/suffix to convert a typed value to sp_RbVal.
    Call as: emit_box_open(t, b); emit_expr(c, node, b); emit_box_close(t, b). */
