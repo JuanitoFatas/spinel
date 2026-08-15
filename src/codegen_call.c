@@ -8987,6 +8987,246 @@ int emit_arg_type_guards(Compiler *c, int id, Buf *b) {
 }
 
 
+/* A blockless iterator answers an external Enumerator rather than iterating: the wrappers for each, reverse_each, each_with_index, each_index, each_char, each_line, each_slice, each_cons, cycle, slice_before/after, the hash faces, and with_index.
+   Split out of emit_call; pure code movement, no logic change. Called at the
+   point these arms occupied, and declining (0) falls through to the arms that
+   followed them. */
+int emit_blockless_enumerator(Compiler *c, int id, Buf *b) {
+  const NodeTable *nt = c->nt;
+  const char *name = nt_str(nt, id, "name");
+  int recv = nt_ref(nt, id, "receiver");
+  int argc;
+  const int *argv = call_args(nt, id, &argc);
+  (void)nt; (void)argv; (void)recv;
+  if (!name) return 0;
+  /* arr.each / arr.reverse_each with no block -> an external Enumerator over a
+     snapshot of the array's (boxed) elements. Block-form and chained
+     (each.with_index, each.map) uses are matched earlier and never reach here. */
+  /* A blockless `each` on a BOXED receiver (an Array read out of a container,
+     a block parameter) is the same external Enumerator over its elements --
+     without this arm the call fell through to a NoMethodError raise (#3584). */
+  if (recv >= 0 && argc == 0 && nt_ref(nt, id, "block") < 0 &&
+      comp_ntype(c, recv) == TY_POLY && comp_ntype(c, id) == TY_ENUMERATOR &&
+      (sp_streq(name, "each") || sp_streq(name, "each_entry"))) {
+    buf_puts(b, "sp_Enumerator_new_from("); emit_boxed(c, recv, b); buf_puts(b, ")");
+    return 1;
+  }
+  if (recv >= 0 && argc == 0 && nt_ref(nt, id, "block") < 0 &&
+      (ty_is_array(comp_ntype(c, recv)) ||
+       /* a bare [] literal types UNKNOWN until pushes promote it */
+       (comp_ntype(c, recv) == TY_UNKNOWN && nt_type(nt, recv) &&
+        sp_streq(nt_type(nt, recv), "ArrayNode"))) &&
+      (sp_streq(name, "each") || sp_streq(name, "reverse_each") ||
+       sp_streq(name, "map") || sp_streq(name, "collect") ||
+       sp_streq(name, "select") || sp_streq(name, "filter") ||
+       sp_streq(name, "find_all") || sp_streq(name, "reject") ||
+       /* the rest of the block-taking Enumerables answer one too (#3757) */
+       sp_streq(name, "sort_by") || sp_streq(name, "group_by") ||
+       sp_streq(name, "min_by") || sp_streq(name, "max_by") ||
+       sp_streq(name, "find") || sp_streq(name, "detect") ||
+       sp_streq(name, "flat_map") || sp_streq(name, "collect_concat") ||
+       sp_streq(name, "filter_map") || sp_streq(name, "partition") ||
+       sp_streq(name, "take_while") || sp_streq(name, "drop_while") ||
+       sp_streq(name, "find_index") || sp_streq(name, "chunk_while") ||
+       sp_streq(name, "minmax_by") ||
+       sp_streq(name, "each_entry"))) {
+    /* a blockless map/select/reject is the same element snapshot; only its
+       #inspect method name differs (the deferred block is supplied by a later
+       block form, which the chain emitters match before this arm) */
+    if (!sp_streq(name, "each") && !sp_streq(name, "reverse_each") &&
+        !sp_streq(name, "each_entry")) {
+      int te = ++g_tmp;
+      buf_printf(b, "({ sp_Enumerator *_t%d = sp_Enumerator_new_from(", te);
+      emit_boxed(c, recv, b);
+      buf_printf(b, "); _t%d->meth = \"%s\"; _t%d; })", te,
+                 sp_streq(name, "collect") ? "map" :
+                 sp_streq(name, "find_all") ? "select" : name, te);
+      return 1;
+    }
+    buf_printf(b, "sp_Enumerator_new_from%s(", sp_streq(name, "reverse_each") ? "_rev" : "");
+    emit_boxed(c, recv, b); buf_puts(b, ")");
+    return 1;
+  }
+  /* arr.each_with_index / arr.each_index with no block -> an external
+     Enumerator: each_with_index yields [element, index] pairs, each_index
+     yields the indices. A chained/terminal use (each_with_index.map/.to_a) is
+     matched earlier by emit_each_with_index_terminal and never reaches here. */
+  if (recv >= 0 && argc == 0 && nt_ref(nt, id, "block") < 0 &&
+      (ty_is_array(comp_ntype(c, recv)) || comp_ntype(c, recv) == TY_ENUMERATOR ||
+       comp_ntype(c, recv) == TY_POLY) &&
+      (sp_streq(name, "each_with_index") || sp_streq(name, "each_index"))) {
+    /* An Enumerator receiver (`arr.each.each_with_index`) is materialized to its
+       element array first (#2487). */
+    int is_enum = comp_ntype(c, recv) == TY_ENUMERATOR;
+    if (sp_streq(name, "each_with_index")) {
+      buf_puts(b, "sp_Enumerator_new_ewi(");
+      if (is_enum) { buf_puts(b, "sp_box_poly_array(sp_Enumerator_to_a("); emit_expr(c, recv, b); buf_puts(b, "))"); }
+      else emit_boxed(c, recv, b);
+      buf_puts(b, ", 0)");
+    }
+    else {
+      buf_puts(b, "sp_Enumerator_new_indices(");
+      if (is_enum) { buf_puts(b, "sp_box_poly_array(sp_Enumerator_to_a("); emit_expr(c, recv, b); buf_puts(b, "))"); }
+      else emit_boxed(c, recv, b);
+      buf_puts(b, ")");
+    }
+    return 1;
+  }
+  /* str.each_char / each_line with no block -> an Enumerator over the string's
+     characters / lines. */
+  if (recv >= 0 && comp_ntype(c, recv) == TY_STRING && argc == 0 &&
+      nt_ref(nt, id, "block") < 0 &&
+      (sp_streq(name, "each_char") || sp_streq(name, "each_line") ||
+       sp_streq(name, "each_byte") || sp_streq(name, "each_codepoint"))) {
+    /* spill the receiver once: it feeds both the snapshot and the
+       inspect-visible source stamp */
+    int tsrc = ++g_tmp;
+    buf_printf(b, "({ const char *_t%d = ", tsrc);
+    emit_expr(c, recv, b);
+    buf_printf(b, "; SP_GC_ROOT(_t%d); ", tsrc);
+    if (sp_streq(name, "each_byte") || sp_streq(name, "each_codepoint")) {
+      const char *fn = sp_streq(name, "each_byte") ? "sp_str_bytes" : "sp_str_codepoints";
+      buf_printf(b, "sp_enum_with_src(sp_Enumerator_new_from(sp_box_int_array(%s(_t%d))), "
+                    "sp_box_str(_t%d), \"%s\"); })", fn, tsrc, tsrc, name);
+      return 1;
+    }
+    const char *itemfn = sp_streq(name, "each_char") ? "sp_str_chars_poly" : "sp_str_lines_poly";
+    buf_printf(b, "sp_enum_with_src(sp_Enumerator_new_from_items(%s(_t%d)), "
+                  "sp_box_str(_t%d), \"%s\"); })", itemfn, tsrc, tsrc, name);
+    return 1;
+  }
+  /* str.each_line(sep) with no block -> an Enumerator over the sep-kept
+     segments. */
+  if (recv >= 0 && comp_ntype(c, recv) == TY_STRING && argc == 1 &&
+      nt_ref(nt, id, "block") < 0 && sp_streq(name, "each_line") &&
+      comp_ntype(c, argv[0]) == TY_STRING) {
+    int tsrc3 = ++g_tmp;
+    buf_printf(b, "({ const char *_t%d = ", tsrc3);
+    emit_expr(c, recv, b);
+    buf_printf(b, "; SP_GC_ROOT(_t%d); "
+                  "sp_enum_with_src(sp_Enumerator_new_from(sp_box_str_array(sp_str_lines_sep(_t%d, ",
+               tsrc3, tsrc3);
+    emit_expr(c, argv[0], b);
+    buf_printf(b, "))), sp_box_str(_t%d), \"each_line\"); })", tsrc3);
+    return 1;
+  }
+  /* str.each_line(chomp: ...) with no block -> an Enumerator over the
+     (possibly chomped) lines. */
+  if (recv >= 0 && comp_ntype(c, recv) == TY_STRING && argc == 1 &&
+      nt_ref(nt, id, "block") < 0 && sp_streq(name, "each_line") &&
+      nt_type(nt, argv[0]) && sp_streq(nt_type(nt, argv[0]), "KeywordHashNode")) {
+    int chomp_v = struct_kwarg_value(c, argv[0], "chomp");
+    int is_chomp = (chomp_v >= 0 && nt_type(nt, chomp_v) &&
+                    sp_streq(nt_type(nt, chomp_v), "TrueNode"));
+    int tsrc2 = ++g_tmp;
+    buf_printf(b, "({ const char *_t%d = ", tsrc2);
+    emit_expr(c, recv, b);
+    buf_printf(b, "; SP_GC_ROOT(_t%d); "
+                  "sp_enum_with_src(sp_Enumerator_new_from(sp_box_str_array(%s(_t%d))), "
+                  "sp_box_str(_t%d), \"each_line(chomp: %s)\"); })",
+               tsrc2, is_chomp ? "sp_str_lines_chomp" : "sp_str_lines", tsrc2, tsrc2,
+               is_chomp ? "true" : "false");
+    return 1;
+  }
+  /* arr.each_slice(n) / arr.each_cons(n) with no block -> a materialized
+     Enumerator over the slices (non-overlapping, last may be short) or the
+     sliding windows of length n. */
+  if (recv >= 0 && argc == 1 && nt_ref(nt, id, "block") < 0 &&
+      (ty_is_array(comp_ntype(c, recv)) ||
+       comp_ntype(c, recv) == TY_RANGE ||
+       (comp_ntype(c, recv) == TY_UNKNOWN && nt_type(nt, recv) &&
+        sp_streq(nt_type(nt, recv), "ArrayNode"))) &&
+      (sp_streq(name, "each_slice") || sp_streq(name, "each_cons"))) {
+    buf_printf(b, "sp_Enumerator_new_%s(", sp_streq(name, "each_slice") ? "slices" : "cons");
+    emit_boxed(c, recv, b); buf_puts(b, ", ");
+    emit_int_expr(c, argv[0], b); buf_puts(b, ")");
+    return 1;
+  }
+  /* arr.cycle with no count and no block: an Enumerator over the elements. A
+     bounded consumer (first(n) / take(n)) is served by its own arm before this
+     one, which is what the repetition is actually read through (#3758). */
+  if (recv >= 0 && argc == 0 && nt_ref(nt, id, "block") < 0 &&
+      ty_is_array(comp_ntype(c, recv)) && sp_streq(name, "cycle")) {
+    int tcy = ++g_tmp;
+    buf_printf(b, "({ sp_Enumerator *_t%d = sp_Enumerator_new_cycle(", tcy);
+    emit_boxed(c, recv, b);
+    buf_printf(b, ", 1); _t%d->meth = \"cycle\"; _t%d; })", tcy, tcy);
+    return 1;
+  }
+  /* arr.cycle(n) with no block -> a materialized Enumerator of the elements
+     repeated n times (the unbounded blockless form stays a loud reject). */
+  if (recv >= 0 && argc == 1 && nt_ref(nt, id, "block") < 0 &&
+      ty_is_array(comp_ntype(c, recv)) && sp_streq(name, "cycle")) {
+    buf_puts(b, "sp_Enumerator_new_cycle(");
+    emit_boxed(c, recv, b); buf_puts(b, ", ");
+    emit_int_expr(c, argv[0], b); buf_puts(b, ")");
+    return 1;
+  }
+  /* arr.slice_before(pat) / slice_after(pat) with no block -> a materialized
+     Enumerator over the groups. */
+  if (recv >= 0 && argc == 1 && nt_ref(nt, id, "block") < 0 &&
+      ty_is_array(comp_ntype(c, recv)) &&
+      (sp_streq(name, "slice_before") || sp_streq(name, "slice_after"))) {
+    /* CRuby's pattern form matches with `pattern === element`: the boxed
+       pattern dispatches through sp_poly_case_eq (Range cover / Class is_a /
+       Regexp match / value equality, #2847). A Proc pattern would need a
+       stored-proc call per element and stays a loud reject. */
+    TyKind spat = comp_ntype(c, argv[0]);
+    if (spat == TY_PROC)
+      unsupported(c, id, "slice_before/slice_after with a Proc pattern; use the block form");
+    buf_printf(b, "sp_Enumerator_new_from_items(sp_poly_slice_groups(");
+    emit_boxed(c, recv, b); buf_puts(b, ", ");
+    emit_boxed(c, argv[0], b);
+    buf_printf(b, ", %d))", sp_streq(name, "slice_after") ? 1 : 0);
+    return 1;
+  }
+  /* hash.each / hash.each_pair with no block -> an external Enumerator over the
+     hash's [key, value] pairs (sp_enum_items_from builds them). The direct-block
+     form has block >= 0 and is excluded; a block-driving consumer of this
+     enumerator (e.g. `.map { }`) is a separate, later feature. */
+  if (recv >= 0 && argc == 0 && nt_ref(nt, id, "block") < 0 &&
+      ty_is_hash(comp_ntype(c, recv)) &&
+      (sp_streq(name, "each") || sp_streq(name, "each_pair") ||
+       /* blockless Enumerable methods yield an external Enumerator over the
+          [key, value] pairs (the block-consuming chain is a later feature) */
+       sp_streq(name, "map") || sp_streq(name, "collect") ||
+       sp_streq(name, "select") || sp_streq(name, "filter") ||
+       sp_streq(name, "reject") || sp_streq(name, "find") ||
+       sp_streq(name, "detect") || sp_streq(name, "find_all") ||
+       sp_streq(name, "flat_map") || sp_streq(name, "filter_map") ||
+       sp_streq(name, "sort_by") || sp_streq(name, "min_by") ||
+       sp_streq(name, "max_by") || sp_streq(name, "group_by") ||
+       sp_streq(name, "partition"))) {
+    buf_puts(b, "sp_Enumerator_new_from(");
+    emit_boxed(c, recv, b); buf_puts(b, ")");
+    return 1;
+  }
+  /* hash.each_value / hash.each_key with no block -> an external Enumerator
+     over the values / keys (so .to_a/.map chains compose). */
+  if (recv >= 0 && argc == 0 && nt_ref(nt, id, "block") < 0 &&
+      ty_is_hash(comp_ntype(c, recv)) &&
+      (sp_streq(name, "each_value") || sp_streq(name, "each_key"))) {
+    buf_printf(b, "sp_Enumerator_new_from_items(sp_enum_hash_side(");
+    emit_boxed(c, recv, b);
+    buf_printf(b, ", %d))", sp_streq(name, "each_key") ? 1 : 0);
+    return 1;
+  }
+  /* <enumerator>.with_index(off) with no block -> a materialized Enumerator over
+     the [element, off + i] pairs. The block and terminal chain forms
+     (each.with_index { }, each.with_index.map { }) are matched earlier. */
+  if (recv >= 0 && comp_ntype(c, recv) == TY_ENUMERATOR && argc <= 1 &&
+      nt_ref(nt, id, "block") < 0 && sp_streq(name, "with_index")) {
+    buf_puts(b, "sp_Enumerator_with_index(");
+    emit_expr(c, recv, b); buf_puts(b, ", ");
+    if (argc == 1) emit_int_expr(c, argv[0], b); else buf_puts(b, "0");
+    buf_puts(b, ")");
+    return 1;
+  }
+
+  return 0;
+}
+
+
 void emit_call(Compiler *c, int id, Buf *b) {
   /* deep-return pickup (#3227 P6): a marked receiverless call to a method
      whose every return path yields a shared handle -- reset the side
@@ -11966,230 +12206,8 @@ void emit_call(Compiler *c, int id, Buf *b) {
 
   if (emit_concurrency_call(c, id, b)) return;
 
-  /* arr.each / arr.reverse_each with no block -> an external Enumerator over a
-     snapshot of the array's (boxed) elements. Block-form and chained
-     (each.with_index, each.map) uses are matched earlier and never reach here. */
-  /* A blockless `each` on a BOXED receiver (an Array read out of a container,
-     a block parameter) is the same external Enumerator over its elements --
-     without this arm the call fell through to a NoMethodError raise (#3584). */
-  if (recv >= 0 && argc == 0 && nt_ref(nt, id, "block") < 0 &&
-      comp_ntype(c, recv) == TY_POLY && comp_ntype(c, id) == TY_ENUMERATOR &&
-      (sp_streq(name, "each") || sp_streq(name, "each_entry"))) {
-    buf_puts(b, "sp_Enumerator_new_from("); emit_boxed(c, recv, b); buf_puts(b, ")");
-    return;
-  }
-  if (recv >= 0 && argc == 0 && nt_ref(nt, id, "block") < 0 &&
-      (ty_is_array(comp_ntype(c, recv)) ||
-       /* a bare [] literal types UNKNOWN until pushes promote it */
-       (comp_ntype(c, recv) == TY_UNKNOWN && nt_type(nt, recv) &&
-        sp_streq(nt_type(nt, recv), "ArrayNode"))) &&
-      (sp_streq(name, "each") || sp_streq(name, "reverse_each") ||
-       sp_streq(name, "map") || sp_streq(name, "collect") ||
-       sp_streq(name, "select") || sp_streq(name, "filter") ||
-       sp_streq(name, "find_all") || sp_streq(name, "reject") ||
-       /* the rest of the block-taking Enumerables answer one too (#3757) */
-       sp_streq(name, "sort_by") || sp_streq(name, "group_by") ||
-       sp_streq(name, "min_by") || sp_streq(name, "max_by") ||
-       sp_streq(name, "find") || sp_streq(name, "detect") ||
-       sp_streq(name, "flat_map") || sp_streq(name, "collect_concat") ||
-       sp_streq(name, "filter_map") || sp_streq(name, "partition") ||
-       sp_streq(name, "take_while") || sp_streq(name, "drop_while") ||
-       sp_streq(name, "find_index") || sp_streq(name, "chunk_while") ||
-       sp_streq(name, "minmax_by") ||
-       sp_streq(name, "each_entry"))) {
-    /* a blockless map/select/reject is the same element snapshot; only its
-       #inspect method name differs (the deferred block is supplied by a later
-       block form, which the chain emitters match before this arm) */
-    if (!sp_streq(name, "each") && !sp_streq(name, "reverse_each") &&
-        !sp_streq(name, "each_entry")) {
-      int te = ++g_tmp;
-      buf_printf(b, "({ sp_Enumerator *_t%d = sp_Enumerator_new_from(", te);
-      emit_boxed(c, recv, b);
-      buf_printf(b, "); _t%d->meth = \"%s\"; _t%d; })", te,
-                 sp_streq(name, "collect") ? "map" :
-                 sp_streq(name, "find_all") ? "select" : name, te);
-      return;
-    }
-    buf_printf(b, "sp_Enumerator_new_from%s(", sp_streq(name, "reverse_each") ? "_rev" : "");
-    emit_boxed(c, recv, b); buf_puts(b, ")");
-    return;
-  }
-  /* arr.each_with_index / arr.each_index with no block -> an external
-     Enumerator: each_with_index yields [element, index] pairs, each_index
-     yields the indices. A chained/terminal use (each_with_index.map/.to_a) is
-     matched earlier by emit_each_with_index_terminal and never reaches here. */
-  if (recv >= 0 && argc == 0 && nt_ref(nt, id, "block") < 0 &&
-      (ty_is_array(comp_ntype(c, recv)) || comp_ntype(c, recv) == TY_ENUMERATOR ||
-       comp_ntype(c, recv) == TY_POLY) &&
-      (sp_streq(name, "each_with_index") || sp_streq(name, "each_index"))) {
-    /* An Enumerator receiver (`arr.each.each_with_index`) is materialized to its
-       element array first (#2487). */
-    int is_enum = comp_ntype(c, recv) == TY_ENUMERATOR;
-    if (sp_streq(name, "each_with_index")) {
-      buf_puts(b, "sp_Enumerator_new_ewi(");
-      if (is_enum) { buf_puts(b, "sp_box_poly_array(sp_Enumerator_to_a("); emit_expr(c, recv, b); buf_puts(b, "))"); }
-      else emit_boxed(c, recv, b);
-      buf_puts(b, ", 0)");
-    }
-    else {
-      buf_puts(b, "sp_Enumerator_new_indices(");
-      if (is_enum) { buf_puts(b, "sp_box_poly_array(sp_Enumerator_to_a("); emit_expr(c, recv, b); buf_puts(b, "))"); }
-      else emit_boxed(c, recv, b);
-      buf_puts(b, ")");
-    }
-    return;
-  }
-  /* str.each_char / each_line with no block -> an Enumerator over the string's
-     characters / lines. */
-  if (recv >= 0 && comp_ntype(c, recv) == TY_STRING && argc == 0 &&
-      nt_ref(nt, id, "block") < 0 &&
-      (sp_streq(name, "each_char") || sp_streq(name, "each_line") ||
-       sp_streq(name, "each_byte") || sp_streq(name, "each_codepoint"))) {
-    /* spill the receiver once: it feeds both the snapshot and the
-       inspect-visible source stamp */
-    int tsrc = ++g_tmp;
-    buf_printf(b, "({ const char *_t%d = ", tsrc);
-    emit_expr(c, recv, b);
-    buf_printf(b, "; SP_GC_ROOT(_t%d); ", tsrc);
-    if (sp_streq(name, "each_byte") || sp_streq(name, "each_codepoint")) {
-      const char *fn = sp_streq(name, "each_byte") ? "sp_str_bytes" : "sp_str_codepoints";
-      buf_printf(b, "sp_enum_with_src(sp_Enumerator_new_from(sp_box_int_array(%s(_t%d))), "
-                    "sp_box_str(_t%d), \"%s\"); })", fn, tsrc, tsrc, name);
-      return;
-    }
-    const char *itemfn = sp_streq(name, "each_char") ? "sp_str_chars_poly" : "sp_str_lines_poly";
-    buf_printf(b, "sp_enum_with_src(sp_Enumerator_new_from_items(%s(_t%d)), "
-                  "sp_box_str(_t%d), \"%s\"); })", itemfn, tsrc, tsrc, name);
-    return;
-  }
-  /* str.each_line(sep) with no block -> an Enumerator over the sep-kept
-     segments. */
-  if (recv >= 0 && comp_ntype(c, recv) == TY_STRING && argc == 1 &&
-      nt_ref(nt, id, "block") < 0 && sp_streq(name, "each_line") &&
-      comp_ntype(c, argv[0]) == TY_STRING) {
-    int tsrc3 = ++g_tmp;
-    buf_printf(b, "({ const char *_t%d = ", tsrc3);
-    emit_expr(c, recv, b);
-    buf_printf(b, "; SP_GC_ROOT(_t%d); "
-                  "sp_enum_with_src(sp_Enumerator_new_from(sp_box_str_array(sp_str_lines_sep(_t%d, ",
-               tsrc3, tsrc3);
-    emit_expr(c, argv[0], b);
-    buf_printf(b, "))), sp_box_str(_t%d), \"each_line\"); })", tsrc3);
-    return;
-  }
-  /* str.each_line(chomp: ...) with no block -> an Enumerator over the
-     (possibly chomped) lines. */
-  if (recv >= 0 && comp_ntype(c, recv) == TY_STRING && argc == 1 &&
-      nt_ref(nt, id, "block") < 0 && sp_streq(name, "each_line") &&
-      nt_type(nt, argv[0]) && sp_streq(nt_type(nt, argv[0]), "KeywordHashNode")) {
-    int chomp_v = struct_kwarg_value(c, argv[0], "chomp");
-    int is_chomp = (chomp_v >= 0 && nt_type(nt, chomp_v) &&
-                    sp_streq(nt_type(nt, chomp_v), "TrueNode"));
-    int tsrc2 = ++g_tmp;
-    buf_printf(b, "({ const char *_t%d = ", tsrc2);
-    emit_expr(c, recv, b);
-    buf_printf(b, "; SP_GC_ROOT(_t%d); "
-                  "sp_enum_with_src(sp_Enumerator_new_from(sp_box_str_array(%s(_t%d))), "
-                  "sp_box_str(_t%d), \"each_line(chomp: %s)\"); })",
-               tsrc2, is_chomp ? "sp_str_lines_chomp" : "sp_str_lines", tsrc2, tsrc2,
-               is_chomp ? "true" : "false");
-    return;
-  }
-  /* arr.each_slice(n) / arr.each_cons(n) with no block -> a materialized
-     Enumerator over the slices (non-overlapping, last may be short) or the
-     sliding windows of length n. */
-  if (recv >= 0 && argc == 1 && nt_ref(nt, id, "block") < 0 &&
-      (ty_is_array(comp_ntype(c, recv)) ||
-       comp_ntype(c, recv) == TY_RANGE ||
-       (comp_ntype(c, recv) == TY_UNKNOWN && nt_type(nt, recv) &&
-        sp_streq(nt_type(nt, recv), "ArrayNode"))) &&
-      (sp_streq(name, "each_slice") || sp_streq(name, "each_cons"))) {
-    buf_printf(b, "sp_Enumerator_new_%s(", sp_streq(name, "each_slice") ? "slices" : "cons");
-    emit_boxed(c, recv, b); buf_puts(b, ", ");
-    emit_int_expr(c, argv[0], b); buf_puts(b, ")");
-    return;
-  }
-  /* arr.cycle with no count and no block: an Enumerator over the elements. A
-     bounded consumer (first(n) / take(n)) is served by its own arm before this
-     one, which is what the repetition is actually read through (#3758). */
-  if (recv >= 0 && argc == 0 && nt_ref(nt, id, "block") < 0 &&
-      ty_is_array(comp_ntype(c, recv)) && sp_streq(name, "cycle")) {
-    int tcy = ++g_tmp;
-    buf_printf(b, "({ sp_Enumerator *_t%d = sp_Enumerator_new_cycle(", tcy);
-    emit_boxed(c, recv, b);
-    buf_printf(b, ", 1); _t%d->meth = \"cycle\"; _t%d; })", tcy, tcy);
-    return;
-  }
-  /* arr.cycle(n) with no block -> a materialized Enumerator of the elements
-     repeated n times (the unbounded blockless form stays a loud reject). */
-  if (recv >= 0 && argc == 1 && nt_ref(nt, id, "block") < 0 &&
-      ty_is_array(comp_ntype(c, recv)) && sp_streq(name, "cycle")) {
-    buf_puts(b, "sp_Enumerator_new_cycle(");
-    emit_boxed(c, recv, b); buf_puts(b, ", ");
-    emit_int_expr(c, argv[0], b); buf_puts(b, ")");
-    return;
-  }
-  /* arr.slice_before(pat) / slice_after(pat) with no block -> a materialized
-     Enumerator over the groups. */
-  if (recv >= 0 && argc == 1 && nt_ref(nt, id, "block") < 0 &&
-      ty_is_array(comp_ntype(c, recv)) &&
-      (sp_streq(name, "slice_before") || sp_streq(name, "slice_after"))) {
-    /* CRuby's pattern form matches with `pattern === element`: the boxed
-       pattern dispatches through sp_poly_case_eq (Range cover / Class is_a /
-       Regexp match / value equality, #2847). A Proc pattern would need a
-       stored-proc call per element and stays a loud reject. */
-    TyKind spat = comp_ntype(c, argv[0]);
-    if (spat == TY_PROC)
-      unsupported(c, id, "slice_before/slice_after with a Proc pattern; use the block form");
-    buf_printf(b, "sp_Enumerator_new_from_items(sp_poly_slice_groups(");
-    emit_boxed(c, recv, b); buf_puts(b, ", ");
-    emit_boxed(c, argv[0], b);
-    buf_printf(b, ", %d))", sp_streq(name, "slice_after") ? 1 : 0);
-    return;
-  }
-  /* hash.each / hash.each_pair with no block -> an external Enumerator over the
-     hash's [key, value] pairs (sp_enum_items_from builds them). The direct-block
-     form has block >= 0 and is excluded; a block-driving consumer of this
-     enumerator (e.g. `.map { }`) is a separate, later feature. */
-  if (recv >= 0 && argc == 0 && nt_ref(nt, id, "block") < 0 &&
-      ty_is_hash(comp_ntype(c, recv)) &&
-      (sp_streq(name, "each") || sp_streq(name, "each_pair") ||
-       /* blockless Enumerable methods yield an external Enumerator over the
-          [key, value] pairs (the block-consuming chain is a later feature) */
-       sp_streq(name, "map") || sp_streq(name, "collect") ||
-       sp_streq(name, "select") || sp_streq(name, "filter") ||
-       sp_streq(name, "reject") || sp_streq(name, "find") ||
-       sp_streq(name, "detect") || sp_streq(name, "find_all") ||
-       sp_streq(name, "flat_map") || sp_streq(name, "filter_map") ||
-       sp_streq(name, "sort_by") || sp_streq(name, "min_by") ||
-       sp_streq(name, "max_by") || sp_streq(name, "group_by") ||
-       sp_streq(name, "partition"))) {
-    buf_puts(b, "sp_Enumerator_new_from(");
-    emit_boxed(c, recv, b); buf_puts(b, ")");
-    return;
-  }
-  /* hash.each_value / hash.each_key with no block -> an external Enumerator
-     over the values / keys (so .to_a/.map chains compose). */
-  if (recv >= 0 && argc == 0 && nt_ref(nt, id, "block") < 0 &&
-      ty_is_hash(comp_ntype(c, recv)) &&
-      (sp_streq(name, "each_value") || sp_streq(name, "each_key"))) {
-    buf_printf(b, "sp_Enumerator_new_from_items(sp_enum_hash_side(");
-    emit_boxed(c, recv, b);
-    buf_printf(b, ", %d))", sp_streq(name, "each_key") ? 1 : 0);
-    return;
-  }
-  /* <enumerator>.with_index(off) with no block -> a materialized Enumerator over
-     the [element, off + i] pairs. The block and terminal chain forms
-     (each.with_index { }, each.with_index.map { }) are matched earlier. */
-  if (recv >= 0 && comp_ntype(c, recv) == TY_ENUMERATOR && argc <= 1 &&
-      nt_ref(nt, id, "block") < 0 && sp_streq(name, "with_index")) {
-    buf_puts(b, "sp_Enumerator_with_index(");
-    emit_expr(c, recv, b); buf_puts(b, ", ");
-    if (argc == 1) emit_int_expr(c, argv[0], b); else buf_puts(b, "0");
-    buf_puts(b, ")");
-    return;
-  }
-
+  /* A blockless iterator answers an external Enumerator rather than iterating: the wrappers for each, reverse_each, each_with_index, each_index, each_char, each_line, each_slice, each_cons, cycle, slice_before/after, the hash faces, and with_index. (above). */
+  if (emit_blockless_enumerator(c, id, b)) return;
   /* Enumerator instance methods: #next / #peek (raise StopIteration past the
      end), #rewind (reset, returns self), #size. */
   if (recv >= 0 && comp_ntype(c, recv) == TY_ENUMERATOR) {

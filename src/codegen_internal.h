@@ -655,6 +655,7 @@ Buf expr_buf(Compiler *c, int node);
 /* Receiver-typed method-call emitters (codegen_call_recv.c). Each returns 1 if
    it handled the call and emitted into `b`, else 0 (emit_call falls through). */
 int emit_arg_type_guards(Compiler *c, int id, Buf *b);
+int emit_blockless_enumerator(Compiler *c, int id, Buf *b);
 int emit_array_call(Compiler *c, int id, Buf *b);
 int emit_hash_call(Compiler *c, int id, Buf *b);
 int emit_scalar_call(Compiler *c, int id, Buf *b);
