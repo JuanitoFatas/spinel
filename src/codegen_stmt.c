@@ -6830,6 +6830,45 @@ else {
       }
       return;
     }
+    /* A native (C-backed) class has no ivar behind its attribute: the read and
+       the write are the C symbols its own `native_method` declarations name.
+       `ctx.options |= FLAG` is the shape this serves, and without it the whole
+       op-assign was refused however the setter itself lowered. */
+    if (recv >= 0 && attr && op && ty_is_object(rt) &&
+        c->classes[ty_object_class(rt)].is_native_class) {
+      int ncid = ty_object_class(rt);
+      char nsetter[300]; snprintf(nsetter, sizeof nsetter, "%s=", attr);
+      int rdm = comp_native_method_find(c, ncid, attr, 0, 0);
+      int wrm = comp_native_method_find(c, ncid, nsetter, 1, 0);
+      if (rdm >= 0 && wrm >= 0) {
+        NativeMethod *nrm = &c->native_methods[rdm];
+        NativeMethod *nwm = &c->native_methods[wrm];
+        int nint = sp_streq(nrm->ret, "int") && nwm->nargs == 1 && sp_streq(nwm->args[0], "int");
+        int nflt = sp_streq(nrm->ret, "float") && nwm->nargs == 1 && sp_streq(nwm->args[0], "float");
+        /* only a numeric pair can take an operator here: anything else would
+           put the C operator on a pointer or a boxed value */
+        if (!nint && !nflt)
+          unsupported(c, id, "call operator write (native attribute that is not numeric)");
+        if (nflt && bitop)
+          unsupported(c, id, "call operator write (bitwise operator on a float attribute)");
+        int trecv = ++g_tmp;
+        emit_indent(b, indent);
+        emit_ctype(c, rt, b);
+        buf_printf(b, " _t%d = ", trecv); emit_expr(c, recv, b); buf_puts(b, ";\n");
+        /* the temp can be the receiver's only live reference and the value
+           expression may allocate */
+        emit_indent(b, indent); buf_printf(b, "SP_GC_ROOT(_t%d);\n", trecv);
+        emit_indent(b, indent);
+        buf_printf(b, "%s(_t%d, %s(_t%d) %s ", nwm->csym, trecv, nrm->csym, trecv, op);
+        if (rhst == TY_POLY) {
+          buf_puts(b, nint ? "sp_poly_to_i(" : "sp_poly_to_f(");
+          emit_expr(c, val, b); buf_puts(b, ")");
+        }
+        else emit_expr(c, val, b);
+        buf_puts(b, ");\n");
+        return;
+      }
+    }
     if (recv >= 0 && attr && rt == TY_POLY) {
       /* poly receiver (e.g. a Hash value that was never narrowed to a
          concrete object type -- doom's `door[:sector]`, where `door`
