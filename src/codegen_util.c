@@ -998,6 +998,7 @@ int ty_is_struct_valued(TyKind t) {
 const char *native_c_type(const char *spec) {
   if (!spec) return "void";
   if (sp_streq(spec, "any"))    return "sp_RbVal";
+  if (sp_streq(spec, "ptr"))    return "void *";   /* raw pointer passthrough */
   if (sp_streq(spec, "string")) return "const char *";
   if (sp_streq(spec, "string?")) return "const char *";  /* nullable; call site wraps */
   if (sp_streq(spec, "nstring")) return "const char *";   /* NULL-able string, unboxed */
