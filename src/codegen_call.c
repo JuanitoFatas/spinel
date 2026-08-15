@@ -5412,6 +5412,37 @@ else {
   return 0;
 }
 
+/* A native declaration's argument spec is a contract: the C symbol takes that
+   representation and nothing converts to it at the call. An argument whose
+   static type cannot be the declared one puts a pointer in a scalar slot (or
+   the reverse), which the C compiler then reports against the generated file
+   -- a message about `sp_X_new` that says nothing the Ruby author can act on.
+   Refuse it here instead, naming the position and both types. A poly, nil or
+   unresolved argument is not settled and stays on the existing path. */
+void native_arg_check(Compiler *c, int id, const char *what, NativeMethod *m,
+                      int argc, const int *argv) {
+  for (int ai = 0; ai < m->nargs && ai < argc; ai++) {
+    const char *spec = m->args[ai];
+    if (!spec || sp_streq(spec, "any") || sp_streq(spec, "ptr") ||
+        sp_streq(spec, "pointer") || sp_streq(spec, "regexp")) continue;
+    TyKind want = ffi_spec_to_ty(spec);
+    TyKind got = argv[ai] >= 0 ? comp_ntype(c, argv[ai]) : TY_UNKNOWN;
+    if (want == TY_UNKNOWN || got == TY_UNKNOWN || got == TY_POLY || got == TY_NIL) continue;
+    /* a machine scalar needs a machine scalar, and a C string needs a string:
+       everything else at this boundary is a pointer of some other shape */
+    int want_scalar = (want == TY_INT || want == TY_FLOAT || want == TY_BOOL);
+    int got_scalar = (got == TY_INT || got == TY_FLOAT || got == TY_BOOL ||
+                      got == TY_SYMBOL || got == TY_BIGINT);
+    int bad = (want_scalar && !got_scalar) ||
+              (want == TY_STRING && got != TY_STRING && got != TY_STRBUF);
+    if (!bad) continue;
+    char msg[256];
+    snprintf(msg, sizeof msg, "%s `%s` argument %d (declared :%s, given %s)",
+             what, m->csym ? m->csym : "?", ai + 1, spec, ty_name(got));
+    unsupported(c, id, msg);
+  }
+}
+
 /* native (C-backed) class constructor: call the declared C symbol with the
    assigned cls_id first (runtime cls_id == class index), then the args in
    their native representation. The returned pointer is GC-allocated by the
@@ -5424,6 +5455,7 @@ int emit_native_ctor(Compiler *c, int id, int ci, int argc, const int *argv, Buf
   int nn = comp_native_method_find_typed(c, ci, "new", argc, 1, nta == argc ? natys : NULL);
   if (nn < 0) return 0;
   NativeMethod *m = &c->native_methods[nn];
+  native_arg_check(c, id, "native constructor", m, argc, argv);
   buf_printf(b, "%s(%d", m->csym, ci);
   for (int ai = 0; ai < m->nargs && ai < argc; ai++) {
     buf_puts(b, ", ");

@@ -8389,6 +8389,7 @@ int emit_object_call(Compiler *c, int id, Buf *b) {
       }
       if (nm >= 0) {
         NativeMethod *m = &c->native_methods[nm];
+        native_arg_check(c, id, "native method", m, argc, argv);
         int wrap = sp_streq(m->ret, "string?");
         if (wrap) buf_puts(b, "sp_box_nullable_str(");
         buf_puts(b, m->csym); buf_puts(b, "("); emit_expr(c, recv, b);
