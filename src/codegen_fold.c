@@ -1426,12 +1426,17 @@ int emit_minmax_by_expr(Compiler *c, int id, Buf *b) {
      time, the way `map` with the same symbol-proc already does, instead of
      refusing the whole build. */
   if (bvt == TY_UNKNOWN && block_tail_is_unresolved(c, bb[bn - 1])) bvt = TY_POLY;
+  /* An ARRAY key compares lexicographically through the boxed ordering, the
+     same way a String or Symbol key does, and `sort_by` on the same receiver
+     already accepts one. Refusing it here dropped the call to the
+     unresolved-call raise: NoMethodError for `min_by` on an Array (#3948). */
+  int bvt_arr = ty_is_array(bvt) || ty_is_obj_array(bvt);
   if (bvt != TY_INT && bvt != TY_FLOAT && bvt != TY_POLY &&
-      bvt != TY_STRING && bvt != TY_SYMBOL) return 0;
+      bvt != TY_STRING && bvt != TY_SYMBOL && !bvt_arr) return 0;
   /* A String/Symbol key orders lexicographically: box it and compare with the
      poly ordering (sp_poly_lt/gt use String#<=>). Only the plain min_by/max_by
      form is wired for it here; the count and minmax_by forms keep rejecting. */
-  int key_box = (bvt == TY_STRING || bvt == TY_SYMBOL);
+  int key_box = (bvt == TY_STRING || bvt == TY_SYMBOL || bvt_arr);
   TyKind bvt_slot = key_box ? TY_POLY : bvt;
   /* 2+-param block over a poly array of sub-arrays: auto-splat each element
      across the params. The winning element is stored from an element temp
