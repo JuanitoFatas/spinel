@@ -2076,6 +2076,27 @@ int emit_pm_cond(Compiler *c, int pat, int t, TyKind pt, Buf *b) {
       emit_pm_array_cond(c, pat, arr, b);
       return 1;
     }
+    /* A user object answers an array pattern through its own #deconstruct,
+       the way the case-arm emitter asks it: match what that returns. Without
+       this the object reached the typed-array walk below and the emitted C
+       read `->len` off the object'"'"'s struct (#3956). */
+    if (ty_is_object(pt)) {
+      int adef = -1;
+      int am = comp_method_in_chain(c, ty_object_class(pt), "deconstruct", &adef);
+      if (am < 0 || adef < 0 || c->scopes[am].ret == TY_UNKNOWN) return 0;
+      TyKind art = c->scopes[am].ret;
+      const char *acn = c->classes[adef].c_name;
+      int aisv = comp_ty_value_obj(c, pt);
+      int at = ++g_tmp;
+      Buf *as = g_pm_hash_sink ? g_pm_hash_sink : g_pre;
+      int ai = g_pm_hash_sink ? g_pm_hash_sink_indent : g_indent;
+      emit_indent(as, ai);
+      emit_ctype(c, art, as);
+      if (aisv) buf_printf(as, " _t%d = sp_%s_deconstruct(_t%d);\n", at, acn, t);
+      else      buf_printf(as, " _t%d = sp_%s_deconstruct((sp_%s *)_t%d);\n", at, acn, acn, t);
+      if (needs_root(art)) { emit_indent(as, ai); emit_gc_root_tmp(c, art, at, as); buf_puts(as, "\n"); }
+      return emit_pm_cond(c, pat, at, art, b);
+    }
     /* From here the scrutinee is a typed (int/float/str) array pointer. A nested
        array element can never match one, since a typed array cannot hold a
        sub-array, so such a pattern is a guaranteed non-match. */
@@ -2201,6 +2222,41 @@ int emit_pm_cond(Compiler *c, int pat, int t, TyKind pt, Buf *b) {
       buf_printf(hs0, "sp_SymPolyHash *_t%d = sp_time_deconstruct_all(_t%d); SP_GC_ROOT(_t%d);\n",
                  tth, t, tth);
       return emit_pm_cond(c, pat, tth, TY_SYM_POLY_HASH, b);
+    }
+    /* A statically typed object answers a hash pattern through its own
+       #deconstruct_keys, exactly as the boxed form above does -- box it and
+       take that path rather than refusing. Without this the one-line `obj in
+       {...}` was rejected at the front end for every receiver that defines the
+       method, while `case`/`in` against the same object compiled (#3956). */
+    if (ty_is_object(pt)) {
+      /* Ask the object itself, the way the case-arm emitter does: a user
+         #deconstruct_keys is the answer, and the generic keyed reflection
+         (Struct, Data) is the fallback. Without either the one-line `obj in
+         {...}` was refused at the front end for every receiver that defines
+         the method, while `case`/`in` against the same object compiled
+         (#3956). */
+      int ddef = -1;
+      int dm = comp_method_in_chain(c, ty_object_class(pt), "deconstruct_keys", &ddef);
+      if (dm >= 0 && ddef >= 0 && c->scopes[dm].ret != TY_UNKNOWN) {
+        TyKind drt = c->scopes[dm].ret;
+        const char *dcn = c->classes[ddef].c_name;
+        int isv = comp_ty_value_obj(c, pt);
+        int dt = ++g_tmp;
+        Buf *ds = g_pm_hash_sink ? g_pm_hash_sink : g_pre;
+        int di = g_pm_hash_sink ? g_pm_hash_sink_indent : g_indent;
+        emit_indent(ds, di);
+        emit_ctype(c, drt, ds);
+        if (isv) buf_printf(ds, " _t%d = sp_%s_deconstruct_keys(_t%d, sp_box_nil());\n", dt, dcn, t);
+        else     buf_printf(ds, " _t%d = sp_%s_deconstruct_keys((sp_%s *)_t%d, sp_box_nil());\n", dt, dcn, dcn, t);
+        if (needs_root(drt)) { emit_indent(ds, di); emit_gc_root_tmp(c, drt, dt, ds); buf_puts(ds, "\n"); }
+        return emit_pm_cond(c, pat, dt, drt, b);
+      }
+      Buf hb; memset(&hb, 0, sizeof hb);
+      char ho[24]; snprintf(ho, sizeof ho, "_t%d", t);
+      emit_boxed_text(c, pt, ho, &hb);
+      emit_pm_hash_cond_poly(c, pat, hb.p ? hb.p : "sp_box_nil()", b);
+      free(hb.p);
+      return 1;
     }
     const char *hn = ty_is_hash(pt) ? ty_hash_cname(pt) : NULL;
     if (!hn) return 0;
