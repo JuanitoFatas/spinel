@@ -655,6 +655,7 @@ void emit_block_invoke(Compiler *c, int args_node, Buf *b, int indent, int as_ex
      (auto-splat). Evaluate it once into a rooted temp and bind each param (and
      any rest param) from its elements rather than from the splat AST node. */
   int splat_tmp = -1; TyKind splat_at = TY_UNKNOWN;
+  int poly_splat_tmp = -1;   /* a boxed yielded value splatted at run time */
   if (yc == 1 && yargs) {
     int inner = -1;
     if (nt_type(nt, yargs[0]) && sp_streq(nt_type(nt, yargs[0]), "SplatNode"))
@@ -666,7 +667,23 @@ void emit_block_invoke(Compiler *c, int args_node, Buf *b, int indent, int as_ex
     else if (P + O + Q > 1 || (P + O + Q >= 1 && R))
       inner = yargs[0];
     TyKind at = inner >= 0 ? comp_ntype(c, inner) : TY_UNKNOWN;
-    if (ty_is_array(at) || at == TY_POLY_ARRAY) {
+    /* A BOXED yielded value can be an array too, and CRuby splats it just the
+       same. Only a statically typed array was splatted, so a method yielding
+       what it read out of a boxed container -- Set#each over its element array
+       -- bound the whole element to the first parameter and nil to the rest
+       (#3944). Decide it at run time. */
+    if (at == TY_POLY && inner >= 0) {
+      poly_splat_tmp = ++g_tmp;
+      Buf pb2; memset(&pb2, 0, sizeof pb2); emit_expr(c, inner, &pb2);
+      emit_indent(g_pre, g_indent);
+      buf_printf(g_pre, "sp_RbVal _t%d = %s; SP_GC_ROOT_RBVAL(_t%d);\n",
+                 poly_splat_tmp, pb2.p ? pb2.p : "sp_box_nil()", poly_splat_tmp);
+      emit_indent(g_pre, g_indent);
+      buf_printf(g_pre, "int _fs%d = (_t%d.tag == SP_TAG_OBJ && sp_poly_is_array_kind(_t%d.cls_id));\n",
+                 poly_splat_tmp, poly_splat_tmp, poly_splat_tmp);
+      free(pb2.p);
+    }
+    else if (ty_is_array(at) || at == TY_POLY_ARRAY) {
       splat_at = at;
       splat_tmp = ++g_tmp;
       Buf sb; memset(&sb, 0, sizeof sb); emit_expr(c, inner, &sb);
@@ -691,7 +708,20 @@ void emit_block_invoke(Compiler *c, int args_node, Buf *b, int indent, int as_ex
     const char *bpr = bprbuf;
     if (!as_expr) emit_indent(b, indent);
     buf_printf(b, "lv_%s = ", bpr);
-    if (splat_tmp >= 0) {
+    if (poly_splat_tmp >= 0) {
+      LocalVar *bl = bsc ? scope_local(bsc, bp) : NULL;
+      TyKind bt = bl ? bl->type : TY_UNKNOWN;
+      char psrc[160];
+      if (k == 0)
+        snprintf(psrc, sizeof psrc, "(_fs%d ? sp_poly_index_poly(_t%d, sp_box_int(0)) : _t%d)",
+                 poly_splat_tmp, poly_splat_tmp, poly_splat_tmp);
+      else
+        snprintf(psrc, sizeof psrc, "(_fs%d ? sp_poly_index_poly(_t%d, sp_box_int(%d)) : sp_box_nil())",
+                 poly_splat_tmp, poly_splat_tmp, k);
+      if (bt == TY_POLY || bt == TY_UNKNOWN) buf_puts(b, psrc);
+      else emit_unbox_text(c, bt, psrc, b);
+    }
+    else if (splat_tmp >= 0) {
       /* element k of the splatted array, guarded: when the array is shorter
          than the param list the surplus params bind nil (CRuby auto-splat),
          using the same per-slot default the non-splat under-fill path does. */
