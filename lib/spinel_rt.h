@@ -4768,6 +4768,14 @@ static mrb_int sp_rbval_hash_key(sp_RbVal v) {
       return v.v.s ? (mrb_int)sp_str_hash(v.v.s) : 0;
     case SP_TAG_ENCODING:
       return v.v.s ? (mrb_int)sp_str_hash(v.v.s) : 0;
+    /* A Class value keys by NAME, the way `==` on two of them compares: a
+       class box carries either a cls_id or a name, so hashing the box itself
+       made `h[Integer] = 1; h[Integer] = 2` two entries (and `group_by(&:class)`
+       one bucket per element). */
+    case SP_TAG_CLASS: {
+      const char *cn = sp_class_val_name(v);
+      return cn ? (mrb_int)sp_str_hash(cn) : 0;
+    }
     /* -0.0 and 0.0 are eql?, so they must hash alike: normalize the sign of
        zero away before hashing the bits (#3651). */
     case SP_TAG_FLT: { double f = v.v.f == 0.0 ? 0.0 : v.v.f;
@@ -4897,6 +4905,10 @@ static mrb_bool sp_rbval_eql_key(sp_RbVal a, sp_RbVal b) {
       if (a.v.s == b.v.s) return TRUE;
       if (!a.v.s || !b.v.s) return FALSE;
       return strcmp(a.v.s, b.v.s) == 0;
+    case SP_TAG_CLASS: {   /* by name, paired with the name-based hash above */
+      const char *an = sp_class_val_name(a), *bn = sp_class_val_name(b);
+      return (an && bn) ? strcmp(an, bn) == 0 : an == bn;
+    }
     case SP_TAG_FLT:
       /* a NaN is not == to itself, but CRuby's container lookups fall back on
          identity, so the very same NaN is still found by its own key (#3650) */
