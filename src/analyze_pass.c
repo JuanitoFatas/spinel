@@ -1051,11 +1051,38 @@ int reconcile_locals_reading_ivars(Compiler *c) {
     int val_id = nt_ref(nt, id, "value");
     if (val_id < 0) continue;
     const char *vty = nt_type(nt, val_id);
-    if (!vty || !sp_streq(vty, "InstanceVariableReadNode")) continue;
+    if (!vty) continue;
+    int is_iv = sp_streq(vty, "InstanceVariableReadNode");
+    /* `x = reader` reads the same slot one call deep: an argument-less,
+       block-less attr_reader on self. Its own node type was settled before the
+       late widening below reached the slot, so reading it back would answer
+       the stale narrower type -- the local then declared the object pointer
+       while the field it is assigned from had become boxed (#3938). */
+    int is_rd = !is_iv && sp_streq(vty, "CallNode");
+    if (!is_iv && !is_rd) continue;
     const char *nm = nt_str(nt, id, "name");
     LocalVar *lv = nm ? scope_local(comp_scope_of(c, id), nm) : NULL;
     if (!lv || lv->is_param || lv->is_block_param || lv->rbs_seeded) continue;
-    TyKind ivt = infer_type(c, val_id);
+    TyKind ivt = TY_UNKNOWN;
+    if (is_iv) ivt = infer_type(c, val_id);
+    else {
+      int rcv = nt_ref(nt, val_id, "receiver");
+      const char *rnm = nt_str(nt, val_id, "name");
+      int ra = nt_ref(nt, val_id, "arguments"); int rac = 0;
+      if (ra >= 0) nt_arr(nt, ra, "arguments", &rac);
+      if (!rnm || rac != 0 || nt_ref(nt, val_id, "block") >= 0) continue;
+      if (rcv >= 0 && !(nt_type(nt, rcv) && sp_streq(nt_type(nt, rcv), "SelfNode"))) continue;
+      Scope *sc = comp_scope_of(c, val_id);
+      int cls = sc ? sc->class_id : -1;
+      int rdcls = -1;
+      if (cls < 0 || !comp_reader_in_chain(c, cls, rnm, &rdcls)) continue;
+      if (rdcls < 0 || rdcls >= c->nclasses) continue;
+      const char *rn2 = comp_resolve_alias(c, cls, rnm);
+      char ivn2[300]; snprintf(ivn2, sizeof ivn2, "@%s", rn2 ? rn2 : rnm);
+      int iv2 = comp_ivar_index(&c->classes[rdcls], ivn2);
+      if (iv2 < 0) continue;
+      ivt = ivar_value_ty(&c->classes[rdcls], iv2);
+    }
     if (ivt == TY_UNKNOWN) continue;
     TyKind m = ty_unify(lv->type, ivt);
     if (m != lv->type) { lv->type = m; changed = 1; }
