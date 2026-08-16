@@ -2097,10 +2097,23 @@ static sp_RbVal sp_poly_hash_get_pair_val(sp_RbVal h, sp_RbVal key, mrb_bool *fo
   *found = FALSE;
   return sp_box_nil();
 }
+SP_NORETURN SP_COLD static void sp_raise_poly_nomethod(const char *m, sp_RbVal v);  /* fwd */
+/* `length` on a boxed receiver: nil, a number and a user object have none, and
+   sp_poly_length answers 0 for all three -- so `v.length` on a nil read out of
+   a hash miss answered 0 instead of raising NoMethodError (#3974). */
+static mrb_int sp_poly_length_m(sp_RbVal v) {
+  if (v.tag == SP_TAG_NIL || v.tag == SP_TAG_INT || v.tag == SP_TAG_FLT ||
+      v.tag == SP_TAG_BIGINT || v.tag == SP_TAG_BOOL || sp_poly_is_user_obj(v))
+    sp_raise_poly_nomethod("length", v);
+  return sp_poly_length(v);
+}
 /* `size` on a boxed receiver: a collection answers its length, but an Integer
    answers the bytes of its machine representation, which sp_poly_length has no
-   arm for and reported as 0. */
+   arm for and reported as 0. nil and a user object have no size at all. */
 static mrb_int sp_poly_size(sp_RbVal v) {
+  if (v.tag == SP_TAG_NIL || v.tag == SP_TAG_BOOL || v.tag == SP_TAG_FLT ||
+      sp_poly_is_user_obj(v))
+    sp_raise_poly_nomethod("size", v);
   if (v.tag == SP_TAG_INT) return (mrb_int)sizeof(mrb_int);
   if (v.tag == SP_TAG_BIGINT) {
     sp_Bigint *bg = (sp_Bigint *)v.v.p;
@@ -2201,8 +2214,12 @@ static void __attribute__((noinline,cold)) sp_raise_frozen_hash_at(void *h, int 
    method raises CRuby's NoMethodError (e.g. `1.nan?`, `"x".abs`). */
 SP_NORETURN SP_COLD static void sp_raise_poly_nomethod(const char *m, sp_RbVal v) {
   sp_exc_stage_recv(v);
-  sp_raise_cls("NoMethodError",
-               sp_sprintf("undefined method '%s' for an instance of %s", m, sp_poly_class_name(v)));
+  /* nil, true and false read as themselves in CRuby's message, as the sibling
+     builder below already spells them */
+  const char *d = (v.tag == SP_TAG_NIL) ? SPL("nil")
+                : (v.tag == SP_TAG_BOOL) ? (v.v.i ? SPL("true") : SPL("false"))
+                : sp_sprintf("an instance of %s", sp_poly_class_name(v));
+  sp_raise_cls("NoMethodError", sp_sprintf("undefined method '%s' for %s", m, d));
 }
 /* CRuby-shaped NoMethodError text for an unresolved call on a runtime value:
    nil/true/false read as themselves, anything else as "an instance of
@@ -7066,8 +7083,23 @@ SP_NORETURN SP_COLD void sp_raise_cls(const char *cls, const char *msg) {
   if (sp_exc_top > 0) { sp_exc_msg[sp_exc_top-1] = msg == sp_exc_no_msg ? msg : msg ? sp_str_dup_external(msg) : NULL; sp_exc_cls[sp_exc_top-1] = cls; sp_exc_obj[sp_exc_top-1] = sp_pending_exc_obj; sp_pending_exc_obj = NULL; sp_pending_cause = sp_explicit_cause_set ? sp_explicit_cause : (sp_cur_handled() ? sp_cur_handled() : sp_inflight_cause); sp_inflight_cause = NULL; sp_explicit_cause = NULL; sp_explicit_cause_set = 0; sp_last_exc_cls = cls; longjmp(sp_exc_stack[sp_exc_top-1], 1); }
   /* Uncaught SystemExit terminates silently with its status (Kernel#exit). */
   if (strcmp(cls, "SystemExit") == 0) exit(sp_exc_exit_status(sp_pending_exc_obj));
-  /* Uncaught: CRuby's tail format "<message> (<ClassName>)". The source
-     location CRuby prefixes is not carried through the raise machinery. */
+  /* Uncaught: CRuby's tail format "<message> (<ClassName>)", prefixed by the
+     raising frame and followed by its callers when the backtrace substrate is
+     live (a --debug build). Without it there is no location to print, and an
+     uncaught raise in a multi-file program said only what went wrong, never
+     where (#3974). Frames are method-granularity, so there is no `:line:`. */
+#if SP_BT_AVAILABLE
+  if (sp_bt_enabled && sp_bt_n > 0) {
+    sp_StrArray *bt = sp_bt_format(sp_bt_buf, sp_bt_n);
+    if (bt && bt->len > 0) {
+      fprintf(stderr, "%s: %s (%s)\n", sp_StrArray_get(bt, 0),
+              (msg && *msg) ? msg : cls, cls);
+      for (mrb_int _i = 1; _i < bt->len; _i++)
+        fprintf(stderr, "\tfrom %s\n", sp_StrArray_get(bt, _i));
+      exit(1);
+    }
+  }
+#endif
   fprintf(stderr, "%s (%s)\n", (msg && *msg) ? msg : cls, cls); exit(1); }
 static void sp_raise(const char *msg) { sp_raise_cls("RuntimeError", msg); }
 

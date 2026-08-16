@@ -10852,10 +10852,12 @@ int emit_poly_call(Compiler *c, int id, Buf *b) {
         else if (sp_streq(name, "size")) {
           /* Integer#size is the byte width of the machine representation, not
              a length; sp_poly_length has no arm for it and answered 0. */
-          buf_puts(b, "sp_poly_size("); emit_expr(c, recv, b); buf_puts(b, ")");
+          buf_puts(b, "sp_poly_size("); emit_boxed(c, recv, b); buf_puts(b, ")");
         }
         else {
-          buf_puts(b, "sp_poly_length("); emit_expr(c, recv, b); buf_puts(b, ")");
+          /* nil / a number / a user object has no #length: answering 0 turned a
+             NoMethodError into a silent zero (#3974) */
+          buf_puts(b, "sp_poly_length_m("); emit_boxed(c, recv, b); buf_puts(b, ")");
         }
         return 1;
       }
