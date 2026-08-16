@@ -17294,6 +17294,12 @@ else { memcpy(dir, sf, n); dir[n] = 0; } }
     buf_printf(b, "switch(_t%d.cls_id){", kt);
     for (int ci = 0; ci < c->nclasses; ci++) {
       if (is_builtin_reopen(c->classes[ci].name)) continue;
+      /* A MODULE has no `new`, and no constructor is emitted for one: giving it
+         an arm called an sp_<Module>_new that nothing defines, and the program
+         failed to link (#3965). */
+      { int mdn = c->classes[ci].def_node;
+        const char *mdt = mdn >= 0 ? nt_type(nt, mdn) : NULL;
+        if (mdt && sp_streq(mdt, "ModuleNode")) continue; }
       /* a zero-arg .new can only construct a class whose initialize takes no
          required args; an arg-requiring ctor would be an ArgumentError in MRI,
          and its C function has parameters -- omit its arm (a runtime cls_id for
@@ -17342,6 +17348,9 @@ else { memcpy(dir, sf, n); dir[n] = 0; } }
     for (int ci = 0; ci < c->nclasses; ci++) {
       if (is_builtin_reopen(c->classes[ci].name) || c->classes[ci].is_struct ||
           c->classes[ci].is_native_class || !c->classes[ci].instantiated) continue;
+      { int mdn = c->classes[ci].def_node;   /* a module has no `new` (#3965) */
+        const char *mdt = mdn >= 0 ? nt_type(nt, mdn) : NULL;
+        if (mdt && sp_streq(mdt, "ModuleNode")) continue; }
       int initm = comp_method_in_chain(c, ci, "initialize", NULL);
       int np = initm >= 0 ? c->scopes[initm].nparams : 0;
       int nreq = initm >= 0 ? c->scopes[initm].nrequired : 0;
