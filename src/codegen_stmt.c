@@ -643,7 +643,12 @@ else {
           Buf ab; memset(&ab, 0, sizeof ab);
           emit_boxed(c, argv[k], &ab);
           emit_indent(b, indent);
-          buf_printf(b, "  sp_PolyArray_push(_t%d, %s);\n", tpa, ab.p ? ab.p : "sp_box_nil()");
+          /* a splat contributes its ELEMENTS, not one array argument (#3957) */
+          if (nt_kind(nt, argv[k]) == NK_SplatNode)
+            buf_printf(b, "  sp_PolyArray_append_all(_t%d, sp_poly_to_poly_array(%s));\n",
+                       tpa, ab.p ? ab.p : "sp_box_nil()");
+          else
+            buf_printf(b, "  sp_PolyArray_push(_t%d, %s);\n", tpa, ab.p ? ab.p : "sp_box_nil()");
           free(ab.p);
         }
         emit_indent(b, indent);

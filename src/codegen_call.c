@@ -13491,12 +13491,17 @@ void emit_call(Compiler *c, int id, Buf *b) {
       buf_printf(g_pre, "%s;\n", ffb.p ? ffb.p : "\"\"");
       free(ffb.p);
       emit_indent(g_pre, g_indent);
-      buf_printf(g_pre, "sp_PolyArray *_t%d = sp_PolyArray_new();\n", tfa);
+      buf_printf(g_pre, "sp_PolyArray *_t%d = sp_PolyArray_new(); SP_GC_ROOT(_t%d);\n", tfa, tfa);
       for (int ai = 1; ai < argc; ai++) {
         Buf fab; memset(&fab, 0, sizeof fab);
         emit_boxed(c, argv[ai], &fab);
         emit_indent(g_pre, g_indent);
-        buf_printf(g_pre, "sp_PolyArray_push(_t%d, %s);\n", tfa, fab.p ? fab.p : "sp_box_nil()");
+        /* a splat contributes its ELEMENTS, not one array argument (#3957) */
+        if (nt_kind(nt, argv[ai]) == NK_SplatNode)
+          buf_printf(g_pre, "sp_PolyArray_append_all(_t%d, sp_poly_to_poly_array(%s));\n",
+                     tfa, fab.p ? fab.p : "sp_box_nil()");
+        else
+          buf_printf(g_pre, "sp_PolyArray_push(_t%d, %s);\n", tfa, fab.p ? fab.p : "sp_box_nil()");
         free(fab.p);
       }
       buf_printf(b, "({ sp_File_write(%s, sp_str_format_polyarr(_t%d, _t%d)); sp_box_nil(); })", r, tfp, tfa);
@@ -14322,7 +14327,8 @@ else { memcpy(dir, sf, n); dir[n] = 0; } }
       buf_printf(g_pre, "%s;\n", fb.p ? fb.p : "");
       free(fb.p);
       emit_indent(g_pre, g_indent);
-      buf_printf(g_pre, "sp_PolyArray *_t%d = sp_PolyArray_new();\n", ta);
+      /* Rooted: every arg below boxes, and a box allocates. */
+      buf_printf(g_pre, "sp_PolyArray *_t%d = sp_PolyArray_new(); SP_GC_ROOT(_t%d);\n", ta, ta);
       for (int ai = 1; ai < ac; ai++) {
         /* Emit the boxed arg into a local buffer first: an arg that is itself a
            call rooting its operands pushes those decls to g_pre, which must land
@@ -14331,7 +14337,15 @@ else { memcpy(dir, sf, n); dir[n] = 0; } }
         Buf ab; memset(&ab, 0, sizeof ab);
         emit_boxed(c, av[ai], &ab);
         emit_indent(g_pre, g_indent);
-        buf_printf(g_pre, "sp_PolyArray_push(_t%d, %s);\n", ta, ab.p ? ab.p : "sp_box_nil()");
+        /* `format(fmt, *args)`: the splat contributes its ELEMENTS. Pushing the
+           boxed array as one argument left the conversions unfed and raised
+           "too few arguments" (#3957). A splatted literal never got here -- the
+           parser spreads it into separate args. */
+        if (nt_kind(nt, av[ai]) == NK_SplatNode)
+          buf_printf(g_pre, "sp_PolyArray_append_all(_t%d, sp_poly_to_poly_array(%s));\n",
+                     ta, ab.p ? ab.p : "sp_box_nil()");
+        else
+          buf_printf(g_pre, "sp_PolyArray_push(_t%d, %s);\n", ta, ab.p ? ab.p : "sp_box_nil()");
         free(ab.p);
       }
       buf_printf(b, "sp_str_format_polyarr(_t%d, _t%d)", tf, ta);
