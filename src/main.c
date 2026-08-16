@@ -512,6 +512,13 @@ int main(int argc, char **argv) {
   s_add(&cmd, " ");
   snprintf(tmp, sizeof tmp, "-O%s ", opt_level); s_add(&cmd, tmp);
   s_add(&cmd, "-Wno-all -ffunction-sections -fdata-sections ");
+  /* A pointer of the wrong type in generated code is a miscompile, not a style
+     question: it reads one struct through another's layout, which segfaults or
+     answers garbage (a Symbol key dereferenced as a char *, #3975; an Integer
+     element bound to a string handle, #3971). Both showed up only as a warning
+     in the build log, easy to scroll past. Fail the build instead, so the
+     emitter's own bug surfaces here rather than at run time. */
+  s_add(&cmd, "-Werror=incompatible-pointer-types -Werror=int-conversion ");
   if (fiber_frame_guard) s_add(&cmd, "-Wframe-larger-than=65536 ");
   snprintf(tmp, sizeof tmp, "-I\"%s\" -I\"%s%cregexp\" ", lib_dir, lib_dir, PATH_SEP); s_add(&cmd, tmp);
   /* Compile the generated TU with the same threading define as the mt runtime
