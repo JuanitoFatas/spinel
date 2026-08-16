@@ -1687,7 +1687,24 @@ int emit_poly_class_when(Compiler *c, int cond_id, const char *tmp, Buf *b) {
   else if (sp_streq(cn, "FalseClass"))
     buf_printf(b, "(%s.tag == SP_TAG_BOOL && !%s.v.b)", tmp, tmp);
   else if (sp_streq(cn, "Numeric"))
-    buf_printf(b, "(%s.tag == SP_TAG_INT || %s.tag == SP_TAG_FLT)", tmp, tmp);
+    buf_printf(b, "(%s.tag == SP_TAG_INT || %s.tag == SP_TAG_FLT || %s.tag == SP_TAG_BIGINT || "
+                  "(%s.tag == SP_TAG_OBJ && (%s.cls_id == SP_BUILTIN_RATIONAL || "
+                  "%s.cls_id == SP_BUILTIN_BIG_RATIONAL || %s.cls_id == SP_BUILTIN_COMPLEX)))",
+               tmp, tmp, tmp, tmp, tmp, tmp, tmp);
+  /* The value types below have a builtin cls_id but no entry in the class
+     table, so the user-class arm at the end found nothing and emitted a
+     constant false: `when Rational` simply never matched (#3959). */
+  else if (sp_streq(cn, "Rational"))
+    buf_printf(b, "(%s.tag == SP_TAG_OBJ && (%s.cls_id == SP_BUILTIN_RATIONAL || "
+                  "%s.cls_id == SP_BUILTIN_BIG_RATIONAL))", tmp, tmp, tmp);
+  else if (sp_streq(cn, "Complex"))
+    buf_printf(b, "(%s.tag == SP_TAG_OBJ && %s.cls_id == SP_BUILTIN_COMPLEX)", tmp, tmp);
+  else if (sp_streq(cn, "Regexp"))
+    buf_printf(b, "(%s.tag == SP_TAG_OBJ && %s.cls_id == SP_BUILTIN_REGEX)", tmp, tmp);
+  else if (sp_streq(cn, "Proc"))
+    buf_printf(b, "(%s.tag == SP_TAG_OBJ && %s.cls_id == SP_BUILTIN_PROC)", tmp, tmp);
+  else if (sp_streq(cn, "Time"))
+    buf_printf(b, "(%s.tag == SP_TAG_OBJ && %s.cls_id == SP_BUILTIN_TIME)", tmp, tmp);
   else if (sp_streq(cn, "Range"))
     buf_printf(b, "(%s.tag == SP_TAG_OBJ && %s.cls_id == SP_BUILTIN_RANGE)", tmp, tmp);
   else if (sp_streq(cn, "Array"))

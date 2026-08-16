@@ -9658,6 +9658,53 @@ int emit_unresolved_call(Compiler *c, int id, Buf *b) {
 }
 
 
+/* The runtime test for `<poly value v> is_a? <class named cn>` (exact: the
+   instance_of? form, no ancestry). Shared by is_a?/kind_of?/instance_of? and by
+   `Klass === poly`, which used to carry its own shorter copy of the table and
+   answered a constant false for every class it did not list -- `Rational === v`
+   was simply never true (#3959). Emits nothing and answers 0 when the name is
+   not a class at all. */
+static int emit_poly_isa_test(Compiler *c, const char *cn, const char *v, int exact, Buf *b) {
+  if (!cn) return 0;
+  if (sp_streq(cn, "Integer") || sp_streq(cn, "Fixnum")) buf_printf(b, "%s.tag == SP_TAG_INT", v);
+  else if (sp_streq(cn, "String"))
+    buf_printf(b, "(%s.tag == SP_TAG_STR || (%s.tag == SP_TAG_OBJ && %s.cls_id == SP_BUILTIN_STRBUF))", v, v, v);
+  else if (sp_streq(cn, "Float"))    buf_printf(b, "%s.tag == SP_TAG_FLT", v);
+  else if (sp_streq(cn, "Symbol"))   buf_printf(b, "%s.tag == SP_TAG_SYM", v);
+  else if (sp_streq(cn, "NilClass")) buf_printf(b, "%s.tag == SP_TAG_NIL", v);
+  else if (sp_streq(cn, "TrueClass"))  buf_printf(b, "(%s.tag == SP_TAG_BOOL && %s.v.b)", v, v);
+  else if (sp_streq(cn, "FalseClass")) buf_printf(b, "(%s.tag == SP_TAG_BOOL && !%s.v.b)", v, v);
+  else if (sp_streq(cn, "Numeric"))
+    buf_printf(b, "(%s.tag == SP_TAG_INT || %s.tag == SP_TAG_FLT || %s.tag == SP_TAG_BIGINT || "
+                  "(%s.tag == SP_TAG_OBJ && (%s.cls_id == SP_BUILTIN_RATIONAL || "
+                  "%s.cls_id == SP_BUILTIN_BIG_RATIONAL || %s.cls_id == SP_BUILTIN_COMPLEX)))",
+               v, v, v, v, v, v, v);
+  else if (sp_streq(cn, "Array"))    buf_printf(b, "(%s.tag == SP_TAG_OBJ && %s.cls_id <= -1 && %s.cls_id >= -12)", v, v, v);
+  else if (sp_streq(cn, "Hash"))     buf_printf(b, "(%s.tag == SP_TAG_OBJ && ((%s.cls_id <= -13 && %s.cls_id >= -20) || %s.cls_id == -34))", v, v, v, v);
+  else if (sp_streq(cn, "Encoding")) buf_printf(b, "%s.tag == SP_TAG_ENCODING", v);
+  else {
+    int cid = comp_class_index(c, cn);
+    if (cid >= 0) {
+      buf_printf(b, "(%s.tag == SP_TAG_OBJ && (", v);
+      int first = 1;
+      for (int k = 0; k < c->nclasses; k++)
+        if (k == cid || (!exact && is_descendant(c, k, cid))) {
+          buf_printf(b, "%s%s.cls_id == %d", first ? "" : " || ", v, k); first = 0;
+        }
+      if (first) buf_puts(b, "0");
+      buf_puts(b, "))");
+    }
+    /* a builtin ancestor not covered above (Object/BasicObject/Kernel are
+       universal; Numeric/Comparable/Enumerable are module mixins; Rational,
+       Complex, Regexp, Proc and friends have a cls_id but no class-table
+       entry): defer to the runtime ancestry helper rather than a blanket
+       false. */
+    else if (!exact) buf_printf(b, "sp_poly_kind_of_builtin(%s, \"%s\")", v, cn);
+    else buf_printf(b, "(strcmp(sp_poly_class_name(%s), \"%s\") == 0)", v, cn);
+  }
+  return 1;
+}
+
 void emit_call(Compiler *c, int id, Buf *b) {
   /* deep-return pickup (#3227 P6): a marked receiverless call to a method
      whose every return path yields a shared handle -- reset the side
@@ -21352,37 +21399,7 @@ else { memcpy(dir, sf, n); dir[n] = 0; } }
       int t = ++g_tmp;
       buf_printf(b, "({ sp_RbVal _t%d = ", t); emit_expr(c, recv, b); buf_printf(b, "; ");
       char v[32]; snprintf(v, sizeof v, "_t%d", t);
-      if (sp_streq(cn, "Integer") || sp_streq(cn, "Fixnum")) buf_printf(b, "%s.tag == SP_TAG_INT", v);
-      else if (sp_streq(cn, "String"))
-        buf_printf(b, "(%s.tag == SP_TAG_STR || (%s.tag == SP_TAG_OBJ && %s.cls_id == SP_BUILTIN_STRBUF))", v, v, v);
-      else if (sp_streq(cn, "Float"))    buf_printf(b, "%s.tag == SP_TAG_FLT", v);
-      else if (sp_streq(cn, "Symbol"))   buf_printf(b, "%s.tag == SP_TAG_SYM", v);
-      else if (sp_streq(cn, "NilClass")) buf_printf(b, "%s.tag == SP_TAG_NIL", v);
-      else if (sp_streq(cn, "TrueClass"))  buf_printf(b, "(%s.tag == SP_TAG_BOOL && %s.v.b)", v, v);
-      else if (sp_streq(cn, "FalseClass")) buf_printf(b, "(%s.tag == SP_TAG_BOOL && !%s.v.b)", v, v);
-      else if (sp_streq(cn, "Numeric"))  buf_printf(b, "(%s.tag == SP_TAG_INT || %s.tag == SP_TAG_FLT)", v, v);
-      else if (sp_streq(cn, "Array"))    buf_printf(b, "(%s.tag == SP_TAG_OBJ && %s.cls_id <= -1 && %s.cls_id >= -12)", v, v, v);
-      else if (sp_streq(cn, "Hash"))     buf_printf(b, "(%s.tag == SP_TAG_OBJ && ((%s.cls_id <= -13 && %s.cls_id >= -20) || %s.cls_id == -34))", v, v, v, v);
-      else if (sp_streq(cn, "Encoding")) buf_printf(b, "%s.tag == SP_TAG_ENCODING", v);
-      else {
-        int cid = comp_class_index(c, cn);
-        int exact = sp_streq(name, "instance_of?");
-        if (cid >= 0) {
-          buf_printf(b, "(%s.tag == SP_TAG_OBJ && (", v);
-          int first = 1;
-          for (int k = 0; k < c->nclasses; k++)
-            if (k == cid || (!exact && is_descendant(c, k, cid))) {
-              buf_printf(b, "%s%s.cls_id == %d", first ? "" : " || ", v, k); first = 0;
-            }
-          if (first) buf_puts(b, "0");
-          buf_puts(b, "))");
-        }
-        /* a builtin ancestor not covered above (Object/BasicObject/Kernel are
-           universal; Numeric/Comparable/Enumerable are module mixins): defer to
-           the runtime ancestry helper instead of a blanket false. */
-        else if (!exact) buf_printf(b, "sp_poly_kind_of_builtin(%s, \"%s\")", v, cn);
-        else buf_printf(b, "(strcmp(sp_poly_class_name(%s), \"%s\") == 0)", v, cn);
-      }
+      emit_poly_isa_test(c, cn, v, sp_streq(name, "instance_of?"), b);
       buf_puts(b, "; })");
       return;
     }
@@ -21878,15 +21895,7 @@ else { memcpy(dir, sf, n); dir[n] = 0; } }
         int tv = ++g_tmp;
         buf_printf(b, "({ sp_RbVal _t%d = ", tv); emit_expr(c, argv[0], b); buf_printf(b, "; ");
         char v[32]; snprintf(v, sizeof v, "_t%d", tv);
-        if (sp_streq(cn, "Integer") || sp_streq(cn, "Fixnum")) buf_printf(b, "%s.tag == SP_TAG_INT", v);
-        else if (sp_streq(cn, "String"))
-        buf_printf(b, "(%s.tag == SP_TAG_STR || (%s.tag == SP_TAG_OBJ && %s.cls_id == SP_BUILTIN_STRBUF))", v, v, v);
-        else if (sp_streq(cn, "Float"))    buf_printf(b, "%s.tag == SP_TAG_FLT", v);
-        else if (sp_streq(cn, "Symbol"))   buf_printf(b, "%s.tag == SP_TAG_SYM", v);
-        else if (sp_streq(cn, "NilClass")) buf_printf(b, "%s.tag == SP_TAG_NIL", v);
-        else if (sp_streq(cn, "Numeric"))  buf_printf(b, "(%s.tag == SP_TAG_INT || %s.tag == SP_TAG_FLT)", v, v);
-        else if (sp_streq(cn, "Array"))    buf_printf(b, "(%s.tag == SP_TAG_OBJ && %s.cls_id <= -1 && %s.cls_id >= -12)", v, v, v);
-        else buf_printf(b, "0");
+        emit_poly_isa_test(c, cn, v, 0, b);
         buf_puts(b, "; })");
         return;
       }
