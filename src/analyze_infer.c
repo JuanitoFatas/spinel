@@ -928,9 +928,11 @@ TyKind infer_call(Compiler *c, int id) {
       infer_type(c, recv) == TY_POLY)
     return TY_POLY;
 
-  /* `!` and `!=` are ordinary methods a class may override, so the result is
-     whatever its definition answers, not a bool (#3740) */
-  if (recv >= 0 && (sp_streq(name, "!") || sp_streq(name, "!=")) &&
+  /* `!`, `!=` and `==` are ordinary methods a class may override, so the
+     result is whatever its definition answers, not a bool (#3740). `==` joins
+     them: a class whose `==` answers something else had every call site typed
+     bool, and the value was rendered as true/false. */
+  if (recv >= 0 && (sp_streq(name, "!") || sp_streq(name, "!=") || sp_streq(name, "==")) &&
       argc == (sp_streq(name, "!") ? 0 : 1)) {
     TyKind nrt = infer_type(c, recv);
     if (ty_is_object(nrt)) {

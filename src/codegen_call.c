@@ -287,6 +287,14 @@ static void emit_cmethod_block_arg(Compiler *c, int id, Scope *cm, int blk_tmp, 
    with sp_bigint_new_int. Not for the int64 exponent/shift argument of pow or
    the shift operators, which stays an int. */
 void emit_bigint_operand_ext(Compiler *c, int node, Buf *b);
+/* An operand a bigint comparison may coerce: another number, or a value whose
+   type is only known at run time. A user OBJECT is not one -- its own #== (or
+   #<=>) has to dispatch, and coercing the pointer through sp_bigint_new_int
+   compared the address instead, silently (#3975). */
+static int bigint_cmp_operand_ok(TyKind t) {
+  return t == TY_INT || t == TY_BIGINT || t == TY_FLOAT || t == TY_RATIONAL ||
+         t == TY_POLY || t == TY_UNKNOWN;
+}
 static void emit_bigint_operand(Compiler *c, int node, Buf *b) {
   TyKind t = comp_ntype(c, node);
   if (t == TY_BIGINT) { emit_expr(c, node, b); return; }
@@ -7324,7 +7332,8 @@ static int emit_case_eq_call(Compiler *c, int id, Buf *b) {
       }
     }
     /* bigint == / != */
-    if (rt == TY_BIGINT || a0 == TY_BIGINT) {
+    if ((rt == TY_BIGINT || a0 == TY_BIGINT) &&
+        bigint_cmp_operand_ok(rt) && bigint_cmp_operand_ok(a0)) {
       buf_printf(b, "(sp_bigint_cmp(");
       emit_bigint_operand(c, recv, b);
       buf_puts(b, ", ");
@@ -21248,7 +21257,8 @@ else { memcpy(dir, sf, n); dir[n] = 0; } }
   if (recv >= 0 && argc == 1 &&
       (sp_streq(name, "<") || sp_streq(name, ">") ||
        sp_streq(name, "<=") || sp_streq(name, ">="))) {
-    if (rt == TY_BIGINT || comp_ntype(c, argv[0]) == TY_BIGINT) {
+    if ((rt == TY_BIGINT || comp_ntype(c, argv[0]) == TY_BIGINT) &&
+        bigint_cmp_operand_ok(rt) && bigint_cmp_operand_ok(comp_ntype(c, argv[0]))) {
       buf_printf(b, "(sp_bigint_cmp(");
       emit_bigint_operand(c, recv, b);
       buf_puts(b, ", ");
