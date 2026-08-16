@@ -486,10 +486,12 @@ void emit_p_one(Compiler *c, int arg, Buf *b, int indent) {
     buf_printf(b, "{ sp_StrRange _t%d = ", tv); emit_expr(c, arg, b);
     buf_printf(b, "; fputs(sp_srange_inspect(_t%d), stdout); putchar('\\n'); }\n", tv);
   }
-  else if (t == TY_CLASS) {   /* a Class/Module inspects as its name */
+  else if (t == TY_CLASS) {   /* a Class/Module inspects as its name, except a
+                                 keyword-init Struct class, which carries the
+                                 `(keyword_init: true)` suffix (#3947) */
     int cv = ++g_tmp;
     buf_printf(b, "{ sp_Class _t%d = ", cv); emit_expr(c, arg, b);
-    buf_printf(b, "; fputs(sp_class_to_s(_t%d), stdout); putchar('\\n'); }\n", cv);
+    buf_printf(b, "; fputs(sp_class_inspect_name(_t%d), stdout); putchar('\\n'); }\n", cv);
   }
   else if (t == TY_BIGINT) {
     /* Integer#inspect == #to_s, so a bignum prints the same as puts/print. */

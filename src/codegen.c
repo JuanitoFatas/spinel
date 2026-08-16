@@ -7324,6 +7324,19 @@ char *codegen_program(const NodeTable *nt) {
     buf_puts(&b, "case -178:return SPL(\"Thread::ConditionVariable\");case -179:return SPL(\"Fiber\");");
     buf_puts(&b, "case -180:return SPL(\"MatchData\");");
     buf_puts(&b, "default:return sp_str_empty;} }\n\n");
+    /* CRuby INSPECTS a keyword-init Struct class as `K(keyword_init: true)`
+       while its name and to_s stay the bare name, so the render arms need a
+       second table rather than a suffixed sp_class_to_s (#3947). Emitted
+       alongside it, and identical to it when no such class exists. */
+    buf_puts(&b, "static const char *sp_class_inspect_name(sp_Class c){switch(c.cls_id){");
+    for (int i = 0; i < c->nclasses; i++) {
+      if (is_builtin_reopen(c->classes[i].name)) continue;
+      if (!c->classes[i].is_struct || c->classes[i].kw_init != 1) continue;
+      const char *qname = class_ruby_name(c, i);
+      if (!qname) qname = c->classes[i].name;
+      buf_printf(&b, "case %d:return SPL(\"%s(keyword_init: true)\");", i, qname);
+    }
+    buf_puts(&b, "default:break;} return sp_class_to_s(c); }\n\n");
     /* Inverse of the table above, for resolving a class carried by NAME back to
        its builtin id so the id-keyed hierarchy walks work on it (#3022). Cold
        path only (superclass/ancestors), so a linear scan is fine. */

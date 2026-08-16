@@ -15252,7 +15252,10 @@ else { memcpy(dir, sf, n); dir[n] = 0; } }
          sp_poly_class_val): stringify uniformly. */
       int _clt = ++g_tmp;
       buf_printf(b, "({ sp_Class _cl%d = ", _clt); emit_expr(c, recv, b);
-      buf_printf(b, "; sp_class_to_s(_cl%d); })", _clt);
+      /* inspect carries a keyword-init Struct class's suffix; name and to_s
+         stay the bare name (#3947) */
+      buf_printf(b, "; sp_class_%s(_cl%d); })",
+                 sp_streq(name, "inspect") ? "inspect_name" : "to_s", _clt);
     }
     else emit_expr(c, recv, b);
     return;
@@ -15401,7 +15404,13 @@ else { memcpy(dir, sf, n); dir[n] = 0; } }
       comp_cmethod_in_chain(c, comp_class_index(c, nt_str(nt, recv, "name")), name, NULL) < 0) {
     { int qci = comp_class_index(c, nt_str(nt, recv, "name"));
       const char *qn8 = qci >= 0 ? class_ruby_name(c, qci) : NULL;
-      buf_printf(b, "SPL(\"%s\")", qn8 ? qn8 : nt_str(nt, recv, "name")); }
+      /* A keyword-init Struct class INSPECTS as `K(keyword_init: true)`; its
+         name and to_s stay the bare name, and a positional Struct or a Data
+         class has no suffix at all (#3947). */
+      int kwq = (qci >= 0 && c->classes[qci].is_struct && c->classes[qci].kw_init == 1 &&
+                 sp_streq(name, "inspect"));
+      buf_printf(b, "SPL(\"%s%s\")", qn8 ? qn8 : nt_str(nt, recv, "name"),
+                 kwq ? "(keyword_init: true)" : ""); }
     return;
   }
   /* self.name / self.to_s / self.inspect inside a class method -> class name.
