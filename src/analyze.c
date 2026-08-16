@@ -3365,8 +3365,17 @@ static void desugar_enum_chain_shapes(Compiler *c) {
     if (recv < 0 || !nt_type(nt, recv) || !sp_streq(nt_type(nt, recv), "CallNode")) continue;
     const char *rn = nt_str(nt, recv, "name");
     if (!rn || nt_ref(nt, recv, "block") >= 0) continue;
-    if (sp_streq(nm, "with_index") && sp_streq(rn, "each_char")) {
-      nt_node_set_str(nt, recv, "name", "chars");
+    /* str.each_char/each_line/each_byte(blockless, no args).with_index ->
+       chars/lines/bytes.each.with_index, so the pair types as an array element
+       plus an int index. Only each_char was rewritten, so the other two kept an
+       opaque enumerator element and a BOXED index: passed to anything wanting
+       an Integer -- a Struct field another site builds with a literal -- the
+       boxed value met an mrb_int parameter and the build failed (#3939). */
+    if (sp_streq(nm, "with_index") && nt_ref(nt, recv, "arguments") < 0 &&
+        (sp_streq(rn, "each_char") || sp_streq(rn, "each_line") || sp_streq(rn, "each_byte"))) {
+      nt_node_set_str(nt, recv, "name",
+                      sp_streq(rn, "each_char") ? "chars" :
+                      sp_streq(rn, "each_line") ? "lines" : "bytes");
       int eachn = nt_new_node(nt, "CallNode");
       if (eachn < 0) continue;
       nt_node_set_str(nt, eachn, "name", "each");
