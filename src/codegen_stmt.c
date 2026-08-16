@@ -3929,7 +3929,20 @@ void emit_case(Compiler *c, int id, Buf *b, int indent) {
             buf_printf(b, "(sp_bigint_cmp(_t%d, ", t); emit_expr(c, conds[j], b); buf_puts(b, ") == 0)");
           }
           else if (pt == TY_STRING) {
-            buf_printf(b, "sp_str_eq(_t%d, ", t); emit_expr(c, conds[j], b); buf_puts(b, ")");
+            /* An arm of another type can never be `===` a String: `when
+               ["foo", "foo"]` is Array#=== , which is ==, and a String is not
+               an Array. Passing the array pointer to sp_str_eq did not even
+               typecheck; evaluate the arm for its effects and answer false. */
+            TyKind wat = comp_ntype(c, conds[j]);
+            if (wat != TY_STRING && wat != TY_STRBUF && wat != TY_POLY && wat != TY_UNKNOWN) {
+              buf_printf(b, "((void)_t%d, (void)(", t); emit_expr(c, conds[j], b); buf_puts(b, "), 0)");
+            }
+            else {
+              buf_printf(b, "sp_str_eq(_t%d, ", t);
+              if (wat == TY_POLY) { buf_puts(b, "sp_poly_to_s("); emit_expr(c, conds[j], b); buf_puts(b, ")"); }
+              else emit_expr(c, conds[j], b);
+              buf_puts(b, ")");
+            }
           }
           else if (pt == TY_POLY) {
             buf_printf(b, "sp_poly_eq(_t%d, ", t); emit_boxed(c, conds[j], b); buf_puts(b, ")");
@@ -4253,7 +4266,20 @@ void emit_case_expr(Compiler *c, int id, Buf *b) {
           else buf_puts(b, subj);
           buf_puts(b, "}), _sp_proc_poly_ret)); })");
         }
-        else if (pt == TY_STRING) { buf_printf(b, "sp_str_eq(_t%d, ", t); emit_expr(c, conds[j], b); buf_puts(b, ")"); }
+        else if (pt == TY_STRING) {
+          /* an arm of another type can never be `===` a String (see the sibling
+             arm above): evaluate it and answer false */
+          TyKind wat2 = comp_ntype(c, conds[j]);
+          if (wat2 != TY_STRING && wat2 != TY_STRBUF && wat2 != TY_POLY && wat2 != TY_UNKNOWN) {
+            buf_printf(b, "((void)_t%d, (void)(", t); emit_expr(c, conds[j], b); buf_puts(b, "), 0)");
+          }
+          else {
+            buf_printf(b, "sp_str_eq(_t%d, ", t);
+            if (wat2 == TY_POLY) { buf_puts(b, "sp_poly_to_s("); emit_expr(c, conds[j], b); buf_puts(b, ")"); }
+            else emit_expr(c, conds[j], b);
+            buf_puts(b, ")");
+          }
+        }
         else if (pt == TY_POLY) { buf_printf(b, "sp_poly_eq(_t%d, ", t); emit_boxed(c, conds[j], b); buf_puts(b, ")"); }
         else if (ty_is_object(pt) && comp_ntype(c, conds[j]) == pt &&
                  (comp_method_in_chain(c, ty_object_class(pt), "===", NULL) >= 0 ||
@@ -7980,12 +8006,23 @@ else {
           /* On underflow (fewer elements than the fixed pre/post targets) the
              splat collects nothing rather than wrapping to a negative length;
              clamp the slice length to zero. */
+          /* The slice is taken from the SOURCE array, so it must use the
+             source's kind; the rest local's own kind decides only what the
+             slice is converted to. Slicing a poly array through
+             sp_IntArray_slice read one struct as another (#3975 sweep). */
           buf_printf(b, "sp_%sArray *_t%d = sp_%sArray_slice(_t%d, %dLL, _t%d->len > %dLL ? _t%d->len - %dLL : 0LL);\n",
-                     rk, tr, rk, tarr, ln, tarr, ln + rn, tarr, ln + rn);
+                     k, tr, k, tarr, ln, tarr, ln + rn, tarr, ln + rn);
           emit_indent(b, indent);
           buf_printf(b, "SP_GC_ROOT(_t%d);\n", tr);
           emit_indent(b, indent);
-          emit_local_ref(c, id, rest_var, b); buf_printf(b, " = _t%d;\n", tr);
+          emit_local_ref(c, id, rest_var, b); buf_puts(b, " = ");
+          if (sp_streq(rk, k)) buf_printf(b, "_t%d;\n", tr);
+          else if (sp_streq(k, "Poly"))
+            buf_printf(b, "sp_%sArray_from_poly_array(_t%d);\n",
+                       sp_streq(rk, "Int") ? "Int" : sp_streq(rk, "Str") ? "Str" : "Float", tr);
+          else if (sp_streq(rk, "Poly"))
+            buf_printf(b, "sp_%sArray_to_poly%s(_t%d);\n", k, sp_streq(k, "Str") ? "_fmt" : "", tr);
+          else buf_printf(b, "_t%d;\n", tr);
         }
         for (int j = 0; j < rn; j++) {
           const char *lty = nt_type(nt, rights[j]);

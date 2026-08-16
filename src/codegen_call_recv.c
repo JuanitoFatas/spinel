@@ -301,6 +301,26 @@ int emit_array_call(Compiler *c, int id, Buf *b) {
        struct (#3608). */
     if (en == 0) c->ntype[recv] = TY_POLY_ARRAY;
   }
+  /* The same literal one pass-through call down (`[].freeze.rotate`): the
+     freeze/dup/clone arm builds the literal at ITS type, which for an empty one
+     is the int-array default, and the poly-array arm below then handed an
+     sp_IntArray * to sp_PolyArray_dup. Pin the literal, and the call that
+     carries it, to the poly array this dispatch is about to build. */
+  if (recv >= 0 && rt == TY_POLY_ARRAY && nt_kind(nt, recv) == NK_CallNode) {
+    const char *pnm = nt_str(nt, recv, "name");
+    int pin_recv = nt_ref(nt, recv, "receiver");
+    if (pnm && pin_recv >= 0 && nt_ref(nt, recv, "block") < 0 &&
+        (sp_streq(pnm, "freeze") || sp_streq(pnm, "dup") || sp_streq(pnm, "clone") ||
+         sp_streq(pnm, "itself")) &&
+        nt_type(nt, pin_recv) && sp_streq(nt_type(nt, pin_recv), "ArrayNode")) {
+      int pen = 0; nt_arr(nt, pin_recv, "elements", &pen);
+      if (pen == 0 &&
+          (comp_ntype(c, pin_recv) == TY_UNKNOWN || ty_is_array(comp_ntype(c, pin_recv)))) {
+        c->ntype[pin_recv] = TY_POLY_ARRAY;
+        c->ntype[recv] = TY_POLY_ARRAY;
+      }
+    }
+  }
   TyKind a0 = argc >= 1 ? comp_ntype(c, argv[0]) : TY_UNKNOWN;
   TyKind res = comp_ntype(c, id);
   /* [].first / [].last on an empty literal: there is no element type to read;
@@ -1168,6 +1188,45 @@ int emit_array_call(Compiler *c, int id, Buf *b) {
        boxing); for 2+ arguments box the receiver and every argument into rooted
        locals -- the GC is precise, so they must stay reachable across the
        helper's allocations -- and hand them to sp_poly_product as one vector. */
+    /* product(b, c, ...) WITH a block: CRuby runs the block for each tuple and
+       answers the receiver. Emitting the product alone answered the tuple array
+       instead, so `arr.product(x, y) { }.equal?(arr)` was false (and the
+       inference, which already said self, disagreed with the emission). */
+    if (sp_streq(name, "product") && argc >= 2 && nt_ref(nt, id, "block") >= 0) {
+      int blk = nt_ref(nt, id, "block");
+      int bbody = nt_ref(nt, blk, "body");
+      int bn = 0; const int *bb = bbody >= 0 ? nt_arr(nt, bbody, "body", &bn) : NULL;
+      const char *fp0 = block_param_name(c, blk, 0);
+      int nn = argc + 1;
+      int *ids = (int *)malloc(sizeof(int) * nn);
+      if (!ids) { perror("malloc"); exit(1); }
+      int trecv = ++g_tmp, tprod = ++g_tmp, ti = ++g_tmp;
+      buf_puts(b, "({ ");
+      buf_printf(b, "sp_RbVal _t%d = ", trecv); emit_boxed(c, recv, b);
+      buf_printf(b, "; SP_GC_ROOT_RBVAL(_t%d); ", trecv);
+      ids[0] = trecv;
+      for (int i = 0; i < argc; i++) {
+        ids[i + 1] = ++g_tmp;
+        buf_printf(b, "sp_RbVal _t%d = ", ids[i + 1]); emit_boxed(c, argv[i], b);
+        buf_printf(b, "; SP_GC_ROOT_RBVAL(_t%d); ", ids[i + 1]);
+      }
+      buf_printf(b, "sp_RbVal _tp%d[%d] = { _t%d", tprod, nn, ids[0]);
+      for (int i = 1; i < nn; i++) buf_printf(b, ", _t%d", ids[i]);
+      buf_printf(b, " }; sp_PolyArray *_t%d = sp_poly_product(_tp%d, %d); SP_GC_ROOT(_t%d);",
+                 tprod, tprod, nn, tprod);
+      buf_printf(b, " for (mrb_int _t%d = 0; _t%d < sp_PolyArray_length(_t%d); _t%d++) {",
+                 ti, ti, tprod, ti);
+      if (fp0) buf_printf(b, " lv_%s = sp_PolyArray_get(_t%d, _t%d);", rename_local(fp0), tprod, ti);
+      buf_puts(b, " {");
+      for (int j2 = 0; j2 < bn; j2++) emit_stmt(c, bb[j2], b, 0);
+      buf_puts(b, " } } ");
+      /* the receiver, in the C type this call is inferred to have */
+      TyKind pres = comp_ntype(c, id);
+      if (pres == TY_POLY || pres == TY_UNKNOWN) buf_printf(b, "_t%d; })", trecv);
+      else { emit_unbox_text(c, pres, ({ static char rb9[32]; snprintf(rb9, sizeof rb9, "_t%d", trecv); rb9; }), b); buf_puts(b, "; })"); }
+      free(ids);
+      return 1;
+    }
     if (sp_streq(name, "product") && argc >= 2) {
       int nn = argc + 1;
       int *ids = (int *)malloc(sizeof(int) * nn);
@@ -2532,6 +2591,15 @@ else {
          the receiver (CRuby returns self) */
       if (sp_streq(name, "product") && argc == 1 && nt_ref(nt, id, "block") >= 0) {
         int blk = nt_ref(nt, id, "block");
+        /* an empty `[]` argument has no element type of its own and would emit
+           as the int-array default, which this arm then reads as the poly array
+           it dispatches on (#3975 sweep) */
+        if (nt_type(nt, argv[0]) && sp_streq(nt_type(nt, argv[0]), "ArrayNode")) {
+          int aen = 0; nt_arr(nt, argv[0], "elements", &aen);
+          if (aen == 0 && (comp_ntype(c, argv[0]) == TY_UNKNOWN ||
+                           ty_is_array(comp_ntype(c, argv[0]))))
+            c->ntype[argv[0]] = TY_POLY_ARRAY;
+        }
         TyKind at = comp_ntype(c, argv[0]);
         const char *kb = (at == TY_POLY_ARRAY) ? "Poly" : (array_kind(at) ? array_kind(at) : "Poly");
         int bbody = nt_ref(nt, blk, "body");
