@@ -1496,6 +1496,45 @@ int infer_poly_call(Compiler *c, int id, TyKind rt, TyKind *out) {
     if (sp_streq(name, "match")) { *out = TY_MATCHDATA; return 1; }
     if (sp_streq(name, "=~")) { *out = TY_POLY; return 1; }
   }
+  /* The names Integer alone owns, on a boxed receiver: the emitter unboxes and
+     re-dispatches, so the answer is the typed one. */
+  if (recv >= 0 && rt == TY_POLY && nt_ref(nt, id, "block") < 0 &&
+      !an_user_defines_or_reads(c, name)) {
+    if (sp_streq(name, "digits") && argc <= 1) { *out = TY_INT_ARRAY; return 1; }
+    if (sp_streq(name, "gcdlcm") && argc == 1) { *out = TY_INT_ARRAY; return 1; }
+    if ((sp_streq(name, "pred") || sp_streq(name, "bit_length")) && argc == 0)
+      { *out = TY_INT; return 1; }
+    if (sp_streq(name, "ceildiv") && argc == 1) { *out = TY_INT; return 1; }
+    if (sp_streq(name, "pow") && (argc == 1 || argc == 2)) { *out = TY_INT; return 1; }
+  }
+  /* The Enumerable names a boxed receiver shares with Array: the emitter
+     materializes the elements and re-dispatches, so the answer is the
+     poly-array one. */
+  if (recv >= 0 && rt == TY_POLY && !an_user_defines_or_reads(c, name)) {
+    int has_blk = nt_ref(nt, id, "block") >= 0;
+    if (!has_blk && argc == 0 && sp_streq(name, "minmax")) { *out = TY_POLY_ARRAY; return 1; }
+    if (!has_blk && argc == 0 && sp_streq(name, "tally")) { *out = TY_POLY_POLY_HASH; return 1; }
+    if (!has_blk && sp_streq(name, "product")) { *out = TY_POLY_ARRAY; return 1; }
+    if (!has_blk && (sp_streq(name, "combination") || sp_streq(name, "permutation")))
+      { *out = TY_POLY_ARRAY; return 1; }
+    if (has_blk && sp_streq(name, "group_by")) { *out = TY_POLY_POLY_HASH; return 1; }
+    if (has_blk && sp_streq(name, "partition")) { *out = TY_POLY_ARRAY; return 1; }
+    if (has_blk && (sp_streq(name, "chunk_while") || sp_streq(name, "slice_when")))
+      { *out = TY_POLY_ARRAY; return 1; }
+    /* each_with_object answers the seed it was handed; an empty literal seed
+       carries no type of its own, and the emitter builds the general container
+       of that shape -- a poly hash for `{}`, a poly array for `[]`. */
+    if (has_blk && sp_streq(name, "each_with_object") && argc == 1) {
+      TyKind st = infer_type(c, argv[0]);
+      if (st == TY_UNKNOWN) {
+        const char *sty = nt_type(nt, argv[0]);
+        st = (sty && (sp_streq(sty, "HashNode") || sp_streq(sty, "KeywordHashNode")))
+               ? TY_POLY_POLY_HASH : TY_POLY_ARRAY;
+      }
+      *out = st;
+      return 1;
+    }
+  }
   /* poly.tr / the String-pattern sub / gsub: same shape with two arguments. */
   if (recv >= 0 && rt == TY_POLY && argc == 2 && nt_ref(nt, id, "block") < 0 &&
       (sp_streq(name, "tr") ||

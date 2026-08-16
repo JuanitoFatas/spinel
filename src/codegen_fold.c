@@ -1898,6 +1898,15 @@ int emit_sum_block_poly_expr(Compiler *c, int id, Buf *b) {
   buf_printf(b, "; SP_GC_ROOT_RBVAL(_t%d); for (mrb_int _t%d = 0; _t%d < _t%d; _t%d++) { ",
              tacc, ti, ti, tn, ti);
   if (p0r) buf_printf(b, "sp_RbVal lv_%s = _t%d->data[_t%d]; ", p0r, ta, ti);
+  /* A two-param block over a boxed HASH walks [key, value] pairs, so the
+     element auto-splats across the params -- binding only the first left the
+     second nil, and `h.sum { |k, v| v }` added nil to the accumulator. */
+  { const char *p1 = block_param_name(c, block, 1);
+    if (p0r && p1) {
+      const char *p1r = rename_local(p1);
+      buf_printf(b, "sp_RbVal lv_%s = sp_poly_massign_get(lv_%s, 1LL); "
+                    "lv_%s = sp_poly_massign_get(lv_%s, 0LL); ", p1r, p0r, p0r, p0r);
+    } }
   {
     Buf inner; memset(&inner, 0, sizeof inner);
     Buf valb; memset(&valb, 0, sizeof valb);

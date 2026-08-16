@@ -2097,6 +2097,19 @@ static sp_RbVal sp_poly_hash_get_pair_val(sp_RbVal h, sp_RbVal key, mrb_bool *fo
   *found = FALSE;
   return sp_box_nil();
 }
+/* `size` on a boxed receiver: a collection answers its length, but an Integer
+   answers the bytes of its machine representation, which sp_poly_length has no
+   arm for and reported as 0. */
+static mrb_int sp_poly_size(sp_RbVal v) {
+  if (v.tag == SP_TAG_INT) return (mrb_int)sizeof(mrb_int);
+  if (v.tag == SP_TAG_BIGINT) {
+    sp_Bigint *bg = (sp_Bigint *)v.v.p;
+    mrb_int bits = bg ? (mrb_int)sp_bigint_bit_length(bg) : 0;
+    mrb_int bytes = (bits + 7) / 8;
+    return bytes < (mrb_int)sizeof(mrb_int) ? (mrb_int)sizeof(mrb_int) : bytes;
+  }
+  return sp_poly_length(v);
+}
 static mrb_bool sp_poly_hash_subset(sp_RbVal a, sp_RbVal b, int strict) {
   mrb_int na = sp_poly_length(a), nb = sp_poly_length(b);
   if (strict ? (na >= nb) : (na > nb)) return FALSE;

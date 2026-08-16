@@ -10129,7 +10129,71 @@ int emit_poly_call(Compiler *c, int id, Buf *b) {
       return 1;
     }
   }
+  /* The names Integer alone owns, on a boxed receiver: unbox once and
+     re-dispatch through the typed emitter, the way the String surface below
+     does. Untyped, they raised NoMethodError naming Integer itself. */
+  if (recv >= 0 && rt == TY_POLY && nt_ref(nt, id, "block") < 0 &&
+      !user_defines_or_reads(c, name) && g_n_argov < MAX_ARG_OVERRIDE) {
+    static const struct { const char *name; int argc; } PINT[] = {
+      {"digits", 0}, {"digits", 1}, {"pred", 0}, {"bit_length", 0},
+      {"ceildiv", 1}, {"pow", 1}, {"pow", 2}, {"gcdlcm", 1},
+      {NULL, 0} };
+    int want_pi = 0;
+    for (int i = 0; PINT[i].name && !want_pi; i++)
+      if (sp_streq(name, PINT[i].name) && argc == PINT[i].argc) want_pi = 1;
+    if (want_pi) {
+      int tpi = ++g_tmp;
+      Buf rbi; memset(&rbi, 0, sizeof rbi); emit_expr(c, recv, &rbi);
+      emit_indent(g_pre, g_indent);
+      buf_printf(g_pre, "mrb_int _t%d = sp_poly_to_i(%s);\n", tpi, rbi.p ? rbi.p : "sp_box_nil()");
+      free(rbi.p);
+      g_argov_node[g_n_argov] = recv;
+      snprintf(g_argov_text[g_n_argov], sizeof g_argov_text[0], "_t%d", tpi);
+      g_n_argov++;
+      TyKind svpi = c->ntype[recv]; c->ntype[recv] = TY_INT;
+      emit_call(c, id, b);
+      c->ntype[recv] = svpi;
+      g_n_argov--;
+      return 1;
+    }
+  }
+  /* The Enumerable names a boxed receiver shares with Array: materialize its
+     elements into a poly array once and re-dispatch, so the poly-array
+     emitters serve them. Without this a widened array (a container read, a
+     destructured return) raised NoMethodError naming Array, the class that
+     defines them. Hashes and ranges materialize through the same helper, and
+     a receiver that is neither answers an empty list, which is what the
+     runtime helper already does for a non-collection. */
+  if (recv >= 0 && rt == TY_POLY && !user_defines_or_reads(c, name) &&
+      g_n_argov < MAX_ARG_OVERRIDE) {
+    static const struct { const char *name; int wants_block; } PENUM[] = {
+      {"minmax", 0}, {"tally", 0}, {"product", 0}, {"combination", 0},
+      {"permutation", 0}, {"group_by", 1}, {"partition", 1},
+      {"each_with_object", 1}, {"chunk_while", 1}, {"slice_when", 1},
+      {NULL, 0} };
+    int want_pe = 0;
+    int has_blk = nt_ref(nt, id, "block") >= 0;
+    for (int i = 0; PENUM[i].name && !want_pe; i++)
+      if (sp_streq(name, PENUM[i].name) && (!PENUM[i].wants_block || has_blk)) want_pe = 1;
+    if (want_pe) {
+      int tpe = ++g_tmp;
+      Buf rbe; memset(&rbe, 0, sizeof rbe); emit_boxed(c, recv, &rbe);
+      emit_indent(g_pre, g_indent);
+      buf_printf(g_pre, "sp_PolyArray *_t%d = sp_enum_items_from(%s); SP_GC_ROOT(_t%d);\n",
+                 tpe, rbe.p ? rbe.p : "sp_box_nil()", tpe);
+      free(rbe.p);
+      g_argov_node[g_n_argov] = recv;
+      snprintf(g_argov_text[g_n_argov], sizeof g_argov_text[0], "_t%d", tpe);
+      g_n_argov++;
+      TyKind svpe = c->ntype[recv]; c->ntype[recv] = TY_POLY_ARRAY;
+      emit_call(c, id, b);
+      c->ntype[recv] = svpe;
+      g_n_argov--;
+      return 1;
+    }
+  }
   /* The rest of the String surface on a boxed receiver: unbox once and
+
      re-dispatch the same call with the receiver typed String, so the typed
      emitter IS the implementation. Only names no other class answers may go
      here -- the receiver's runtime class is unknown, so a name Array or
@@ -10693,6 +10757,11 @@ int emit_poly_call(Compiler *c, int id, Buf *b) {
           buf_puts(b, "({ sp_RbVal _ep = "); emit_boxed(c, recv, b);
           buf_puts(b, "; sp_poly_is_user_obj(_ep) ? (sp_raise_poly_nomethod(\"empty?\", _ep), 0)"
                       " : (sp_poly_length(_ep) == 0); })");
+        }
+        else if (sp_streq(name, "size")) {
+          /* Integer#size is the byte width of the machine representation, not
+             a length; sp_poly_length has no arm for it and answered 0. */
+          buf_puts(b, "sp_poly_size("); emit_expr(c, recv, b); buf_puts(b, ")");
         }
         else {
           buf_puts(b, "sp_poly_length("); emit_expr(c, recv, b); buf_puts(b, ")");
