@@ -3176,6 +3176,13 @@ void emit_fiber_new(Compiler *c, int id, Buf *b, int as_gen, int size_node) {
      terminating resume, which sp_enum_gen_pull surfaces as StopIteration#result. */
   /* A yield in this body reaches the lowered method's block through the cell
      the frame carries, not a local (#3355). */
+  /* This body becomes its own C function, so an enclosing C loop is not in
+     scope for it. Left counted, an `ensure` inside the body emitted the
+     deferred-`next` propagation as a `continue` -- outside any loop, which no
+     C compiler accepts (#3949). The proc-literal emitter resets it for the
+     same reason. */
+  int sv_fib_loopd = g_c_loop_depth;
+  g_c_loop_depth = 0;
   int sv_yblkc = g_yblk_celled;
   {
     const char *ybn = (g_lowered_blk_name && g_lowered_blk_name[0]) ? g_lowered_blk_name : "__yblk__";
@@ -3238,6 +3245,7 @@ void emit_fiber_new(Compiler *c, int id, Buf *b, int as_gen, int size_node) {
   }
 
   buf_puts(pb, "}\n");
+  g_c_loop_depth = sv_fib_loopd;
 
   /* Append the completed body to g_procs. Any nested fiber bodies emitted
      while building body_buf already appended themselves to g_procs, so they
