@@ -2001,6 +2001,33 @@ int emit_pm_cond(Compiler *c, int pat, int t, TyKind pt, Buf *b) {
       buf_printf(b, "sp_exc_is_a((sp_Exception *)_t%d, \"%s\")", t, exc_when_cls_name(c, cn2));
       return 1;
     }
+    /* A user object scrutinee: the class-name table below only knows the
+       builtins, so `case obj; in SomeClass` folded to a constant false for
+       every user class -- including a Struct or a Data value against its own
+       class (#3946). Decide it the way the `when` chain does: statically when
+       the scrutinee's class is the pattern class or below it, and by the
+       runtime tag when the pattern names a descendant of the static type. */
+    if (ty_is_object(pt)) {
+      int cid = ty_object_class(pt);
+      int tcid = comp_class_index(c, cn2);
+      if (tcid >= 0 && (cid == tcid || is_descendant(c, cid, tcid))) { buf_puts(b, "1"); return 1; }
+      if (tcid >= 0 && is_descendant(c, tcid, cid)) {
+        const char *acc = comp_ty_value_obj(c, pt) ? "." : "->";
+        int first = 1;
+        buf_puts(b, "(");
+        for (int k = 0; k < c->nclasses; k++) {
+          if (k != tcid && !is_descendant(c, k, tcid)) continue;
+          if (!first) buf_puts(b, " || ");
+          buf_printf(b, "_t%d%scls_id == %d", t, acc, k);
+          first = 0;
+        }
+        if (first) buf_puts(b, "0");
+        buf_puts(b, ")");
+        return 1;
+      }
+      buf_puts(b, "0");
+      return 1;
+    }
     int yes = ty_matches_class(pt, cn2, 0);
     buf_printf(b, "%d", yes > 0 ? 1 : 0);
     return 1;
