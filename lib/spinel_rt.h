@@ -3266,6 +3266,23 @@ static int sp_rbval_is_array(sp_RbVal v) {
    (boxing its elements) and spliced there. Returns the possibly-new boxed array
    so the caller stores it back into the receiver's slot. */
 static sp_RbVal sp_poly_splice(sp_RbVal recv, mrb_int start, mrb_int len, sp_RbVal src) {
+  /* `s[start, len] = v` through a poly receiver: spinel strings splice into a
+     fresh buffer, so a plain string box answers the new value for the caller to
+     store back, while a shared handle absorbs it in place -- which is the only
+     form an element receiver can use, and the write was silently dropped
+     before (#3940). */
+  if (recv.tag == SP_TAG_STR || sp_poly_is_strbuf(recv)) {
+    const char *cur = (recv.tag == SP_TAG_STR) ? (recv.v.s ? recv.v.s : sp_str_empty)
+                                               : sp_String_cstr((sp_String *)recv.v.p);
+    const char *rep = (src.tag == SP_TAG_STR) ? (src.v.s ? src.v.s : sp_str_empty)
+                                              : sp_poly_to_s(src);
+    SP_GC_ROOT(cur); SP_GC_ROOT(rep);
+    SP_GC_ROOT_RBVAL(recv);
+    const char *out = sp_str_splice_at(cur, start, len, rep, 0);
+    if (recv.tag == SP_TAG_STR) return sp_box_str(out);
+    sp_String_set_bin((sp_String *)recv.v.p, out);
+    return recv;
+  }
   if (recv.tag != SP_TAG_OBJ) return recv;
   mrb_int alen = sp_poly_arr_len(recv);
   mrb_int s = start < 0 ? start + alen : start;
@@ -3336,6 +3353,24 @@ static sp_RbVal sp_poly_splice(sp_RbVal recv, mrb_int start, mrb_int len, sp_RbV
    runtime length, then splice. A begin index below -length raises RangeError
    (CRuby uses RangeError here, not the (start,len) form's IndexError). */
 static sp_RbVal sp_poly_splice_range(sp_RbVal recv, sp_Range r, sp_RbVal src) {
+  /* a string receiver measures the range against its CHARACTER length, which
+     sp_poly_arr_len answers 0 for (#3940) */
+  if (recv.tag == SP_TAG_STR || sp_poly_is_strbuf(recv)) {
+    const char *cur = (recv.tag == SP_TAG_STR) ? (recv.v.s ? recv.v.s : sp_str_empty)
+                                               : sp_String_cstr((sp_String *)recv.v.p);
+    mrb_int slen = (mrb_int)sp_str_length(cur);
+    mrb_int sfirst = r.first;
+    if (sfirst == INTPTR_MIN) sfirst = 0;
+    else if (sfirst < 0) sfirst += slen;
+    mrb_int slen2;
+    if (r.last == INTPTR_MAX) { slen2 = slen - sfirst; if (slen2 < 0) slen2 = 0; }
+    else {
+      mrb_int last = r.last < 0 ? r.last + slen : r.last;
+      slen2 = last - sfirst + (r.excl ? 0 : 1);
+      if (slen2 < 0) slen2 = 0;
+    }
+    return sp_poly_splice(recv, sfirst, slen2, src);
+  }
   /* frozen precedes range validation (CRuby's modify-check runs first) */
   if (recv.tag == SP_TAG_OBJ && sp_typed_arr_frozen(recv)) sp_raise_frozen_array_v(recv);
   mrb_int alen = sp_poly_arr_len(recv);
@@ -6084,6 +6119,19 @@ static sp_RbVal sp_poly_arr_widen_and_set(sp_RbVal v, mrb_int idx, sp_RbVal val)
                                               : sp_poly_to_s(val);
     return sp_box_str(sp_str_splice_at(v.v.s ? v.v.s : sp_str_empty, idx, 1, rep, 0));
   }
+  /* the same on a SHARED string: the handle absorbs the spliced contents, so
+     the write lands on the container's own element rather than on a fresh box
+     the caller would have to store back -- which an element receiver has no
+     slot for, and the mutation was lost or refused (#3940). */
+  if (sp_poly_is_strbuf(v)) {
+    sp_String *sh = (sp_String *)v.v.p;
+    const char *rep = (val.tag == SP_TAG_STR) ? (val.v.s ? val.v.s : sp_str_empty)
+                                              : sp_poly_to_s(val);
+    SP_GC_ROOT_RBVAL(v);
+    SP_GC_ROOT(rep);
+    sp_String_set_bin(sh, sp_str_splice_at(sp_String_cstr(sh), idx, 1, rep, 0));
+    return v;
+  }
   sp_poly_arr_set(v, idx, val);
   return v;
 }
@@ -6152,14 +6200,22 @@ static sp_RbVal sp_poly_set_poly(sp_RbVal v, sp_RbVal key, sp_RbVal val) {
    promoted result back into outer's slot so a typed->poly promotion survives.
    outer is a POLY_ARRAY for an array-of-arrays; sp_poly_set_poly also covers a
    hash outer. Codegen yields the rhs separately, so the return is advisory. */
+/* The element at outer[oidx], read the way the container itself indexes: an
+   integer names a KEY in a hash, not a position, and reading one as a position
+   answered nil -- the write-back below then replaced the value with it (#3940). */
+static sp_RbVal sp_poly_slot_inner(sp_RbVal outer, mrb_int oidx) {
+  if (outer.tag == SP_TAG_OBJ && sp_poly_is_hash_kind(outer.cls_id))
+    return sp_poly_index_poly(outer, sp_box_int(oidx));
+  return sp_poly_arr_get(outer, oidx);
+}
 static sp_RbVal sp_poly_slot_splice(sp_RbVal outer, mrb_int oidx, mrb_int start, mrb_int len, sp_RbVal src) {
-  sp_RbVal inner = sp_poly_arr_get(outer, oidx);
+  sp_RbVal inner = sp_poly_slot_inner(outer, oidx);
   sp_RbVal res = sp_poly_splice(inner, start, len, src);
   sp_poly_set_poly(outer, sp_box_int(oidx), res);
   return res;
 }
 static sp_RbVal sp_poly_slot_splice_range(sp_RbVal outer, mrb_int oidx, sp_Range r, sp_RbVal src) {
-  sp_RbVal inner = sp_poly_arr_get(outer, oidx);
+  sp_RbVal inner = sp_poly_slot_inner(outer, oidx);
   sp_RbVal res = sp_poly_splice_range(inner, r, src);
   sp_poly_set_poly(outer, sp_box_int(oidx), res);
   return res;
@@ -6171,7 +6227,7 @@ static sp_RbVal sp_poly_slot_splice_range(sp_RbVal outer, mrb_int oidx, sp_Range
    rooted inside the callee only where an allocation (promotion) happens, after
    every raise condition has been checked. */
 static sp_RbVal sp_poly_slot_set(sp_RbVal outer, mrb_int oidx, mrb_int ikey, sp_RbVal val) {
-  sp_RbVal inner = sp_poly_arr_get(outer, oidx);
+  sp_RbVal inner = sp_poly_slot_inner(outer, oidx);
   sp_RbVal res = sp_poly_arr_widen_and_set(inner, ikey, val);
   sp_poly_set_poly(outer, sp_box_int(oidx), res);
   return val;

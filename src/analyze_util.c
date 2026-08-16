@@ -384,13 +384,13 @@ const char *sym_static_value(Compiler *c, int node) {
    ever fused at a forcing site. (#2932) */
 /* See compiler.h for the masks. Every name carries SP_MUT_LOCAL; the
    narrower sites drop the mutators their storage shape cannot serve:
-     `[]=`                      rebinds through an index write, no container arm
+     `[]=`                      needs the rename+shadow shim on an ivar
      insert / slice! / setbyte  need the rename+shadow shim, impossible on an ivar
      append_as_bytes            has no guard-narrowed re-route arm
    The masks reproduce the four lists this table replaced, name for name. */
 int sp_str_mutator(const char *nm, unsigned want) {
   static const struct { const char *nm; unsigned mask; } M[] = {
-    { "[]=",             SP_MUT_LOCAL },
+    { "[]=",             SP_MUT_LOCAL | SP_MUT_CONTAINER },
     { "insert",          SP_MUT_LOCAL | SP_MUT_CONTAINER },
     { "slice!",          SP_MUT_LOCAL | SP_MUT_CONTAINER },
     { "setbyte",         SP_MUT_LOCAL | SP_MUT_CONTAINER },
