@@ -1586,6 +1586,25 @@ int static_nil_reader_cond(Compiler *c, int pred) {
   return ivar_all_writes_nil(c, nm);
 }
 
+/* `block_given?` is decided statically in most emissions: an inlined yielding
+   method always has one, and a plain (non-lowered, non-proc-form) body never
+   does. Answering it as a constant left the dead branch in the C, where it
+   still had to typecheck -- the `return to_enum(:each) unless block_given?`
+   idiom assigned the receiver into the Enumerator-typed result slot of the
+   other path and warned on every such method (#3953). 1 = always true,
+   0 = always false, -1 = decided at run time. */
+static int static_block_given_cond(Compiler *c, int pred) {
+  const NodeTable *nt = c->nt;
+  if (pred < 0 || nt_kind(nt, pred) != NK_CallNode) return -1;
+  const char *nm = nt_str(nt, pred, "name");
+  if (!nm || !sp_streq(nm, "block_given?")) return -1;
+  int r = nt_ref(nt, pred, "receiver");
+  if (r >= 0 && !(nt_type(nt, r) && sp_streq(nt_type(nt, r), "SelfNode"))) return -1;
+  if (g_block_id >= 0) return 1;
+  if (g_current_scope_is_lowered || g_yield_proc_ref) return -1;
+  return 0;
+}
+
 void emit_if(Compiler *c, int id, Buf *b, int indent, int is_unless, int tail) {
   const NodeTable *nt = c->nt;
   int pred = nt_ref(nt, id, "predicate");
@@ -1597,6 +1616,7 @@ void emit_if(Compiler *c, int id, Buf *b, int indent, int is_unless, int tail) {
     int sc = static_isa_cond(c, pred);
     if (sc < 0) sc = static_nil_ivar_cond(c, pred);
     if (sc < 0) sc = static_nil_reader_cond(c, pred);
+    if (sc < 0) sc = static_block_given_cond(c, pred);
     /* `if defined?(UnknownConst) [&& ...]`: nil guard, the branch is dead.
        Must be dropped (not just emitted under `if (NULL)`): its body may call
        methods reachability already skipped for the same reason, or lean on
@@ -4684,6 +4704,21 @@ static void emit_tail_value(Compiler *c, int node, Buf *b) {
      method's result temp) takes the value as-is: do not rewrite a poly
      `sp_box_nil()` into the scalar emit_ret_nil(g_ret_type) form below. */
   if (g_ret_type == TY_POLY || (g_result_var && g_result_poly)) { emit_expr(c, node, b); return; }
+  /* An inlined body whose tail answers a different POINTER kind than the slot
+     this emission types: the blockless `each` splice types its result from the
+     CALL (an Enumerator) while the body's tail is `self`. That value is the
+     generator's own return -- CRuby reads it only as StopIteration#result --
+     and storing a receiver pointer in an Enumerator slot is a lie the C
+     compiler rightly warns about. Evaluate the tail and leave the slot nil
+     (#3953). */
+  if (g_result_var && !g_result_poly && g_ret_type != TY_POLY && needs_root(g_ret_type)) {
+    TyKind vt0 = comp_ntype(c, node);
+    if (ty_is_object(vt0) && !ty_is_object(g_ret_type) && !ty_is_array(g_ret_type) &&
+        !ty_is_hash(g_ret_type) && g_ret_type != TY_STRING && g_ret_type != TY_STRBUF) {
+      buf_puts(b, "((void)("); emit_expr(c, node, b); buf_puts(b, "), NULL)");
+      return;
+    }
+  }
   /* An int value returned through a TY_BIGINT slot must be wrapped: the raw
      integer is otherwise reinterpreted as an sp_Bigint* -- a literal `return 0`
      became a NULL pointer that segfaulted the caller's first sp_bigint_cmp

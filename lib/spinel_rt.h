@@ -6463,19 +6463,32 @@ static sp_RbVal sp_poly_arr_span(sp_RbVal v, mrb_int from, mrb_int n) {
   sp_PolyArray *p = sp_poly_to_a_arr(v); SP_GC_ROOT(p);
   return sp_box_poly_array(sp_PolyArray_slice(p, from, n));
 }
+/* The span helpers below read ITEMS, and a generator-backed Enumerator has
+   none until it runs: `e.take(1)` on one answered [] where CRuby answers its
+   first element. Materialize the enumerator first; every other receiver is
+   already its own subject. */
+static sp_PolyArray *sp_enum_to_a_boxed(sp_RbVal v);   /* fwd: drain an enumerator */
+static sp_RbVal sp_poly_span_subject(sp_RbVal v) {
+  if (v.tag == SP_TAG_OBJ && v.cls_id == SP_BUILTIN_ENUMERATOR && v.v.p)
+    return sp_box_poly_array(sp_enum_to_a_boxed(v));
+  return v;
+}
 static sp_RbVal sp_poly_arr_take(sp_RbVal v, mrb_int n) {
   if (n < 0) sp_raise_cls("ArgumentError", "negative array size");
+  v = sp_poly_span_subject(v);
   mrb_int alen = sp_poly_length(v);
   return sp_poly_arr_span(v, 0, n > alen ? alen : n);
 }
 static sp_RbVal sp_poly_arr_last_n(sp_RbVal v, mrb_int n) {
   if (n < 0) sp_raise_cls("ArgumentError", "negative array size");
+  v = sp_poly_span_subject(v);
   mrb_int alen = sp_poly_length(v);
   if (n > alen) n = alen;
   return sp_poly_arr_span(v, alen - n, n);
 }
 static sp_RbVal sp_poly_arr_drop(sp_RbVal v, mrb_int n) {
   if (n < 0) sp_raise_cls("ArgumentError", "attempt to drop negative size");
+  v = sp_poly_span_subject(v);
   mrb_int alen = sp_poly_length(v);
   if (n > alen) n = alen;
   return sp_poly_arr_span(v, n, alen - n);
