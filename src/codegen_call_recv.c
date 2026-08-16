@@ -1234,8 +1234,12 @@ int emit_array_call(Compiler *c, int id, Buf *b) {
                        ti, tlo, ti, thi, ti, an, to, an, tr, ti);
           }
           else {
+            /* the index is an index: a Float one converts here, as it does for
+               every other index-taking method. Emitted raw, a literal Float
+               reached `sp_XArray_get`'s mrb_int parameter and the C compiler
+               truncated it with a warning of its own (#3936). */
             buf_printf(b, "sp_%sArray_push(_t%d, sp_%sArray_get(_t%d, ", an, to, an, tr);
-            emit_expr(c, argv[a], b); buf_puts(b, ")); ");
+            emit_int_expr(c, argv[a], b); buf_puts(b, ")); ");
           }
         }
         buf_printf(b, "_t%d; })", to);
