@@ -537,6 +537,7 @@ const char *bigint_arith_fn(const char *op);
    `=`->_set, anything else non-identifier -> `_`. Returns a static buffer
    (one live result at a time -- fine since each use is consumed inline). */
 const char *mc(const char *name);
+const char *mc_top(const char *name);
 const char *iv_c(const char *name);  /* ivar/member name -> valid C field id (#3110) */
 /* A class method scope is shadowed (and must not be emitted) when a later
    scope redefines the same (class, name, is_cmethod) -- a reopened class

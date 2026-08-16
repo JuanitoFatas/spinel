@@ -1552,6 +1552,58 @@ const char *mc(const char *name) {
   buf[j] = '\0';
   return buf;
 }
+
+/* The module prefixes the runtime's own symbols use: every `sp_` function in
+   lib/ is `sp_<prefix>_...`. A TOP-LEVEL Ruby method mangles to `sp_<name>`,
+   so one whose name starts with any of these can collide with a runtime
+   symbol -- `def str_hash` collided with sp_str_hash and the generated C did
+   not compile (#3973). Such a method is emitted with an `rb_` infix instead;
+   the name is internal, so renaming one that would not really have collided
+   costs nothing. Regenerate with:
+     grep -rhoE '\bsp_[a-z][a-z0-9]*_' lib/*.h lib/*.c | sort -u |
+       sed 's/^sp_//;s/_$//' */
+static const char *const SP_RT_PREFIXES[] = {
+  "abort", "active", "addrinfo", "alloc", "argf", "argv", "array", "at",
+  "backtrace", "bigint", "bm", "bound", "box", "brat", "brk", "bt",
+  "builtin", "bytes", "c", "callee", "caller", "case", "catch", "cell",
+  "char", "class", "cmperr", "complex", "convert", "crypto", "ctx", "cur",
+  "curry", "dir", "dyn", "encoding", "endless", "enum", "env", "exc",
+  "exit", "explicit", "ext", "fd", "ffi", "fiber", "file", "float", "fmod",
+  "fmt", "format", "frange", "fstr", "gc", "get", "glob", "hashproc",
+  "heap", "i64", "inflight", "inspect", "install", "int", "interrupt",
+  "io", "json", "kernel", "krand", "kwargs", "last", "lgamma", "loop",
+  "mar", "mark", "marshal", "marv", "math", "md", "method", "monotonic",
+  "mpz", "net", "nil", "nomethod", "num", "obj", "oom", "openstruct",
+  "pair", "pcg32", "pcg", "pending", "penum", "poly", "polyarr",
+  "polypoly", "pool", "preempt", "proc", "process", "program", "ptr",
+  "publish", "queue", "raise", "random", "range", "rat", "rational",
+  "rationalize", "rbs", "rbval", "re", "read", "real", "recompute",
+  "reraise", "rescue", "resolve", "round", "ruby", "safepoint", "sched",
+  "select", "sig", "signal", "simplest", "slurp", "snprintf", "sock",
+  "sockopt", "sort", "splat", "srange", "stage", "stat", "str", "strpoly",
+  "stw", "sweep", "sym", "sympoly", "sysmon", "system", "thread", "time",
+  "tls", "trap", "typed", "uc", "unbox", "unwind", "urandom", "user",
+  "utf8", "w", "wi", "with", "worker",
+  NULL
+};
+
+/* The mangled name of a top-level method: `mc(name)`, with an `rb_` infix when
+   the plain form would sit in the runtime's own namespace. */
+const char *mc_top(const char *name) {
+  static char buf[272];
+  const char *m = mc(name);
+  const char *us = strchr(m, '_');
+  if (us && us > m) {
+    size_t seg = (size_t)(us - m);
+    for (int i = 0; SP_RT_PREFIXES[i]; i++) {
+      if (strlen(SP_RT_PREFIXES[i]) != seg) continue;
+      if (strncmp(m, SP_RT_PREFIXES[i], seg) != 0) continue;
+      snprintf(buf, sizeof buf, "rb_%s", m);
+      return buf;
+    }
+  }
+  return m;
+}
 /* Mangle an ivar/struct-member name (sans leading '@') to a valid C field
    identifier, so a Struct/Data member like `verbose?` becomes iv_verbose_p
    rather than the illegal iv_verbose? (#3110). Same character map as mc(), but
