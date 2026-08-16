@@ -6376,16 +6376,33 @@ static sp_RbVal sp_poly_to_h_m(sp_RbVal v) {
     sp_RbVal h = sp_obj_to_h_fn(v);
     if (h.tag == SP_TAG_OBJ) return h;
   }
-  /* an array of [k, v] pairs -> a symbol-keyed hash (Hash#partition sub-array,
-     Enumerable pair lists; matches the inferred TY_SYM_POLY_HASH) (#2991) */
+  /* an array of [k, v] pairs -> a hash keyed by whatever the pairs hold: a
+     Symbol-keyed one where every key is a Symbol (the Hash#partition
+     sub-array and Enumerable pair lists this was written for), the general
+     boxed hash otherwise -- reading an Integer key as a symbol id built a
+     hash whose keys were other programs' symbols (#3972) */
   if (v.tag == SP_TAG_OBJ && sp_poly_is_array_kind(v.cls_id)) {
     mrb_int n = sp_poly_length(v);
+    int all_sym = 1;
+    for (mrb_int i = 0; i < n && all_sym; i++) {
+      sp_RbVal pair = sp_poly_arr_get(v, i);
+      if (!(pair.tag == SP_TAG_OBJ && sp_poly_is_array_kind(pair.cls_id) && sp_poly_length(pair) == 2))
+        sp_raise_cls("TypeError", "wrong element type (expected a [key, value] pair)");
+      if (sp_poly_arr_get(pair, 0).tag != SP_TAG_SYM) all_sym = 0;
+    }
+    if (!all_sym) {
+      sp_PolyPolyHash *ph = sp_PolyPolyHash_new();
+      SP_GC_ROOT(ph);
+      for (mrb_int i = 0; i < n; i++) {
+        sp_RbVal pair = sp_poly_arr_get(v, i);
+        sp_PolyPolyHash_set(ph, sp_poly_arr_get(pair, 0), sp_poly_arr_get(pair, 1));
+      }
+      return sp_box_obj(ph, SP_BUILTIN_POLY_POLY_HASH);
+    }
     sp_SymPolyHash *h = sp_SymPolyHash_new();
     SP_GC_ROOT(h);
     for (mrb_int i = 0; i < n; i++) {
       sp_RbVal pair = sp_poly_arr_get(v, i);
-      if (!(pair.tag == SP_TAG_OBJ && sp_poly_is_array_kind(pair.cls_id) && sp_poly_length(pair) == 2))
-        sp_raise_cls("TypeError", "wrong element type (expected a [key, value] pair)");
       sp_RbVal k = sp_poly_arr_get(pair, 0);
       sp_SymPolyHash_set(h, (sp_sym)k.v.i, sp_poly_arr_get(pair, 1));
     }

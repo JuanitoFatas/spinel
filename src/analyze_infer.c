@@ -3873,7 +3873,11 @@ else {
           /* concrete result types, matching the TY_NIL receiver arm so a
              local settled on an early (pre-widening) pass stays consistent */
           if (sp_streq(name, "to_a")) return TY_POLY_ARRAY;
-          if (sp_streq(name, "to_h")) return TY_SYM_POLY_HASH;
+          /* Hash#to_h is the identity, so a boxed receiver keeps whatever
+             variant it really holds: narrowing to the symbol-keyed one made
+             `opts.to_h` on a String-keyed hash raise (#3972). nil.to_h is the
+             empty hash, which the boxed answer covers too. */
+          if (sp_streq(name, "to_h")) return TY_POLY;
           if (sp_streq(name, "to_r") || sp_streq(name, "rationalize")) return TY_RATIONAL;
           return TY_COMPLEX;
         }
