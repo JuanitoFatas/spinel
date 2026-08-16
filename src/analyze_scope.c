@@ -1389,6 +1389,22 @@ static void sg_transplant_module(Compiler *c, int mod_ci, int newci) {
         dst->pnames[p] = src->pnames[p] ? strdup(src->pnames[p]) : NULL;
         dst->pdefault[p] = src->pdefault ? src->pdefault[p] : -1;
       }
+      /* Give the copy its own parameter LOCALS, carrying the original's types.
+         Walking the cloned body only interns a parameter the body READS, and a
+         method that just hands its parameter to `super` reads none of them
+         (`def render(text) = "[#{super}]"`). The caller then found no slot to
+         take the parameter's type from and passed the argument's own, which
+         the emitted signature -- built from the same missing slot as poly --
+         did not accept (#3951). */
+      for (int p = 0; p < src->nparams; p++) {
+        if (!dst->pnames[p]) continue;
+        LocalVar *sp_lv = scope_local(src, dst->pnames[p]);
+        LocalVar *dp = scope_local_intern(dst, dst->pnames[p]);
+        if (!dp) continue;
+        dp->is_param = 1;
+        if (sp_lv && dp->type == TY_UNKNOWN) dp->type = sp_lv->type;
+        src = &c->scopes[ms]; dst = &c->scopes[dst_idx];  /* intern may realloc */
+      }
     }
   }
 }
