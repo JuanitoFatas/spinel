@@ -8251,8 +8251,15 @@ static int emit_array_arith_call(Compiler *c, int id, Buf *b) {
     /* An operand with no static type (a reader through a slot the fixpoint
        could not settle) still has a boxed form: do the arithmetic at run time,
        where the value's real class decides, rather than refusing the whole
-       program (#3781). */
-    if (recv >= 0 && (rt == TY_UNKNOWN || a0 == TY_UNKNOWN)) {
+       program (#3781).
+
+       A user object argument to a numeric receiver takes the same route when
+       the coerce path above did not claim it: at run time the object's own
+       #coerce answers, or the TypeError CRuby raises does -- refusing to
+       compile made an ordinary "can't be coerced" into a build failure. */
+    if (recv >= 0 && (rt == TY_UNKNOWN || a0 == TY_UNKNOWN ||
+                      (ty_is_object(a0) &&
+                       (rt == TY_INT || rt == TY_FLOAT || rt == TY_BIGINT || rt == TY_RATIONAL)))) {
       const char *pf = sp_streq(name, "+") ? "sp_poly_add"
                      : sp_streq(name, "-") ? "sp_poly_sub"
                      : sp_streq(name, "*") ? "sp_poly_mul"

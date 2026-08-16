@@ -541,6 +541,7 @@ int g_uses_argv = 0;
 int g_uses_threads = 0;
 int g_has_user_cmp = 0;
 int g_has_user_binop = 0;
+int g_has_user_coerce = 0;
 int g_gen_obj_hashkey = 0;
 int g_gen_obj_valeq = 0;
 int g_re_init_needed = 0;

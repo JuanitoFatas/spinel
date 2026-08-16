@@ -1973,10 +1973,23 @@ static inline mrb_bool sp_poly_is_strbuf(sp_RbVal v) {
 }
 typedef sp_RbVal (*sp_user_binop_fn)(const char *op, sp_RbVal a, sp_RbVal b, mrb_bool *handled);
 static sp_user_binop_fn sp_user_binop_hook = NULL;
+/* The numeric coerce protocol from the other side: `5 + obj` asks obj for
+   `coerce(5)` and applies the operator to the pair it answers. The generated
+   TU installs a cls_id switch over the classes that define #coerce. The static
+   path takes this route whenever the object's type is known at the call site;
+   this is the same protocol for an operand that only reads poly (#3960). */
+typedef sp_RbVal (*sp_user_coerce_fn)(const char *op, sp_RbVal recv, sp_RbVal obj, mrb_bool *handled);
+static sp_user_coerce_fn sp_user_coerce_hook = NULL;
 static sp_RbVal sp_poly_binop_bad(const char *op, sp_RbVal recv, sp_RbVal arg) {
   if (recv.tag == SP_TAG_OBJ && recv.cls_id >= 0 && sp_user_binop_hook) {
     mrb_bool _h = FALSE;
     sp_RbVal _r = sp_user_binop_hook(op, recv, arg, &_h);
+    if (_h) return _r;
+  }
+  if (arg.tag == SP_TAG_OBJ && arg.cls_id >= 0 && sp_user_coerce_hook &&
+      !(recv.tag == SP_TAG_OBJ && recv.cls_id >= 0)) {
+    mrb_bool _h = FALSE;
+    sp_RbVal _r = sp_user_coerce_hook(op, recv, arg, &_h);
     if (_h) return _r;
   }
   const char *rc = sp_poly_class_name(recv);
@@ -2532,9 +2545,9 @@ static void sp_sort_idx_by_poly(mrb_int *idx, const sp_RbVal *keys, mrb_int n) {
   if (src != idx) for (mrb_int x = 0; x < n; x++) idx[x] = src[x];   /* odd #levels: result is in tmp */
   free(tmp);
 }
-static sp_RbVal sp_poly_div(sp_RbVal a, sp_RbVal b) { if ((sp_poly_is_brat(a) || sp_poly_is_brat(b))) { if (a.tag == SP_TAG_FLT || b.tag == SP_TAG_FLT) return sp_box_float(sp_poly_to_f(a) / sp_poly_to_f(b)); return sp_brat_div_poly(a, b); } if ((sp_poly_is_rational(a) || sp_poly_is_rational(b)) && a.tag != SP_TAG_FLT && b.tag != SP_TAG_FLT) return sp_box_rational(sp_rational_div(sp_poly_as_rational(a), sp_poly_as_rational(b))); if ((a.tag == SP_TAG_OBJ && a.cls_id == SP_BUILTIN_COMPLEX) || (b.tag == SP_TAG_OBJ && b.cls_id == SP_BUILTIN_COMPLEX)) return sp_box_complex(sp_complex_div(sp_poly_as_complex(a), sp_poly_as_complex(b))); if (a.tag == SP_TAG_FLT || b.tag == SP_TAG_FLT) return sp_box_float(sp_poly_to_f_with_rational(a) / sp_poly_to_f_with_rational(b)); if (sp_poly_is_user_obj(a)) return sp_poly_binop_bad("/", a, b); return sp_box_int(sp_idiv(sp_poly_to_i(a), sp_poly_to_i(b))); }
+static sp_RbVal sp_poly_div(sp_RbVal a, sp_RbVal b) { if ((sp_poly_is_brat(a) || sp_poly_is_brat(b))) { if (a.tag == SP_TAG_FLT || b.tag == SP_TAG_FLT) return sp_box_float(sp_poly_to_f(a) / sp_poly_to_f(b)); return sp_brat_div_poly(a, b); } if ((sp_poly_is_rational(a) || sp_poly_is_rational(b)) && a.tag != SP_TAG_FLT && b.tag != SP_TAG_FLT) return sp_box_rational(sp_rational_div(sp_poly_as_rational(a), sp_poly_as_rational(b))); if ((a.tag == SP_TAG_OBJ && a.cls_id == SP_BUILTIN_COMPLEX) || (b.tag == SP_TAG_OBJ && b.cls_id == SP_BUILTIN_COMPLEX)) return sp_box_complex(sp_complex_div(sp_poly_as_complex(a), sp_poly_as_complex(b))); if (a.tag == SP_TAG_FLT || b.tag == SP_TAG_FLT) return sp_box_float(sp_poly_to_f_with_rational(a) / sp_poly_to_f_with_rational(b)); if (sp_poly_is_user_obj(a) || sp_poly_is_user_obj(b)) return sp_poly_binop_bad("/", a, b); return sp_box_int(sp_idiv(sp_poly_to_i(a), sp_poly_to_i(b))); }
 static sp_RbVal sp_poly_str_mod(sp_RbVal a, sp_RbVal b);  /* fwd: defined beside the format helper */
-static sp_RbVal sp_poly_mod(sp_RbVal a, sp_RbVal b) { if (a.tag == SP_TAG_STR || sp_poly_is_strbuf(a)) return sp_poly_str_mod(sp_poly_strbuf_deref(a), b); if (a.tag == SP_TAG_FLT || b.tag == SP_TAG_FLT) return sp_box_float(sp_fmod(sp_poly_to_f(a), sp_poly_to_f(b))); if (sp_poly_is_user_obj(a)) return sp_poly_binop_bad("%", a, b); if (sp_poly_is_rational(a) || sp_poly_is_rational(b)) return sp_box_rational(sp_rational_mod(sp_poly_as_rational(a), sp_poly_as_rational(b))); return sp_box_int(sp_imod(sp_poly_to_i(a), sp_poly_to_i(b))); }  /* sp_fmod: CRuby divisor-sign result + zero-divisor raise */
+static sp_RbVal sp_poly_mod(sp_RbVal a, sp_RbVal b) { if (a.tag == SP_TAG_STR || sp_poly_is_strbuf(a)) return sp_poly_str_mod(sp_poly_strbuf_deref(a), b); if (a.tag == SP_TAG_FLT || b.tag == SP_TAG_FLT) return sp_box_float(sp_fmod(sp_poly_to_f(a), sp_poly_to_f(b))); if (sp_poly_is_user_obj(a) || sp_poly_is_user_obj(b)) return sp_poly_binop_bad("%", a, b); if (sp_poly_is_rational(a) || sp_poly_is_rational(b)) return sp_box_rational(sp_rational_mod(sp_poly_as_rational(a), sp_poly_as_rational(b))); return sp_box_int(sp_imod(sp_poly_to_i(a), sp_poly_to_i(b))); }  /* sp_fmod: CRuby divisor-sign result + zero-divisor raise */
 /* divmod / quo on a boxed receiver. The typed paths build these inline per
    receiver kind; the poly path had neither, so an exact Rational reaching them
    through a block parameter raised NoMethodError on a method it answers (#3512).
@@ -2715,7 +2728,7 @@ static sp_RbVal sp_poly_pow(sp_RbVal a, sp_RbVal b) {
     if (e < 0) sp_raise_cls("RangeError", "negative exponent");
     return sp_box_bigint(sp_bigint_pow((sp_Bigint *)a.v.p, e));
   }
-  if (sp_poly_is_user_obj(a)) return sp_poly_binop_bad("**", a, b);
+  if (sp_poly_is_user_obj(a) || sp_poly_is_user_obj(b)) return sp_poly_binop_bad("**", a, b);
   /* An exact receiver keeps its class through `**`, as it does on the typed
      path: a Rational raised to an integer is a Rational, and a Complex is a
      Complex. Falling to pow(double, double) evaluated them in floats, which is
@@ -2949,6 +2962,25 @@ static sp_RbVal sp_poly_binop_sym(sp_RbVal a, sp_sym op, sp_RbVal b) {
   if (s && strcmp(s, "<<") == 0) return sp_poly_shl(a, b);
   if (s && strcmp(s, ">>") == 0) return sp_poly_shr(a, b);
   return sp_poly_binop_bad(s ? s : "", a, b);
+}
+/* Apply a binary operator named by string to two boxed operands. Used by the
+   generated coerce dispatch to finish the protocol on the pair #coerce
+   answered; an unknown operator answers nil rather than raising, and the
+   caller's original TypeError stands. */
+static sp_RbVal sp_poly_binop_apply(const char *op, sp_RbVal a, sp_RbVal b) {
+  if (!op) return sp_box_nil();
+  if (op[1] == 0) {
+    switch (op[0]) {
+      case '+': return sp_poly_add(a, b);
+      case '-': return sp_poly_sub(a, b);
+      case '*': return sp_poly_mul(a, b);
+      case '/': return sp_poly_div(a, b);
+      case '%': return sp_poly_mod(a, b);
+      default: break;
+    }
+  }
+  if (strcmp(op, "**") == 0) return sp_poly_pow(a, b);
+  return sp_box_nil();
 }
 static mrb_int sp_PolyArray_length(sp_PolyArray *a) { if (!a) return 0; return a->len; }
 /* Helpers for iterating over a poly value that holds a boxed array. */

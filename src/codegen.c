@@ -6004,6 +6004,60 @@ static void emit_user_binop_dispatch(Compiler *c, Buf *b) {
   buf_puts(b, "    default: break;\n  }\n  return sp_box_nil();\n}\n");
 }
 
+/* 1 if class k defines a #coerce this TU emits and can call from the runtime
+   hook: one parameter, no rest, a poly-array return (the [other, self] pair).
+   The coerce protocol needs it for `5 + obj` where obj only reads poly. */
+static int class_coerce_emittable(Compiler *c, int k) {
+  int defcls = -1;
+  int mi = comp_method_in_chain(c, k, "coerce", &defcls);
+  if (mi < 0) return 0;
+  Scope *m = &c->scopes[mi];
+  if (!m->reachable || m->yields || scope_is_shadowed(c, mi) || m->is_transplanted_source)
+    return 0;
+  if (m->nparams != 1 || m->rest_idx >= 0) return 0;
+  if (m->ret != TY_POLY_ARRAY) return 0;
+  return 1;
+}
+
+/* Generate sp_user_coerce_dispatch: a cls_id switch that runs the numeric
+   coerce protocol from the ARGUMENT side. `5 + obj` is CRuby's
+   `a, b = obj.coerce(5); a <op> b`; the static path already emits that
+   directly whenever the object's class is known at the call site, but an
+   operand that only reads poly reached sp_poly_binop_bad and raised
+   "can't be coerced" instead (#3960). */
+static void emit_user_coerce_dispatch(Compiler *c, Buf *b) {
+  buf_puts(b, "static sp_RbVal sp_user_coerce_dispatch(const char *op, sp_RbVal recv, sp_RbVal obj, mrb_bool *handled) {\n");
+  buf_puts(b, "  *handled = FALSE;\n  sp_PolyArray *_pr = NULL;\n  switch (obj.cls_id) {\n");
+  for (int k = 0; k < c->nclasses; k++) {
+    if (!c->classes[k].instantiated || !class_coerce_emittable(c, k)) continue;
+    int defcls = -1;
+    int mi = comp_method_in_chain(c, k, "coerce", &defcls);
+    if (mi < 0) continue;
+    Scope *m = &c->scopes[mi];
+    LocalVar *p = scope_local(m, m->pnames[0]);
+    TyKind pt = (p && p->type != TY_UNKNOWN) ? p->type : TY_POLY;
+    /* the parameter takes the boxed numeric receiver; a narrower slot would
+       have to be unboxed, and only the poly and numeric shapes can be */
+    const char *arg;
+    if (pt == TY_POLY) arg = "recv";
+    else if (pt == TY_INT) arg = "sp_poly_to_i(recv)";
+    else if (pt == TY_FLOAT) arg = "sp_poly_to_f(recv)";
+    else continue;
+    const char *dcn = c->classes[defcls].c_name;
+    buf_printf(b, "    case %d: _pr = sp_%s_coerce(%s(sp_%s *)obj.v.p, %s); break;\n",
+               comp_class_index(c, c->classes[k].name), dcn,
+               c->classes[defcls].is_value_type ? "*" : "", dcn, arg);
+  }
+  buf_puts(b, "    default: break;\n  }\n");
+  buf_puts(b, "  if (!_pr || _pr->len < 2) return sp_box_nil();\n");
+  buf_puts(b, "  SP_GC_ROOT(_pr);\n");
+  /* The pair's own operator finishes the job: for the usual [Klass(other),
+     self] that is the class's own method, reached through the binop hook. */
+  buf_puts(b, "  sp_RbVal _rv = sp_poly_binop_apply(op, _pr->data[0], _pr->data[1]);\n");
+  buf_puts(b, "  if (_rv.tag == SP_TAG_NIL) return sp_box_nil();\n");
+  buf_puts(b, "  *handled = TRUE;\n  return _rv;\n}\n");
+}
+
 /* 1 if instantiated class k defines both #hash and #eql? with emittable shapes --
    the Ruby idiom for a custom Hash key. Validates BOTH signatures here so the two
    hooks are generated all-or-nothing: a class that passes gets both a hash arm and
@@ -6198,6 +6252,8 @@ void emit_regex_section(Compiler *c, Buf *b) {
     buf_puts(b, "static mrb_int sp_obj_cmp_dispatch(sp_RbVal a, sp_RbVal b, mrb_bool *comparable);\n");
   if (g_has_user_binop)
     buf_puts(b, "static sp_RbVal sp_user_binop_dispatch(const char *op, sp_RbVal a, sp_RbVal b, mrb_bool *handled);\n");
+  if (g_has_user_coerce)
+    buf_puts(b, "static sp_RbVal sp_user_coerce_dispatch(const char *op, sp_RbVal recv, sp_RbVal obj, mrb_bool *handled);\n");
   if (g_needs_class_machinery)
     buf_puts(b, "static int sp_poly_is_a(sp_RbVal obj, sp_Class klass);\n");
   if (g_gen_obj_hash)
@@ -6255,6 +6311,8 @@ void emit_regex_section(Compiler *c, Buf *b) {
     buf_puts(b, "  sp_obj_cmp_hook = sp_obj_cmp_dispatch;\n");
   if (g_has_user_binop)
     buf_puts(b, "  sp_user_binop_hook = sp_user_binop_dispatch;\n");
+  if (g_has_user_coerce)
+    buf_puts(b, "  sp_user_coerce_hook = sp_user_coerce_dispatch;\n");
   if (g_gen_obj_hashkey)
     buf_puts(b, "  sp_obj_hash_hook = sp_gen_obj_hash;\n  sp_obj_eql_hook = sp_gen_obj_eql;\n");
   if (g_gen_obj_valeq)
@@ -8142,6 +8200,11 @@ char *codegen_program(const NodeTable *nt) {
         if (comp_method_in_chain(c, k, uops[u], NULL) >= 0) { g_has_user_binop = 1; break; }
     }
   }
+  g_has_user_coerce = 0;
+  for (int k = 0; k < c->nclasses; k++) {
+    if (!c->classes[k].instantiated) continue;
+    if (class_coerce_emittable(c, k)) { g_has_user_coerce = 1; break; }
+  }
   g_gen_obj_hashkey = 0;
   for (int k = 0; k < c->nclasses; k++)
     if (class_is_hashkey(c, k) || class_is_valuekey(c, k)) { g_gen_obj_hashkey = 1; break; }
@@ -8186,6 +8249,7 @@ char *codegen_program(const NodeTable *nt) {
   /* Comparable cmp-hook dispatcher (after the user `<=>` definitions it calls). */
   if (g_has_user_cmp) emit_obj_cmp_dispatch(c, body);
   if (g_has_user_binop) emit_user_binop_dispatch(c, body);
+  if (g_has_user_coerce) emit_user_coerce_dispatch(c, body);
   /* Struct/Data value-== hook (after the class struct definitions); emitted
      before the hash-key dispatch, which references sp_obj_eq_dispatch. */
   if (g_gen_obj_valeq) emit_obj_valeq_dispatch(c, body);
