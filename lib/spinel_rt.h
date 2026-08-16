@@ -1549,6 +1549,10 @@ sp_Bigint *sp_bigint_or(sp_Bigint *a, sp_Bigint *b);
 sp_Bigint *sp_bigint_xor(sp_Bigint *a, sp_Bigint *b);
 static sp_Bigint *sp_poly_as_bigint(sp_RbVal v);
 static sp_RbVal sp_poly_binop_bad(const char *op, sp_RbVal recv, sp_RbVal arg);  /* fwd */
+static inline int sp_poly_is_array_kind(int cls_id);            /* fwd: array set ops */
+static sp_PolyArray *sp_poly_to_poly_array(sp_RbVal v);
+static sp_PolyArray *sp_PolyArray_intersect(sp_PolyArray *a, sp_PolyArray *b);
+static sp_PolyArray *sp_PolyArray_union(sp_PolyArray *a, sp_PolyArray *b);
 static sp_RbVal sp_poly_bitop(sp_RbVal a, sp_RbVal b, int op) {  /* 0:& 1:| 2:^ */
   /* a user class's own &/|/^ comes first: coercing the object to an integer
      answered a builtin result for a method the class had written (#3501) */
@@ -1571,6 +1575,17 @@ static sp_RbVal sp_poly_bitop(sp_RbVal a, sp_RbVal b, int op) {  /* 0:& 1:| 2:^ 
                    : op == 1 ? sp_bigint_or(ba, bb) : sp_bigint_xor(ba, bb);
       return sp_box_bigint(r);
     }
+  }
+  /* Two ARRAYS: `&` and `|` are Array's set operations, as `+` and `-` already
+     are on this path. Read as integer arithmetic they answered 0, so a fold
+     over an array of arrays lost its result silently (#3966). */
+  if (a.tag == SP_TAG_OBJ && sp_poly_is_array_kind(a.cls_id) &&
+      b.tag == SP_TAG_OBJ && sp_poly_is_array_kind(b.cls_id) && op != 2) {
+    SP_GC_ROOT_RBVAL(a); SP_GC_ROOT_RBVAL(b);
+    sp_PolyArray *pa = sp_poly_to_poly_array(a); SP_GC_ROOT(pa);
+    sp_PolyArray *pb = sp_poly_to_poly_array(b); SP_GC_ROOT(pb);
+    return sp_box_poly_array(op == 0 ? sp_PolyArray_intersect(pa, pb)
+                                     : sp_PolyArray_union(pa, pb));
   }
   mrb_int ai = sp_poly_to_i(a), bi = sp_poly_to_i(b);
   return sp_box_int(op == 0 ? (ai & bi) : op == 1 ? (ai | bi) : (ai ^ bi));
@@ -1904,6 +1919,8 @@ static inline int sp_poly_is_array_kind(int cls_id);                       /* de
 static sp_PolyArray *sp_poly_to_poly_array(sp_RbVal v);                    /* defined below */
 static sp_PolyArray *sp_PolyArray_concat(sp_PolyArray *a, sp_PolyArray *b); /* defined below */
 static sp_PolyArray *sp_PolyArray_difference(sp_PolyArray *a, sp_PolyArray *b); /* defined below */
+static sp_PolyArray *sp_PolyArray_intersect(sp_PolyArray *a, sp_PolyArray *b);  /* defined below */
+static sp_PolyArray *sp_PolyArray_union(sp_PolyArray *a, sp_PolyArray *b);      /* defined below */
 /* int+int that auto-promotes to bigint on overflow in --int-overflow=promote;
    plain (wrapping) C arithmetic otherwise, matching the sp_int_* macro policy. */
 #ifdef SP_INT_OVERFLOW_MODE_PROMOTE
@@ -2776,15 +2793,34 @@ static sp_RbVal sp_poly_shr(sp_RbVal a, sp_RbVal b) {
 /* & | ^ are boolean operators on a nil/boolean receiver (NilClass#& is
    always false, | and ^ test the operand's truthiness) and bitwise on an
    integer receiver. */
+/* Two boxed ARRAYS: `&` and `|` are Array's set operations, as `+` and `-`
+   already were on this path. Read as bitwise integer arithmetic they answered
+   0 -- a fold over an array of arrays lost its result silently (#3966). */
+static int sp_poly_both_arrays(sp_RbVal a, sp_RbVal b) {
+  return a.tag == SP_TAG_OBJ && sp_poly_is_array_kind(a.cls_id) &&
+         b.tag == SP_TAG_OBJ && sp_poly_is_array_kind(b.cls_id);
+}
 static sp_RbVal sp_poly_band(sp_RbVal a, sp_RbVal b) {
   if (a.tag == SP_TAG_NIL) return sp_box_bool(0);
   if (a.tag == SP_TAG_BOOL) return sp_box_bool(a.v.b && sp_poly_truthy(b));
+  if (sp_poly_both_arrays(a, b)) {
+    SP_GC_ROOT_RBVAL(a); SP_GC_ROOT_RBVAL(b);
+    sp_PolyArray *pa = sp_poly_to_poly_array(a); SP_GC_ROOT(pa);
+    sp_PolyArray *pb = sp_poly_to_poly_array(b); SP_GC_ROOT(pb);
+    return sp_box_poly_array(sp_PolyArray_intersect(pa, pb));
+  }
   if (sp_poly_is_user_obj(a)) return sp_poly_binop_bad("&", a, b);
   return sp_box_int(sp_poly_to_i(a) & sp_poly_to_i(b));
 }
 static sp_RbVal sp_poly_bor(sp_RbVal a, sp_RbVal b) {
   if (a.tag == SP_TAG_NIL) return sp_box_bool(sp_poly_truthy(b));
   if (a.tag == SP_TAG_BOOL) return sp_box_bool(a.v.b || sp_poly_truthy(b));
+  if (sp_poly_both_arrays(a, b)) {
+    SP_GC_ROOT_RBVAL(a); SP_GC_ROOT_RBVAL(b);
+    sp_PolyArray *pa = sp_poly_to_poly_array(a); SP_GC_ROOT(pa);
+    sp_PolyArray *pb = sp_poly_to_poly_array(b); SP_GC_ROOT(pb);
+    return sp_box_poly_array(sp_PolyArray_union(pa, pb));
+  }
   if (sp_poly_is_user_obj(a)) return sp_poly_binop_bad("|", a, b);
   return sp_box_int(sp_poly_to_i(a) | sp_poly_to_i(b));
 }

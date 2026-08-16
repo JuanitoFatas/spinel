@@ -3231,7 +3231,11 @@ int emit_reduce_block_expr(Compiler *c, int id, Buf *b) {
     if (pl0) pl0->type = acc_ty;
     if (pl1) pl1->type = et;
     for (int j = 0; j < bn; j++) infer_subtree(c, bb[j]);
-    if (comp_ntype(c, bb[bn - 1]) == TY_POLY) acc_ty = TY_POLY_ARRAY;
+    TyKind bt9 = comp_ntype(c, bb[bn - 1]);
+    /* a body answering a DIFFERENT array kind widens the same way a boxed one
+       does: `reduce([9]) { |a, b| a & b }` over an array of arrays answers a
+       poly array, which an int-array accumulator slot cannot hold (#3966) */
+    if (bt9 == TY_POLY || (ty_is_array(bt9) && bt9 != acc_ty)) acc_ty = TY_POLY_ARRAY;
     if (pl0) pl0->type = s0;
     if (pl1) pl1->type = s1;
   }
