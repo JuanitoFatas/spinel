@@ -7366,7 +7366,33 @@ else {
       TyKind vt = comp_ntype(c, value);
       int tarr = ++g_tmp;
       const char *k;
-      if (ty_is_object(vt) && c->classes[ty_object_class(vt)].is_struct) {
+      int obj_dc_def = -1;
+      int obj_dc = ty_is_object(vt)
+                     ? comp_method_in_chain(c, ty_object_class(vt), "deconstruct", &obj_dc_def)
+                     : -1;
+      if (obj_dc >= 0) {
+        /* `obj => [a, b]` on a class that defines #deconstruct: call it and
+           match against the array it answers, as the case/in arm does. The
+           untyped branch below read the object itself as an array of ints
+           (#3955). */
+        int isv = c->classes[ty_object_class(vt)].is_value_type;
+        TyKind drt = (TyKind)c->scopes[obj_dc].ret;
+        if (!ty_is_array(drt)) drt = TY_POLY_ARRAY;
+        const char *dcn = c->classes[obj_dc_def].name;
+        int tobj = ++g_tmp;
+        emit_indent(b, indent);
+        emit_ctype(c, vt, b);
+        buf_printf(b, " _t%d = ", tobj); emit_expr(c, value, b); buf_puts(b, ";\n");
+        /* Root the receiver: #deconstruct allocates its array. */
+        if (!isv) { emit_indent(b, indent); buf_printf(b, "SP_GC_ROOT(_t%d);\n", tobj); }
+        emit_indent(b, indent); emit_ctype(c, drt, b);
+        if (isv) buf_printf(b, " _t%d = sp_%s_deconstruct(_t%d);\n", tarr, dcn, tobj);
+        else     buf_printf(b, " _t%d = sp_%s_deconstruct((sp_%s *)_t%d);\n", tarr, dcn, dcn, tobj);
+        emit_indent(b, indent); buf_printf(b, "SP_GC_ROOT(_t%d);\n", tarr);
+        vt = drt;
+        k = (drt == TY_POLY_ARRAY) ? "Poly" : array_kind(drt);
+      }
+      else if (ty_is_object(vt) && c->classes[ty_object_class(vt)].is_struct) {
         /* Struct/Data has no member array; synthesize #deconstruct inline as a
            PolyArray of its (boxed) members, then match against that. */
         ClassInfo *sc = &c->classes[ty_object_class(vt)];
@@ -7451,6 +7477,10 @@ else {
       TyKind vt = comp_ntype(c, value);
       const char *hn = ty_is_hash(vt) ? ty_hash_cname(vt) : NULL;
       int thash = ++g_tmp;
+      int obj_dk_def = -1;
+      int obj_dk = ty_is_object(vt)
+                     ? comp_method_in_chain(c, ty_object_class(vt), "deconstruct_keys", &obj_dk_def)
+                     : -1;
       if (vt == TY_MATCHDATA) {
         /* `matchdata => {name:}`: bind through deconstruct_keys, like case/in. */
         int mdt = ++g_tmp;
@@ -7463,6 +7493,29 @@ else {
         thash = emit_md_deconstruct_keys(b, indent, md);
         hn = "SymPoly";
         vt = TY_SYM_POLY_HASH;
+      }
+      else if (obj_dk >= 0) {
+        /* `obj => {k:}` on a class that defines #deconstruct_keys: call it and
+           bind through the hash it answers, as the case/in arm does. Without
+           this the object fell to the untyped branch below, whose bindings are
+           all skipped for want of a hash type -- every variable stayed nil and
+           nothing was raised (#3955). */
+        int isv = c->classes[ty_object_class(vt)].is_value_type;
+        TyKind drt = (TyKind)c->scopes[obj_dk].ret;
+        if (!ty_is_hash(drt)) drt = TY_SYM_POLY_HASH;
+        const char *dcn = c->classes[obj_dk_def].name;
+        int tobj = ++g_tmp;
+        emit_indent(b, indent);
+        emit_ctype(c, vt, b);
+        buf_printf(b, " _t%d = ", tobj); emit_expr(c, value, b); buf_puts(b, ";\n");
+        /* Root the receiver: #deconstruct_keys allocates its hash. */
+        if (!isv) { emit_indent(b, indent); buf_printf(b, "SP_GC_ROOT(_t%d);\n", tobj); }
+        emit_indent(b, indent); emit_ctype(c, drt, b);
+        if (isv) buf_printf(b, " _t%d = sp_%s_deconstruct_keys(_t%d, sp_box_nil());\n", thash, dcn, tobj);
+        else     buf_printf(b, " _t%d = sp_%s_deconstruct_keys((sp_%s *)_t%d, sp_box_nil());\n", thash, dcn, dcn, tobj);
+        if (needs_root(drt)) { emit_indent(b, indent); emit_gc_root_tmp(c, drt, thash, b); buf_puts(b, "\n"); }
+        hn = ty_hash_cname(drt);
+        vt = drt;
       }
       else if (ty_is_object(vt) && c->classes[ty_object_class(vt)].is_struct) {
         /* `struct => {x:}`: synthesize #deconstruct_keys inline as a SymPolyHash
