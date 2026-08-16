@@ -3390,9 +3390,21 @@ void emit_case_match(Compiler *c, int id, Buf *b, int indent, int tail, int valu
           const char *rnm = nt_str(nt, inner, "name");
           if (rnm) {
             /* the rest is the middle: skip apn leading, drop npost trailing. */
+            LocalVar *rlv = scope_local(comp_scope_of(c, id), rnm);
+            char sx[96];
+            snprintf(sx, sizeof sx, "sp_%sArray_slice(_t%d, %dLL, _t%d->len - %dLL)",
+                     k, arm_t, apn, arm_t, apn + npost);
             emit_indent(b, body_indent);
-            buf_printf(b, "lv_%s = sp_%sArray_slice(_t%d, %dLL, _t%d->len - %dLL);\n",
-                       rnm, k, arm_t, (long long)apn, arm_t, (long long)(apn + npost));
+            buf_printf(b, "lv_%s = ", rnm);
+            /* a local shared with another arm of a different array kind holds
+               the slice boxed, as the required bindings above already do */
+            if (rlv && rlv->type == TY_POLY && !sp_streq(k, "Poly")) {
+              Buf bx; memset(&bx, 0, sizeof bx);
+              emit_boxed_text(c, arr_t, sx, &bx);
+              buf_puts(b, bx.p ? bx.p : "sp_box_nil()"); free(bx.p);
+            }
+            else buf_puts(b, sx);
+            buf_puts(b, ";\n");
           }
         }
       }

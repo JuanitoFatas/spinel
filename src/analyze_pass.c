@@ -775,6 +775,22 @@ static TyKind pm_deconstruct_arr_ty(Compiler *c, TyKind scrutinee_t) {
    pattern to boxed poly: values reached through a poly-valued container
    (a hash value, a find window, a capture under either) are sp_RbVal at
    the binding site. Monotonic unify, like the flat arms. */
+/* The array an object scrutinee deconstructs to, from its own #deconstruct.
+   An array pattern over an object used to default its bindings to Integer,
+   which read a boxed Symbol's bits as a small int and bound 1 and 2 for
+   `[:x, :y]` (#3954). The method's return type says what the elements really
+   are; TY_UNKNOWN means the class has no #deconstruct to ask. */
+static TyKind pm_object_deconstruct_array(Compiler *c, TyKind scrut) {
+  if (!ty_is_object(scrut)) return TY_UNKNOWN;
+  int cid = ty_object_class(scrut);
+  if (cid < 0 || cid >= c->nclasses) return TY_UNKNOWN;
+  int defcls = cid;
+  int mi = comp_method_in_chain(c, cid, "deconstruct", &defcls);
+  if (mi < 0) return TY_UNKNOWN;
+  TyKind rt = c->scopes[mi].ret;
+  return ty_is_array(rt) ? rt : TY_POLY_ARRAY;
+}
+
 static int pm_seed_locals_poly(Compiler *c, Scope *ms, int pat) {
   const NodeTable *nt = c->nt;
   int changed = 0;
@@ -1001,9 +1017,12 @@ static int infer_case_pattern_locals(Compiler *c) {
           if (!lv || lv->is_param || lv->is_block_param) continue;
           /* A poly/untyped VALUE scrutinee yields boxed elements, so a required
              binding is poly -- not int. TY_INT here reinterpreted a boxed
-             element's bits and produced garbage. Object scrutinees keep the
-             legacy default (their members/#deconstruct are usually int-typed). */
+             element's bits and produced garbage. An object scrutinee's elements
+             come from its own #deconstruct, whose return type says what they
+             are; only an object with none left to ask keeps the legacy default. */
+          TyKind darr = pm_object_deconstruct_array(c, array_scrutinee);
           TyKind et = (elem_t != TY_UNKNOWN) ? elem_t
+                    : (darr != TY_UNKNOWN) ? ty_array_elem(darr)
                     : ty_is_object(array_scrutinee) ? TY_INT : TY_POLY;
           TyKind mg = ty_unify(lv->type, et);
           if (mg != lv->type) { lv->type = mg; changed = 1; }
@@ -1024,7 +1043,9 @@ static int infer_case_pattern_locals(Compiler *c) {
                  array, so its rest slice is a poly array -- not an int array.
                  TY_INT_ARRAY reinterpreted sp_poly_slice's boxed poly array and
                  rendered garbage. Object scrutinees keep the legacy default. */
+              TyKind darr2 = pm_object_deconstruct_array(c, array_scrutinee);
               TyKind rest_arr = ty_is_array(array_scrutinee) ? array_scrutinee
+                              : (darr2 != TY_UNKNOWN) ? darr2
                               : ty_is_object(array_scrutinee) ? TY_INT_ARRAY : TY_POLY_ARRAY;
               TyKind mg = ty_unify(lv->type, rest_arr);
               if (mg != lv->type) { lv->type = mg; changed = 1; }
@@ -1036,6 +1057,7 @@ static int infer_case_pattern_locals(Compiler *c) {
   }
   return changed;
 }
+
 
 /* Widen each local `x` in a `x = @ivar` write to the ivar's (possibly
    just-widened) type, monotonically. Unlike infer_write_types this never resets
