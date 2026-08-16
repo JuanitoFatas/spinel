@@ -6181,17 +6181,38 @@ int infer_block_params(Compiler *c) {
       if (cs_type_params_site(c, recv, argv, argc)) changed = 1;
       continue;
     }
-    if (!sp_streq(rty, "LocalVariableReadNode")) continue;
+    /* A proc reached through a name: type the literal that name was assigned.
+       A LOCAL was the only name looked at, so the identical lambda written to a
+       constant or an instance variable kept the no-evidence int default and
+       answered Integer for whatever it was really called with (#3942). A
+       constant is program-wide, so its write is matched by name alone; a local
+       and an ivar are matched within their scope and class. */
     const char *varname = nt_str(nt, recv, "name");
     if (!varname) continue;
+    int want_kind;
+    if (sp_streq(rty, "LocalVariableReadNode")) want_kind = 0;
+    else if (sp_streq(rty, "ConstantReadNode") || sp_streq(rty, "ConstantPathNode")) want_kind = 1;
+    else if (sp_streq(rty, "InstanceVariableReadNode")) want_kind = 2;
+    else continue;
     Scope *call_scope = comp_scope_of(c, id);
-    /* otherwise a local holding a proc: type the proc literal assigned to it */
+    int call_cls = call_scope ? call_scope->class_id : -1;
     for (int w = 0; w < nt->count; w++) {
       const char *wty = nt_type(nt, w);
-      if (!wty || !sp_streq(wty, "LocalVariableWriteNode")) continue;
+      if (!wty) continue;
+      if (want_kind == 0) {
+        if (!sp_streq(wty, "LocalVariableWriteNode")) continue;
+        if (comp_scope_of(c, w) != call_scope) continue;
+      }
+      else if (want_kind == 1) {
+        if (!sp_streq(wty, "ConstantWriteNode") && !sp_streq(wty, "ConstantPathWriteNode")) continue;
+      }
+      else {
+        if (!sp_streq(wty, "InstanceVariableWriteNode")) continue;
+        Scope *ws = comp_scope_of(c, w);
+        if (!ws || ws->class_id != call_cls) continue;
+      }
       const char *wname = nt_str(nt, w, "name");
       if (!wname || !sp_streq(wname, varname)) continue;
-      if (comp_scope_of(c, w) != call_scope) continue;
       int val = nt_ref(nt, w, "value");
       if (val < 0 || !is_proc_create(c, val)) continue;
       if (cs_type_params_site(c, val, argv, argc)) changed = 1;

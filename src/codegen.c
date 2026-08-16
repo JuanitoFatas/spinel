@@ -25,6 +25,10 @@ const char *ty_nullable_builtin_id(TyKind t) {
     case TY_SOCKOPT:    return "SP_BUILTIN_SOCKOPT";
     case TY_OPENSTRUCT: return "SP_BUILTIN_OPENSTRUCT";
     case TY_MATCHDATA:  return "SP_BUILTIN_MATCHDATA";
+    /* A compiled pattern is a heap pointer like the rest: without a boxed
+       identity a Regexp reaching a boxed slot -- an array element, a proc
+       argument -- was evaluated for effect and answered nil (#3950). */
+    case TY_REGEX:      return "SP_BUILTIN_REGEX";
     case TY_CURRY:      return "SP_BUILTIN_CURRY";
     /* TY_TMS is an unboxed VALUE type: it boxes by heap copy (sp_box_tms),
        never as a nullable pointer (#3132) */
@@ -2704,6 +2708,7 @@ int proc_slot_is_ptr(TyKind t) {
     case TY_QUEUE: case TY_MUTEX: case TY_CONDVAR: case TY_RANDOM:
     case TY_DIR: case TY_ADDRINFO: case TY_SOCKOPT: case TY_OPENSTRUCT:
     case TY_METHOD: case TY_IO: case TY_ARGF: case TY_ENUMERATOR:
+    case TY_REGEX:
       return 1;
     default: break;
   }
