@@ -17145,12 +17145,26 @@ else { memcpy(dir, sf, n); dir[n] = 0; } }
     }
     buf_printf(b, "sp_RbVal _t%d = sp_box_nil(); switch(_t%d.cls_id){", rt2, kt);
     for (int ci = 0; ci < c->nclasses; ci++) {
-      if (is_builtin_reopen(c->classes[ci].name) || c->classes[ci].is_struct ||
-          c->classes[ci].is_native_class) continue;
+      if (is_builtin_reopen(c->classes[ci].name) || c->classes[ci].is_native_class) continue;
       int initm = comp_method_in_chain(c, ci, "initialize", NULL);
       int np = initm >= 0 ? c->scopes[initm].nparams : 0;
       int nreq = initm >= 0 ? c->scopes[initm].nrequired : 0;
-      if (argc != np || nreq != np) continue;   /* only an exact all-required match */
+      /* A Struct or Data class has a GENERATED constructor taking its members
+         positionally rather than an `initialize` scope, so the arity test above
+         finds nothing and the class was skipped entirely -- the switch came out
+         empty and `instance.class.new(...)` answered the nil seed (#3945). */
+      int kw_ctor = 0;
+      if (c->classes[ci].is_struct) {
+        if (initm >= 0) continue;               /* a custom initialize: the test above rules */
+        np = nreq = c->classes[ci].nreaders;
+        /* `klass.new(a: 1, b: 2)`: one keyword hash standing for every member,
+           which is how a Data value is normally built. */
+        if (argc == 1 && argv && nt_type(nt, argv[0]) &&
+            (sp_streq(nt_type(nt, argv[0]), "KeywordHashNode") ||
+             sp_streq(nt_type(nt, argv[0]), "HashNode")))
+          kw_ctor = 1;
+      }
+      if (!kw_ctor && (argc != np || nreq != np)) continue;   /* only an exact all-required match */
       buf_printf(b, "case %d: _t%d=", ci, rt2);
       if (c->classes[ci].is_value_type)
         buf_printf(b, "sp_box_vobj_%s(sp_%s_new(", c->classes[ci].c_name, c->classes[ci].c_name);
@@ -17161,7 +17175,28 @@ else { memcpy(dir, sf, n); dir[n] = 0; } }
         if (j) buf_puts(b, ", ");
         LocalVar *pp = is2 ? scope_local(is2, is2->pnames[j]) : NULL;
         TyKind pt = (pp && pp->type != TY_UNKNOWN) ? pp->type : TY_POLY;
-        char tn[24]; snprintf(tn, sizeof tn, "_t%d", atmp[j]);
+        /* a generated member constructor takes the member's own slot type */
+        if (!is2 && c->classes[ci].is_struct) {
+          char mvn[300]; snprintf(mvn, sizeof mvn, "@%s", c->classes[ci].readers[j]);
+          int mvi = comp_ivar_index(&c->classes[ci], mvn);
+          if (mvi >= 0 && c->classes[ci].ivar_types[mvi] != TY_UNKNOWN)
+            pt = c->classes[ci].ivar_types[mvi];
+        }
+        char tn[24];
+        if (kw_ctor) {
+          char probe[420];
+          snprintf(probe, sizeof probe,
+                   "sp_poly_hash_probe(_t%d, sp_box_sym(sp_sym_intern(\"%s\")), &_kwf)",
+                   atmp[0], c->classes[ci].readers[j]);
+          buf_puts(b, "({ mrb_bool _kwf; sp_RbVal _kwv = ");
+          buf_puts(b, probe);
+          buf_puts(b, "; (void)_kwf; ");
+          if (pt == TY_POLY) buf_puts(b, "_kwv");
+          else emit_unbox_text(c, pt, "_kwv", b);
+          buf_puts(b, "; })");
+          continue;
+        }
+        snprintf(tn, sizeof tn, "_t%d", atmp[j]);
         if (pt == TY_POLY) buf_puts(b, tn);
         else emit_unbox_text(c, pt, tn, b);
       }
