@@ -1475,6 +1475,27 @@ int infer_poly_call(Compiler *c, int id, TyKind rt, TyKind *out) {
       NULL };
     for (int i = 0; PBANGN[i]; i++) if (sp_streq(name, PBANGN[i])) { *out = TY_STRING; return 1; }
   }
+  /* The names Regexp alone owns, on a boxed receiver: the emitter unboxes the
+     pattern and dispatches through the typed emitter, so the answer is the
+     typed one. Untyped, the call boxed nil and `re.source` on a block
+     parameter answered nil (#3961). */
+  if (recv >= 0 && rt == TY_POLY && argc == 0 && nt_ref(nt, id, "block") < 0 &&
+      !an_user_defines_or_reads(c, name)) {
+    if (sp_streq(name, "source")) { *out = TY_STRING; return 1; }
+    if (sp_streq(name, "options")) { *out = TY_INT; return 1; }
+    if (sp_streq(name, "casefold?")) { *out = TY_BOOL; return 1; }
+    if (sp_streq(name, "names")) { *out = TY_STR_ARRAY; return 1; }
+    if (sp_streq(name, "named_captures")) { *out = TY_STR_POLY_HASH; return 1; }
+  }
+  /* the match forms with a boxed operand answer what the typed ones do */
+  if (recv >= 0 && argc == 1 && nt_ref(nt, id, "block") < 0 &&
+      !an_user_defines_or_reads(c, name) &&
+      (rt == TY_POLY || ((rt == TY_STRING || rt == TY_STRBUF) &&
+                         infer_type(c, argv[0]) == TY_POLY))) {
+    if (sp_streq(name, "match?")) { *out = TY_BOOL; return 1; }
+    if (sp_streq(name, "match")) { *out = TY_MATCHDATA; return 1; }
+    if (sp_streq(name, "=~")) { *out = TY_POLY; return 1; }
+  }
   /* poly.tr / the String-pattern sub / gsub: same shape with two arguments. */
   if (recv >= 0 && rt == TY_POLY && argc == 2 && nt_ref(nt, id, "block") < 0 &&
       (sp_streq(name, "tr") ||

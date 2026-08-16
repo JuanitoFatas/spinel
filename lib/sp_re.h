@@ -60,6 +60,11 @@ sp_StrArray *sp_re_rpartition(mrb_regexp_pattern *pat, const char *str);
 mrb_bool sp_re_match_p(mrb_regexp_pattern *pat, const char *str);
 mrb_bool sp_re_match_p_at(mrb_regexp_pattern *pat, const char *str, mrb_int pos);
 mrb_bool sp_re_case_eq(mrb_regexp_pattern *pat, sp_RbVal v);
+/* poly-operand match forms: either side may carry the pattern (#3961) */
+mrb_regexp_pattern *sp_poly_as_pattern(sp_RbVal v);
+mrb_bool sp_poly_match_p(sp_RbVal a, sp_RbVal b);
+sp_MatchData *sp_poly_match_data(sp_RbVal a, sp_RbVal b);
+mrb_int sp_poly_match_index(sp_RbVal a, sp_RbVal b);
 void sp_re_expand_rep(const mrb_regexp_pattern *pat, char **out_io, size_t *olen_io, size_t *cap_io, const char *rep, size_t rlen, const char *src, int *caps, int ncaps);
 const char *sp_re_gsub(mrb_regexp_pattern *pat, const char *str, const char *rep);
 const char *sp_re_sub(mrb_regexp_pattern *pat, const char *str, const char *rep);

@@ -327,6 +327,59 @@ mrb_bool sp_re_case_eq(mrb_regexp_pattern *pat, sp_RbVal v) {SP_GC_ROOT_RBVAL(v)
   }
   return sp_re_match(pat, s) >= 0;
 }
+/* The pattern behind a boxed value: a Regexp box is one already, and a String
+   is compiled the way `str.match?("b")` compiles its argument. Answers NULL for
+   anything else. Used by the poly-receiver match forms below (#3961). */
+mrb_regexp_pattern *sp_poly_as_pattern(sp_RbVal v) {SP_GC_ROOT_RBVAL(v);
+  if (v.tag == SP_TAG_OBJ && v.cls_id == SP_BUILTIN_REGEX) return (mrb_regexp_pattern *)v.v.p;
+  const char *s = NULL;
+  if (v.tag == SP_TAG_STR) s = v.v.s ? v.v.s : "";
+  else if (v.tag == SP_TAG_OBJ && v.cls_id == SP_BUILTIN_STRBUF && v.v.p)
+    s = sp_String_cstr((sp_String *)v.v.p);
+  if (!s) return NULL;
+  return re_compile(s, (int64_t)strlen(s), 0);
+}
+/* The subject string behind a boxed value (a plain string, a shared handle, a
+   Symbol); NULL when the value is not one. */
+static const char *sp_poly_subject(sp_RbVal v) {
+  if (v.tag == SP_TAG_STR) return v.v.s ? v.v.s : SPL("");
+  if (v.tag == SP_TAG_OBJ && v.cls_id == SP_BUILTIN_STRBUF && v.v.p)
+    return sp_String_cstr((sp_String *)v.v.p);
+  if (v.tag == SP_TAG_SYM && sp_sym_name_fn) return sp_sym_name_fn((sp_sym)v.v.i);
+  return NULL;
+}
+/* `a.match?(b)` / `a.match(b)` / `a =~ b` where either operand only reads poly:
+   whichever side is the Regexp is the pattern, and the other is the subject --
+   the same rule CRuby applies, and the reason both `re.match?(s)` and
+   `s.match?(re)` work. A pattern that cannot be built answers no match. */
+static int sp_poly_match_pair(sp_RbVal a, sp_RbVal b,
+                              mrb_regexp_pattern **pat_out, const char **str_out) {
+  sp_RbVal pv, sv;
+  if (b.tag == SP_TAG_OBJ && b.cls_id == SP_BUILTIN_REGEX) { pv = b; sv = a; }
+  else { pv = a; sv = b; }
+  const char *s = sp_poly_subject(sv);
+  if (!s) return 0;
+  mrb_regexp_pattern *p = sp_poly_as_pattern(pv);
+  if (!p) return 0;
+  *pat_out = p; *str_out = s;
+  return 1;
+}
+mrb_bool sp_poly_match_p(sp_RbVal a, sp_RbVal b) {SP_GC_ROOT_RBVAL(a);SP_GC_ROOT_RBVAL(b);
+  mrb_regexp_pattern *p; const char *s;
+  if (!sp_poly_match_pair(a, b, &p, &s)) return FALSE;
+  return sp_re_match_p(p, s);
+}
+sp_MatchData *sp_poly_match_data(sp_RbVal a, sp_RbVal b) {SP_GC_ROOT_RBVAL(a);SP_GC_ROOT_RBVAL(b);
+  mrb_regexp_pattern *p; const char *s;
+  if (!sp_poly_match_pair(a, b, &p, &s)) return NULL;
+  return sp_re_matchdata(p, s);
+}
+mrb_int sp_poly_match_index(sp_RbVal a, sp_RbVal b) {SP_GC_ROOT_RBVAL(a);SP_GC_ROOT_RBVAL(b);
+  mrb_regexp_pattern *p; const char *s;
+  if (!sp_poly_match_pair(a, b, &p, &s)) return SP_INT_NIL;
+  mrb_int r = sp_re_match(p, s);
+  return r < 0 ? SP_INT_NIL : r;
+}
 void sp_re_expand_rep(const mrb_regexp_pattern *pat,
                              char **out_io, size_t *olen_io, size_t *cap_io,
                              const char *rep, size_t rlen,

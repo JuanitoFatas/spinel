@@ -8331,6 +8331,17 @@ static mrb_bool sp_poly_case_eq(sp_RbVal pat, sp_RbVal e) {
     if (e.tag != SP_TAG_INT && e.tag != SP_TAG_FLT) return 0;
     return sp_frange_cover(*(sp_FloatRange *)pat.v.p, sp_poly_to_f(e));
   }
+  /* ("a".."e") === "c": a string range covers by string comparison (#3963) */
+  if (pat.tag == SP_TAG_OBJ && pat.cls_id == SP_BUILTIN_STR_RANGE) {
+    sp_RbVal ed = sp_poly_strbuf_deref(e);
+    if (ed.tag != SP_TAG_STR) return 0;
+    return sp_srange_cover(*(sp_StrRange *)pat.v.p, ed.v.s ? ed.v.s : sp_str_empty);
+  }
+  /* a shared-mutable string on either side behaves as its value (#3227) */
+  if (sp_poly_is_strbuf(pat) || sp_poly_is_strbuf(e))
+    return sp_poly_eq(sp_poly_strbuf_deref(pat), sp_poly_strbuf_deref(e));
+  if (pat.tag == SP_TAG_OBJ && pat.cls_id == SP_BUILTIN_REGEX && e.tag == SP_TAG_SYM)
+    return sp_re_case_eq((mrb_regexp_pattern *)pat.v.p, e);
   return sp_poly_eq(pat, e);
 }
 static sp_PolyArray *sp_poly_slice_groups(sp_RbVal arr, sp_RbVal pat, int after) {

@@ -10237,13 +10237,62 @@ int emit_poly_call(Compiler *c, int id, Buf *b) {
       return 1;
     }
   }
-  /* poly === arg is == (Object#===) when no user class overrides it */
+  /* The Regexp surface on a boxed receiver: the names Regexp alone owns unbox
+     the pattern and re-dispatch through the typed emitter, and the match forms
+     -- which String owns too -- go to the runtime pair dispatch, where either
+     operand may carry the pattern. A Regexp arriving through a block parameter
+     had no arm at all and raised NoMethodError naming Regexp (#3961). */
+  if (recv >= 0 && rt == TY_POLY && nt_ref(nt, id, "block") < 0 &&
+      !user_defines_or_reads(c, name) && g_n_argov < MAX_ARG_OVERRIDE) {
+    static const char *const RXO[] = { "source", "options", "casefold?",
+                                       "named_captures", "names", NULL };
+    int want_rx = 0;
+    for (int i = 0; RXO[i] && !want_rx; i++) if (sp_streq(name, RXO[i]) && argc == 0) want_rx = 1;
+    if (want_rx) {
+      int trx = ++g_tmp;
+      Buf rbx; memset(&rbx, 0, sizeof rbx); emit_expr(c, recv, &rbx);
+      emit_indent(g_pre, g_indent);
+      buf_printf(g_pre, "mrb_regexp_pattern *_t%d = sp_poly_as_pattern(%s);\n",
+                 trx, rbx.p ? rbx.p : "sp_box_nil()");
+      free(rbx.p);
+      g_argov_node[g_n_argov] = recv;
+      snprintf(g_argov_text[g_n_argov], sizeof g_argov_text[0], "_t%d", trx);
+      g_n_argov++;
+      TyKind svrx = c->ntype[recv]; c->ntype[recv] = TY_REGEX;
+      emit_call(c, id, b);
+      c->ntype[recv] = svrx;
+      g_n_argov--;
+      return 1;
+    }
+  }
+  if (recv >= 0 && argc == 1 && nt_ref(nt, id, "block") < 0 &&
+      !user_defines_or_reads(c, name) &&
+      (sp_streq(name, "match?") || sp_streq(name, "match") || sp_streq(name, "=~")) &&
+      (rt == TY_POLY || ((rt == TY_STRING || rt == TY_STRBUF) &&
+                         comp_ntype(c, argv[0]) == TY_POLY))) {
+    /* `=~` answers the match offset or nil, so it rides boxed like the typed
+       form does; the other two answer a bool and a MatchData. */
+    if (sp_streq(name, "=~")) {
+      int tmi = ++g_tmp;
+      buf_printf(b, "({ mrb_int _t%d = sp_poly_match_index(", tmi);
+      emit_boxed(c, recv, b); buf_puts(b, ", "); emit_boxed(c, argv[0], b);
+      buf_printf(b, "); _t%d == SP_INT_NIL ? sp_box_nil() : sp_box_int(_t%d); })", tmi, tmi);
+      return 1;
+    }
+    const char *fn = sp_streq(name, "match?") ? "sp_poly_match_p" : "sp_poly_match_data";
+    buf_printf(b, "%s(", fn); emit_boxed(c, recv, b);
+    buf_puts(b, ", "); emit_boxed(c, argv[0], b); buf_puts(b, ")");
+    return 1;
+  }
+  /* poly === arg dispatches on the RECEIVER's runtime class, the way CRuby's
+     case-equality does: a Regexp matches, a Range covers, a Class tests
+     membership. Answering plain equality made every one of them false (#3963). */
   if (recv >= 0 && rt == TY_POLY && argc == 1 && sp_streq(name, "===")) {
     int has_user = 0;
     for (int k = 0; k < c->nclasses && !has_user; k++)
       if (comp_method_in_chain(c, k, name, NULL) >= 0) has_user = 1;
     if (!has_user) {
-      buf_puts(b, "sp_poly_eq(");
+      buf_puts(b, "sp_poly_case_eq(");
       emit_expr(c, recv, b);
       buf_puts(b, ", ");
       emit_boxed(c, argv[0], b);

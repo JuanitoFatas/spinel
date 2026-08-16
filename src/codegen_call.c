@@ -9756,7 +9756,11 @@ void emit_call(Compiler *c, int id, Buf *b) {
                        " ? sp_penum_call1((sp_Proc *)_t%d.v.p, ", tp3, tp3, tp3);
       { Buf ab3; memset(&ab3, 0, sizeof ab3); emit_boxed(c, pv[0], &ab3);
         buf_puts(&pb3, ab3.p ? ab3.p : "sp_box_nil()");
-        buf_printf(&pb3, ") : sp_box_bool(sp_poly_eq(_t%d, ", tp3);
+        /* Everything else dispatches case-equality on the receiver's runtime
+           class the way CRuby does -- a Regexp matches, a Range covers, a
+           Class tests membership. Plain equality answered false for all of
+           them (#3963). */
+        buf_printf(&pb3, ") : sp_box_bool(sp_poly_case_eq(_t%d, ", tp3);
         buf_puts(&pb3, ab3.p ? ab3.p : "sp_box_nil()"); free(ab3.p); }
       buf_puts(&pb3, ")); })");
       emit_unbox_text(c, comp_ntype(c, id), pb3.p ? pb3.p : "sp_box_nil()", b);
