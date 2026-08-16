@@ -5727,7 +5727,8 @@ static char *ple_escaped = NULL;
    marking a bare local read doesn't rescan the whole node table per argument
    (each such write is (scope, name) -> literal id). Proc-literal writes are
    rare, so a flat list walked per mark is plenty. */
-static int *ple_pw = NULL;      /* triples: scope index, write node, literal */
+static int *ple_pw = NULL;      /* quads: kind (0 local / 1 const / 2 ivar),
+                                   scope-or-class index, write node, literal */
 static int ple_npw = 0;
 /* Mark node `x` as escaping. If `x` is a bare local read of a proc, mark the
    proc LITERAL assigned to that local too: `f = ->(a){...}; g([f])` escapes the
@@ -5739,16 +5740,32 @@ static void ple_mark_escaped(Compiler *c, int x) {
   if (x < 0 || x >= n || !ple_escaped) return;
   ple_escaped[x] = 1;
   const char *xty = nt_type(nt, x);
-  if (!xty || !sp_streq(xty, "LocalVariableReadNode")) return;
+  if (!xty) return;
+  /* A CONSTANT or an ivar holding the literal escapes just as a local does:
+     `A = ->(x){...}; run(A)` hands the lambda to a method that calls it, and
+     the literal kept the no-evidence int default -- `x[0]` on an Array
+     argument compiled as an integer bit read and answered 0 (#3968). */
+  int want_kind;
+  int want_idx = -1;
+  if (sp_streq(xty, "LocalVariableReadNode")) {
+    Scope *sc = comp_scope_of(c, x);
+    if (!sc) return;
+    want_kind = 0; want_idx = (int)(sc - c->scopes);
+  }
+  else if (sp_streq(xty, "ConstantReadNode") || sp_streq(xty, "ConstantPathNode")) want_kind = 1;
+  else if (sp_streq(xty, "InstanceVariableReadNode")) {
+    Scope *sc = comp_scope_of(c, x);
+    want_kind = 2; want_idx = sc ? sc->class_id : -1;
+  }
+  else return;
   const char *vn = nt_str(nt, x, "name");
-  Scope *sc = vn ? comp_scope_of(c, x) : NULL;
-  if (!vn || !sc) return;
-  int si = (int)(sc - c->scopes);
+  if (!vn) return;
   for (int i = 0; i < ple_npw; i++) {
-    if (ple_pw[i * 3] != si) continue;
-    const char *wn = nt_str(nt, ple_pw[i * 3 + 1], "name");
+    if (ple_pw[i * 4] != want_kind) continue;
+    if (want_kind != 1 && ple_pw[i * 4 + 1] != want_idx) continue;
+    const char *wn = nt_str(nt, ple_pw[i * 4 + 2], "name");
     if (!wn || !sp_streq(wn, vn)) continue;
-    ple_escaped[ple_pw[i * 3 + 2]] = 1;
+    ple_escaped[ple_pw[i * 4 + 3]] = 1;
   }
 }
 static void ple_build(Compiler *c) {
@@ -5763,22 +5780,30 @@ static void ple_build(Compiler *c) {
   free(ple_pw); ple_pw = NULL; ple_npw = 0;
   {
     int cap = 0;
-    NT_FOREACH_KIND(nt, NK_LocalVariableWriteNode, w) {
+    for (int w = 0; w < n; w++) {
+      NodeKind wk = nt_kind(nt, w);
+      int kind;
+      if (wk == NK_LocalVariableWriteNode) kind = 0;
+      else if (wk == NK_ConstantWriteNode || wk == NK_ConstantPathWriteNode) kind = 1;
+      else if (wk == NK_InstanceVariableWriteNode) kind = 2;
+      else continue;
       int val = nt_ref(nt, w, "value");
       if (val < 0 || val >= n || !nt_type(nt, val) ||
           !(sp_streq(nt_type(nt, val), "LambdaNode") || is_proc_create(c, val)))
         continue;
       Scope *sc = comp_scope_of(c, w);
-      if (!sc) continue;
+      if (!sc && kind != 1) continue;
       if (ple_npw >= cap) {
         cap = cap ? cap * 2 : 64;
-        int *np = realloc(ple_pw, sizeof(int) * 3 * (size_t)cap);
+        int *np = realloc(ple_pw, sizeof(int) * 4 * (size_t)cap);
         if (!np) break;
         ple_pw = np;
       }
-      ple_pw[ple_npw * 3] = (int)(sc - c->scopes);
-      ple_pw[ple_npw * 3 + 1] = w;
-      ple_pw[ple_npw * 3 + 2] = val;
+      ple_pw[ple_npw * 4] = kind;
+      ple_pw[ple_npw * 4 + 1] = kind == 0 ? (int)(sc - c->scopes)
+                              : kind == 2 ? (sc ? sc->class_id : -1) : -1;
+      ple_pw[ple_npw * 4 + 2] = w;
+      ple_pw[ple_npw * 4 + 3] = val;
       ple_npw++;
     }
   }
