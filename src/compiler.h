@@ -98,6 +98,14 @@ typedef struct {
                        the writes, which still read the poly array -- and the
                        two array kinds unify to the plain poly SCALAR, strictly
                        worse than either. TY_UNKNOWN = not narrowed. */
+  TyKind rbs_type;  /* the type an --rbs seed declared for this slot, kept
+                       beside `type` because inference may narrow the slot
+                       afterwards. A narrowing of an `untyped` (poly) seed is
+                       not a declaration, so it must not be trusted the way a
+                       concrete one is: taking it as declared made a
+                       String-passing call site reinterpret the pointer, and
+                       the program segfaulted with no diagnostic (#3977).
+                       TY_UNKNOWN = no seed. */
   int poly_ctr;     /* (TY_POLY) a builtin Array or Hash is among the values
                        that flow into this slot. TY_POLY is a top type with no
                        member list, so a call on it cannot otherwise tell

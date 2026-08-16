@@ -2245,7 +2245,7 @@ static void seed_method(Compiler *c, Scope *s, const char *ret_tok, char *ptypes
     if (pt != TY_UNKNOWN) {
       LocalVar *lv = scope_local(s, s->pnames[pi]);
       if (lv) {
-        lv->type = pt; lv->rbs_seeded = 1;
+        lv->type = pt; lv->rbs_seeded = 1; lv->rbs_type = pt;
         /* a nilable int parameter holds the sentinel like any other: mark it
            so boxing it answers nil rather than INTPTR_MIN */
         if (g_seed_nilable && (pt == TY_INT || pt == TY_FLOAT)) lv->nullable_int = 1;
@@ -9752,7 +9752,13 @@ static void check_seed_contradictions(Compiler *c) {
           nt_kind(nt, argv[i]) == NK_BlockArgumentNode) break;
       LocalVar *lv = m->pnames[i] ? scope_local(m, m->pnames[i]) : NULL;
       if (!lv || !lv->rbs_seeded) continue;
-      TyKind slot = lv->type, val = infer_type(c, argv[i]);
+      /* The DECLARED type is what a seed promises. Inference may narrow the
+         slot afterwards -- an `untyped` (poly) parameter whose body indexes it
+         with a symbol key reads as a symbol-keyed hash -- and that narrowing is
+         spinel's own guess, not a declaration to hold a call site to (#3977). */
+      TyKind slot = (lv->rbs_type != TY_UNKNOWN) ? lv->rbs_type : lv->type;
+      TyKind val = infer_type(c, argv[i]);
+      if (slot == TY_POLY) continue;   /* `untyped` accepts anything */
       int fs2 = seed_repr_family(c, slot), fv2 = seed_repr_family(c, val);
       if (!fs2 || !fv2) continue;
       if (fs2 == fv2) {
@@ -9774,6 +9780,28 @@ static void check_seed_contradictions(Compiler *c) {
       exit(1);
     }
   }
+}
+
+/* Re-assert the type an --rbs seed declared for a parameter. The seed is the
+   promise the emitted code is allowed to trust, and inference narrows a slot
+   from evidence that is only about ONE call site -- an `untyped` (poly)
+   parameter whose body reads `value[:key]` looks like a symbol-keyed hash, and
+   every other caller then had its argument reinterpreted through that layout
+   (#3977). A concrete seed is already left alone by the passes that check
+   rbs_seeded; this catches the ones that do not. */
+static int reassert_rbs_param_seeds(Compiler *c) {
+  int changed = 0;
+  for (int s = 0; s < c->nscopes; s++) {
+    Scope *sc = &c->scopes[s];
+    for (int i = 0; i < sc->nlocals; i++) {
+      LocalVar *lv = &sc->locals[i];
+      if (!lv->is_param || !lv->rbs_seeded) continue;
+      if (lv->rbs_type == TY_UNKNOWN || lv->type == lv->rbs_type) continue;
+      lv->type = lv->rbs_type;
+      changed = 1;
+    }
+  }
+  return changed;
 }
 
 /* Names whose miss answers nil while the type stays TY_INT (a search index, a
@@ -11450,6 +11478,7 @@ void analyze_program(Compiler *c) {
     if (desugar_enumerable_via_to_a(c)) ch |= infer_write_types(c);
     narrow_locals_from_arrays(c);
     ch |= infer_param_types(c);
+    reassert_rbs_param_seeds(c);   /* a seed outranks a narrowing derived from one call site */
     ch |= bind_coerce_operator_params(c);   /* 3 + obj calls obj's op WITH obj */
     ch |= infer_param_hash_value(c);
     ch |= propagate_prep_params(c);
@@ -12418,6 +12447,7 @@ void analyze_program(Compiler *c) {
   g_ret_no_new_poly = 1;
   for (int iter = 0; iter < 8; iter++) if (!infer_return_types(c)) break;
   g_ret_no_new_poly = 0;
+  reassert_rbs_param_seeds(c);   /* the post-fixpoint passes narrow too */
   /* The returns settled above may have widened past the locals that were
      derived from them (the write re-run ran first, and its `no new poly` gate
      kept a return narrow until now). Reconcile the object slots, whose

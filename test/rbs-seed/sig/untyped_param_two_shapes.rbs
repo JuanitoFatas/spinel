@@ -1,0 +1,9 @@
+class Box
+  def self.value_of: (untyped value) -> String
+end
+
+class Holder
+  def initialize: () -> void
+  def []=: (untyped key, untyped value) -> untyped
+  def []: (untyped key) -> String
+end
