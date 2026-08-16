@@ -5445,9 +5445,13 @@ int emit_predicate_expr(Compiler *c, int id, Buf *b) {
       if (!splatP && p0) {
         Scope *blkv = comp_scope_of(c, block);
         LocalVar *plv = (blkv && p0raw) ? scope_local(blkv, p0raw) : NULL;
-        TyKind pt = plv ? plv->type : TY_POLY;
-        emit_indent(g_pre, bodyIndentP);
-        emit_block_param_from_boxed(c, p0, pt, src, g_pre);
+        /* A parameter the body never reads was never interned, so it has no
+           declaration to assign into: binding it emitted `lv_x = ...` for an
+           undeclared name and the C build failed (#3967). */
+        if (plv) {
+          emit_indent(g_pre, bodyIndentP);
+          emit_block_param_from_boxed(c, p0, plv->type, src, g_pre);
+        }
       }
     }
     for (int j = 0; j < bn - 1; j++) emit_stmt(c, bb[j], g_pre, bodyIndentP);

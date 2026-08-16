@@ -20994,6 +20994,28 @@ else { memcpy(dir, sf, n); dir[n] = 0; } }
     return;
   }
 
+  /* Blockless any?/all?/none?/one? on a BOXED receiver: walk the elements and
+     count the truthy ones, the way the typed-array arms do. A widened array
+     (an element read, a destructured multi-value return) had no arm at all and
+     raised NoMethodError naming Array, the class that defines them (#3967). */
+  if (recv >= 0 && argc == 0 && nt_ref(nt, id, "block") < 0 && rt == TY_POLY &&
+      (sp_streq(name, "any?") || sp_streq(name, "all?") ||
+       sp_streq(name, "none?") || sp_streq(name, "one?")) &&
+      !user_defines_or_reads(c, name)) {
+    int ta = ++g_tmp, tn = ++g_tmp, tcnt = ++g_tmp, ti = ++g_tmp;
+    buf_printf(b, "({ sp_RbVal _t%d = ", ta); emit_boxed(c, recv, b);
+    buf_puts(b, "; "); emit_poly_iter_obj_normalize(c, ta, b);
+    buf_printf(b, "mrb_int _t%d = sp_poly_arr_len_ex(_t%d); mrb_int _t%d = 0;"
+                  " for (mrb_int _t%d = 0; _t%d < _t%d; _t%d++)"
+                  " if (sp_poly_truthy(sp_poly_each_elem(_t%d, _t%d))) _t%d++; ",
+               tn, ta, tcnt, ti, ti, tn, ti, ta, ti, tcnt);
+    if (sp_streq(name, "any?"))       buf_printf(b, "_t%d > 0; })", tcnt);
+    else if (sp_streq(name, "all?"))  buf_printf(b, "_t%d == _t%d; })", tcnt, tn);
+    else if (sp_streq(name, "none?")) buf_printf(b, "_t%d == 0; })", tcnt);
+    else                              buf_printf(b, "_t%d == 1; })", tcnt);
+    return;
+  }
+
   /* any?/all?/none?/one?(Class) over an array: Class === element membership
      (the value-argument arms compare ==). Walks the boxed elements so every
      array kind is covered. */
