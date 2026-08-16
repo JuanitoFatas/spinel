@@ -2731,6 +2731,19 @@ int proc_slot_is_ptr(TyKind t) {
   return ty_is_array(t) || ty_is_obj_array(t) || ty_is_hash(t) || ty_is_object(t);
 }
 
+/* A parameter shape that fits NEITHER the mrb_int slot nor a pointer laundered
+   through it: the by-value structs (Range, Time, Rational, Complex, Class, a
+   value-type object). Like a float, such a value rides the boxed side channel
+   and is unboxed in the callee -- passing it through the mrb_int slot did not
+   even compile (#3962). */
+int proc_slot_via_poly(Compiler *c, TyKind t) {
+  if (t == TY_POLY || t == TY_FLOAT) return 0;   /* their own arms handle these */
+  if (proc_slot_is_direct(t) || t == TY_PROC) return 0;
+  if (ty_is_object(t)) return comp_ty_value_obj(c, t);
+  if (proc_slot_is_ptr(t)) return 0;
+  return c_type_name(t) != NULL;   /* a shape with no C type at all still defers */
+}
+
 /* True if a closure cell for `lv` carries the variable's real typed pointer
    (string / array / hash / object), as opposed to a laundered or scalar slot.
    A typed-pointer cell is a plain `T *_cell_x` whose deref is an ordinary
@@ -4022,7 +4035,18 @@ else if (orecv >= 0 && onm) {
     /* A param past the supplied argument count binds nil, not the typed zero
        (CRuby fills missing block/proc params with nil). The body is already
        nil-aware for these slots; supply the matching nil sentinel. */
-    if (pt == TY_POLY || pt == TY_FLOAT) {
+    if (pt != TY_POLY && pt != TY_FLOAT && proc_slot_via_poly(c, pt)) {
+      /* a by-value struct rides the boxed side channel and unboxes here */
+      if (k < 16) {
+        g_needs_proc_poly_argslot = 1;
+        buf_printf(pb, "(argc > %d) ? ", k);
+        char slotx[48]; snprintf(slotx, sizeof slotx, "_sp_proc_poly_args[%d]", k);
+        emit_unbox_text(c, pt, slotx, pb);
+        buf_printf(pb, " : %s;\n", default_value(pt));
+      }
+      else buf_printf(pb, "%s;\n", default_value(pt));
+    }
+    else if (pt == TY_POLY || pt == TY_FLOAT) {
       /* A poly param doesn't fit the mrb_int slot, so it rides the
          _sp_proc_poly_args side-channel the call site published. A float rides
          it too: a raw mrb_float in the slot is value-truncated (0.7 -> 0), so

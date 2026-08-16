@@ -1181,7 +1181,9 @@ void emit_proc_call_args(Compiler *c, int argc, const int *argv, Buf *b, int for
      like a poly and read back with sp_poly_to_f in the callee. */
   for (int k = 0; k < nargs && !any_poly; k++) {
     TyKind at = comp_ntype(c, argv[k]);
-    if (at == TY_POLY || at == TY_FLOAT) any_poly = 1;
+    /* a by-value struct (Range, Time, Rational, ...) rides the side channel for
+       the same reason a float does: the mrb_int slot cannot hold it (#3962) */
+    if (at == TY_POLY || at == TY_FLOAT || proc_slot_via_poly(c, at)) any_poly = 1;
   }
   buf_printf(b, "%d, ", argc);
   if (any_poly) {
@@ -1223,7 +1225,7 @@ void emit_proc_call_args(Compiler *c, int argc, const int *argv, Buf *b, int for
       if (k) buf_puts(b, ", ");
       if (at == TY_POLY) buf_printf(b, "sp_poly_to_i(_t%d)", atmp[k]);
       else if (proc_slot_is_ptr(at) || at == TY_PROC) buf_printf(b, "(mrb_int)(uintptr_t)_t%d", atmp[k]);
-      else if (at == TY_FLOAT) buf_puts(b, "0");  /* float rides the boxed side-channel; the mrb_int slot is dead */
+      else if (at == TY_FLOAT || proc_slot_via_poly(c, at)) buf_puts(b, "0");  /* rides the boxed side-channel; the mrb_int slot is dead */
       else buf_printf(b, "_t%d", atmp[k]);
     }
     if (nargs == 0) buf_puts(b, "0");  /* C99: no empty initializer list */
