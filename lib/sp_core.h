@@ -23,6 +23,7 @@ intptr_t sp_str_to_i_lenient_base(const char *s, intptr_t base);
 double  sp_str_to_f_strict(const char *s);
 double sp_str_to_f_lenient(const char *s);
 int     sp_snprintf_c_float(char *buf, size_t size, const char *fmt, double v);
+int     sp_snprintf_ruby_float(char *buf, size_t size, const char *fmt, double v);
 
 /* Cold integer-math + String#oct helpers. */
 intptr_t sp_gcd(intptr_t a, intptr_t b);

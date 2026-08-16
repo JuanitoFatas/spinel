@@ -408,6 +408,69 @@ int sp_snprintf_c_float(char *buf, size_t size, const char *fmt, double v) {
   return snprintf(buf, size, fmt, v);
 }
 
+/* Ruby's float conversions round the SHORTEST round-trip decimal
+   representation, not the exact binary value: `format("%.2f", 2.675)` answers
+   2.68 where C's printf answers 2.67, since 2.675 is stored as
+   2.67499999999999982 and Ruby's dtoa works from the four digits "2675" that
+   identify that double. Ties there go to even, so 2.345 answers 2.34 where C
+   answers 2.35. Round to `keep` significant digits the same way and rebuild
+   the value, leaving libc to lay out the field. */
+static double sp_float_round_shortest(double v, int keep) {
+  if (!isfinite(v) || v == 0.0 || keep <= 0 || keep > 17) return v;
+  char digs[48];
+  int nd = 0;
+  double a = v < 0 ? -v : v;
+  int dp = sp_float_shortest(a, digs, &nd);
+  /* nothing to re-round: the cut falls before the first digit (where Ruby's
+     own dtoa consults the exact value instead) or past the last one. A value
+     that needs 16 or 17 digits to identify it is left alone as well -- Ruby's
+     dtoa gives up on its own fast path there and rounds the exact binary
+     value, which is what libc does below. */
+  if (nd <= 0 || keep >= nd || nd > 15) return v;
+  long long num = 0;
+  for (int i = 0; i < keep; i++) num = num * 10 + (digs[i] - '0');
+  int rd = digs[keep] - '0', tail = 0;
+  for (int i = keep + 1; i < nd; i++) if (digs[i] != '0') { tail = 1; break; }
+  if (rd > 5 || (rd == 5 && (tail || (num & 1)))) num++;
+  /* num scaled by 10^(dp-keep+1); parse it back for the correctly-rounded
+     double (a carry that lengthened num keeps the same scale) */
+  char buf[64];
+  snprintf(buf, sizeof buf, "%llde%d", num, dp - keep + 1);
+  char *end = NULL;
+  double r = 0;
+  if (!sp_read_float(buf, &end, &r)) return v;
+  return v < 0 ? -r : r;
+}
+/* sprintf's float directives: the C-locale delegation above, with Ruby's
+   rounding. The conversion decides how many significant digits survive --
+   %f counts them from the decimal point, %e from the first digit, %g is a
+   significant-digit count of its own. A `*` precision takes an argument this
+   call does not receive, so such a format is left to libc. */
+int sp_snprintf_ruby_float(char *buf, size_t size, const char *fmt, double v) {
+  size_t n = fmt ? strlen(fmt) : 0;
+  char conv = n ? fmt[n - 1] : 0;
+  if ((conv == 'f' || conv == 'e' || conv == 'E' || conv == 'g' || conv == 'G') &&
+      !strchr(fmt, '*') && isfinite(v) && v != 0.0) {
+    const char *dot = strchr(fmt, '.');
+    int prec = 6;   /* C's default for all five */
+    if (dot) {
+      prec = 0;
+      for (const char *q = dot + 1; *q >= '0' && *q <= '9'; q++) prec = prec * 10 + (*q - '0');
+    }
+    int keep;
+    if (conv == 'f') {
+      char digs[48];
+      int nd = 0;
+      double a = v < 0 ? -v : v;
+      keep = sp_float_shortest(a, digs, &nd) + prec + 1;
+    }
+    else if (conv == 'g' || conv == 'G') keep = prec ? prec : 1;
+    else keep = prec + 1;
+    v = sp_float_round_shortest(v, keep);
+  }
+  return sp_snprintf_c_float(buf, size, fmt, v);
+}
+
 /* Cold integer-math and String#oct helpers, moved out of spinel_rt.h
  * so they're compiled once into libspinel_rt.a rather than re-parsed
  * in every generated translation unit. Leaf functions: arithmetic +
