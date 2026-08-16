@@ -205,7 +205,25 @@ int emit_ctor_yield_inline(Compiler *c, int id, int ci, Buf *b) {
        are renamed (nested yield-method inlines) -- zeroing the whole
        table emitted the unrenamed lv_<name> (undeclared identifier, or a
        silent capture of a same-named caller local). */
-    int sv = g_nren; g_nren = saved_nren;
+    int sv = g_nren;
+    /* A nested inline INSIDE an argument expression pushes its own entries at
+       this very depth and overwrites this one's, so restoring the count alone
+       brought back another method's names -- the body then emitted the
+       unrenamed `lv_<name>` for whatever had been clobbered, which nothing
+       declares (`Set.new(set.map { ... })`, #3943). Park the entries across
+       the argument, not just the count. */
+    int park_n = sv - saved_nren;
+    char (*park_f)[96] = NULL; char (*park_t)[112] = NULL;
+    if (park_n > 0) {
+      park_f = (char (*)[96])malloc(sizeof(char[96]) * (size_t)park_n);
+      park_t = (char (*)[112])malloc(sizeof(char[112]) * (size_t)park_n);
+      if (park_f && park_t) {
+        memcpy(park_f, g_ren_from + saved_nren, sizeof(char[96]) * (size_t)park_n);
+        memcpy(park_t, g_ren_to + saved_nren, sizeof(char[112]) * (size_t)park_n);
+      }
+      else { free(park_f); free(park_t); park_f = NULL; park_t = NULL; }
+    }
+    g_nren = saved_nren;
     /* args are CALL-SITE expressions: an ivar arg (`Set.new(@data)`) must
        read the caller's self, not the freshly-allocated instance g_self was
        repointed at for the inlined body */
@@ -224,6 +242,11 @@ int emit_ctor_yield_inline(Compiler *c, int id, int ci, Buf *b) {
     else emit_arg_or_default(c, m, i, provided, b);
     g_self = svs; g_self_deref = svd;
     g_nren = sv;
+    if (park_f && park_t) {
+      memcpy(g_ren_from + saved_nren, park_f, sizeof(char[96]) * (size_t)park_n);
+      memcpy(g_ren_to + saved_nren, park_t, sizeof(char[112]) * (size_t)park_n);
+    }
+    free(park_f); free(park_t);
     buf_puts(b, ";\n");
   }
 

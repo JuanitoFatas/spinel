@@ -341,7 +341,26 @@ int emit_inline_call_x(Compiler *c, int id, Buf *b, int indent, int as_expr) {
        are renamed (nested yield-method inlines) -- zeroing the whole
        table emitted the unrenamed lv_<name> (undeclared identifier, or a
        silent capture of a same-named caller local). */
-    int sv = g_nren; g_nren = saved_nren;
+    int sv = g_nren;
+    /* The argument expression is call-site code, so the callee's renames are
+       switched off for it. A nested inline INSIDE that expression pushes its
+       own entries at this very depth and overwrites the callee's, so restoring
+       the count alone brought back another method's names -- this body then
+       emitted the unrenamed `lv_<name>` for whatever had been clobbered, which
+       nothing declares (#3943). Park the entries across the argument, not just
+       the count. */
+    int park_n = sv - saved_nren;
+    char (*park_f)[96] = NULL; char (*park_t)[112] = NULL;
+    if (park_n > 0) {
+      park_f = (char (*)[96])malloc(sizeof(char[96]) * (size_t)park_n);
+      park_t = (char (*)[112])malloc(sizeof(char[112]) * (size_t)park_n);
+      if (park_f && park_t) {
+        memcpy(park_f, g_ren_from + saved_nren, sizeof(char[96]) * (size_t)park_n);
+        memcpy(park_t, g_ren_to + saved_nren, sizeof(char[112]) * (size_t)park_n);
+      }
+      else { free(park_f); free(park_t); park_f = NULL; park_t = NULL; }
+    }
+    g_nren = saved_nren;
     if (fwd_encl && i < fwd_encl->nparams) {
       LocalVar *ep = scope_local(fwd_encl, fwd_encl->pnames[i]);
       LocalVar *mp = scope_local(m, m->pnames[i]);
@@ -377,6 +396,11 @@ int emit_inline_call_x(Compiler *c, int id, Buf *b, int indent, int as_expr) {
         emit_arg_or_default(c, m, i, kv, b);
     }
     g_nren = sv;
+    if (park_f && park_t) {
+      memcpy(g_ren_from + saved_nren, park_f, sizeof(char[96]) * (size_t)park_n);
+      memcpy(g_ren_to + saved_nren, park_t, sizeof(char[112]) * (size_t)park_n);
+    }
+    free(park_f); free(park_t);
     buf_puts(b, ";\n");
   }
 
