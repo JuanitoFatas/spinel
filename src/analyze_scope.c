@@ -847,10 +847,22 @@ void walk_scope(Compiler *c, int id, int scope_idx, int class_id) {
    when their module is included at the top level. */
 void register_module_functions(Compiler *c) {
   const NodeTable *nt = c->nt;
-  for (int ci = 0; ci < c->nclasses; ci++) {
-    int dn = c->classes[ci].def_node;
-    const char *dt = dn >= 0 ? nt_type(nt, dn) : NULL;
-    if (!dt || !sp_streq(dt, "ModuleNode")) continue;
+  /* Every module BODY, not just the one recorded as the module's def_node: a
+     module reopened in a second file (a gem's version.rb naming the module,
+     then its main file) keeps the first body as def_node, so the reopen's
+     `module_function` was never seen and its methods stayed instance-level --
+     `M.helper(x)` then had no callee and refused to compile (#3969). */
+  for (int dn = 0; dn < nt->count; dn++) {
+    if (nt_kind(nt, dn) != NK_ModuleNode) continue;
+    int ci = -1;
+    for (int k = 0; k < c->nclasses && ci < 0; k++) if (c->classes[k].def_node == dn) ci = k;
+    if (ci < 0) {
+      /* a ModuleNode names its module through constant_path, not a "name" */
+      int cp = nt_ref(nt, dn, "constant_path");
+      const char *mnm = cp >= 0 ? nt_str(nt, cp, "name") : nt_str(nt, dn, "name");
+      ci = mnm ? comp_class_index(c, mnm) : -1;
+    }
+    if (ci < 0) continue;
     int body = nt_ref(nt, dn, "body");
     if (body < 0) continue;
     int bn = 0;
