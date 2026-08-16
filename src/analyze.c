@@ -12364,6 +12364,15 @@ void analyze_program(Compiler *c) {
   g_ret_no_new_poly = 1;
   for (int iter = 0; iter < 8; iter++) if (!infer_return_types(c)) break;
   g_ret_no_new_poly = 0;
+  /* The returns settled above may have widened past the locals that were
+     derived from them (the write re-run ran first, and its `no new poly` gate
+     kept a return narrow until now). Reconcile the object slots, whose
+     assignment has no coercion to fall back on. */
+  for (int iter = 0; iter < 8; iter++) {
+    int ch = widen_object_locals_from_poly_writes(c);
+    ch |= infer_return_types(c);
+    if (!ch) break;
+  }
   /* The write-type re-run can re-derive a hash/array container type for an
      iteration-bound block param from its element-index usage (e.g. `a[1]=v`),
      clobbering the TY_POLY the block-param pass pinned for a poly-collection

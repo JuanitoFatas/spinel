@@ -1064,6 +1064,29 @@ static int infer_case_pattern_locals(Compiler *c) {
    a local, so it only lifts a local that reads a now-wider ivar and leaves every
    other local's carefully-derived type (pattern/massign/block bindings) intact
    -- the reconciliation the late ivar-widening fixpoint needs (#1793). */
+/* A local typed as one object class whose write value settled POLY only after
+   the post-fixpoint write re-run (a callee's return widens last, once its
+   parameter has seen a second class): the emitted assignment hands an sp_RbVal
+   to an sp_Foo * and the C build fails. Widen the slot to poly -- the value
+   really can be either class. Object slots only: a scalar slot has a coercion
+   at the assignment, an object slot has none. (#3964) */
+int widen_object_locals_from_poly_writes(Compiler *c) {
+  const NodeTable *nt = c->nt;
+  int changed = 0;
+  for (int id = 0; id < nt->count; id++) {
+    if (nt_kind(nt, id) != NK_LocalVariableWriteNode) continue;
+    const char *nm = nt_str(nt, id, "name");
+    Scope *s = nm ? comp_scope_of(c, id) : NULL;
+    LocalVar *lv = s ? scope_local(s, nm) : NULL;
+    if (!lv || lv->is_param || lv->is_block_param || lv->rbs_seeded) continue;
+    if (!ty_is_object(lv->type)) continue;
+    int v = nt_ref(nt, id, "value");
+    if (v < 0 || infer_type(c, v) != TY_POLY) continue;
+    lv->type = TY_POLY;
+    changed = 1;
+  }
+  return changed;
+}
 int reconcile_locals_reading_ivars(Compiler *c) {
   const NodeTable *nt = c->nt;
   int changed = 0;
