@@ -610,6 +610,32 @@ static void emit_slot_nil_test(Compiler *c, TyKind t, int tmp, int want_nil, Buf
   (void)c;
 }
 
+/* One build-time warning per constant that the whole program never defines.
+   The reference still emits its runtime NameError (CRuby's behaviour, which
+   ruby/spec asserts), but the build no longer says nothing at all about a name
+   that can never resolve -- a dropped require reads as a runtime engine bug
+   otherwise (#3976). Deduplicated by name so a constant read in a loop body
+   warns once. */
+static void warn_undefined_constant(Compiler *c, int id, const char *nm) {
+  static char seen[64][128];
+  static int nseen = 0;
+  if (!nm || !*nm) return;
+  for (int i = 0; i < nseen; i++) if (sp_streq(seen[i], nm)) return;
+  if (nseen < 64) { snprintf(seen[nseen], sizeof seen[0], "%s", nm); nseen++; }
+  int ln = (int)nt_int(c->nt, id, "node_line", 0);
+  int fid = (int)nt_int(c->nt, id, "node_file", 0);
+  const char *file = nt_file_path(c->nt, fid);
+  if (!file || !*file) file = c->nt->source_file;
+  if (!file || !*file) file = "source.rb";
+  if (ln > 0)
+    fprintf(stderr, "spinel: %s:%d: warning: uninitialized constant %s: "
+                    "defined nowhere in the program (raises NameError when reached)\n",
+            file, ln, nm);
+  else
+    fprintf(stderr, "spinel: warning: uninitialized constant %s: "
+                    "defined nowhere in the program (raises NameError when reached)\n", nm);
+}
+
 void emit_expr(Compiler *c, int id, Buf *b) {
   const NodeTable *nt = c->nt;
   const char *ty = nt_type(nt, id);
@@ -1730,8 +1756,17 @@ void emit_expr(Compiler *c, int id, Buf *b) {
         int _bcid = builtin_class_id(nm);
         if (_bcid != 0)
           buf_printf(b, "((sp_Class){%d})", _bcid);  /* builtin class as value */
-        else
+        else {
+          /* A constant defined NOWHERE in the program: spinel is closed-world
+             and `const_set` only stores into a constant the program already
+             defines, so no definition can arrive later. Say so at build time --
+             a dropped `require` otherwise reads as an engine bug, since the
+             build succeeds and the first request crashes (#3976). It stays a
+             warning, not an error: referencing a missing constant to test the
+             NameError is legal Ruby, and ruby/spec does exactly that. */
+          warn_undefined_constant(c, id, nm);
           buf_printf(b, "(sp_raise_cls(\"NameError\", \"uninitialized constant %s\"), ((sp_Class){-1}))", nm);
+        }
       }
     }
     else unsupported(c, id, "constant read");
@@ -1889,12 +1924,17 @@ void emit_expr(Compiler *c, int id, Buf *b) {
       int _bcpid = builtin_class_id(nm);
       if (_bcpid != 0) { buf_printf(b, "((sp_Class){%d})", _bcpid); return; }
     }
-    /* unresolved qualified constant: raise NameError at runtime */
+    /* A qualified constant defined nowhere: the same build-time answer as the
+       bare form above (#3976). */
     {
       char fullname[512];
-      if (par_nmc && nm) snprintf(fullname, sizeof fullname, "%s::%s", par_nmc, nm);
+      /* CRuby qualifies the name by a NAMED module (`M::Missing`) but not by
+         Object, whose constants are the top-level ones (#3976). */
+      if (par_nmc && nm && !sp_streq(par_nmc, "Object"))
+        snprintf(fullname, sizeof fullname, "%s::%s", par_nmc, nm);
       else if (nm) snprintf(fullname, sizeof fullname, "%s", nm);
       else snprintf(fullname, sizeof fullname, "?");
+      warn_undefined_constant(c, id, fullname);
       buf_printf(b, "(sp_raise_cls(\"NameError\", \"uninitialized constant %s\"), ((sp_Class){-1}))", fullname);
     }
     return;
