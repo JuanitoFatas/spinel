@@ -1029,6 +1029,12 @@ void emit_assign(Compiler *c, int id, Buf *b, int indent) {
          yields the handle: alias it directly (#3227 P5) */
       emit_expr(c, v, b);
     }
+    else if (comp_ntype(c, v) == TY_POLY || strbuf_boxed_elem_read(c, v)) {
+      /* a container element read hands out the element's BOXED handle: take the
+         handle out of the box, so the local and the element are one object and
+         a mutation through either shows in the other (#3941) */
+      buf_puts(b, "sp_poly_as_strbuf("); emit_expr(c, v, b); buf_puts(b, ")");
+    }
     else {
       /* a value-position append chain over a shared base: run the chain (it
          appends in place), then alias the BASE handle -- wrapping the cstr

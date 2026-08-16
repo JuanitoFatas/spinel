@@ -674,6 +674,18 @@ void emit_boxed(Compiler *c, int node, Buf *b) {
           buf_printf(b, "sp_box_obj(%s, SP_BUILTIN_STRBUF)", srefX);
           return;
         } }
+      /* an element read is ALREADY a boxed handle when the container holds
+         one: pass it through (as a handle box either way) so the alias keeps
+         the container's own string rather than a fresh copy of it (#3941) */
+      if (strbuf_boxed_elem_read(c, node)) {
+        buf_puts(b, "sp_box_obj(sp_poly_as_strbuf(");
+        unsigned char sv_m2 = c->strbuf_box[node];
+        c->strbuf_box[node] = 0;
+        emit_expr(c, node, b);
+        c->strbuf_box[node] = sv_m2;
+        buf_puts(b, "), SP_BUILTIN_STRBUF)");
+        return;
+      }
       /* a demanded literal / expression store: wrap a FRESH handle so the
          container element is mutable in place (#3227 P3) */
       buf_puts(b, "sp_box_obj(sp_String_new_shared(");

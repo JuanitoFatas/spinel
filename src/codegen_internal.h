@@ -108,6 +108,7 @@ extern char g_ren_to[MAX_RENAME][112];
 const char *strbuf_local_name(Compiler *c, int recv);
 int strbuf_ivar_owner(Compiler *c, int node);
 int strbuf_slot_ref(Compiler *c, int recv, char *out, size_t cap);
+int strbuf_boxed_elem_read(Compiler *c, int v);
 int emit_strbuf_read_ref(Compiler *c, int recv, Buf *b);
 extern int g_block_nren;
 extern int g_yield_block_fallback_nren;

@@ -9340,6 +9340,38 @@ static int promote_shared_stored_strings(Compiler *c) {
     if (llv3->type != TY_STRBUF || !llv3->str_shared)
       { llv3->type = TY_STRBUF; llv3->str_shared = 1; changed = 1; }
   }
+  /* Container-read alias (`r = rows[0]; r.upcase!`): the local is another name
+     for the element, so an in-place mutation through it has to land on the
+     container's own string. Demand that container's stores into handles,
+     promote the local, and mark the read so the emitter hands out the handle
+     instead of the safe copy -- the local held a COPY before, and the
+     container never saw the mutation (#3941). */
+  for (int w = 0; w < nt->count; w++) {
+    if (nt_kind(nt, w) != NK_LocalVariableWriteNode) continue;
+    int wv = nt_ref(nt, w, "value");
+    if (wv < 0 || nt_kind(nt, wv) != NK_CallNode) continue;
+    const char *idxn5 = nt_str(nt, wv, "name");
+    if (!idxn5 || !sp_streq(idxn5, "[]")) continue;
+    if (nt_ref(nt, wv, "block") >= 0) continue;
+    int cont5 = nt_ref(nt, wv, "receiver");
+    if (cont5 < 0 || nt_kind(nt, cont5) != NK_LocalVariableReadNode) continue;
+    const char *contn5 = nt_str(nt, cont5, "name");
+    Scope *conts5 = contn5 ? comp_scope_of(c, cont5) : NULL;
+    LocalVar *contv5 = (contn5 && conts5) ? scope_local(conts5, contn5) : NULL;
+    if (!contv5 || (!ty_is_array(contv5->type) && !ty_is_hash(contv5->type) &&
+                    contv5->type != TY_UNKNOWN)) continue;
+    const char *lname5 = nt_str(nt, w, "name");
+    Scope *ls5 = comp_scope_of(c, w);
+    LocalVar *llv5 = (lname5 && ls5) ? scope_local(ls5, lname5) : NULL;
+    if (!llv5 || !strbuf_slot_eligible_shape(c, lname5, ls5, llv5)) continue;
+    if (strbuf_mut_kind(c, lname5, ls5) != 1) continue;
+    if (llv5->type != TY_UNKNOWN && llv5->type != TY_STRING &&
+        llv5->type != TY_STRBUF && llv5->type != TY_POLY) continue;
+    changed |= strbuf_demand_container_stores(c, contn5, conts5);
+    if (!c->strbuf_box[wv]) { c->strbuf_box[wv] = 1; changed = 1; }
+    if (llv5->type != TY_STRBUF || !llv5->str_shared)
+      { llv5->type = TY_STRBUF; llv5->str_shared = 1; changed = 1; }
+  }
   return changed;
 }
 

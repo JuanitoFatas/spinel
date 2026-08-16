@@ -760,6 +760,18 @@ int emit_strbuf_read_ref(Compiler *c, int recv, Buf *b) {
   buf_printf(b, "sp_String_cstr(%s)", sref);
   return 1;
 }
+/* `cont[k]` where the container hands its elements out BOXED (a poly array, a
+   hash): the read is an sp_RbVal, so a shared-handle destination has to unbox
+   it rather than wrap it (#3941). */
+int strbuf_boxed_elem_read(Compiler *c, int v) {
+  if (v < 0 || nt_kind(c->nt, v) != NK_CallNode) return 0;
+  const char *nm = nt_str(c->nt, v, "name");
+  if (!nm || !sp_streq(nm, "[]")) return 0;
+  int r = nt_ref(c->nt, v, "receiver");
+  if (r < 0) return 0;
+  TyKind rt = comp_ntype(c, r);
+  return rt == TY_POLY || rt == TY_POLY_ARRAY || ty_is_hash(rt);
+}
 int strbuf_slot_ref(Compiler *c, int recv, char *out, size_t cap) {
   const char *rn = strbuf_local_name(c, recv);
   if (rn) {
@@ -778,8 +790,16 @@ int strbuf_slot_ref(Compiler *c, int recv, char *out, size_t cap) {
       c->strbuf_box[recv] && comp_ntype(c, recv) == TY_STRBUF) {
     Buf rb2; memset(&rb2, 0, sizeof rb2);
     emit_expr(c, recv, &rb2);
-    int fit = rb2.p && strlen(rb2.p) + 3 <= cap;
-    if (fit) snprintf(out, cap, "(%s)", rb2.p);
+    /* A container ELEMENT read comes back BOXED (a poly array element, a hash
+       value), so the handle has to come out of the box; a reader call already
+       emits the sp_String * itself (#3941). */
+    int erecv = nt_ref(c->nt, recv, "receiver");
+    const char *cnm = nt_str(c->nt, recv, "name");
+    TyKind ert = erecv >= 0 ? comp_ntype(c, erecv) : TY_UNKNOWN;
+    int boxed = cnm && sp_streq(cnm, "[]") &&
+                (ert == TY_POLY || ert == TY_POLY_ARRAY || ty_is_hash(ert));
+    int fit = rb2.p && strlen(rb2.p) + 24 <= cap;
+    if (fit) snprintf(out, cap, boxed ? "sp_poly_as_strbuf(%s)" : "(%s)", rb2.p);
     free(rb2.p);
     return fit;
   }
