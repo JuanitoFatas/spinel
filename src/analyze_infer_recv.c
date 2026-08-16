@@ -600,6 +600,9 @@ int infer_hash_call(Compiler *c, int id, TyKind rt, TyKind *out) {
          into the universal PolyPoly hash -- passing one specialized layout to
          another layout's merge helper read garbage / segfaulted (#3261) */
       if (ty_is_hash(at) && at != rt) { *out = TY_POLY_POLY_HASH; return 1; }
+      /* a BOXED argument holds whichever variant the value really is, which the
+         receiver's layout cannot be assumed to match: the same fold (#3975) */
+      if (at == TY_POLY) { *out = TY_POLY_POLY_HASH; return 1; }
       { *out = rt; return 1; }
     }
     /* replace(other) returns self, but self's SLOT widens to the universal

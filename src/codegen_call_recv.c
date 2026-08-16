@@ -4976,11 +4976,24 @@ else {
           /* default(key): a hash built with a block calls its default_proc with
              (self, key); default() (or a hash with no proc) returns default_v
              (#2464). Only the poly-value variants carry a dproc. */
-          if (argc == 1) {
+          /* The proc takes the key in the hash's own key representation, so an
+             argument of another type cannot be handed to it -- passing an
+             Integer where a `const char *` key is expected did not even
+             typecheck. Such a key can never be in this hash, so answer the
+             plain default. */
+          TyKind dkt = argc == 1 ? comp_ntype(c, argv[0]) : TY_UNKNOWN;
+          int dkey_ok = rt == TY_POLY_POLY_HASH ||
+                        (rt == TY_SYM_POLY_HASH && dkt == TY_SYMBOL) ||
+                        (rt == TY_STR_POLY_HASH && (dkt == TY_STRING || dkt == TY_STRBUF));
+          if (argc == 1 && dkey_ok) {
             buf_printf(b, "; (_t%d && _t%d->dproc) ? _t%d->dproc(_t%d, ", t, t, t, t);
             if (rt == TY_POLY_POLY_HASH) emit_boxed(c, argv[0], b);
             else emit_expr(c, argv[0], b);
             buf_printf(b, ", _t%d->dproc_self) : (_t%d ? _t%d->default_v : sp_box_nil()); })", t, t, t);
+          }
+          else if (argc == 1) {
+            buf_printf(b, "; (void)("); emit_expr(c, argv[0], b);
+            buf_printf(b, "); _t%d ? _t%d->default_v : sp_box_nil(); })", t, t);
           }
           else {
             buf_printf(b, "; _t%d ? _t%d->default_v : sp_box_nil(); })", t, t);
@@ -5314,6 +5327,16 @@ else {
            wrong struct (#3261). Matches the TY_POLY_POLY_HASH inference. */
         if (ty_is_hash(at) && at != rt &&
             !(rt == TY_STR_POLY_HASH && (at == TY_STR_STR_HASH || at == TY_STR_INT_HASH))) {
+          buf_puts(b, "sp_poly_hash_merge("); emit_boxed(c, recv, b);
+          buf_puts(b, ", "); emit_boxed(c, argv[0], b); buf_puts(b, ")");
+          return 1;
+        }
+        /* a BOXED argument holds whichever variant the value really is: casting
+           it to the receiver's layout read a Sym-keyed hash through a Str-keyed
+           struct, and the Symbol key was then dereferenced as a char * (#3975).
+           Fold through the universal boxed merge instead, as a cross-variant
+           merge already does. */
+        if (at == TY_POLY) {
           buf_puts(b, "sp_poly_hash_merge("); emit_boxed(c, recv, b);
           buf_puts(b, ", "); emit_boxed(c, argv[0], b); buf_puts(b, ")");
           return 1;
