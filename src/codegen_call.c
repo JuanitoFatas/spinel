@@ -9714,6 +9714,45 @@ static int emit_poly_isa_test(Compiler *c, const char *cn, const char *v, int ex
   return 1;
 }
 
+/* The declared `ffi_buffer` a call argument names (`M.a`), or -1 when the
+   pointer comes from anywhere else (a C return value, a callback parameter, a
+   local holding a :ptr) -- those have no size to check against. */
+static int ffi_buffer_arg(Compiler *c, int arg) {
+  const NodeTable *nt = c->nt;
+  if (arg < 0 || nt_kind(nt, arg) != NK_CallNode) return -1;
+  if (nt_ref(nt, arg, "arguments") >= 0 || nt_ref(nt, arg, "block") >= 0) return -1;
+  int r = nt_ref(nt, arg, "receiver");
+  const char *rty = r >= 0 ? nt_type(nt, r) : NULL;
+  if (!rty || (!sp_streq(rty, "ConstantReadNode") && !sp_streq(rty, "ConstantPathNode"))) return -1;
+  const char *mod = nt_str(nt, r, "name");
+  const char *nm = nt_str(nt, arg, "name");
+  if (!mod || !nm) return -1;
+  for (int i = 0; i < c->n_ffi_bufs; i++)
+    if (sp_streq(c->ffi_bufs[i].mod, mod) && sp_streq(c->ffi_bufs[i].name, nm)) return i;
+  return -1;
+}
+
+/* An `ffi_read_*` / `ffi_write_*` applied to a declared buffer touches
+   [offset, offset + width) of it, and every term is known here: refuse the
+   access that runs past the end rather than emitting it. The buffer is one the
+   compiler declared itself, so this is an out-of-bounds access on its own
+   storage -- silent in an ordinary build, a global-buffer-overflow under
+   ASAN (#3970). */
+static void ffi_check_buffer_bounds(Compiler *c, int id, int arg,
+                                    const char *kind, int off, const char *dir) {
+  int bi = ffi_buffer_arg(c, arg);
+  if (bi < 0) return;
+  int w = ffi_scalar_width(kind);
+  if (w <= 0) return;
+  if (off >= 0 && off + w <= c->ffi_bufs[bi].size) return;
+  char msg[320];
+  snprintf(msg, sizeof msg,
+           "ffi_%s_%s at offset %d runs %d bytes past the end of ffi_buffer :%s (%d bytes)",
+           dir, kind, off, off + w - c->ffi_bufs[bi].size, c->ffi_bufs[bi].name,
+           c->ffi_bufs[bi].size);
+  unsupported_feature(c, id, msg);
+}
+
 void emit_call(Compiler *c, int id, Buf *b) {
   /* deep-return pickup (#3227 P6): a marked receiverless call to a method
      whose every return path yields a shared handle -- reset the side
@@ -18915,6 +18954,7 @@ else { memcpy(dir, sf, n); dir[n] = 0; } }
         if (ri >= 0 && argc >= 1) {
           const char *kind = c->ffi_readers[ri].kind;
           int off = c->ffi_readers[ri].offset;
+          ffi_check_buffer_bounds(c, id, argv[0], kind, off, "read");
           /* The suffix names the load width; taking every one but i32 as a
              32-bit unsigned read meant a declared 1- or 2-byte field pulled in
              its neighbours, and a read at the last bytes of a buffer ran off
@@ -19003,6 +19043,7 @@ else { memcpy(dir, sf, n); dir[n] = 0; } }
         if (wi >= 0 && argc >= 2) {
           const char *kind = c->ffi_writers[wi].kind;
           int off = c->ffi_writers[wi].offset;
+          ffi_check_buffer_bounds(c, id, argv[0], kind, off, "write");
           int tv = ++g_tmp;
           if (kind && sp_streq(kind, "ptr")) {
             TyKind vt = comp_ntype(c, argv[1]);

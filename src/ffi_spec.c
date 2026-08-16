@@ -47,11 +47,11 @@ static const FfiSpecInfo FFI_SPECS[] = {
    spec tokens above (`u8` here, `uint8` there) because it is the surface
    syntax of a different declaration, but the same rule holds: one table, so
    the width a suffix promises is the width that is loaded and stored. */
-static const struct { const char *kind; const char *c_type; } FFI_SCALAR_KINDS[] = {
-  { "u8",  "uint8_t"  }, { "i8",  "int8_t"  },
-  { "u16", "uint16_t" }, { "i16", "int16_t" },
-  { "u32", "uint32_t" }, { "i32", "int32_t" },
-  { "u64", "uint64_t" }, { "i64", "int64_t" },
+static const struct { const char *kind; const char *c_type; int width; } FFI_SCALAR_KINDS[] = {
+  { "u8",  "uint8_t",  1 }, { "i8",  "int8_t",  1 },
+  { "u16", "uint16_t", 2 }, { "i16", "int16_t", 2 },
+  { "u32", "uint32_t", 4 }, { "i32", "int32_t", 4 },
+  { "u64", "uint64_t", 8 }, { "i64", "int64_t", 8 },
 };
 
 const char *ffi_scalar_ctype(const char *kind) {
@@ -59,6 +59,14 @@ const char *ffi_scalar_ctype(const char *kind) {
   for (unsigned i = 0; i < sizeof(FFI_SCALAR_KINDS) / sizeof(FFI_SCALAR_KINDS[0]); i++)
     if (sp_streq(FFI_SCALAR_KINDS[i].kind, kind)) return FFI_SCALAR_KINDS[i].c_type;
   return NULL;
+}
+
+int ffi_scalar_width(const char *kind) {
+  if (!kind) return 0;
+  if (sp_streq(kind, "ptr")) return (int)sizeof(void *);
+  for (unsigned i = 0; i < sizeof(FFI_SCALAR_KINDS) / sizeof(FFI_SCALAR_KINDS[0]); i++)
+    if (sp_streq(FFI_SCALAR_KINDS[i].kind, kind)) return FFI_SCALAR_KINDS[i].width;
+  return 0;
 }
 
 const FfiSpecInfo *ffi_spec_lookup(const char *spec) {

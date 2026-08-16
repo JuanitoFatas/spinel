@@ -28,4 +28,10 @@ const FfiSpecInfo *ffi_spec_lookup(const char *spec);
    under one width and read at another. */
 const char *ffi_scalar_ctype(const char *kind);
 
+/* The byte width that suffix loads and stores ("ptr" is a pointer), or 0 for
+   a suffix outside the vocabulary. The bounds check against a declared
+   `ffi_buffer` needs the width the access really touches, and taking it from
+   the same table is what keeps the two in step. */
+int ffi_scalar_width(const char *kind);
+
 #endif /* FFI_SPEC_H */

@@ -173,6 +173,12 @@ guessed at.
 image: `Module.name(buf, val)` stores `val` at `offset` and returns it,
 with the same suffixes and the same widths.
 
+Applied to a declared `ffi_buffer`, the access is bounds-checked while
+compiling: `offset + width` past the buffer's size is refused at the call
+site, since both terms are known there. A pointer from anywhere else -- a
+C return value, a callback parameter, a local holding a `:ptr` -- carries
+no size, so it stays unchecked and is yours to get right.
+
 ```ruby
 # sqlite3_open(path, ppDb) writes the new db handle into *ppDb.
 # Pull the pointer out of our scratch buffer at offset 0.
