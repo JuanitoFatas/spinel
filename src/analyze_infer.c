@@ -920,6 +920,14 @@ TyKind infer_call(Compiler *c, int id) {
     }
   }
 
+  /* A copy of a value whose type is only known at run time is itself only known
+     at run time: answering UNKNOWN left the slot open to the usage rules, and an
+     int-keyed `copy[i] = v` then typed the copy of an Array as a HASH -- the
+     method answered `{}` where CRuby answered an Array (#3952). */
+  if (recv >= 0 && argc == 0 && (sp_streq(name, "dup") || sp_streq(name, "clone")) &&
+      infer_type(c, recv) == TY_POLY)
+    return TY_POLY;
+
   /* `!` and `!=` are ordinary methods a class may override, so the result is
      whatever its definition answers, not a bool (#3740) */
   if (recv >= 0 && (sp_streq(name, "!") || sp_streq(name, "!=")) &&
