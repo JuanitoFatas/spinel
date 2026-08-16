@@ -20410,6 +20410,15 @@ else { memcpy(dir, sf, n); dir[n] = 0; } }
     if (cg_qm && !cg_own) {
       LocalVar *cv = comp_const(c, cg_qm);
       if (cv && cv->type != TY_UNKNOWN) { buf_printf(b, "cst_%s", cg_qm); return; }
+      /* A CLASS or module name: const_get answers the class object. The lookup
+         above knows only VALUE constants, so `Object.const_get(:Foo)` on a
+         class the program defines fell through to the NameError below (#3969). */
+      { int cgc = comp_class_index(c, cg_qm);
+        if (cgc >= 0) {
+          if (comp_ntype(c, id) == TY_CLASS) buf_printf(b, "((sp_Class){%d})", cgc);
+          else buf_printf(b, "sp_box_class((sp_Class){%d})", cgc);
+          return;
+        } }
       /* Builtin module constants: Klass.const_get(:C) resolves to the same value
          as Klass::C. const_get's result is poly, so box it (#2685). */
       {

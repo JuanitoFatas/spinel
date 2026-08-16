@@ -4853,6 +4853,8 @@ else {
                                        sp_streq(cg_rty, "ConstantPathNode"))) ? nt_str(nt, recv, "name") : NULL;
       if (cg_rnm && !const_owned_by_class(c, cg_rnm, cgn)) return TY_POLY;
     }
+    /* a CLASS or module name answers the class object itself (#3969) */
+    if (cgn && comp_class_index(c, cgn) >= 0) return TY_CLASS;
     if (cgn) { LocalVar *cv = comp_const(c, cgn); if (cv && cv->type != TY_UNKNOWN) return cv->type; return TY_POLY; }
   }
   if (sp_streq(name, "nil?") && recv >= 0 && argc == 0) return TY_BOOL;
