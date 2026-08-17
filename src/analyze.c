@@ -12466,6 +12466,7 @@ void analyze_program(Compiler *c) {
      assignment has no coercion to fall back on. */
   for (int iter = 0; iter < 8; iter++) {
     int ch = widen_object_locals_from_poly_writes(c);
+    ch |= widen_arrays_from_map_bang(c);
     ch |= infer_return_types(c);
     if (!ch) break;
   }

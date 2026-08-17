@@ -1087,6 +1087,43 @@ int widen_object_locals_from_poly_writes(Compiler *c) {
   }
   return changed;
 }
+/* `arr.map! { ... }` REPLACES every element with the block's value, so a tail
+   the receiver's element type cannot hold widens the receiver itself -- the
+   same reasoning as a push of a foreign element, on a mutation that rewrites
+   the whole array rather than extending it. Without this the typed setter took
+   the tail raw (`sp_IntArray_set(a, i, <a String>)`) and the C build failed.
+   Widening only: a receiver whose element type already fits is untouched. */
+int widen_arrays_from_map_bang(Compiler *c) {
+  const NodeTable *nt = c->nt;
+  int changed = 0;
+  NT_FOREACH_KIND(nt, NK_CallNode, id) {
+    const char *nm = nt_str(nt, id, "name");
+    if (!nm || (!sp_streq(nm, "map!") && !sp_streq(nm, "collect!"))) continue;
+    int blk = nt_ref(nt, id, "block");
+    if (blk < 0) continue;
+    int body = nt_ref(nt, blk, "body");
+    int bn = 0; const int *bb = body >= 0 ? nt_arr(nt, body, "body", &bn) : NULL;
+    if (bn <= 0) continue;
+    TyKind tt = infer_type(c, bb[bn - 1]);
+    if (tt == TY_UNKNOWN) continue;
+    int recv = nt_ref(nt, id, "receiver");
+    if (recv < 0 || nt_kind(nt, recv) != NK_LocalVariableReadNode) continue;
+    const char *rnm = nt_str(nt, recv, "name");
+    Scope *ls = rnm ? comp_scope_of(c, recv) : NULL;
+    LocalVar *lv = ls ? scope_local(ls, rnm) : NULL;
+    /* A plain local owns its array outright, so widening the slot is the whole
+       story. A parameter or an ivar shares the storage with a caller or with
+       another method, and the box a boxed receiver writes back through cannot
+       change its element representation -- widening those here compiles the
+       program and then loses the values (`sp_poly_to_i` of a String), which is
+       worse than the build failure. They are left alone. */
+    if (!lv || lv->is_param || lv->is_block_param || lv->rbs_seeded) continue;
+    if (!ty_is_array(lv->type) || lv->type == TY_POLY_ARRAY) continue;
+    if (tt == ty_array_elem(lv->type)) continue;
+    lv->type = TY_POLY_ARRAY; changed = 1;
+  }
+  return changed;
+}
 int reconcile_locals_reading_ivars(Compiler *c) {
   const NodeTable *nt = c->nt;
   int changed = 0;
