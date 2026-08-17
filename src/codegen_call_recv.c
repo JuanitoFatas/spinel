@@ -7234,7 +7234,15 @@ int emit_scalar_call(Compiler *c, int id, Buf *b) {
       }
       const char *cfn = sp_streq(name, "floor") ? "floor" : sp_streq(name, "ceil") ? "ceil"
                       : sp_streq(name, "truncate") ? "trunc" : "round";
+      /* A POSITIVE digit count goes through the runtime helper: scaling by a
+         power of ten and rounding the product answers a decimal short when the
+         product's own representation error crosses the tie (#3983). */
+      const char *precop = sp_streq(name, "floor") ? "SP_PREC_FLOOR"
+                         : sp_streq(name, "ceil") ? "SP_PREC_CEIL"
+                         : sp_streq(name, "truncate") ? "SP_PREC_TRUNC" : "SP_PREC_ROUND";
       if (half_fn) cfn = half_fn;
+      if (half_fn && sp_streq(half_fn, "sp_round_half_even")) precop = "SP_PREC_HALF_EVEN";
+      else if (half_fn && sp_streq(half_fn, "sp_round_half_down")) precop = "SP_PREC_HALF_DOWN";
       if ((sp_streq(name, "floor") || sp_streq(name, "ceil") ||
            sp_streq(name, "round") || sp_streq(name, "truncate"))) {
         if (nonlit) {
@@ -7243,7 +7251,7 @@ int emit_scalar_call(Compiler *c, int id, Buf *b) {
           int tn = ++g_tmp, tv = ++g_tmp;
           buf_printf(b, "({ mrb_int _t%d = ", tn); emit_int_expr(c, argv[0], b);
           buf_printf(b, "; double _t%d = (%s); (_t%d > 0)", tv, r, tn);
-          buf_printf(b, " ? ({ double _f = pow(10, (double)_t%d); sp_box_float(isinf(_f) ? _t%d : %s(_t%d * _f) / _f); })", tn, tv, cfn, tv);
+          buf_printf(b, " ? sp_box_float(sp_float_prec_op(_t%d, _t%d, %s))", tv, tn, precop);
           buf_printf(b, " : ({ if (isinf(_t%d)) sp_raise_cls(\"FloatDomainError\", _t%d > 0 ? \"Infinity\" : \"-Infinity\");"
                         " if (isnan(_t%d)) sp_raise_cls(\"FloatDomainError\", \"NaN\");"
                         " double _f = pow(10, (double)(-_t%d)); sp_box_int(isinf(_f) ? 0 : (mrb_int)(%s(_t%d / _f) * _f)); }); })",
@@ -7255,13 +7263,13 @@ int emit_scalar_call(Compiler *c, int id, Buf *b) {
           int tx = ++g_tmp;
           /* the tie-break mode applies here too: this branch hard-coded the
              default rounding, so `half:` was silently ignored (#3647) */
-          buf_printf(b, "({ double _t%d = (%s); double _f = pow(10, %d);"
-                        " double _r = %s(_t%d * _f) / _f;"
+          buf_printf(b, "({ double _t%d = (%s);"
+                        " double _r = sp_float_prec_op(_t%d, %d, %s);"
                         " (_t%d != 0.0 && _r == 0.0) ? 0.0 : _r; })",
-                     tx, r, ndig, cfn, tx, tx);
+                     tx, r, tx, ndig, precop, tx);
         }
         else if (ndig > 0)
-          buf_printf(b, "({ double _f = pow(10, %d); %s((%s) * _f) / _f; })", ndig, cfn, r);
+          buf_printf(b, "sp_float_prec_op((%s), %d, %s)", r, ndig, precop);
         else if (ndig < 0) {  /* round to a power of ten left of the decimal -> Integer */
           int tg = ++g_tmp;
           buf_printf(b, "({ double _t%d = (%s);"

@@ -1,6 +1,8 @@
 /* sp_core.c -- runtime helpers split out of spinel_rt.h into
  * libspinel_rt.a. See sp_core.h for the rationale. */
 #include "sp_core.h"
+#include <float.h>
+#include <string.h>
 #include "sp_alloc.h"   /* sp_str_byte_len: embedded-NUL detection in Integer()/Float() */
 #include "sp_dtoa.h"    /* sp_read_float: locale-independent String#to_f / Float() */
 #include <stdlib.h>
@@ -537,4 +539,129 @@ mrb_int sp_str_oct(const char*s){SP_GC_ROOT_STR(s);
     any=1; prev_us=0; p++;
   }
   return sign*val;
+}
+
+/* Float#round(n) and its siblings at a positive digit count. Scaling by 10**n
+   and rounding the product reads the product's OWN representation error as
+   part of the value: 64.781995 * 1e5 is 6478199.4999999991, so the digit that
+   should round up rounds down and the answer comes out a decimal short. CRuby
+   compensates by asking whether the next step up is still <= the input, which
+   is what makes 64.781995.round(5) answer 64.782 rather than 64.78199. The
+   floor/ceil forms compensate the same way, from the other side.
+   nd <= 0 answers an Integer and is the caller's own path; this is the Float
+   half. (#3983) */
+/* Float#round / #floor / #ceil / #truncate at a POSITIVE digit count, laid
+   out as CRuby lays it out (numeric.c: flo_round, rb_float_floor,
+   rb_float_ceil). Scaling by a power of ten and rounding the product reads the
+   product's OWN representation error as part of the value -- 64.781995 * 1e5
+   is 6478199.4999999991, so the digit that should round up rounds down and the
+   answer comes out a decimal short (#3983). Each form compensates differently,
+   and the asymmetry is deliberate:
+     round  compensates on both sides, which is what makes 2.675.round(2)
+            answer 2.68 rather than the exact value's 2.67;
+     floor  compensates upward only;
+     ceil   takes the scaled product as it stands.
+   The two guards decide whether the digit being asked for is inside the
+   double's reach at all: past it the value is unchanged, short of it the value
+   rounds away to zero. A digit count a power of ten cannot represent exactly
+   (>= DBL_DIG) goes through the decimal conversion, which is exact, in place
+   of CRuby's rational arithmetic. */
+/* The round family past DBL_DIG digits, decided on the value's own decimal
+   expansion rather than on a scaled product. The cut digit and what follows it
+   settle the tie the same way CRuby's rational arithmetic does, which the
+   library conversion alone cannot: it breaks exact ties to even, and Ruby's
+   default breaks them away from zero. */
+static double sp_prec_decimal_round(double x, intptr_t nd, int op) {
+  char buf[512];
+  int extra = 25;
+  snprintf(buf, sizeof buf, "%.*f", (int)nd + extra, x);
+  char *dot = strchr(buf, '.');
+  if (!dot) return x;
+  char *cut = dot + 1 + (int)nd;      /* the first digit past the cut */
+  char cutd = *cut;
+  int tail_nonzero = 0;
+  for (char *q = cut + 1; *q; q++) if (*q != '0') { tail_nonzero = 1; break; }
+  *cut = '\0';                        /* the truncation toward zero */
+  double r = strtod(buf, NULL);
+  int away;
+  if (cutd > '5') away = 1;
+  else if (cutd < '5') away = 0;
+  else if (tail_nonzero) away = 1;
+  else if (op == SP_PREC_HALF_DOWN) away = 0;
+  else if (op == SP_PREC_HALF_EVEN) {
+    char last = cut[-1];
+    away = (last >= '0' && last <= '9') ? ((last - '0') % 2 != 0) : 0;
+  }
+  else away = 1;                      /* the default: ties leave zero behind */
+  if (!away) return r;
+  double step = 1.0 / pow(10, (double)nd);
+  snprintf(buf, sizeof buf, "%.*f", (int)nd, x < 0.0 ? r - step : r + step);
+  return strtod(buf, NULL);
+}
+static int sp_prec_overflow(intptr_t nd, int binexp) {
+  return nd >= (DBL_DIG + 2) - (binexp > 0 ? binexp / 4 : binexp / 3 - 1);
+}
+static int sp_prec_underflow(intptr_t nd, int binexp) {
+  return nd < -(binexp > 0 ? binexp / 3 + 1 : binexp / 4);
+}
+double sp_float_prec_op(double x, intptr_t nd, int op) {
+  if (x == 0.0 || !isfinite(x) || nd <= 0) return x;
+  if (op == SP_PREC_TRUNC) return sp_float_prec_op(x, nd, signbit(x) ? SP_PREC_CEIL : SP_PREC_FLOOR);
+  int binexp = 0;
+  frexp(x, &binexp);
+  if (sp_prec_overflow(nd, binexp)) return x;
+  if (sp_prec_underflow(nd, binexp)) {
+    /* round leaves zero whatever the sign; floor keeps a negative value's own
+       first decimal step, and ceil keeps a positive one's */
+    if (op == SP_PREC_FLOOR && x < 0.0) { /* fall through to the arithmetic */ }
+    else if (op == SP_PREC_CEIL && x > 0.0) { /* likewise */ }
+    else return 0.0;
+  }
+  /* Past DBL_DIG digits a power of ten is no longer exact, so the scaled form
+     reads its own error as part of the value; CRuby rounds those by rational.
+     The decimal conversion is the same exact answer. floor and ceil keep the
+     scaled form -- that is what CRuby answers for them. */
+  if (nd >= DBL_DIG && op != SP_PREC_FLOOR && op != SP_PREC_CEIL) return sp_prec_decimal_round(x, nd, op);
+  double s = pow(10, (double)nd);
+  double xs = x * s;
+  if (!isfinite(s) || !isfinite(xs)) return x;
+  double f;
+  switch (op) {
+    case SP_PREC_FLOOR: {
+      f = floor(xs);
+      double res = (f + 1) / s;
+      return res > x ? f / s : res;
+    }
+    case SP_PREC_CEIL:
+      return ceil(xs) / s;
+    case SP_PREC_HALF_EVEN: {
+      /* the tie is decided on the fractional part alone, so the integral part
+         is split off first and only rejoined at the end */
+      double u, v, us, vs, ff, d, uf;
+      v = modf(x, &u);
+      us = u * s; vs = v * s;
+      if (x > 0.0) {
+        ff = floor(vs); uf = us + ff; d = vs - ff;
+        if (d > 0.5) d = 1.0;
+        else if (d == 0.5 || (uf + 0.5) / s <= x) d = fmod(uf, 2.0);
+        else d = 0.0;
+        return (us + ff + d) / s;
+      }
+      ff = ceil(vs); uf = us + ff; d = ff - vs;
+      if (d > 0.5) d = 1.0;
+      else if (d == 0.5 || (uf - 0.5) / s >= x) d = fmod(-uf, 2.0);
+      else d = 0.0;
+      return (us + ff - d) / s;
+    }
+    case SP_PREC_HALF_DOWN:
+      f = round(xs);
+      if (x > 0) { if ((f - 0.5) / s >= x) f -= 1; }
+      else { if ((f + 0.5) / s <= x) f += 1; }
+      return f / s;
+    default:
+      f = round(xs);
+      if (x > 0) { if ((f + 0.5) / s <= x) f += 1; }
+      else { if ((f - 0.5) / s >= x) f -= 1; }
+      return f / s;
+  }
 }

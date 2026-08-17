@@ -40,4 +40,14 @@ intptr_t sp_int_floor(intptr_t v, intptr_t nd);
 intptr_t sp_int_truncate(intptr_t v, intptr_t nd);
 intptr_t sp_str_oct(const char *s);
 
+/* Float#round / #floor / #ceil / #truncate at a POSITIVE digit count, and the
+   `half:` variants of round. `op` selects which. */
+#define SP_PREC_ROUND      0   /* round, default half-up tie-break */
+#define SP_PREC_FLOOR      1
+#define SP_PREC_CEIL       2
+#define SP_PREC_TRUNC      3
+#define SP_PREC_HALF_EVEN  4
+#define SP_PREC_HALF_DOWN  5
+double sp_float_prec_op(double x, intptr_t nd, int op);
+
 #endif
