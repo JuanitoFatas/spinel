@@ -4311,7 +4311,7 @@ void emit_case_expr(Compiler *c, int id, Buf *b) {
     }
     buf_puts(b, ") { ");
     emit_case_branch_value(c, nt_ref(nt, wn, "statements"), rt, cr, b);
-    buf_puts(b, "}\n");   /* newline so the next arm's `else if` never forms `} else` */
+    buf_puts(b, "}\n");   /* newline: the next arm's `else if` must not join the brace */
   }
   if (else_c >= 0) {
     buf_puts(b, "else { ");

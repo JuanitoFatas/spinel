@@ -11152,7 +11152,9 @@ int emit_poly_call(Compiler *c, int id, Buf *b) {
         buf_printf(b, " sp_PolyPolyHash_set(_t%d, _tk%d, %s); }",
                    tr, tk, tailv.p ? tailv.p : "sp_box_nil()");
         free(tailv.p); }
-      buf_printf(b, " else sp_PolyPolyHash_set(_t%d, _tk%d, _tv%d); }", tr, tk, tk);
+      /* newline before `else`: the arm above ends with `}`, and the two would
+         otherwise concatenate into the `} else` form the C style forbids */
+      buf_printf(b, "\nelse sp_PolyPolyHash_set(_t%d, _tk%d, _tv%d); }", tr, tk, tk);
       buf_printf(b, " _t%d; })", tr);
       for (int i = 0; i < 3; i++) if (mlv[i]) mlv[i]->type = msave[i];
       return 1;

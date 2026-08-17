@@ -1459,7 +1459,8 @@ int emit_minmax_by_expr(Compiler *c, int id, Buf *b) {
        read it as an sp_IntArray and did not compile (#3860). */
     if (is_range) {
       buf_printf(g_pre, "sp_IntArray *_t%d = sp_range_to_ia(%s);\n", trv, rb.p ? rb.p : "");
-    } else {
+    }
+    else {
       emit_ctype(c, rt, g_pre);
       buf_printf(g_pre, " _t%d = %s;\n", trv, rb.p ? rb.p : "");
     }

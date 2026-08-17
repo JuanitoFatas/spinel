@@ -2674,7 +2674,8 @@ static sp_RbVal sp_poly_coerce(sp_RbVal a, sp_RbVal b) {
   if (a.tag == SP_TAG_FLT || b.tag == SP_TAG_FLT) {
     sp_PolyArray_push(out, sp_box_float(sp_poly_to_f_with_rational(b)));
     sp_PolyArray_push(out, sp_box_float(sp_poly_to_f_with_rational(a)));
-  } else {
+  }
+  else {
     sp_PolyArray_push(out, b);
     sp_PolyArray_push(out, a);
   }

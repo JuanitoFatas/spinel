@@ -6205,7 +6205,8 @@ static int emit_class_new_call(Compiler *c, int id, Buf *b) {
               /* an explicitly given message stays, even empty (#3713) */
               if (comp_ntype(c, argv[0]) == TY_STRING) {
                 buf_puts(b, "sp_exc_msg_given("); emit_expr(c, argv[0], b); buf_puts(b, ")");
-              } else {
+              }
+              else {
                 int mt2 = ++g_tmp;
                 buf_printf(b, "({ sp_RbVal _t%d = ", mt2); emit_boxed(c, argv[0], b);
                 buf_printf(b, "; _t%d.tag == SP_TAG_NIL ? (&(\"\\xff\")[1])"
@@ -6432,7 +6433,8 @@ static int emit_class_new_call(Compiler *c, int id, Buf *b) {
              .new falls back to the class name (#3713) */
           if (comp_ntype(c, argv[0]) == TY_STRING) {
             buf_puts(b, "sp_exc_msg_given("); emit_expr(c, argv[0], b); buf_puts(b, ")");
-          } else {
+          }
+          else {
             /* nil is not a message: it falls back to the class name like the
                no-argument form, while an empty string stays empty (#3812) */
             int mt = ++g_tmp;
@@ -7396,7 +7398,8 @@ static int emit_case_eq_call(Compiler *c, int id, Buf *b) {
           buf_printf(b, " sp_FloatRange _f%d = ", tb); emit_expr(c, argv[0], b);
           buf_printf(b, "; _t%d = _f%d.first; _e2 = _f%d.excl;", tb, tb, tb);
           buf_printf(b, " (_t%d == _t%d && (mrb_float)_r%d.last == _f%d.last && _e1 == _e2)", ta, tb, ta, tb);
-        } else {
+        }
+        else {
           buf_printf(b, " sp_FloatRange _f%d = ", ta); emit_expr(c, recv, b);
           buf_printf(b, "; _t%d = _f%d.first; _e1 = _f%d.excl;", ta, ta, ta);
           buf_printf(b, " sp_Range _r%d = ", tb); emit_expr(c, argv[0], b);
@@ -12600,10 +12603,12 @@ void emit_call(Compiler *c, int id, Buf *b) {
     #define SP_EMIT_PROC_OPERAND(nd_) do { \
       if (comp_ntype(c, (nd_)) == TY_POLY) { \
         buf_puts(b, "sp_poly_to_proc("); emit_boxed(c, (nd_), b); buf_puts(b, ")"); \
-      } else if (comp_ntype(c, (nd_)) == TY_CURRY) { \
+      } \
+      else if (comp_ntype(c, (nd_)) == TY_CURRY) { \
         /* a curry accumulates arguments; composition threads Procs (#3864) */ \
         buf_puts(b, "sp_curry_to_proc("); emit_expr(c, (nd_), b); buf_puts(b, ")"); \
-      } else emit_expr(c, (nd_), b); \
+      } \
+      else emit_expr(c, (nd_), b); \
     } while (0)
     buf_printf(b, "({ sp_Proc *_t%d = ", t1);
     if (fwd) SP_EMIT_PROC_OPERAND(argv[0]); else SP_EMIT_PROC_OPERAND(recv);
@@ -14800,7 +14805,8 @@ else { memcpy(dir, sf, n); dir[n] = 0; } }
             buf_printf(b, "sp_raise_cls(\"%s\", sp_exc_msg_given(", effn);
             emit_expr(c, av[1], b);
             buf_puts(b, "))");
-          } else {
+          }
+          else {
             /* nil is not a message, so the class name answers (#3812) */
             int rt2 = ++g_tmp;
             buf_printf(b, "({ sp_RbVal _t%d = ", rt2); emit_boxed(c, av[1], b);

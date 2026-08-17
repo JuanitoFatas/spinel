@@ -1460,7 +1460,8 @@ static void fi_build(Compiler *c) {
       if (fi_reaches(c, si, si, seen, cand, 0)) cand[si] = 0;   /* on a cycle */
     }
     free(seen);
-  } else {
+  }
+  else {
     for (int si = 0; si < c->nscopes; si++) cand[si] = 0;
   }
   /* Bound the DEPTH of the forced set, not just its size. always_inline
