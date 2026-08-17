@@ -6067,10 +6067,16 @@ int infer_block_params(Compiler *c) {
     TyKind rt = infer_type(c, recv);
     int yields_self = sp_streq(cname, "tap") || sp_streq(cname, "then") ||
                       sp_streq(cname, "yield_self");
+    /* An untyped receiver leaves the param untyped too -- body usage is what
+       types it there (`[].tap { |a| a << 1 }` gets its array kind from the
+       push). The SLOT still has to exist: codegen binds the param whether or
+       not anything reads it, and an unread param nobody interned named an
+       undeclared identifier (#3979). Intern without claiming a type. */
+    int intern_only = 0;
     if (yields_self) {
       /* tap/then/yield_self yield self to the block param for ANY receiver
          type (a string, an int, an object), so type the param as rt. */
-      if (rt == TY_UNKNOWN) continue;
+      if (rt == TY_UNKNOWN) intern_only = 1;
     }
     else {
       if (!ty_is_object(rt)) continue;
@@ -6089,7 +6095,7 @@ int infer_block_params(Compiler *c) {
       for (int k = 1; k <= maxn; k++) {
         char nm[16]; snprintf(nm, sizeof nm, "_%d", k);
         LocalVar *lv = scope_local_intern(bs, nm); lv->is_block_param = 1;
-        if (lv->type != rt) { lv->type = rt; changed = 1; }
+        if (!intern_only && lv->type != rt) { lv->type = rt; changed = 1; }
       }
       continue;
     }
@@ -6100,7 +6106,7 @@ int infer_block_params(Compiler *c) {
       const char *p = nt_str(nt, reqs[k], "name");
       if (!p) continue;
       LocalVar *lv = scope_local_intern(bs, p); lv->is_block_param = 1;
-      if (lv->type != rt) { lv->type = rt; changed = 1; }
+      if (!intern_only && lv->type != rt) { lv->type = rt; changed = 1; }
     }
   }
 
