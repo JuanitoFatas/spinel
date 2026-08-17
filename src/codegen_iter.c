@@ -1639,6 +1639,11 @@ int emit_tap_then_expr(Compiler *c, int id, Buf *b) {
   int tres = 0; TyKind rett = TY_VOID;
   if (is_then) {
     rett = comp_ntype(c, id);
+    /* A body that always `break`s completes normally nowhere, so it publishes
+       no result type and `void` cannot declare the slot the substrate writes
+       (#3986). The break itself delivers its value through sp_brk_val, and the
+       slot is dead on that path, so a boxed one keeps the C valid. */
+    if (rett == TY_VOID || rett == TY_UNKNOWN) rett = TY_POLY;
     tres = ++g_tmp;
     emit_indent(g_pre, g_indent); emit_ctype(c, rett, g_pre);
     buf_printf(g_pre, " _t%d = %s;\n", tres, default_value(rett));
