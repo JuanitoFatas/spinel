@@ -9353,7 +9353,20 @@ static int promote_shared_stored_strings(Compiler *c) {
     }
     const char *lname3 = nt_str(nt, w, "name");
     Scope *ls3 = comp_scope_of(c, w);
-    if (saw_tail && !shared_ok && lname3 && ls3 &&
+    /* strbuf_mut_kind is keyed on name + scope only, so `rr << x` reports a
+       string mutation whatever rr holds -- `<<` is Array#push and Integer's
+       shift as well. Gate the demand on the CALLER's slot being able to hold a
+       String, exactly as the uniform branch below gates its own promotion: a
+       slot already known to be an array (`rr = mk; rr << 1.5`) is pushing, and
+       demanding the callee's tail into the shared set typed the callee's empty
+       `[]` a strbuf -- which then flowed back and retyped rr itself, so the
+       array literal was emitted as sp_String_new_shared(sp_IntArray_new()). */
+    LocalVar *clv3 = (lname3 && ls3) ? scope_local(ls3, lname3) : NULL;
+    int caller_may_be_str = clv3 && (clv3->type == TY_UNKNOWN ||
+                                     clv3->type == TY_STRING ||
+                                     clv3->type == TY_STRBUF ||
+                                     clv3->type == TY_POLY);
+    if (saw_tail && !shared_ok && lname3 && ls3 && caller_may_be_str &&
         strbuf_mut_kind(c, lname3, ls3) == 1) {
       /* the CALLER mutates the result (`rr = mk; rr << x`): demand the
          callee's returned locals into the shared set; the uniform gate then
@@ -9383,13 +9396,11 @@ static int promote_shared_stored_strings(Compiler *c) {
       continue;
     }
     if (!shared_ok || !saw_tail) continue;
-    LocalVar *llv3 = (lname3 && ls3) ? scope_local(ls3, lname3) : NULL;
-    if (!llv3 || !strbuf_slot_eligible_shape(c, lname3, ls3, llv3)) continue;
-    if (llv3->type != TY_UNKNOWN && llv3->type != TY_STRING &&
-        llv3->type != TY_STRBUF && llv3->type != TY_POLY) continue;
+    if (!clv3 || !strbuf_slot_eligible_shape(c, lname3, ls3, clv3)) continue;
+    if (!caller_may_be_str) continue;
     c->strbuf_box[wv] = 1; changed = 1;
-    if (llv3->type != TY_STRBUF || !llv3->str_shared)
-      { llv3->type = TY_STRBUF; llv3->str_shared = 1; changed = 1; }
+    if (clv3->type != TY_STRBUF || !clv3->str_shared)
+      { clv3->type = TY_STRBUF; clv3->str_shared = 1; changed = 1; }
   }
   /* Container-read alias (`r = rows[0]; r.upcase!`): the local is another name
      for the element, so an in-place mutation through it has to land on the
