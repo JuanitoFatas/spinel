@@ -3034,7 +3034,7 @@ int emit_iteration_stmt(Compiler *c, int id, Buf *b, int indent) {
     Buf rb; memset(&rb, 0, sizeof rb); emit_expr(c, recv, &rb);
     emit_indent(b, indent); buf_printf(b, "{ sp_IntArray *_t%d = ", ta); buf_puts(b, rb.p ? rb.p : ""); buf_puts(b, ";\n"); free(rb.p);
     emit_indent(b, indent + 1); buf_printf(b, "sp_PtrArray *_t%d = %s(_t%d, ", tc, genfn, ta);
-    if (ac == 1) emit_expr(c, av[0], b); else buf_printf(b, "_t%d ? _t%d->len : 0", ta, ta);
+    if (ac == 1) emit_int_expr(c, av[0], b); else buf_printf(b, "_t%d ? _t%d->len : 0", ta, ta);
     buf_puts(b, "); SP_GC_ROOT(_t"); buf_printf(b, "%d);\n", tc);
     emit_indent(b, indent + 1); buf_printf(b, "for (mrb_int _t%d = 0; _t%d < _t%d->len; _t%d++) {\n", ti, ti, tc, ti);
     if (p0) {
@@ -3464,7 +3464,7 @@ int emit_iteration_stmt(Compiler *c, int id, Buf *b, int indent) {
     }
     else {
       buf_printf(b, "sp_str_split_limit(%s, ", rb.p ? rb.p : ""); emit_expr(c, sp_argv[0], b);
-      buf_puts(b, ", "); emit_expr(c, sp_argv[1], b); buf_puts(b, ");\n");
+      buf_puts(b, ", "); emit_int_expr(c, sp_argv[1], b); buf_puts(b, ");\n");
     }
     free(rb.p);
     emit_indent(b, indent); buf_printf(b, "SP_GC_ROOT(_t%d);\n", tm);

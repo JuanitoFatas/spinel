@@ -1834,7 +1834,7 @@ int emit_array_call(Compiler *c, int id, Buf *b) {
       return 1;
     }
     if (rt == TY_POLY_ARRAY && sp_streq(name, "delete_at") && argc == 1) {
-      buf_puts(b, "sp_PolyArray_delete_at("); emit_expr(c, recv, b); buf_puts(b, ", "); emit_expr(c, argv[0], b); buf_puts(b, ")");
+      buf_puts(b, "sp_PolyArray_delete_at("); emit_expr(c, recv, b); buf_puts(b, ", "); emit_int_expr(c, argv[0], b); buf_puts(b, ")");
       return 1;
     }
     /* Array#delete(v) (value-based, not index-based) on TY_POLY_ARRAY --
@@ -2320,7 +2320,7 @@ else {
       if (sp_streq(name, "dig") && argc >= 1) {
         if (argc == 1) {
           /* single-step: same as arr[i] */
-          buf_printf(b, "sp_%sArray_get(", k); emit_expr(c, recv, b); buf_puts(b, ", "); emit_expr(c, argv[0], b); buf_puts(b, ")");
+          buf_printf(b, "sp_%sArray_get(", k); emit_expr(c, recv, b); buf_puts(b, ", "); emit_int_expr(c, argv[0], b); buf_puts(b, ")");
         }
         else {
           /* multi-step: hand the whole key list to the runtime walk, which
@@ -2712,7 +2712,7 @@ else {
         Buf ra = expr_buf(c, recv);
         buf_printf(b, "({ sp_IntArray *_t%d = %s;", ta, ra.p ? ra.p : "NULL"); free(ra.p);
         buf_printf(b, " sp_PtrArray *_t%d = %s(_t%d, ", tc, combfn, ta);
-        if (argc == 1) emit_expr(c, argv[0], b);
+        if (argc == 1) emit_int_expr(c, argv[0], b);
         else buf_printf(b, "_t%d ? _t%d->len : 0", ta, ta);   /* argless permutation: full length */
         /* the combinations are only in this temp until the loop below boxes
            them, and the array it boxes them into allocates first */
@@ -2749,7 +2749,7 @@ else {
         int t = ++g_tmp;
         buf_printf(b, "({ sp_%sArray *_t%d = ", k, t); emit_expr(c, recv, b);
         buf_printf(b, "; sp_%sArray_rotate_bang(_t%d, ", k, t);
-        if (argc == 1) emit_expr(c, argv[0], b); else buf_puts(b, "1");
+        if (argc == 1) emit_int_expr(c, argv[0], b); else buf_puts(b, "1");
         buf_printf(b, "); _t%d; })", t);
         return 1;
       }
@@ -2791,7 +2791,7 @@ else {
         return 1;
       }
       if (sp_streq(name, "delete_at") && argc == 1) {
-        buf_printf(b, "sp_%sArray_delete_at(", k); emit_expr(c, recv, b); buf_puts(b, ", "); emit_expr(c, argv[0], b); buf_puts(b, ")");
+        buf_printf(b, "sp_%sArray_delete_at(", k); emit_expr(c, recv, b); buf_puts(b, ", "); emit_int_expr(c, argv[0], b); buf_puts(b, ")");
         return 1;
       }
       if (sp_streq(name, "delete") && argc == 1 && (rt == TY_INT_ARRAY || rt == TY_STR_ARRAY)) {
@@ -2858,7 +2858,7 @@ else {
       if (sp_streq(name, "slice!") && argc == 1) {
         /* slice!(i): remove and return the element (nil sentinel on miss) */
         buf_printf(b, "sp_%sArray_delete_at(", k); emit_expr(c, recv, b);
-        buf_puts(b, ", "); emit_expr(c, argv[0], b); buf_puts(b, ")");
+        buf_puts(b, ", "); emit_int_expr(c, argv[0], b); buf_puts(b, ")");
         return 1;
       }
       int block = nt_ref(nt, id, "block");
@@ -4081,7 +4081,7 @@ else {
       }
       if (sp_streq(name, "slice!") && argc == 1) {
         buf_puts(b, "sp_PolyArray_delete_at("); emit_expr(c, recv, b);
-        buf_puts(b, ", "); emit_expr(c, argv[0], b); buf_puts(b, ")");
+        buf_puts(b, ", "); emit_int_expr(c, argv[0], b); buf_puts(b, ")");
         return 1;
       }
       if (sp_streq(name, "replace") && argc == 1 && a0 == TY_POLY_ARRAY) {
@@ -4148,7 +4148,7 @@ else {
         int t = ++g_tmp;
         buf_printf(b, "({ sp_PolyArray *_t%d = ", t); emit_expr(c, recv, b);
         buf_printf(b, "; sp_PolyArray_rotate_bang(_t%d, ", t);
-        if (argc == 1) emit_expr(c, argv[0], b); else buf_puts(b, "1");
+        if (argc == 1) emit_int_expr(c, argv[0], b); else buf_puts(b, "1");
         buf_printf(b, "); _t%d; })", t);
         return 1;
       }
@@ -6310,7 +6310,7 @@ int emit_scalar_call(Compiler *c, int id, Buf *b) {
         buf_printf(b, "sp_re_rindex_from_opt(sp_re_pat_%d, %s, ", re_lit_index(c, argv[0]), r);
         emit_int_expr(c, argv[1], b); buf_puts(b, ")");
       }
-      else if (sp_streq(name, "rindex") && argc == 2) { buf_printf(b, "sp_str_rindex_from(%s, ", r); emit_expr(c, argv[0], b); buf_puts(b, ", "); emit_expr(c, argv[1], b); buf_puts(b, ")"); }
+      else if (sp_streq(name, "rindex") && argc == 2) { buf_printf(b, "sp_str_rindex_from(%s, ", r); emit_expr(c, argv[0], b); buf_puts(b, ", "); emit_int_expr(c, argv[1], b); buf_puts(b, ")"); }
       else if (sp_streq(name, "crypt") && argc == 1) { buf_printf(b, "sp_str_crypt(%s, ", r); emit_expr(c, argv[0], b); buf_puts(b, ")"); }
       /* scrub! mutates in place, so a frozen receiver raises -- but only when
          it would actually replace something: CRuby returns a frozen string
@@ -6403,7 +6403,7 @@ int emit_scalar_call(Compiler *c, int id, Buf *b) {
         else { buf_printf(b, "sp_str_split_drop_trailing(%s, ", r); emit_expr(c, argv[0], b); buf_puts(b, ")"); }
       }
       else if (sp_streq(name, "split") && argc == 2) {
-        buf_printf(b, "sp_str_split_limit(%s, ", r); emit_expr(c, argv[0], b); buf_puts(b, ", "); emit_expr(c, argv[1], b); buf_puts(b, ")");
+        buf_printf(b, "sp_str_split_limit(%s, ", r); emit_expr(c, argv[0], b); buf_puts(b, ", "); emit_int_expr(c, argv[1], b); buf_puts(b, ")");
       }
       else if (sp_streq(name, "clamp") && (argc == 2 ||
                (argc == 1 && nt_type(c->nt, argv[0]) && sp_streq(nt_type(c->nt, argv[0]), "RangeNode")))) {
@@ -6478,7 +6478,7 @@ int emit_scalar_call(Compiler *c, int id, Buf *b) {
       }
       else if (sp_streq(name, "casecmp") && argc == 1) { buf_printf(b, "sp_str_casecmp(%s, ", r); emit_expr(c, argv[0], b); buf_puts(b, ")"); }
       else if (sp_streq(name, "casecmp?") && argc == 1) { buf_printf(b, "(sp_str_casecmp(%s, ", r); emit_expr(c, argv[0], b); buf_puts(b, ") == 0)"); }
-      else if (sp_streq(name, "byteslice") && argc == 2) { buf_printf(b, "sp_str_byteslice(%s, ", r); emit_expr(c, argv[0], b); buf_puts(b, ", "); emit_expr(c, argv[1], b); buf_puts(b, ")"); }
+      else if (sp_streq(name, "byteslice") && argc == 2) { buf_printf(b, "sp_str_byteslice(%s, ", r); emit_int_expr(c, argv[0], b); buf_puts(b, ", "); emit_int_expr(c, argv[1], b); buf_puts(b, ")"); }
       /* byteslice(range): resolve endpoints against the bytesize (#2348) */
       else if (sp_streq(name, "byteslice") && argc == 1 && comp_ntype(c, argv[0]) == TY_RANGE) {
         int trg = ++g_tmp;
@@ -6488,7 +6488,7 @@ int emit_scalar_call(Compiler *c, int id, Buf *b) {
                    r, trg, trg, trg, trg, trg);
       }
       /* single-index byteslice(i): nil at the bytesize boundary (#2333) */
-      else if (sp_streq(name, "byteslice") && argc == 1) { buf_printf(b, "sp_str_byteslice1(%s, ", r); emit_expr(c, argv[0], b); buf_puts(b, ")"); }
+      else if (sp_streq(name, "byteslice") && argc == 1) { buf_printf(b, "sp_str_byteslice1(%s, ", r); emit_int_expr(c, argv[0], b); buf_puts(b, ")"); }
       else if (sp_streq(name, "setbyte") && argc == 2) {
         /* copy-on-write: rebind an lvalue receiver to the mutated copy
            (a literal's bytes live in static storage, #2029) */
@@ -6496,10 +6496,10 @@ int emit_scalar_call(Compiler *c, int id, Buf *b) {
         int lvw = rvt2 && (sp_streq(rvt2, "LocalVariableReadNode") ||
                            sp_streq(rvt2, "InstanceVariableReadNode"));
         int tv2 = ++g_tmp;
-        buf_printf(b, "({ mrb_int _t%d = ", tv2); emit_expr(c, argv[1], b);
+        buf_printf(b, "({ mrb_int _t%d = ", tv2); emit_int_expr(c, argv[1], b);
         buf_puts(b, "; ");
         if (lvw) { emit_expr(c, recv, b); buf_puts(b, " = "); }
-        buf_printf(b, "sp_str_setbyte_cow(%s, ", r); emit_expr(c, argv[0], b);
+        buf_printf(b, "sp_str_setbyte_cow(%s, ", r); emit_int_expr(c, argv[0], b);
         buf_printf(b, ", _t%d); _t%d; })", tv2, tv2);
       }
       else if (sp_streq(name, "getbyte") && argc == 1) {
@@ -6594,7 +6594,7 @@ int emit_scalar_call(Compiler *c, int id, Buf *b) {
       else if (sp_streq(name, "chars") && argc == 0)   buf_printf(b, "sp_str_chars(%s)", r);
       else if ((sp_streq(name, "succ") || sp_streq(name, "next")) && argc == 0) buf_printf(b, "sp_str_succ(%s)", r);
       else if (sp_streq(name, "to_i") && argc == 0)    buf_printf(b, "sp_str_to_i_cruby(%s)", r);
-      else if (sp_streq(name, "to_i") && argc == 1)    { buf_printf(b, "sp_str_to_i_base(%s, ", r); emit_expr(c, argv[0], b); buf_puts(b, ")"); }
+      else if (sp_streq(name, "to_i") && argc == 1)    { buf_printf(b, "sp_str_to_i_base(%s, ", r); emit_int_expr(c, argv[0], b); buf_puts(b, ")"); }
       else if (sp_streq(name, "to_f") && argc == 0)    buf_printf(b, "sp_str_to_f_cruby(%s)", r);  /* underscores (#2330) */
       else if (sp_streq(name, "gsub") && argc == 2) {
         buf_printf(b, "sp_str_gsub(%s, ", r); emit_str_expr(c, argv[0], b); buf_puts(b, ", "); emit_str_expr(c, argv[1], b); buf_puts(b, ")");
@@ -6751,7 +6751,7 @@ int emit_scalar_call(Compiler *c, int id, Buf *b) {
       }
       else if ((sp_streq(name, "floor") || sp_streq(name, "ceil") ||
                 sp_streq(name, "round") || sp_streq(name, "truncate")) && argc == 1) {
-        buf_printf(b, "sp_int_%s(%s, ", name, r); emit_expr(c, argv[0], b); buf_puts(b, ")");
+        buf_printf(b, "sp_int_%s(%s, ", name, r); emit_int_expr(c, argv[0], b); buf_puts(b, ")");
       }
       else if (sp_streq(name, "abs"))    buf_printf(b, "sp_int_abs(%s)", r);
       else if (sp_streq(name, "chr") && argc == 0) buf_printf(b, "sp_int_chr(%s)", r);

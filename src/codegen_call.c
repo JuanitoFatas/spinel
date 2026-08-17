@@ -17901,7 +17901,7 @@ else { memcpy(dir, sf, n); dir[n] = 0; } }
       buf_puts(b, "sp_bigint_isqrt("); emit_expr(c, argv[0], b); buf_puts(b, ")");  /* (#2420) */
       return;
     }
-    buf_puts(b, "sp_int_sqrt("); emit_expr(c, argv[0], b); buf_puts(b, ")");
+    buf_puts(b, "sp_int_sqrt("); emit_int_expr(c, argv[0], b); buf_puts(b, ")");
     return;
   }
 
