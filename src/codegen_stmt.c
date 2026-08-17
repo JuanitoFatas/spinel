@@ -8874,6 +8874,30 @@ else {
       int nargs = nt_ref(nt, id, "arguments");
       int nvc = 0; const int *nv = nargs >= 0 ? nt_arr(nt, nargs, "arguments", &nvc) : NULL;
       if (nvc > 0) {
+        /* An empty `[]` / `{}` carries no kind of its own, and the destination
+           is the block's own value slot: build the literal at THAT kind, or the
+           default one lands in it as the wrong struct (#3978). */
+        if (g_ie_next_ty != TY_UNKNOWN) {
+          int vn9 = nv[0];
+          /* `next {}` needs the parens to parse as a hash at all, so the
+             literal arrives wrapped. */
+          while (nt_kind(nt, vn9) == NK_ParenthesesNode) {
+            int pb9 = nt_ref(nt, vn9, "body"); int pn9 = 0;
+            const int *pp9 = pb9 >= 0 ? nt_arr(nt, pb9, "body", &pn9) : NULL;
+            if (pn9 != 1) break;
+            vn9 = pp9[0];
+          }
+          NodeKind vk9 = nt_kind(nt, vn9);
+          int ven9 = 0;
+          if (vk9 == NK_ArrayNode || vk9 == NK_HashNode || vk9 == NK_KeywordHashNode)
+            nt_arr(nt, vn9, "elements", &ven9);
+          if (ven9 == 0 &&
+              ((vk9 == NK_ArrayNode && ty_is_array(g_ie_next_ty)) ||
+               ((vk9 == NK_HashNode || vk9 == NK_KeywordHashNode) && ty_is_hash(g_ie_next_ty)))) {
+            c->ntype[vn9] = g_ie_next_ty;
+            if (vn9 != nv[0]) c->ntype[nv[0]] = g_ie_next_ty;
+          }
+        }
         emit_indent(b, indent); buf_printf(b, "%s = ", g_ie_next_var);
         if (g_ie_res_poly) emit_boxed(c, nv[0], b); else emit_expr(c, nv[0], b);
         buf_puts(b, ";\n");

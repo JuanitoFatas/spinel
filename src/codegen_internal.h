@@ -144,6 +144,11 @@ extern const char *g_yielder_name;
 /* Result temp for a do{}while(0)-wrapped instance_exec splice; a top-level
    `next <v>` captures into it before continuing out. NULL otherwise. */
 extern const char *g_ie_next_var;
+/* The C type of the slot g_ie_next_var names, when it is a container kind: an
+   empty `[]` / `{}` handed to `next` has no kind of its own and would be built
+   at its own default, which the destination then reads as the wrong struct
+   (#3978). TY_UNKNOWN when unknown or not a container. */
+extern TyKind g_ie_next_ty;
 extern int g_c_loop_depth;   /* C-loop nesting inside the current fn body */
 extern int g_in_proc_body;   /* emitting a _proc_N function body */
 /* Set while the wrapped splice's result temp is poly, so a value-carrying
@@ -599,6 +604,8 @@ int emit_lazy_pipeline_expr(Compiler *c, int id, Buf *b);
 int lazy_alias_write_suppressible(Compiler *c, int write);  /* lazy-alias write whose uses all force it */
 int emit_lazy_size_expr(Compiler *c, int id, Buf *b);
 int emit_native_ctor(Compiler *c, int id, int ci, int argc, const int *argv, Buf *b);
+void emit_block_value_into(Compiler *c, int block, const char *dest,
+                           int want_poly, int indent);
 int emit_collect_expr(Compiler *c, int id, Buf *b);
 int emit_with_index_expr(Compiler *c, int id, Buf *b);
 int emit_enum_with_index_expr(Compiler *c, int id, Buf *b);

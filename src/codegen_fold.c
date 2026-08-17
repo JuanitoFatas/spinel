@@ -3,8 +3,8 @@
 /* Defined lower in this file; declared here so the collecting emitters above
    its definition (the hash block-walk binder, flat_map) can route a block's
    next-aware value into a caller-declared lvalue. */
-static void emit_block_value_into(Compiler *c, int block, const char *dest,
-                                  int want_poly, int indent);
+void emit_block_value_into(Compiler *c, int block, const char *dest,
+                           int want_poly, int indent);
 
 int resolve_forwarded_block(Compiler *c, int block) {
   const NodeTable *nt = c->nt;
@@ -3532,8 +3532,8 @@ int emit_each_with_index_chain(Compiler *c, int id, Buf *b) {
 }
 
 /* defined below, before emit_collect_expr; used by the each-chain terminals */
-static void emit_block_value_into(Compiler *c, int block, const char *dest,
-                                  int want_poly, int indent);
+void emit_block_value_into(Compiler *c, int block, const char *dest,
+                           int want_poly, int indent);
 
 /* The non-fold terminals over arr.each.with_index / arr.each_with_index:
    map/collect (collect block value), select/filter & reject & to_a/entries
@@ -4238,14 +4238,23 @@ int emit_partition_expr(Compiler *c, int id, Buf *b) {
    map, test its truthiness for select). Emits into g_pre at `indent`. This is
    the shared substrate that makes `next <value>` work inside a collecting
    block instead of dropping the value. */
-static void emit_block_value_into(Compiler *c, int block, const char *dest,
-                                  int want_poly, int indent) {
+void emit_block_value_into(Compiler *c, int block, const char *dest,
+                           int want_poly, int indent) {
   const NodeTable *nt = c->nt;
   int body = nt_ref(nt, block, "body");
   int bn = 0; const int *bb = body >= 0 ? nt_arr(nt, body, "body", &bn) : NULL;
   const char *sv_nx = g_ie_next_var; int sv_poly = g_ie_res_poly;
+  TyKind sv_nty = g_ie_next_ty;
   int sv_lexc = g_loop_exc_base; g_loop_exc_base = g_exc_frame_depth;
   g_ie_next_var = dest; g_ie_res_poly = want_poly;
+  /* The destination holds whatever the block answers, and the TAIL is what the
+     inference typed for that -- so an empty `[]` reached through `next` is
+     built at the same kind rather than its own untyped default (#3978). */
+  g_ie_next_ty = TY_UNKNOWN;
+  if (!want_poly && bn > 0) {
+    TyKind dt = comp_ntype(c, bb[bn - 1]);
+    if (ty_is_array(dt) || ty_is_hash(dt)) g_ie_next_ty = dt;
+  }
   g_c_loop_depth++;   /* the do{}while(0) wrapper makes `continue` valid */
   int sd = g_indent;
   /* Wrap the body in do{}while(0): an interior or tail `next <v>` assigns
@@ -4283,6 +4292,7 @@ static void emit_block_value_into(Compiler *c, int block, const char *dest,
   emit_indent(g_pre, indent); buf_puts(g_pre, "} while (0);\n");
   g_c_loop_depth--;
   g_ie_next_var = sv_nx; g_ie_res_poly = sv_poly; g_loop_exc_base = sv_lexc;
+  g_ie_next_ty = sv_nty;
 }
 
 /* map/select/reject/filter as an expression: build a result array via a

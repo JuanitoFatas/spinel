@@ -1662,15 +1662,28 @@ int emit_tap_then_expr(Compiler *c, int id, Buf *b) {
   else if (p0) { emit_indent(g_pre, g_indent); buf_printf(g_pre, "lv_%s = _t%d;\n", p0, tr); }
 
   int sv = g_indent; g_indent = din;
-  int last = is_tap ? bn : bn - 1;
-  for (int j = 0; j < last; j++) emit_stmt(c, bb[j], g_pre, din);
   if (is_then) {
-    Buf vb; memset(&vb, 0, sizeof vb); emit_expr(c, bb[bn - 1], &vb);
-    TyKind vt = comp_ntype(c, bb[bn - 1]);
-    emit_indent(g_pre, din); buf_printf(g_pre, "_t%d = ", tres);
-    if (rett == TY_POLY && vt != TY_POLY) { Buf bx; memset(&bx, 0, sizeof bx); emit_boxed_text(c, vt, vb.p ? vb.p : "", &bx); buf_puts(g_pre, bx.p ? bx.p : ""); free(bx.p); }
-    else buf_puts(g_pre, vb.p ? vb.p : "");
-    buf_puts(g_pre, ";\n"); free(vb.p);
+    /* The body goes through the next-aware substrate: `next <v>` inside a
+       `then` block leaves the block WITH that value, and this splice has no
+       loop of its own, so a bare `continue` was both value-dropping and
+       invalid C (#3978). The do{}while(0) wrapper it emits makes the
+       continue exit exactly this block. */
+    char destbuf[24]; snprintf(destbuf, sizeof destbuf, "_t%d", tres);
+    emit_block_value_into(c, block, destbuf, rett == TY_POLY, din);
+  }
+  else {
+    /* tap discards the block's value, but a `next` still leaves the block --
+       same wrapper, no destination. */
+    const char *sv_nxv = g_ie_next_var;
+    g_ie_next_var = NULL;
+    g_c_loop_depth++;
+    emit_indent(g_pre, din); buf_puts(g_pre, "do {\n");
+    int bi = din + 1; g_indent = bi;
+    for (int j = 0; j < bn; j++) emit_stmt(c, bb[j], g_pre, bi);
+    g_indent = din;
+    emit_indent(g_pre, din); buf_puts(g_pre, "} while (0);\n");
+    g_c_loop_depth--;
+    g_ie_next_var = sv_nxv;
   }
   g_indent = sv;
   if (use_shadow) { emit_indent(g_pre, g_indent); buf_puts(g_pre, "}\n"); }
@@ -3276,15 +3289,20 @@ int emit_iteration_stmt(Compiler *c, int id, Buf *b, int indent) {
        receiver keeps its shadow path -- boxing would strip its methods and
        break `nums.tap { |a| a.sort! }`. */
     int tap_escapes = tlv0 && tsaved0 == TY_POLY && ty_is_object(et);
+    /* tap runs the block once, not in a loop, so a `next` in it has no C loop
+       to continue out of: give it one (#3978). */
+    int tap_next = subtree_has_own_next(nt, body);
+    const char *sv_tap_nx = g_ie_next_var;
+    if (tap_next) g_ie_next_var = NULL;
     if (use_shadow_t && !tap_escapes) {
       int tbody_bn = 0; const int *tbody_bb = body >= 0 ? nt_arr(nt, body, "body", &tbody_bn) : NULL;
       tlv0->type = et;
       for (int j = 0; j < tbody_bn; j++) infer_type(c, tbody_bb[j]);
-      emit_indent(b, indent); buf_puts(b, "{\n");
+      emit_indent(b, indent); buf_puts(b, tap_next ? "do {\n" : "{\n");
       emit_indent(b, indent + 1); emit_ctype(c, et, b);
       buf_printf(b, " lv_%s = _t%d;\n", p0, tr);
       emit_loop_body(c, body, b, indent + 1);
-      emit_indent(b, indent); buf_puts(b, "}\n");
+      emit_indent(b, indent); buf_puts(b, tap_next ? "} while (0);\n" : "}\n");
       tlv0->type = tsaved0;
     }
     else {
@@ -3304,8 +3322,11 @@ int emit_iteration_stmt(Compiler *c, int id, Buf *b, int indent) {
           buf_printf(b, "lv_%s = _t%d;\n", p0, tr);
         }
       }
-      emit_loop_body(c, body, b, indent);
+      if (tap_next) { emit_indent(b, indent); buf_puts(b, "do {\n"); }
+      emit_loop_body(c, body, b, indent + (tap_next ? 1 : 0));
+      if (tap_next) { emit_indent(b, indent); buf_puts(b, "} while (0);\n"); }
     }
+    g_ie_next_var = sv_tap_nx;
     return 1;
   }
 
