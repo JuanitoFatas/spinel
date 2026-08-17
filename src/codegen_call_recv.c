@@ -4166,7 +4166,10 @@ else {
           if (bp) { emit_indent(g_pre, g_indent + 1); buf_printf(g_pre, "lv_%s = sp_PolyArray_get(_t%d, _t%d);\n", bp, trecv, ti); }
           for (int j = 0; j < bn - 1; j++) emit_stmt(c, bb[j], g_pre, g_indent + 1);
           int sv = g_indent; g_indent++;
-          Buf vb = expr_buf(c, bb[bn - 1]); g_indent = sv;
+          /* The slot takes a boxed value: a block whose tail is statically
+             typed (`[].map! { 0 }`, where the empty receiver leaves nothing to
+             widen the tail against) would otherwise put a raw scalar in it. */
+          Buf vb; memset(&vb, 0, sizeof vb); emit_boxed(c, bb[bn - 1], &vb); g_indent = sv;
           emit_indent(g_pre, g_indent + 1);
           buf_printf(g_pre, "sp_PolyArray_set(_t%d, _t%d, %s);\n", trecv, ti, vb.p ? vb.p : "sp_box_nil()");
           free(vb.p);
