@@ -6407,7 +6407,7 @@ void emit_regex_section(Compiler *c, Buf *b) {
       buf_printf(b, "    sp_re_pat_%d = re_compile(", i);
       emit_str_literal(b, g_re_src[i]);
       buf_printf(b, ", %d, %d);\n", (int)strlen(g_re_src[i]), g_re_flg[i]);
-      buf_printf(b, "  }\nelse {\n    sp_re_pat_%d = NULL;\n  }\n", i);
+      buf_printf(b, "  }\nelse {\n    (void)sp_re_pat_%d;\n    sp_re_startup_fail();\n  }\n", i);
     }
   }
   /* From here on (runtime Regexp.new / dynamic patterns), a compile error

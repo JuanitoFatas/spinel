@@ -7257,6 +7257,15 @@ static void sp_re_startup_error_handler(const char *msg) {
   }
   longjmp(sp_re_startup_jmp, 1);
 }
+/* A LITERAL pattern the engine refuses is CRuby's parse-time error: the file
+   does not run at all. Startup compiles every literal, so report there and
+   stop, rather than leaving the slot NULL for the first match to dereference
+   (a segfault, and the message lost with it). */
+static SP_NOINLINE void sp_re_startup_fail(void) {
+  fprintf(stderr, "%s (RegexpError)\n",
+          sp_re_startup_err ? sp_re_startup_err : "invalid regexp literal");
+  exit(1);
+}
 extern void sp_re_set_error_handler(void (*fn)(const char *msg));
 static void sp_mark_in_flight_exceptions(void) {
   /* <=: a rescue arm pops its frame (sp_exc_top--) BEFORE materializing the
