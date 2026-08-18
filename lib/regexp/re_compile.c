@@ -173,6 +173,12 @@ insert_inst(re_compiler *c, uint32_t pos, uint8_t op, uint8_t a, uint16_t offset
     case RE_JMP: case RE_SPLIT: case RE_SPLITNG:
     case RE_LOOKAHEAD: case RE_NEG_LOOKAHEAD:
     case RE_LOOKBEHIND: case RE_NEG_LOOKBEHIND:
+    /* The atomic group carries its jump-to-end target in `offset` as well.
+       Left out of this walk, `(?>a?)*` kept the target the atom had before the
+       quantifier's SPLIT was inserted ahead of it -- one short, which is the
+       sub-pattern's own MATCH: the match ended there and the outer SAVE that
+       records where group 0 ends never ran, so `m[0]` was nil. */
+    case RE_ATOMIC:
       if (c->code[i].offset >= 0xffff) break;
       if (c->code[i].offset > pos || (c->code[i].offset == pos && i > pos)) {
         c->code[i].offset++;
