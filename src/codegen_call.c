@@ -17347,11 +17347,16 @@ else { memcpy(dir, sf, n); dir[n] = 0; } }
     return;
   }
 
-  /* TY_CLASS variable .new -> runtime switch over user classes, returns TY_POLY */
+  /* TY_CLASS variable .new -> runtime switch over user classes, returns TY_POLY.
+     A local that statically holds one class is not that: it dispatches like the
+     constant it holds, and the arm below has no case for a Struct, so a
+     `s = Struct.new(:a); s.new` came out as an empty switch whose nil seed was
+     then cast to the struct pointer (#3992). */
   if (recv >= 0 && sp_streq(name, "new") && comp_ntype(c, recv) == TY_CLASS &&
       nt_type(nt, recv) &&
       !sp_streq(nt_type(nt, recv), "ConstantReadNode") &&
       !sp_streq(nt_type(nt, recv), "ConstantPathNode") &&
+      class_var_static_ci(c, recv) < 0 &&
       argc == 0) {
     int kt = ++g_tmp, rt2 = ++g_tmp;
     buf_printf(b, "({ sp_Class _t%d = ", kt); emit_expr(c, recv, b); buf_printf(b, "; ");

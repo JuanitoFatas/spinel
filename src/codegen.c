@@ -4782,8 +4782,10 @@ void emit_class_new(Compiler *c, ClassInfo *ci, Buf *b) {
       buf_puts(b, "  if (!self) return \"nil\";\n");
       /* an anonymous struct class has no name to show: #<struct a=1, b=2> */
       if (ci->is_anon_struct)
-        buf_printf(b, "  sp_String *s = sp_String_new(\"#<%s\"); SP_GC_ROOT(s);\n",
-                   ci->is_data ? "data" : "struct");
+        /* the space that would precede the first member is CRuby's even when
+           there is none to precede: `Struct.new.new.inspect` is "#<struct >" */
+        buf_printf(b, "  sp_String *s = sp_String_new(\"#<%s%s\"); SP_GC_ROOT(s);\n",
+                   ci->is_data ? "data" : "struct", ci->nivars == 0 ? " " : "");
       else
         buf_printf(b, "  sp_String *s = sp_String_new(\"#<%s %s\"); SP_GC_ROOT(s);\n",
                    ci->is_data ? "data" : "struct", rn);
