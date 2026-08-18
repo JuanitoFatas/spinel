@@ -1939,8 +1939,12 @@ int emit_sum_block_expr(Compiler *c, int id, Buf *b) {
   const char *p0 = block_param_name(c, block, 0); if (p0) p0 = rename_local(p0);
   int body = nt_ref(nt, block, "body");
   int bn = 0; const int *bb = body >= 0 ? nt_arr(nt, body, "body", &bn) : NULL;
-  if (bn < 1) return 0;
-  TyKind acct = comp_ntype(c, bb[bn - 1]);
+  /* An empty block body (`sum {}`) answers nil for every element, which the
+     boxed accumulation adds: an empty receiver never runs it and keeps the 0
+     it starts from, and a non-empty one raises on the first nil, as CRuby's
+     "nil can't be coerced" does (#3991). */
+  TyKind acct = bn > 0 ? comp_ntype(c, bb[bn - 1]) : TY_POLY;
+  if (bn > 0 && acct == TY_NIL) acct = TY_POLY;
   if (acct != TY_INT && acct != TY_FLOAT && acct != TY_STRING && acct != TY_POLY) return 0;
   int args = nt_ref(nt, id, "arguments");
   int argc = 0; const int *argv = args >= 0 ? nt_arr(nt, args, "arguments", &argc) : NULL;
@@ -1979,15 +1983,27 @@ int emit_sum_block_expr(Compiler *c, int id, Buf *b) {
       Buf valb; memset(&valb, 0, sizeof valb);
       Buf *saved_pre = g_pre; g_pre = &inner;
       { int svlm = g_line_map; g_line_map = 0;  /* a #line directive mid stmt-expr is a stray '#' */
-        for (int j = 0; j < bn - 1; j++) emit_stmt(c, bb[j], &inner, 0);  /* leading stmts */
+        for (int j = 0; j + 1 < bn; j++) emit_stmt(c, bb[j], &inner, 0);  /* leading stmts */
         g_line_map = svlm; }
-      emit_boxed(c, bb[bn - 1], &valb);
+      if (bn > 0) emit_boxed(c, bb[bn - 1], &valb);
+      else buf_puts(&valb, "sp_box_nil()");
       g_pre = saved_pre;
       if (inner.p) buf_puts(b, inner.p);
       buf_printf(b, "_t%d = sp_poly_add(_t%d, %s); }", tacc, tacc, valb.p ? valb.p : "sp_box_nil()");
       free(inner.p); free(valb.p);
     }
-    buf_printf(b, " _t%d; })", tacc);
+    /* The call's own type may be a scalar the inference settled on (an int
+       array's `sum {}` is an Integer where it answers at all), so hand back
+       what the caller's slot holds; a nil term raises inside the loop before
+       this is reached. */
+    TyKind sret = comp_ntype(c, id);
+    if (sret == TY_INT || sret == TY_FLOAT || sret == TY_STRING) {
+      char accsrc[32]; snprintf(accsrc, sizeof accsrc, "_t%d", tacc);
+      buf_puts(b, " ");
+      emit_unbox_text(c, sret, accsrc, b);
+      buf_puts(b, "; })");
+    }
+    else buf_printf(b, " _t%d; })", tacc);
     return 1;
   }
   /* a float initial value promotes the whole sum to Float, even when the block
