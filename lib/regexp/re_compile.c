@@ -766,27 +766,59 @@ parse_quantifier(re_compiler *c, int *min_out, int *max_out)
  * with different-length branches, etc.).
  * Used for lookbehind: we need to know exactly how far back to look.
  */
+/* TRUE when every character the class can match is ASCII, so it always
+   consumes exactly one byte. Non-ASCII codepoint ranges and the utf8_any
+   catch-all (set by \D, \W, \S, \H and [[:^alpha:]]) both admit multibyte
+   characters, whose width is not known until match time. (ported from
+   mruby-regexp 1fa7d26c4) */
+static mrb_bool
+class_is_ascii_only(const re_charclass *cc)
+{
+  return cc->num_ranges == 0 && !cc->utf8_any;
+}
+
 static int
-compute_fixed_len(re_compiler *c, uint32_t start, uint32_t end)
+compute_fixed_len(re_compiler *c, uint32_t start, uint32_t end, int *chars_out)
 {
   int len = 0;
+  int chars = 0;
   uint32_t pc = start;
 
   while (pc < end) {
     re_inst inst = c->code[pc];
     switch (inst.op) {
-    case RE_CHAR:
+    case RE_CHAR: {
+      /* A multibyte literal is a run of one-byte RE_CHAR instructions, and
+         what a byte spells depends on the bytes after it, so hand the run to
+         the character measurer rather than read the lead bit alone: a
+         continuation byte no lead reaches is a character of its own, which is
+         the rule the executor rewinds by. Four bytes is the longest character
+         there is, and a run never splits one. */
+      char buf[4];
+      int n = 0;
+      while (n < 4 && pc + (uint32_t)n < end && c->code[pc + n].op == RE_CHAR) {
+        buf[n] = (char)c->code[pc + n].a;
+        n++;
+      }
+      int clen = re_utf8_charlen(buf, buf + n);
+      if (clen < 1) clen = 1;
+      len += clen;
+      chars += 1;
+      pc += (uint32_t)clen;
+      break;
+    }
     case RE_CLASS:
     case RE_NCLASS:
-      len += 1;
-      pc++;
-      break;
     case RE_ANY:
     case RE_ANY_NL:
-      /* . matches one character which can be 1-4 bytes in UTF-8.
-         For ASCII-only mode this is 1 byte; for safety, only allow
-         if we can determine it's ASCII context. Return -1 for now. */
-      return -1;
+      /* one character whatever its members can be, since the executor hands a
+         class one decoded character at a time. The BYTE count is only right
+         for a byte-indexed subject, which is why the rewind counts characters
+         for every other one. */
+      len += 1;
+      chars += 1;
+      pc++;
+      break;
     case RE_SAVE:
       pc++;
       break;  /* zero-width */
@@ -805,11 +837,13 @@ compute_fixed_len(re_compiler *c, uint32_t start, uint32_t end)
       return -1;
     }
     case RE_MATCH:
+      *chars_out = chars;
       return len;
     default:
       return -1;  /* unknown/variable-length instruction */
     }
   }
+  *chars_out = chars;
   return len;
 }
 
@@ -951,13 +985,16 @@ compile_atom(re_compiler *c)
           mrb_bool negative = (c->p[2] == '!');
           next_char(c); next_char(c); next_char(c);  /* skip ?<= or ?<! */
           uint32_t lb_pos = emit(c, negative ? RE_NEG_LOOKBEHIND : RE_LOOKBEHIND, 0, 0);
+          emit(c, RE_LB_WIDTH, 0, 0);
           uint32_t sub_start = c->code_len;
           compile_alt(c);
           emit(c, RE_MATCH, 0, 0);
           c->code[lb_pos].offset = (uint16_t)c->code_len;
 
-          /* compute fixed byte length of lookbehind sub-pattern */
-          int fixed_len = compute_fixed_len(c, sub_start, c->code_len);
+          /* measure the sub-pattern in both units: bytes for a byte-indexed
+             (binary) subject, characters for a UTF-8 one */
+          int fixed_chars = 0;
+          int fixed_len = compute_fixed_len(c, sub_start, c->code_len, &fixed_chars);
           if (fixed_len < 0) {
             compile_error(c, "lookbehind must be fixed length");
           }
@@ -965,6 +1002,8 @@ compile_atom(re_compiler *c)
             compile_error(c, "lookbehind too long (max 255 bytes)");
           }
           c->code[lb_pos].a = (uint8_t)fixed_len;
+          /* the character count never exceeds the byte count, so it fits */
+          c->code[lb_pos + 1].a = (uint8_t)fixed_chars;
 
           if (peek(c) != ')') compile_error(c, "unmatched '('");
           next_char(c);
@@ -1721,8 +1760,7 @@ first_set_walk(const re_inst *code, uint32_t code_len,
     case RE_CLASS: {
       const re_charclass *cc = &classes[code[pc].a];
       for (int i = 0; i < 16; i++) bm[i] |= cc->bitmap[i];
-      if (cc->utf8_any) return FALSE;  /* non-ASCII possible */
-      if (cc->num_ranges > 0) return FALSE;  /* non-ASCII codepoints possible */
+      if (!class_is_ascii_only(cc)) return FALSE;  /* non-ASCII possible */
       return TRUE;
     }
     case RE_NCLASS: {

@@ -44,6 +44,9 @@ enum re_opcode {
   RE_NEG_LOOKAHEAD, /* negative lookahead: offset = end of sub-pattern */
   RE_LOOKBEHIND,     /* positive lookbehind: a = byte length, offset = end */
   RE_NEG_LOOKBEHIND, /* negative lookbehind: a = byte length, offset = end */
+  RE_LB_WIDTH,   /* payload slot following a lookbehind: a = the sub-pattern's
+                    length in CHARACTERS, which is the unit the executor
+                    rewinds by (ported from mruby-regexp 103e1a8bc) */
   RE_GPOS,       /* assert the search-start position (\G) */
   RE_ATOMIC,     /* atomic group (?>...) / possessive quantifier: match the
                     sub-pattern once and commit, offset = end of sub-pattern */

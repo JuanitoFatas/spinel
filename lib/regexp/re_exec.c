@@ -507,6 +507,32 @@ memcmp_ci(const char *a, const char *b, int len)
   return TRUE;
 }
 
+/* Where a lookbehind's sub-pattern starts: the text before `sp` that the
+   sub-pattern describes. A byte-indexed subject rewinds by the byte count the
+   compiler measured; every other one rewinds by CHARACTERS, since a class or a
+   `.` inside the lookbehind matches one character of whatever width and a byte
+   count would land inside a character. (ported from mruby-regexp 103e1a8bc,
+   3df2926a1, bd21fe4aa) */
+static const char *
+lookbehind_start(const mrb_regexp_pattern *pat, const char *str,
+                 const char *str_end, const char *sp, uint32_t pc,
+                 mrb_bool binary)
+{
+  (void)str_end;
+  if (binary) {
+    int lb_len = pat->code[pc].a;
+    return (sp - str < lb_len) ? NULL : sp - lb_len;
+  }
+  int nchars = pat->code[pc + 1].a;
+  while (nchars > 0) {
+    if (sp <= str) return NULL;
+    sp--;
+    while (sp > str && re_utf8_continuation_p(sp)) sp--;
+    nchars--;
+  }
+  return sp;
+}
+
 static mrb_bool
 bt_match_depth(const mrb_regexp_pattern *pat, const char *str, const char *str_end,
                const char *sp, uint32_t pc, int *captures, int ncap, int *steps,
@@ -689,9 +715,9 @@ bt_match_depth(const mrb_regexp_pattern *pat, const char *str, const char *str_e
 
     case RE_LOOKBEHIND:
       {
-        int lb_len = inst.a;
-        if (sp - str < lb_len) return FALSE;  /* not enough text before */
-        if (!bt_match_depth(pat, str, str_end, sp - lb_len, pc + 1, captures, ncap, steps, depth + 1, binary, NULL, gpos))
+        const char *back = lookbehind_start(pat, str, str_end, sp, pc, binary);
+        if (!back) return FALSE;  /* not enough text before */
+        if (!bt_match_depth(pat, str, str_end, back, pc + 2, captures, ncap, steps, depth + 1, binary, NULL, gpos))
           return FALSE;
         pc = inst.offset;
       }
@@ -699,11 +725,10 @@ bt_match_depth(const mrb_regexp_pattern *pat, const char *str, const char *str_e
 
     case RE_NEG_LOOKBEHIND:
       {
-        int lb_len = inst.a;
-        if (sp - str >= lb_len) {
-          if (bt_match_depth(pat, str, str_end, sp - lb_len, pc + 1, captures, ncap, steps, depth + 1, binary, NULL, gpos))
-            return FALSE;
-        }
+        const char *back = lookbehind_start(pat, str, str_end, sp, pc, binary);
+        if (back &&
+            bt_match_depth(pat, str, str_end, back, pc + 2, captures, ncap, steps, depth + 1, binary, NULL, gpos))
+          return FALSE;
         /* if not enough text before, negative lookbehind succeeds */
         pc = inst.offset;
       }
