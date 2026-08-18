@@ -2619,7 +2619,11 @@ int emit_iteration_stmt(Compiler *c, int id, Buf *b, int indent) {
   /* poly_val.each { |v| ... }: runtime-dispatch over a boxed array or hash */
   if ((sp_streq(name, "each") || sp_streq(name, "each_pair") ||
        sp_streq(name, "each_value") || sp_streq(name, "each_key") ||
-       sp_streq(name, "each_with_index")) &&
+       sp_streq(name, "each_with_index") ||
+       /* each_entry yields what each yields for every builtin enumerable, so
+          the boxed receiver iterates the same way (#3395, #3987), and
+          reverse_each walks the same elements from the other end */
+       sp_streq(name, "each_entry") || sp_streq(name, "reverse_each")) &&
       rt == TY_POLY && block >= 0) {
     /* each/each_pair walk the elements (sp_poly_each_elem renders a hash
        entry as a boxed [k, v] pair); each_value/each_key bind one half of
@@ -2645,9 +2649,13 @@ int emit_iteration_stmt(Compiler *c, int id, Buf *b, int indent) {
        freshly-built collection held only by this temp. */
     emit_indent(b, indent); buf_printf(b, "SP_GC_ROOT_RBVAL(_t%d);\n", ta);
     emit_indent(b, indent); emit_poly_iter_obj_normalize(c, ta, b);
+    emit_indent(b, indent); buf_printf(b, "sp_poly_iter_check(_t%d, \"%s\");\n", ta, name);
     emit_indent(b, indent); buf_printf(b, "sp_int _t%d = sp_poly_arr_len_ex(_t%d);\n", tn, ta);
     emit_indent(b, indent);
-    buf_printf(b, "for (sp_int _t%d = 0; _t%d < _t%d; _t%d++) {\n", ti, ti, tn, ti);
+    if (sp_streq(name, "reverse_each"))
+      buf_printf(b, "for (sp_int _t%d = _t%d - 1; _t%d >= 0; _t%d--) {\n", ti, tn, ti, ti);
+    else
+      buf_printf(b, "for (sp_int _t%d = 0; _t%d < _t%d; _t%d++) {\n", ti, ti, tn, ti);
     /* multi-param: auto-splat each poly element into params. Ruby splats only
        when the element is itself an Array (sp_poly_each_elem already renders a
        hash pair as a 2-element array, so |k, v| over a hash still splats); a

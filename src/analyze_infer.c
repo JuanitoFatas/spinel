@@ -1045,12 +1045,16 @@ TyKind infer_call(Compiler *c, int id) {
         (sp_streq(name, "each") || sp_streq(name, "each_with_index") ||
          sp_streq(name, "reverse_each") || sp_streq(name, "each_entry")))
       return rt;
-    /* A poly receiver that provably carries a container answers `each` with
-       itself, exactly as the typed kinds do. Left UNKNOWN, a chained
-       `h.each { }.length` had nothing to dispatch on and raised NoMethodError
-       naming nothing. */
+    /* A poly receiver answers `each` with itself, exactly as the typed kinds
+       do -- that is the receiver's own type, so claiming it says nothing the
+       receiver did not already say. Left UNKNOWN, a chained
+       `h.each { }.length` had nothing to dispatch on and was refused at
+       compile time, naming nothing: `JSON.parse("[]").each { }.size` reached
+       that even though the value is an Array at run time (#3987). A receiver
+       with no `each` raises where it always did, from the run-time dispatch.
+       The value form of the iterator (emit_iter_value_expr) yields the
+       receiver for a poly one too, so the two agree. */
     if (rt == TY_POLY && nt_ref(nt, id, "block") >= 0 &&
-        poly_expr_flows_container(c, recv) &&
         (sp_streq(name, "each") || sp_streq(name, "each_with_index") ||
          sp_streq(name, "reverse_each") || sp_streq(name, "each_entry")))
       return TY_POLY;

@@ -34,7 +34,7 @@ static inline int ty_poly_hash_face_name(const char *nm) {
     "select", "filter", "reject", "compact", "slice",
     "except", "values_at", "fetch_values", "entries", "flatten", "first",
     "each_pair", "each_key", "each_value", "transform_values",
-    "transform_keys", "tally", "chunk_while", "each_entry", "flat_map",
+    "transform_keys", "tally", "chunk_while", "flat_map",
     "collect_concat", "none?", "one?",
     0 };
   if (!nm) return 0;

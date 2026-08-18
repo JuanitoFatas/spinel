@@ -5350,6 +5350,20 @@ static sp_RbVal sp_poly_get_str(sp_RbVal v, const char *key) {
 static sp_StrPolyHash *sp_StrPolyHash_from_poly(sp_RbVal src);
 static sp_SymPolyHash *sp_SymPolyHash_from_poly(sp_RbVal src);
 static sp_PolyPolyHash *sp_PolyPolyHash_from_poly(sp_RbVal src);
+/* A poly `each` receiver that is no collection has no `each` at all, which is
+   CRuby's NoMethodError. Iterating it zero times instead answered the receiver
+   silently, and the chain carried on: `5.each { }.size` printed 8, Integer#size
+   of the receiver the loop handed back (#3987). A user object is let through --
+   it may define its own each, and the to_a normalization ahead of this runs
+   first. */
+static void sp_poly_iter_check(sp_RbVal v, const char *m) {
+  if (v.tag == SP_TAG_OBJ &&
+      (v.cls_id >= 0 || sp_poly_is_array_kind(v.cls_id) ||
+       sp_poly_is_hash_kind(v.cls_id) || v.cls_id == SP_BUILTIN_RANGE ||
+       v.cls_id == SP_BUILTIN_ENUMERATOR))
+    return;
+  sp_raise_poly_nomethod(m, v);
+}
 static sp_int sp_poly_arr_len_ex(sp_RbVal a) {
   if (a.tag != SP_TAG_OBJ) return 0;
   switch (a.cls_id) {

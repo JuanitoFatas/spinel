@@ -6853,6 +6853,9 @@ int infer_block_params(Compiler *c) {
               sp_streq(name, "one?") || sp_streq(name, "count") ||
               sp_streq(name, "sum") || sp_streq(name, "take_while") ||
               sp_streq(name, "drop_while") || sp_streq(name, "each_entry") ||
+              /* reverse_each walks the same elements as each, from the other
+                 end: its block binds them the same way (#3987) */
+              sp_streq(name, "reverse_each") ||
               sp_streq(name, "bsearch") ||
               sp_streq(name, "chunk_while") || sp_streq(name, "slice_when")))
       pt = TY_POLY;
