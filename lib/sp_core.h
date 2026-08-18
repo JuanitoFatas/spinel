@@ -2,7 +2,7 @@
  * libspinel_rt.a so they are compiled once rather than re-parsed and
  * re-codegen'd in every generated translation unit.
  *
- * Signatures use intptr_t / double directly (== mrb_int / mrb_float)
+ * Signatures use intptr_t / double directly (== sp_int / sp_float)
  * to stay decoupled from the runtime's typedefs. These helpers call
  * sp_raise_cls / sp_sprintf, which live in the generated TU
  * (spinel_rt.h) and resolve at link time.

@@ -2,7 +2,7 @@
 #include "sp_proc.h"
 
 void sp_Proc_scan(void *p) { sp_Proc *pr = (sp_Proc *)p; if (pr->cap && pr->cap_scan) pr->cap_scan(pr->cap); }
-sp_Proc *sp_proc_new_meta(void *fn, void *cap, void (*cap_scan)(void *), mrb_int arity, mrb_bool lambda_p, mrb_int param_count, const sp_sym *param_kinds, const sp_sym *param_names) { sp_Proc *p = (sp_Proc *)sp_gc_alloc(sizeof(sp_Proc), NULL, sp_Proc_scan); p->fn = fn; p->cap = cap; p->cap_scan = cap_scan; p->arity = arity; p->lambda_p = lambda_p; p->param_count = param_count; p->param_kinds = param_kinds; p->param_names = param_names; return p; }
+sp_Proc *sp_proc_new_meta(void *fn, void *cap, void (*cap_scan)(void *), sp_int arity, sp_bool lambda_p, sp_int param_count, const sp_sym *param_kinds, const sp_sym *param_names) { sp_Proc *p = (sp_Proc *)sp_gc_alloc(sizeof(sp_Proc), NULL, sp_Proc_scan); p->fn = fn; p->cap = cap; p->cap_scan = cap_scan; p->arity = arity; p->lambda_p = lambda_p; p->param_count = param_count; p->param_kinds = param_kinds; p->param_names = param_names; return p; }
 /* Proc#dup / #clone: a fresh shallow copy (distinct identity; the capture
    environment is shared, like CRuby). dup drops the frozen flag, clone keeps
    it (#3048). */
@@ -16,8 +16,8 @@ sp_Proc *sp_proc_dup(sp_Proc *p, int keep_frozen) {
   return r;
 }
 sp_Proc *sp_proc_new(void *fn, void *cap, void (*cap_scan)(void *)) { return sp_proc_new_meta(fn, cap, cap_scan, 0, FALSE, 0, NULL, NULL); }
-mrb_int sp_proc_arity(sp_Proc *p) { return p ? p->arity : 0; }
-mrb_bool sp_proc_lambda_p(sp_Proc *p) { return p ? p->lambda_p : FALSE; }
+sp_int sp_proc_arity(sp_Proc *p) { return p ? p->arity : 0; }
+sp_bool sp_proc_lambda_p(sp_Proc *p) { return p ? p->lambda_p : FALSE; }
 /* Proc#inspect: CRuby prints "#<Proc:0xADDR file:line (lambda)>"; the
    source location is not tracked, so the address form (+ lambda marker) is
    the best-effort rendering. */
@@ -28,10 +28,10 @@ const char *sp_proc_inspect(sp_Proc *p) {SP_GC_ROOT(p);
 }
 /* Lambda strict-arity check: raise ArgumentError if argc is outside
    [req, req+opt] (no upper bound with a rest param). Procs are lenient. */
-void sp_proc_lambda_arity_check(mrb_int argc, mrb_int req, mrb_int opt, mrb_bool has_rest, mrb_bool has_kw) {
+void sp_proc_lambda_arity_check(sp_int argc, sp_int req, sp_int opt, sp_bool has_rest, sp_bool has_kw) {
   /* a lambda with keyword parameters accepts one extra trailing argument (the
      keyword hash) beyond its positional maximum. */
-  mrb_int max = req + opt + (has_kw ? 1 : 0);
+  sp_int max = req + opt + (has_kw ? 1 : 0);
   if (argc < req || (!has_rest && argc > max)) sp_raise_cls("ArgumentError", "wrong number of arguments");
 }
 /* Proc#parameters with an explicit mode. Kinds are stored canonically
@@ -45,7 +45,7 @@ sp_PolyArray *sp_proc_parameters_ids(sp_Proc *p, int mode, sp_sym req_id, sp_sym
   if (!p || p->param_count <= 0 || !p->param_kinds) return r;
   SP_GC_ROOT(r);
   int want_lambda = mode >= 0 ? mode : (p->lambda_p ? 1 : 0);
-  for (mrb_int i = 0; i < p->param_count; i++) {
+  for (sp_int i = 0; i < p->param_count; i++) {
     sp_sym k = p->param_kinds[i];
     if (!want_lambda && k == req_id) k = opt_id;
     sp_PolyArray *pair = sp_PolyArray_new();
@@ -55,8 +55,8 @@ sp_PolyArray *sp_proc_parameters_ids(sp_Proc *p, int mode, sp_sym req_id, sp_sym
   }
   return r;
 }
-sp_PolyArray *sp_proc_parameters(sp_Proc *p) { SP_GC_ROOT(p); sp_PolyArray *r = sp_PolyArray_new(); if (!p || p->param_count <= 0 || !p->param_kinds) return r; SP_GC_ROOT(r); for (mrb_int i = 0; i < p->param_count; i++) { sp_PolyArray *pair = sp_PolyArray_new(); sp_PolyArray_push(pair, sp_box_sym(p->param_kinds[i])); if (p->param_names && p->param_names[i] >= 0) sp_PolyArray_push(pair, sp_box_sym(p->param_names[i])); sp_PolyArray_push(r, sp_box_poly_array(pair)); } return r; }
-void sp_curry_scan(void *p) { sp_Curry *c = (sp_Curry *)p; if (c->target) sp_gc_mark(c->target); for (mrb_int i = 0; i < c->nargs && i < 16; i++) sp_mark_rbval(c->args[i]); }
+sp_PolyArray *sp_proc_parameters(sp_Proc *p) { SP_GC_ROOT(p); sp_PolyArray *r = sp_PolyArray_new(); if (!p || p->param_count <= 0 || !p->param_kinds) return r; SP_GC_ROOT(r); for (sp_int i = 0; i < p->param_count; i++) { sp_PolyArray *pair = sp_PolyArray_new(); sp_PolyArray_push(pair, sp_box_sym(p->param_kinds[i])); if (p->param_names && p->param_names[i] >= 0) sp_PolyArray_push(pair, sp_box_sym(p->param_names[i])); sp_PolyArray_push(r, sp_box_poly_array(pair)); } return r; }
+void sp_curry_scan(void *p) { sp_Curry *c = (sp_Curry *)p; if (c->target) sp_gc_mark(c->target); for (sp_int i = 0; i < c->nargs && i < 16; i++) sp_mark_rbval(c->args[i]); }
 sp_Curry *sp_curry_new(sp_Proc *p) {
   SP_GC_ROOT(p);  /* the target proc has no other root across this alloc */
   sp_Curry *c = (sp_Curry *)sp_gc_alloc(sizeof(sp_Curry), NULL, sp_curry_scan);
@@ -77,27 +77,27 @@ sp_Curry *sp_curry_apply(sp_Curry *c, sp_RbVal arg) {SP_GC_ROOT_RBVAL(arg);
 /* Publish the accumulated (boxed) args on the side-channel: a poly-param
    target reads its arguments back from there, keeping each arg's real type. */
 void sp_curry_publish_args(sp_Curry *c) {
-  for (mrb_int i = 0; i < c->nargs && i < 16; i++)
+  for (sp_int i = 0; i < c->nargs && i < 16; i++)
     _sp_proc_poly_args[i] = c->args[i];
 }
 
 /* Method#to_proc: wrap the bound method in a Proc whose trampoline forwards
-   through the (void *self, mrb_int...) ABI (the arity dispatches the cast). */
+   through the (void *self, sp_int...) ABI (the arity dispatches the cast). */
 void sp_bm_cap_scan(void *p) { sp_gc_mark(p); }
-mrb_int sp_method_proc_tramp(void *cap, mrb_int argc, mrb_int *args) {
+sp_int sp_method_proc_tramp(void *cap, sp_int argc, sp_int *args) {
   sp_BoundMethod *m = (sp_BoundMethod *)cap;
   if (!m || !m->fn) return 0;
   /* A proc publishes its result through the boxed side-channel, which every
      generated proc body writes; this trampoline only returned it, so a caller
      reading the slot saw a stale value (#3692). The casts below already assume
-     the target's mrb_int ABI, so box the same answer. */
-  #define SP_BM_TRAMP_RET(EXPR) do { mrb_int _r = (EXPR); _sp_proc_poly_ret = sp_box_int(_r); return _r; } while (0)
+     the target's sp_int ABI, so box the same answer. */
+  #define SP_BM_TRAMP_RET(EXPR) do { sp_int _r = (EXPR); _sp_proc_poly_ret = sp_box_int(_r); return _r; } while (0)
   switch (argc) {
-    case 0: SP_BM_TRAMP_RET(((mrb_int (*)(void *))(uintptr_t)m->fn)(m->self));
-    case 1: SP_BM_TRAMP_RET(((mrb_int (*)(void *, mrb_int))(uintptr_t)m->fn)(m->self, args[0]));
-    case 2: SP_BM_TRAMP_RET(((mrb_int (*)(void *, mrb_int, mrb_int))(uintptr_t)m->fn)(m->self, args[0], args[1]));
-    case 3: SP_BM_TRAMP_RET(((mrb_int (*)(void *, mrb_int, mrb_int, mrb_int))(uintptr_t)m->fn)(m->self, args[0], args[1], args[2]));
-    default: SP_BM_TRAMP_RET(((mrb_int (*)(void *, mrb_int, mrb_int, mrb_int, mrb_int))(uintptr_t)m->fn)(m->self, args[0], args[1], args[2], args[3]));
+    case 0: SP_BM_TRAMP_RET(((sp_int (*)(void *))(uintptr_t)m->fn)(m->self));
+    case 1: SP_BM_TRAMP_RET(((sp_int (*)(void *, sp_int))(uintptr_t)m->fn)(m->self, args[0]));
+    case 2: SP_BM_TRAMP_RET(((sp_int (*)(void *, sp_int, sp_int))(uintptr_t)m->fn)(m->self, args[0], args[1]));
+    case 3: SP_BM_TRAMP_RET(((sp_int (*)(void *, sp_int, sp_int, sp_int))(uintptr_t)m->fn)(m->self, args[0], args[1], args[2]));
+    default: SP_BM_TRAMP_RET(((sp_int (*)(void *, sp_int, sp_int, sp_int, sp_int))(uintptr_t)m->fn)(m->self, args[0], args[1], args[2], args[3]));
   }
   #undef SP_BM_TRAMP_RET
 }

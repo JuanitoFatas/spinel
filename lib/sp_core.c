@@ -18,11 +18,11 @@
 #  endif
 #endif
 
-/* Must match sp_types.h: mrb_int is pointer-width (int64 on 64-bit,
+/* Must match sp_types.h: sp_int is pointer-width (int64 on 64-bit,
    int32 on 32-bit) so this TU's helper ABI agrees with the generated TU. */
-typedef intptr_t mrb_int;
-typedef double  mrb_float;
-/* 10^p fits mrb_int only up to this exponent (p>= it collapses to 0):
+typedef intptr_t sp_int;
+typedef double  sp_float;
+/* 10^p fits sp_int only up to this exponent (p>= it collapses to 0):
    10^19 > INT64_MAX, 10^10 > INT32_MAX. */
 #if INTPTR_MAX == INT32_MAX
 #define SP_INT_POW10_LIMIT 10
@@ -38,16 +38,16 @@ const char *sp_sprintf(const char *fmt, ...);
 /* CRuby's `String#to_i` accepts a leading sign, then digits with
    `_` between consecutive digits, and stops at the first non-digit
    (returning what it has so far rather than raising). `"1_2_3asdf"`
-   -> 123. spinel previously emitted `(mrb_int)atoll(s)` which stops
+   -> 123. spinel previously emitted `(sp_int)atoll(s)` which stops
    at the first `_`, returning 1 instead. Issue #619. */
-mrb_int sp_str_to_i_cruby(const char *s) {SP_GC_ROOT_STR(s);
+sp_int sp_str_to_i_cruby(const char *s) {SP_GC_ROOT_STR(s);
   if (!s) return 0;
   const char *p = s;
   while (isspace((unsigned char)*p)) p++;
   int neg = 0;
   if (*p == '+') p++;
   else if (*p == '-') { neg = 1; p++; }
-  mrb_int v = 0;
+  sp_int v = 0;
   int any = 0;
   while (*p) {
     if (*p >= '0' && *p <= '9') {
@@ -56,9 +56,9 @@ mrb_int sp_str_to_i_cruby(const char *s) {SP_GC_ROOT_STR(s);
          on overflow but spinel's int model is int64-only -- raise
          RangeError instead of silently saturating, so a user-side
          `rescue` can react. */
-      mrb_int t;
+      sp_int t;
       if (__builtin_mul_overflow(v, 10, &t) ||
-          __builtin_add_overflow(t, (mrb_int)(*p - '0'), &v)) {
+          __builtin_add_overflow(t, (sp_int)(*p - '0'), &v)) {
         sp_raise_cls("RangeError", sp_sprintf("integer overflow parsing \"%s\"", s));
       }
       any = 1;
@@ -111,7 +111,7 @@ double sp_str_to_f_cruby(const char *s) {
    like MRI; `_` is allowed between digits the same way as base 10.
    Stops at the first invalid digit and returns what's parsed so
    far. Issue #883. */
-mrb_int sp_str_to_i_base(const char *s, mrb_int base) {SP_GC_ROOT_STR(s);
+sp_int sp_str_to_i_base(const char *s, sp_int base) {SP_GC_ROOT_STR(s);
   if (!s) return 0;
   /* base 0 = auto-detect from prefix (0x -> 16, 0b -> 2, 0/0o -> 8,
      otherwise 10). Per CRuby, only base 0 enables prefix-based
@@ -145,7 +145,7 @@ else if (*p == '0' && p[1] != 0) {
     /* base 10 accepts the explicit decimal prefix too (#3719) */
     else if ((base == 10) && (p[1] == 'd' || p[1] == 'D')) p += 2;
   }
-  mrb_int v = 0;
+  sp_int v = 0;
   int any = 0;
   while (*p) {
     int d = -1;
@@ -164,9 +164,9 @@ else if (*p == '0' && p[1] != 0) {
       }
       break;
     }
-    mrb_int t;
+    sp_int t;
     if (__builtin_mul_overflow(v, base, &t) ||
-        __builtin_add_overflow(t, (mrb_int)d, &v)) {
+        __builtin_add_overflow(t, (sp_int)d, &v)) {
       sp_raise_cls("RangeError", sp_sprintf("integer overflow parsing \"%s\"", s));
     }
     any = 1;
@@ -178,12 +178,12 @@ else if (*p == '0' && p[1] != 0) {
 
 /* CRuby's `Integer(s)` raises ArgumentError for unparseable input
    (empty string, leading/trailing junk, all-whitespace). The bare
-   `(mrb_int)strtoll(s, NULL, 10)` spinel previously emitted silently
+   `(sp_int)strtoll(s, NULL, 10)` spinel previously emitted silently
    returned 0 instead, which made `Integer(s) rescue 0` always take
    the main branch. This helper matches CRuby semantics: skips
    leading/trailing whitespace, requires at least one valid digit,
    rejects trailing junk. Accepts an optional leading `+` / `-`. */
-mrb_int sp_str_to_i_strict(const char *s) {SP_GC_ROOT_STR(s);
+sp_int sp_str_to_i_strict(const char *s) {SP_GC_ROOT_STR(s);
   if (!s) sp_raise_cls("ArgumentError", "invalid value for Integer(): nil");
   /* an embedded NUL makes the Ruby string longer than its C prefix: CRuby
      rejects it, a C-string scan would silently parse the prefix. */
@@ -200,7 +200,7 @@ mrb_int sp_str_to_i_strict(const char *s) {SP_GC_ROOT_STR(s);
    ArgumentError on invalid input or unsupported base. Issue #887. */
 /* The shared body. `lenient` is Kernel#Integer's `exception: false`: every
    rejection answers nil (SP_INT_NIL) instead of raising (#3718). */
-static mrb_int sp_str_to_i_base_impl(const char *s, mrb_int base, int lenient) {SP_GC_ROOT_STR(s);
+static sp_int sp_str_to_i_base_impl(const char *s, sp_int base, int lenient) {SP_GC_ROOT_STR(s);
 #define SP_INT_REJECT(cls, msg) do { if (lenient) return SP_INT_NIL; sp_raise_cls(cls, msg); } while (0)
   if (!s) SP_INT_REJECT("ArgumentError", "invalid value for Integer(): nil");
   /* an embedded NUL makes the Ruby string longer than its C prefix: CRuby
@@ -237,7 +237,7 @@ static mrb_int sp_str_to_i_base_impl(const char *s, mrb_int base, int lenient) {
     else if ((base == 10) && (p[1] == 'd' || p[1] == 'D')) p += 2;
   }
   if (*p == '\0') SP_INT_REJECT("ArgumentError", sp_sprintf("invalid value for Integer(): \"%s\"", s));
-  mrb_int v = 0;
+  sp_int v = 0;
   int any = 0;
   while (*p) {
     int d = -1;
@@ -256,9 +256,9 @@ static mrb_int sp_str_to_i_base_impl(const char *s, mrb_int base, int lenient) {
       break;
     }
     {
-      mrb_int t;
+      sp_int t;
       if (__builtin_mul_overflow(v, base, &t) ||
-          __builtin_add_overflow(t, (mrb_int)d, &v)) {
+          __builtin_add_overflow(t, (sp_int)d, &v)) {
         SP_INT_REJECT("RangeError", sp_sprintf("integer overflow parsing \"%s\"", s));
       }
     }
@@ -271,11 +271,11 @@ static mrb_int sp_str_to_i_base_impl(const char *s, mrb_int base, int lenient) {
   return neg ? -v : v;
 #undef SP_INT_REJECT
 }
-mrb_int sp_str_to_i_strict_base(const char *s, mrb_int base) {
+sp_int sp_str_to_i_strict_base(const char *s, sp_int base) {
   return sp_str_to_i_base_impl(s, base, 0);
 }
 /* Kernel#Integer(s[, base], exception: false) */
-mrb_int sp_str_to_i_lenient_base(const char *s, mrb_int base) {
+sp_int sp_str_to_i_lenient_base(const char *s, sp_int base) {
   return sp_str_to_i_base_impl(s, base, 1);
 }
 
@@ -283,7 +283,7 @@ mrb_int sp_str_to_i_lenient_base(const char *s, mrb_int base) {
    on its own would silently return 0.0 for "abc" or empty input;
    match MRI semantics by validating at-least-one-digit + no-trailing-
    junk. Whitespace flanking is fine. Issue #888. */
-static mrb_float sp_str_to_f_impl(const char *s, int lenient) {SP_GC_ROOT_STR(s);
+static sp_float sp_str_to_f_impl(const char *s, int lenient) {SP_GC_ROOT_STR(s);
   if (!s) { if (lenient) return sp_float_nil(); sp_raise_cls("ArgumentError", "invalid value for Float(): nil"); }
   /* embedded NUL: the Ruby string extends past its C prefix -- reject rather
      than silently parsing the prefix ("1\\0" is not a float in CRuby). */
@@ -378,7 +378,7 @@ static mrb_float sp_str_to_f_impl(const char *s, int lenient) {SP_GC_ROOT_STR(s)
         if (!sp_read_float(buf, &endptr, &v)) goto bad;
       }
       if (buf != sbuf) free(buf);
-      return (mrb_float)v;
+      return (sp_float)v;
     }
   bad:
     if (buf != sbuf) free(buf);
@@ -389,8 +389,8 @@ bad0:
   sp_raise_cls("ArgumentError", sp_sprintf("invalid value for Float(): \"%s\"", s));
   return 0.0;  /* unreachable */
 }
-mrb_float sp_str_to_f_strict(const char *s)  { return sp_str_to_f_impl(s, 0); }
-mrb_float sp_str_to_f_lenient(const char *s) { return sp_str_to_f_impl(s, 1); }
+sp_float sp_str_to_f_strict(const char *s)  { return sp_str_to_f_impl(s, 0); }
+sp_float sp_str_to_f_lenient(const char *s) { return sp_str_to_f_impl(s, 1); }
 
 /* Kernel#sprintf's float directives (%f/%e/%g/%a with width/flags) are emitted
    by faithfully delegating to libc snprintf, which is locale-sensitive for the
@@ -477,37 +477,37 @@ int sp_snprintf_ruby_float(char *buf, size_t size, const char *fmt, double v) {
  * so they're compiled once into libspinel_rt.a rather than re-parsed
  * in every generated translation unit. Leaf functions: arithmetic +
  * libc + sp_raise_cls only. */
-mrb_int sp_gcd(mrb_int a,mrb_int b){if(a<0)a=-a;if(b<0)b=-b;while(b){mrb_int t=b;b=a%b;a=t;}return a;}
-mrb_int sp_lcm(mrb_int a,mrb_int b){if(a==0||b==0)return 0;mrb_int g=sp_gcd(a,b);if(a<0)a=-a;if(b<0)b=-b;return (a/g)*b;}
-mrb_int sp_powmod(mrb_int base,mrb_int exp,mrb_int mod){if(exp<0)sp_raise_cls("RangeError","Integer#pow() 1st argument cannot be negative when 2nd argument specified");if(mod==0)sp_raise_cls("ZeroDivisionError","divided by 0");mrb_int r=1;mrb_int m=mod<0?-mod:mod;if(m==1){r=0;}
+sp_int sp_gcd(sp_int a,sp_int b){if(a<0)a=-a;if(b<0)b=-b;while(b){sp_int t=b;b=a%b;a=t;}return a;}
+sp_int sp_lcm(sp_int a,sp_int b){if(a==0||b==0)return 0;sp_int g=sp_gcd(a,b);if(a<0)a=-a;if(b<0)b=-b;return (a/g)*b;}
+sp_int sp_powmod(sp_int base,sp_int exp,sp_int mod){if(exp<0)sp_raise_cls("RangeError","Integer#pow() 1st argument cannot be negative when 2nd argument specified");if(mod==0)sp_raise_cls("ZeroDivisionError","divided by 0");sp_int r=1;sp_int m=mod<0?-mod:mod;if(m==1){r=0;}
 else{base=base%m;if(base<0)base+=m;while(exp>0){if(exp%2==1)r=r*base%m;exp=exp/2;base=base*base%m;}}if(mod<0&&r>0)r-=m;return r;}
-mrb_int sp_ceildiv(mrb_int a,mrb_int b){if(b==0)sp_raise_cls("ZeroDivisionError","divided by 0");if(b==-1)return -a;mrb_int q=a/b;if(a%b!=0&&((a^b)>=0))q++;return q;}
-mrb_int sp_int_clamp(mrb_int v,mrb_int lo,mrb_int hi){return v<lo?lo:v>hi?hi:v;}
-mrb_float sp_float_clamp(mrb_float v,mrb_float lo,mrb_float hi){return v<lo?lo:v>hi?hi:v;}
+sp_int sp_ceildiv(sp_int a,sp_int b){if(b==0)sp_raise_cls("ZeroDivisionError","divided by 0");if(b==-1)return -a;sp_int q=a/b;if(a%b!=0&&((a^b)>=0))q++;return q;}
+sp_int sp_int_clamp(sp_int v,sp_int lo,sp_int hi){return v<lo?lo:v>hi?hi:v;}
+sp_float sp_float_clamp(sp_float v,sp_float lo,sp_float hi){return v<lo?lo:v>hi?hi:v;}
 /* Integer square root via Newton's method -- exact for the full
-   mrb_int range. CRuby raises Math::DomainError on negative input
+   sp_int range. CRuby raises Math::DomainError on negative input
    (flattened runtime name "Math::DomainError"). The seed is n/2, not
    (n+1)/2: at n == MRB_INT_MAX the latter overflows (signed UB), and
    n/2 is a valid Newton seed for all n >= 2. */
-mrb_int sp_int_sqrt(mrb_int n){if(n<0)sp_raise_cls("Math::DomainError","Numerical argument is out of domain - \"isqrt\"");if(n<2)return n;mrb_int x=n,y=n/2;while(y<x){x=y;y=(x+n/x)/2;}return x;}
+sp_int sp_int_sqrt(sp_int n){if(n<0)sp_raise_cls("Math::DomainError","Numerical argument is out of domain - \"isqrt\"");if(n<2)return n;sp_int x=n,y=n/2;while(y<x){x=y;y=(x+n/x)/2;}return x;}
 /* Integer#round/ceil/floor/truncate at 10^(-ndigits). Pure integer
-   arithmetic (no double precision loss above 2^53). 10^p fits mrb_int
+   arithmetic (no double precision loss above 2^53). 10^p fits sp_int
    only for p<=18; p>=19 collapses to 0. Round-up multiply is overflow-
    guarded and falls back to the truncated value. */
-mrb_int sp_ipow10(mrb_int p){mrb_int f=1;mrb_int i=0;while(i<p){f*=10;i++;}return f;}
-mrb_int sp_int_round(mrb_int v,mrb_int nd){if(nd>=0)return v;mrb_int p=-nd;if(p>=SP_INT_POW10_LIMIT)return 0;mrb_int f=sp_ipow10(p);mrb_int q=v/f,r=v%f,half=f/2;if(v>=0){if(r>=half&&q<INTPTR_MAX/f)return(q+1)*f;return q*f;}if(-r>=half&&q>INTPTR_MIN/f)return(q-1)*f;return q*f;}
-mrb_int sp_int_ceil(mrb_int v,mrb_int nd){if(nd>=0)return v;mrb_int p=-nd;if(p>=SP_INT_POW10_LIMIT)return 0;mrb_int f=sp_ipow10(p);mrb_int q=v/f,r=v%f;if(r!=0&&v>0&&q<INTPTR_MAX/f)return(q+1)*f;return q*f;}
-mrb_int sp_int_floor(mrb_int v,mrb_int nd){if(nd>=0)return v;mrb_int p=-nd;if(p>=SP_INT_POW10_LIMIT)return 0;mrb_int f=sp_ipow10(p);mrb_int q=v/f,r=v%f;if(r!=0&&v<0&&q>INTPTR_MIN/f)return(q-1)*f;return q*f;}
-mrb_int sp_int_truncate(mrb_int v,mrb_int nd){if(nd>=0)return v;mrb_int p=-nd;if(p>=SP_INT_POW10_LIMIT)return 0;mrb_int f=sp_ipow10(p);return(v/f)*f;}
+sp_int sp_ipow10(sp_int p){sp_int f=1;sp_int i=0;while(i<p){f*=10;i++;}return f;}
+sp_int sp_int_round(sp_int v,sp_int nd){if(nd>=0)return v;sp_int p=-nd;if(p>=SP_INT_POW10_LIMIT)return 0;sp_int f=sp_ipow10(p);sp_int q=v/f,r=v%f,half=f/2;if(v>=0){if(r>=half&&q<INTPTR_MAX/f)return(q+1)*f;return q*f;}if(-r>=half&&q>INTPTR_MIN/f)return(q-1)*f;return q*f;}
+sp_int sp_int_ceil(sp_int v,sp_int nd){if(nd>=0)return v;sp_int p=-nd;if(p>=SP_INT_POW10_LIMIT)return 0;sp_int f=sp_ipow10(p);sp_int q=v/f,r=v%f;if(r!=0&&v>0&&q<INTPTR_MAX/f)return(q+1)*f;return q*f;}
+sp_int sp_int_floor(sp_int v,sp_int nd){if(nd>=0)return v;sp_int p=-nd;if(p>=SP_INT_POW10_LIMIT)return 0;sp_int f=sp_ipow10(p);sp_int q=v/f,r=v%f;if(r!=0&&v<0&&q>INTPTR_MIN/f)return(q-1)*f;return q*f;}
+sp_int sp_int_truncate(sp_int v,sp_int nd){if(nd>=0)return v;sp_int p=-nd;if(p>=SP_INT_POW10_LIMIT)return 0;sp_int f=sp_ipow10(p);return(v/f)*f;}
 /* String#oct: prefix auto-detection (0x=hex, 0b=bin, 0o/0=oct, else
    base-8). Matches CRuby. */
 /* String#oct: lenient Integer(str, 8)-style parse. Skips leading whitespace,
    accepts an optional sign, an optional base prefix (0x/0b/0o/0d, or a leading
    0 = octal), and single `_` separators between digits. Stops at the first
    character not valid in the selected base (a leading/doubled underscore ends
-   parsing too); an unparseable string is 0. A value past mrb_int raises
+   parsing too); an unparseable string is 0. A value past sp_int raises
    RangeError, like the sibling Integer() parsers. */
-mrb_int sp_str_oct(const char*s){SP_GC_ROOT_STR(s);
+sp_int sp_str_oct(const char*s){SP_GC_ROOT_STR(s);
   if(!s)return 0;
   const char*p=s;
   while(isspace((unsigned char)*p))p++;
@@ -523,7 +523,7 @@ mrb_int sp_str_oct(const char*s){SP_GC_ROOT_STR(s);
     else if(c=='d'||c=='D'){base=10;p+=2;}
     /* a bare leading 0 is octal; keep p on the 0 (a valid octal digit) */
   }
-  mrb_int val=0; int any=0, prev_us=0;
+  sp_int val=0; int any=0, prev_us=0;
   for(;;){
     char c=*p; int d;
     if(c>='0'&&c<='9')d=c-'0';
@@ -532,9 +532,9 @@ mrb_int sp_str_oct(const char*s){SP_GC_ROOT_STR(s);
     else if(c=='_'){ if(!any||prev_us)break; prev_us=1; p++; continue; }
     else break;
     if(d>=base)break;
-    mrb_int t;
-    if(__builtin_mul_overflow(val,(mrb_int)base,&t)||
-       __builtin_add_overflow(t,(mrb_int)d,&val))
+    sp_int t;
+    if(__builtin_mul_overflow(val,(sp_int)base,&t)||
+       __builtin_add_overflow(t,(sp_int)d,&val))
       sp_raise_cls("RangeError",sp_sprintf("integer overflow parsing \"%s\"",s));
     any=1; prev_us=0; p++;
   }

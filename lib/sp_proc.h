@@ -18,14 +18,14 @@
  *
  * 0 optcarrot uses for every function below.
  */
-#include "sp_types.h"   /* mrb_int, sp_sym, mrb_bool */
+#include "sp_types.h"   /* sp_int, sp_sym, sp_bool */
 #include "sp_gc.h"      /* sp_RbVal, sp_gc_alloc, sp_gc_mark */
 #include "sp_alloc.h"   /* sp_PolyArray, sp_box_sym, sp_box_poly_array, sp_raise_cls */
 
-typedef struct sp_Proc { void *fn; void *cap; void (*cap_scan)(void *); mrb_int arity; mrb_bool lambda_p; mrb_int param_count; const sp_sym *param_kinds; const sp_sym *param_names; mrb_bool frozen; /* Object#freeze observed (sp_gc_alloc zero-fills) */ void *origin; /* dup/clone lineage root for Proc#== (NULL: self is the root) */ } sp_Proc;
-typedef struct { sp_Proc *target; mrb_int nargs; sp_RbVal args[16]; } sp_Curry;
+typedef struct sp_Proc { void *fn; void *cap; void (*cap_scan)(void *); sp_int arity; sp_bool lambda_p; sp_int param_count; const sp_sym *param_kinds; const sp_sym *param_names; sp_bool frozen; /* Object#freeze observed (sp_gc_alloc zero-fills) */ void *origin; /* dup/clone lineage root for Proc#== (NULL: self is the root) */ } sp_Proc;
+typedef struct { sp_Proc *target; sp_int nargs; sp_RbVal args[16]; } sp_Curry;
 
-mrb_int sp_proc_call(sp_Proc *p, mrb_int argc, mrb_int *args);   /* defined in the generated TU */
+sp_int sp_proc_call(sp_Proc *p, sp_int argc, sp_int *args);   /* defined in the generated TU */
 extern SP_TLS sp_RbVal _sp_proc_poly_args[16];                   /* defined in the generated TU */
 extern SP_TLS sp_RbVal _sp_proc_poly_ret;                        /* defined in the generated TU */
 
@@ -34,13 +34,13 @@ extern SP_TLS sp_RbVal _sp_proc_poly_ret;                        /* defined in t
 static inline sp_Proc *sp_proc_root(sp_Proc *p) { return (p && p->origin) ? (sp_Proc *)p->origin : p; }
 
 void sp_Proc_scan(void *p);
-sp_Proc *sp_proc_new_meta(void *fn, void *cap, void (*cap_scan)(void *), mrb_int arity, mrb_bool lambda_p, mrb_int param_count, const sp_sym *param_kinds, const sp_sym *param_names);
+sp_Proc *sp_proc_new_meta(void *fn, void *cap, void (*cap_scan)(void *), sp_int arity, sp_bool lambda_p, sp_int param_count, const sp_sym *param_kinds, const sp_sym *param_names);
 sp_Proc *sp_proc_dup(sp_Proc *p, int keep_frozen);
 sp_Proc *sp_proc_new(void *fn, void *cap, void (*cap_scan)(void *));
-mrb_int sp_proc_arity(sp_Proc *p);
-mrb_bool sp_proc_lambda_p(sp_Proc *p);
+sp_int sp_proc_arity(sp_Proc *p);
+sp_bool sp_proc_lambda_p(sp_Proc *p);
 const char *sp_proc_inspect(sp_Proc *p);
-void sp_proc_lambda_arity_check(mrb_int argc, mrb_int req, mrb_int opt, mrb_bool has_rest, mrb_bool has_kw);
+void sp_proc_lambda_arity_check(sp_int argc, sp_int req, sp_int opt, sp_bool has_rest, sp_bool has_kw);
 sp_PolyArray *sp_proc_parameters_ids(sp_Proc *p, int mode, sp_sym req_id, sp_sym opt_id);
 sp_PolyArray *sp_proc_parameters(sp_Proc *p);
 void sp_curry_scan(void *p);
@@ -61,18 +61,18 @@ void sp_curry_publish_args(sp_Curry *c);
 #define SP_BM_SELF_NONE 0   /* not a reference: a number, a class value, unbound */
 #define SP_BM_SELF_OBJ  1
 #define SP_BM_SELF_STR  2
-typedef struct sp_BoundMethod { void *self; mrb_int fn; const char *name; mrb_int arity;
+typedef struct sp_BoundMethod { void *self; sp_int fn; const char *name; sp_int arity;
   const char *desc;   /* compile-time #inspect rendering ("#<Method: Owner#name(params)>"), or NULL */
-  mrb_int self_kind;  /* SP_BM_SELF_* */
-  mrb_int unbound;    /* built by #unbind on a boxed Method: reports UnboundMethod */
+  sp_int self_kind;  /* SP_BM_SELF_* */
+  sp_int unbound;    /* built by #unbind on a boxed Method: reports UnboundMethod */
 } sp_BoundMethod;
 void sp_bm_cap_scan(void *p);
-mrb_int sp_method_proc_tramp(void *cap, mrb_int argc, mrb_int *args);
+sp_int sp_method_proc_tramp(void *cap, sp_int argc, sp_int *args);
 sp_Proc *sp_method_to_proc(sp_BoundMethod *m);
 void sp_BoundMethod_scan(void *p);
 
-static inline sp_BoundMethod *sp_bound_method_new(void *self, mrb_int self_kind, mrb_int fn, const char *name, mrb_int arity) { sp_BoundMethod *m = (sp_BoundMethod *)sp_gc_alloc(sizeof(sp_BoundMethod), NULL, sp_BoundMethod_scan); m->self = self; m->self_kind = self_kind; m->fn = fn; m->name = name; m->arity = arity; m->desc = NULL; m->unbound = 0; return m; }
-static inline sp_BoundMethod *sp_bound_method_new_d(void *self, mrb_int self_kind, mrb_int fn, const char *name, mrb_int arity, const char *desc) { sp_BoundMethod *m = sp_bound_method_new(self, self_kind, fn, name, arity); m->desc = desc; return m; }
+static inline sp_BoundMethod *sp_bound_method_new(void *self, sp_int self_kind, sp_int fn, const char *name, sp_int arity) { sp_BoundMethod *m = (sp_BoundMethod *)sp_gc_alloc(sizeof(sp_BoundMethod), NULL, sp_BoundMethod_scan); m->self = self; m->self_kind = self_kind; m->fn = fn; m->name = name; m->arity = arity; m->desc = NULL; m->unbound = 0; return m; }
+static inline sp_BoundMethod *sp_bound_method_new_d(void *self, sp_int self_kind, sp_int fn, const char *name, sp_int arity, const char *desc) { sp_BoundMethod *m = sp_bound_method_new(self, self_kind, fn, name, arity); m->desc = desc; return m; }
 /* Method#unbind on a BOXED method: the same target with the receiver dropped.
    A boxed value carries no syntax for the compile-time unbound rendering, so
    the copy records it (the #class arm reads `unbound`) (#3692). */

@@ -36,7 +36,7 @@ typedef struct {
   int proc_ret;     /* when type==TY_PROC: the proc's body return type (TyKind),
                        TY_UNKNOWN if not statically known */
   int is_cell;      /* captured by an escaping proc: lives in a heap cell
-                       (mrb_int *_cell_<name>) so the closure and the enclosing
+                       (sp_int *_cell_<name>) so the closure and the enclosing
                        scope share mutable storage */
   int cell_shadow;  /* the cell belongs to a param of an INLINED iteration
                        block, which the loop emitters bind by writing the plain
@@ -77,7 +77,7 @@ typedef struct {
                         and the or-write's truthiness check must fire on first
                         use. The slot is declared with its type's nil sentinel
                         rather than the zero value, so a kind whose zero is a
-                        real value (mrb_int 0, 0.0) can still tell the two
+                        real value (sp_int 0, 0.0) can still tell the two
                         apart (mirrors ConstantVar's const_def_write). */
   int str_shared;   /* (TY_STRBUF) a shared-mutable string: it is aliased
                        (`s2 = s1`) AND mutated in place, so the whole alias set

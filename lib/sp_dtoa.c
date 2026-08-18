@@ -1137,7 +1137,7 @@ int sp_float_shortest(double f, char *digs, int *nd) {
 #endif
 
 int
-sp_format_float(mrb_float f, char *buf, size_t buf_size, char fmt, int prec, char sign)
+sp_format_float(sp_float f, char *buf, size_t buf_size, char fmt, int prec, char sign)
 {
   char *s = buf;
   int buf_remaining = (int)buf_size - 1;
@@ -1430,7 +1430,7 @@ done:
 
 /* ======== sp_read_float ======== */
 
-mrb_bool
+sp_bool
 sp_read_float(const char *str, char **endp, double *fp)
 {
   const char *p = str;

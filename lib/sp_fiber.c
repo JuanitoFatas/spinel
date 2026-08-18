@@ -117,8 +117,8 @@ static void sp_raise(const char *msg) {SP_GC_ROOT_STR(msg); sp_raise_cls("Runtim
    map, GC-allocated so the collector marks its values via the scan hook;
    self-contained here rather than borrowing the runtime's sym_poly_hash so
    the runtime sym_poly_hash stays collector-private to the generated TU. */
-typedef struct { sp_sym *keys; sp_RbVal *vals; mrb_int len, cap; } sp_FiberStore;
-static void sp_FiberStore_scan(void *p) { sp_FiberStore *s = (sp_FiberStore *)p; for (mrb_int i = 0; i < s->len; i++) sp_mark_rbval(s->vals[i]); }
+typedef struct { sp_sym *keys; sp_RbVal *vals; sp_int len, cap; } sp_FiberStore;
+static void sp_FiberStore_scan(void *p) { sp_FiberStore *s = (sp_FiberStore *)p; for (sp_int i = 0; i < s->len; i++) sp_mark_rbval(s->vals[i]); }
 static void sp_FiberStore_fin(void *p) { sp_FiberStore *s = (sp_FiberStore *)p; free(s->keys); free(s->vals); }
 static sp_FiberStore *sp_FiberStore_new(void) {
   sp_FiberStore *s = (sp_FiberStore *)sp_gc_alloc(sizeof(sp_FiberStore), sp_FiberStore_fin, sp_FiberStore_scan);
@@ -135,16 +135,16 @@ static sp_FiberStore *sp_FiberStore_new(void) {
   return s;
 }
 static sp_RbVal sp_FiberStore_get(sp_FiberStore *s, sp_sym k) {
-  for (mrb_int i = 0; i < s->len; i++) if (s->keys[i] == k) return s->vals[i];
+  for (sp_int i = 0; i < s->len; i++) if (s->keys[i] == k) return s->vals[i];
   return sp_box_nil();
 }
 static void sp_FiberStore_set(sp_FiberStore *s, sp_sym k, sp_RbVal v) {SP_GC_ROOT_RBVAL(v);SP_GC_ROOT(s); sp_gc_wb((void*)s);
-  for (mrb_int i = 0; i < s->len; i++) if (s->keys[i] == k) { s->vals[i] = v; return; }
+  for (sp_int i = 0; i < s->len; i++) if (s->keys[i] == k) { s->vals[i] = v; return; }
   if (s->len == s->cap) {
     /* Grow each array into a temp and commit only on success, so a failed
        realloc leaves the store intact (the old buffer survives) instead of
        NULL-deref'ing on the write below or double-freeing a moved buffer. */
-    mrb_int nc = s->cap * 2;
+    sp_int nc = s->cap * 2;
     sp_sym *nk = (sp_sym *)realloc(s->keys, sizeof(sp_sym) * nc);
     if (!nk) sp_raise_cls("NoMemoryError", "failed to grow fiber storage");
     s->keys = nk;
@@ -156,7 +156,7 @@ static void sp_FiberStore_set(sp_FiberStore *s, sp_sym k, sp_RbVal v) {SP_GC_ROO
 }
 static sp_FiberStore *sp_FiberStore_dup(sp_FiberStore *o) {SP_GC_ROOT(o);
   sp_FiberStore *s = sp_FiberStore_new();
-  for (mrb_int i = 0; i < o->len; i++) sp_FiberStore_set(s, o->keys[i], o->vals[i]);
+  for (sp_int i = 0; i < o->len; i++) sp_FiberStore_set(s, o->keys[i], o->vals[i]);
   return s;
 }
 
@@ -338,7 +338,7 @@ else{f->state=1;sp_ctx_swap(&f->caller_ctx,&f->ctx);}sp_exc_ctx_save(f->exc_ctx)
    to (its caller_ctx is unset) -- yielding from either would swap to a garbage
    context, so raise instead (matching CRuby's FiberError). */
 sp_RbVal sp_Fiber_yield(sp_RbVal val){SP_GC_ROOT_RBVAL(val);sp_Fiber*f=sp_fiber_current;if(f==&sp_fiber_root||f->transferred){sp_raise_cls("FiberError","attempt to yield on a not resumed fiber");}f->yielded_value=val;f->state=2;SP_TSAN_SWITCH(f->caller_fiber);sp_ctx_swap(&f->ctx,&f->caller_ctx);if(SP_INJECT_PEEK(f))sp_fiber_consume_inject(f);return f->resumed_value;}
-mrb_bool sp_Fiber_alive(sp_Fiber*f){return f->state!=3;}
+sp_bool sp_Fiber_alive(sp_Fiber*f){return f->state!=3;}
 /* Fiber#raise: queue an exception, then resume the fiber so its suspension point
    (or body entry) raises it. An unhandled raise propagates to this caller via
    sp_Fiber_resume's re-raise, exactly like an exception raised by the body. */

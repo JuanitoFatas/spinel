@@ -244,7 +244,7 @@ int str_in(const char *s, const char *const *set) {
    whether to keep its result. In a `rescue` that meant the array was built
    and thrown away (`x = ([] rescue 0)` assigned nil), and in a begin/rescue
    the value unified to the handler's Integer and the array pointer went into
-   an mrb_int slot (#3495, #3496). */
+   an sp_int slot (#3495, #3496). */
 int node_is_empty_container(const NodeTable *nt, int node) {
   if (node < 0) return 0;
   NodeKind k = nt_kind(nt, node);

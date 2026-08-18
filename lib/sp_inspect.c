@@ -16,11 +16,11 @@ const char *sp_inspect_container(sp_RbVal v) {
      use-after-free under GC pressure. */
   SP_GC_ROOT_RBVAL(v);
   int kind = sp_json_kind_fn ? sp_json_kind_fn(v) : 0;
-  mrb_int n = sp_json_len_fn ? sp_json_len_fn(v) : 0;
+  sp_int n = sp_json_len_fn ? sp_json_len_fn(v) : 0;
   if (kind == 1) {  /* array: [e0, e1, ...] */
     sp_String *s = sp_String_new("[");
     SP_GC_ROOT(s);
-    for (mrb_int i = 0; i < n; i++) {
+    for (sp_int i = 0; i < n; i++) {
       if (i) sp_String_append(s, ", ");
       sp_String_append(s, sp_poly_inspect_fn(sp_json_aref_fn(v, i)));
     }
@@ -30,7 +30,7 @@ const char *sp_inspect_container(sp_RbVal v) {
   /* hash: {k => v, ...}, with the `sym: v` shorthand for a Symbol key. */
   sp_String *s = sp_String_new("{");
   SP_GC_ROOT(s);
-  for (mrb_int i = 0; i < n; i++) {
+  for (sp_int i = 0; i < n; i++) {
     if (i) sp_String_append(s, ", ");
     sp_RbVal k, val;
     sp_json_hpair_fn(v, i, &k, &val);

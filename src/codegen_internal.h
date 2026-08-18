@@ -289,7 +289,7 @@ int rescues_crossed(int pop_base);
 void emit_cur_exc_restore(Buf *b, int pop_base);
 
 /* First-class Proc support: each `proc {}` / `lambda {}` / `->{}` literal
-   lowers to a standalone `static mrb_int _proc_N(void *cap, mrb_int *args)`
+   lowers to a standalone `static sp_int _proc_N(void *cap, sp_int *args)`
    function (the ABI sp_proc_call expects). Definitions accumulate in g_procs
    and prototypes in g_proc_protos during the main emission pass, then are
    flushed ahead of the method/main bodies that reference them. */
@@ -471,7 +471,7 @@ void emit_block_locals_reset(Compiler *c, int blk, Buf *b, int indent);
 const char *resolve_class_alias(Compiler *c, const char *cname);
 /* Emit `sp_Proc *` reference to the synthetic __yblk__ param of a lowered
    self-recursive yield method.  If we are inside an inner proc literal that
-   captures __yblk__ via a cell, cast back from the mrb_int cell slot. */
+   captures __yblk__ via a cell, cast back from the sp_int cell slot. */
 void emit_yblk_ref(Buf *b);
 /* Emit the lead of a tail value: `return ` or `<result> = `. */
 void emit_tail_lead(Buf *b);

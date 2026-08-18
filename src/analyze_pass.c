@@ -7886,7 +7886,7 @@ int infer_return_types(Compiler *c) {
       /* Same shape, and the same reason. RBS `Integer` covers both machine
          ints and bignums, so a body that grew a bignum is a valid inhabitant
          of the declared type -- but the seed had already pinned the signature
-         to mrb_int, and returning an sp_Bigint* through it truncates the
+         to sp_int, and returning an sp_Bigint* through it truncates the
          pointer and answers garbage. Declaring the type correctly made the
          program worse than not declaring it at all (#3518). */
       else if (sc->ret == TY_INT) {
@@ -7904,7 +7904,7 @@ int infer_return_types(Compiler *c) {
     /* synthesized compiler_state methods carry a fixed return type (no AST). */
     if (sc->cs_synth) continue;
     /* A lowered self-recursive yield method returns its block's value through
-       a raw mrb_int carrier pinned when the lowering rewrites the scope
+       a raw sp_int carrier pinned when the lowering rewrites the scope
        (post-fixpoint); re-deriving from the body would break that ABI. */
     if (sc->is_lowered_yield) continue;
     /* An empty method body returns nil; if its value is used at all it must

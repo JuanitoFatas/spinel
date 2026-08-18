@@ -608,7 +608,7 @@ int infer_end_is_float_inf(Compiler *c, int right) {
 }
 
 /* A range endpoint that is an infinite Float: the `Float::INFINITY` constant
-   or its negation. Such a bound has no mrb_int value at all (#3670). */
+   or its negation. Such a bound has no sp_int value at all (#3670). */
 static int infer_endpoint_is_infinite(Compiler *c, int ep) {
   const NodeTable *nt = c->nt;
   if (ep < 0) return 0;
@@ -622,7 +622,7 @@ static int infer_endpoint_is_infinite(Compiler *c, int ep) {
 /* The right endpoint of a literal Range receiver when it was written as a
    finite Float over an Integer begin (1..5.5): that Range keeps the integer
    representation (CRuby iterates it), but its END readers answer the Float the
-   caller wrote, which the mrb_int fields cannot hold (#3896). */
+   caller wrote, which the sp_int fields cannot hold (#3896). */
 int range_lit_float_end(Compiler *c, int recv) {
   const NodeTable *nt = c->nt;
   int rnode = recv;
@@ -674,7 +674,7 @@ int range_enum_redispatch(Compiler *c, int id) {
   int block = nt_ref(nt, id, "block");
   int args = nt_ref(nt, id, "arguments"); int argc = 0;
   if (args >= 0) nt_arr(nt, args, "arguments", &argc);
-  /* Only an integer range materializes faithfully: sp_Range holds mrb_int
+  /* Only an integer range materializes faithfully: sp_Range holds sp_int
      bounds, so redispatch only when a literal range receiver has both bounds
      present and typed TY_INT. A float/string bound would truncate or fail to
      compile, and a beginless/endless range (`(1..)`, `(..5)`) has no int array
@@ -692,7 +692,7 @@ int range_enum_redispatch(Compiler *c, int id) {
     int lo = nt_ref(nt, rn, "left"), hi = nt_ref(nt, rn, "right");
     if (lo < 0 || hi < 0) return 0;
     /* A BOXED bound is fine: the range literal's own emission coerces it to the
-       mrb_int sp_Range holds, exactly as it does for `(1...m).sum`. Demanding a
+       sp_int sp_Range holds, exactly as it does for `(1...m).sum`. Demanding a
        statically int bound refused a destructured block parameter, whose leaf
        binds poly (#3363). A float / string bound still declines. */
     for (int e = 0; e < 2; e++) {
@@ -1614,7 +1614,7 @@ TyKind infer_call(Compiler *c, int id) {
     int mn = method_recv_node(c, recv);
     int mi = mn >= 0 ? method_obj_target_mi(c, mn) : -1;
     if (mi >= 0) return c->scopes[mi].ret == TY_UNKNOWN ? TY_INT : c->scopes[mi].ret;
-    /* Unresolved target: the bound-method ABI returns mrb_int -- except under
+    /* Unresolved target: the bound-method ABI returns sp_int -- except under
        promote, where every method is poly-signatured and bound methods are
        invoked through the poly ABI (sp_RbVal), so the call yields poly. */
     return g_promote_mode ? TY_POLY : TY_INT;
@@ -5307,7 +5307,7 @@ TyKind infer_uncached(Compiler *c, int id) {
        stays on the ordinary int TY_RANGE path, which serves it well (its
        #to_a, #sum and #cover? are all right there and its iteration is the
        integer one CRuby performs).
-       An INFINITE bound is the exception: mrb_int has no value for it, so the
+       An INFINITE bound is the exception: sp_int has no value for it, so the
        int range can only record "unbounded" and #begin / #end then answer nil
        where CRuby answers +/-Infinity. Such a range takes the float
        representation, which holds the infinity -- at the cost of reporting the
@@ -5981,7 +5981,7 @@ TyKind infer_uncached(Compiler *c, int id) {
     }
     /* An empty container body reads UNKNOWN for want of an element type, not
        because it diverges. Left as "no value" the begin took the handler's
-       type alone, and the array pointer went into an mrb_int slot (#3496).
+       type alone, and the array pointer went into an sp_int slot (#3496).
        It carries a value, so the two arms are a union: poly. */
     if (r == TY_UNKNOWN && body >= 0) {
       int bn2 = 0; const int *bs2 = nt_arr(nt, body, "body", &bn2);

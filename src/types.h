@@ -56,7 +56,7 @@ typedef enum {
   TY_SYMBOL,
   TY_BOOL,
   TY_RANGE,
-  TY_FLOAT_RANGE,  /* (1.0..3.0): endpoints are mrb_float (sp_FloatRange) */
+  TY_FLOAT_RANGE,  /* (1.0..3.0): endpoints are sp_float (sp_FloatRange) */
   TY_STR_RANGE,    /* ("a".."e"): endpoints are strings (sp_StrRange) */
   TY_TIME,
   TY_COMPLEX,      /* Cartesian Complex value (sp_Complex: re, im) */

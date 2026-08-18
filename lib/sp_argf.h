@@ -8,13 +8,13 @@
  * the final link the same way lib/sp_core.c reaches sp_sprintf. sp_argf_obj
  * (ARGF's single-instance read cursor) follows the same pattern.
  */
-#include "sp_types.h"   /* mrb_int */
+#include "sp_types.h"   /* sp_int */
 #include <stdio.h>      /* FILE */
 
-typedef struct{const char**data;mrb_int len;}sp_Argv;
+typedef struct{const char**data;sp_int len;}sp_Argv;
 extern sp_Argv sp_argv;               /* defined in the generated TU */
 
-typedef struct { mrb_int idx; FILE *cur; int started; const char *fname; } sp_Argf;
+typedef struct { sp_int idx; FILE *cur; int started; const char *fname; } sp_Argf;
 extern sp_Argf sp_argf_obj;            /* defined in the generated TU */
 
 /* the ARGV-as-poly-array materialization cache: allocated lazily by
@@ -28,6 +28,6 @@ const char *sp_argf_gets(void);
 const char *sp_argf_read(void);
 sp_StrArray *sp_argf_readlines(void);
 const char *sp_argf_filename(void);
-mrb_bool sp_argf_eof(void);
+sp_bool sp_argf_eof(void);
 
 #endif

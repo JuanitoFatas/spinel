@@ -79,9 +79,9 @@ const char *sp_json_val(sp_RbVal v) {
     case SP_TAG_OBJ: {
       int kind = sp_json_kind_fn ? sp_json_kind_fn(v) : 0;
       if (kind == 1) {  /* array */
-        mrb_int n = sp_json_len_fn(v);
+        sp_int n = sp_json_len_fn(v);
         jbuf b; memset(&b, 0, sizeof b); jb_c(&b, '[');
-        for (mrb_int i = 0; i < n; i++) {
+        for (sp_int i = 0; i < n; i++) {
           if (i) jb_c(&b, ',');
           const char *e = sp_json_val(sp_json_aref_fn(v, i));
           jb_add(&b, e, strlen(e));
@@ -90,9 +90,9 @@ const char *sp_json_val(sp_RbVal v) {
         return jb_finish(&b);
       }
       if (kind == 2) {  /* hash */
-        mrb_int n = sp_json_len_fn(v);
+        sp_int n = sp_json_len_fn(v);
         jbuf b; memset(&b, 0, sizeof b); jb_c(&b, '{');
-        for (mrb_int i = 0; i < n; i++) {
+        for (sp_int i = 0; i < n; i++) {
           if (i) jb_c(&b, ',');
           sp_RbVal k, val;
           sp_json_hpair_fn(v, i, &k, &val);
@@ -131,10 +131,10 @@ static void sp_json_pretty_val(jbuf *b, sp_RbVal v, int depth) {
   if (v.tag == SP_TAG_OBJ) {
     int kind = sp_json_kind_fn ? sp_json_kind_fn(v) : 0;
     if (kind == 1) {  /* array */
-      mrb_int n = sp_json_len_fn(v);
+      sp_int n = sp_json_len_fn(v);
       if (n == 0) { jb_add(b, "[]", 2); return; }
       jb_c(b, '[');
-      for (mrb_int i = 0; i < n; i++) {
+      for (sp_int i = 0; i < n; i++) {
         if (i) jb_c(b, ',');
         jb_c(b, '\n');
         sp_json_indent(b, depth + 1);
@@ -146,10 +146,10 @@ static void sp_json_pretty_val(jbuf *b, sp_RbVal v, int depth) {
       return;
     }
     if (kind == 2) {  /* hash */
-      mrb_int n = sp_json_len_fn(v);
+      sp_int n = sp_json_len_fn(v);
       if (n == 0) { jb_add(b, "{}", 2); return; }
       jb_c(b, '{');
-      for (mrb_int i = 0; i < n; i++) {
+      for (sp_int i = 0; i < n; i++) {
         if (i) jb_c(b, ',');
         jb_c(b, '\n');
         sp_json_indent(b, depth + 1);
@@ -294,7 +294,7 @@ static sp_RbVal jp_number(jrd *j) {
   if (n == 0 || n >= sizeof tmp) jp_err("invalid number");
   memcpy(tmp, start, n); tmp[n] = 0;
   if (is_float) return sp_box_float(strtod(tmp, NULL));
-  return sp_box_int((mrb_int)strtoll(tmp, NULL, 10));
+  return sp_box_int((sp_int)strtoll(tmp, NULL, 10));
 }
 static sp_RbVal jp_array(jrd *j, int depth) {
   j->p++;  /* '[' */

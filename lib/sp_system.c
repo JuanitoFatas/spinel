@@ -2,7 +2,7 @@
  * See sp_system.h.
  *
  * Self-contained (libc + OS process API only); does not include
- * spinel_rt.h, so it carries its own mrb_bool/TRUE/FALSE locally. */
+ * spinel_rt.h, so it carries its own sp_bool/TRUE/FALSE locally. */
 #include "sp_system.h"
 #include <stdlib.h>
 #include <string.h>
@@ -12,7 +12,7 @@
 #include <unistd.h>
 #include <sys/wait.h>
 
-typedef int mrb_bool;
+typedef int sp_bool;
 #ifndef TRUE
 #define TRUE 1
 #endif

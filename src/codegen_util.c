@@ -548,7 +548,7 @@ int g_gen_obj_valeq = 0;
 int g_re_init_needed = 0;
 void emit_local_ref(Compiler *c, int scope_node, const char *name, Buf *b) {
   if (g_cap_struct && g_cap_names && nameset_has(g_cap_names, name)) {
-    /* A TY_PROC capture is stored as (mrb_int)(uintptr_t)sp_Proc* in the cell.
+    /* A TY_PROC capture is stored as (sp_int)(uintptr_t)sp_Proc* in the cell.
        Cast it back to sp_Proc* so call sites work. A heap-object cell is a real
        typed pointer, so its deref is already the right lvalue (no cast). */
     LocalVar *clv = scope_node >= 0 ? scope_local(comp_scope_of(c, scope_node), name) : NULL;
@@ -668,7 +668,7 @@ void emit_block_locals_reset(Compiler *c, int blk, Buf *b, int indent) {
           const char *rn2 = rename_local(tmpn);
           emit_indent(b, indent);
           if (lv->type == TY_FLOAT) {
-            buf_printf(b, "_cell_%s = (mrb_float *)sp_gc_alloc(sizeof(mrb_float), NULL, NULL); *_cell_%s = 0.0;\n", rn2, rn2);
+            buf_printf(b, "_cell_%s = (sp_float *)sp_gc_alloc(sizeof(sp_float), NULL, NULL); *_cell_%s = 0.0;\n", rn2, rn2);
           }
           else if (lv->type == TY_POLY) {
             buf_printf(b, "_cell_%s = (sp_RbVal *)sp_gc_alloc(sizeof(sp_RbVal), NULL, sp_cell_scan_rbval); *_cell_%s = sp_box_nil();\n", rn2, rn2);
@@ -682,7 +682,7 @@ void emit_block_locals_reset(Compiler *c, int blk, Buf *b, int indent) {
             buf_printf(b, "), NULL, %s); *_cell_%s = NULL;\n", cell_scan, rn2);
           }
           else {
-            buf_printf(b, "_cell_%s = (mrb_int *)sp_gc_alloc(sizeof(mrb_int), NULL, NULL); *_cell_%s = 0;\n", rn2, rn2);
+            buf_printf(b, "_cell_%s = (sp_int *)sp_gc_alloc(sizeof(sp_int), NULL, NULL); *_cell_%s = 0;\n", rn2, rn2);
           }
         }
         else if (lv && lv->type != TY_UNKNOWN && !lv->is_cell) {
@@ -942,10 +942,10 @@ __attribute__((noreturn)) void unsupported(Compiler *c, int id, const char *what
 const char *c_type_name(TyKind t) {
   if (ty_is_obj_array(t)) return "sp_PtrArray *";
   switch (t) {
-    case TY_INT:         return "mrb_int";
+    case TY_INT:         return "sp_int";
     case TY_BIGINT:      return "sp_Bigint *";
-    case TY_FLOAT:       return "mrb_float";
-    case TY_BOOL:        return "mrb_bool";
+    case TY_FLOAT:       return "sp_float";
+    case TY_BOOL:        return "sp_bool";
     case TY_STRING:      return "const char *";
     case TY_SYMBOL:      return "sp_sym";
     case TY_RANGE:       return "sp_Range";
@@ -1027,7 +1027,7 @@ const char *native_c_type(const char *spec) {
   if (sp_streq(spec, "cstring")) return "const char *";   /* borrowed C string; call site dups */
   if (sp_streq(spec, "cbinstr")) return "const char *";  /* borrowed C bytes; call site dups sp_ffi_bin_len of them */
   if (sp_streq(spec, "regexp")) return "mrb_regexp_pattern *";
-  if (sp_streq(spec, "int"))    return "mrb_int";
+  if (sp_streq(spec, "int"))    return "sp_int";
   if (sp_streq(spec, "float"))  return "double";
   if (sp_streq(spec, "bool"))   return "int";
   if (sp_streq(spec, "nil") || sp_streq(spec, "void")) return "void";
@@ -1070,7 +1070,7 @@ const char *local_init_value(Compiler *c, LocalVar *lv) {
 int local_nil_test(Compiler *c, LocalVar *lv, const char *ref, Buf *out) {
   if (!lv) return 0;
   TyKind t = lv->type;
-  /* mrb_int 0 and 0.0 are real values, so the slot only distinguishes nil when
+  /* sp_int 0 and 0.0 are real values, so the slot only distinguishes nil when
      it was declared with the sentinel -- which declare_local does exactly when
      the local has no definite assignment anywhere. */
   int nil_init = lv->or_write_only && !lv->is_param && !lv->is_block_param;
@@ -1716,7 +1716,7 @@ void scope_proc_form_begin(Compiler *c, int s) {
   snprintf(g_pf_ref, sizeof g_pf_ref, "lv_%s", sc->blk_param);
   g_yield_proc_ref = g_pf_ref;
   /* The proc form returns POLY, and it has to: the same yielding method
-     inlined at two call sites produces two different C types (an mrb_int at
+     inlined at two call sites produces two different C types (an sp_int at
      one, a const char * at the other), because each site is monomorphised
      with its own block. One shared function cannot carry a per-call-site
      return type, so it carries the boxed one and the dispatch unboxes into

@@ -384,7 +384,7 @@ const char *sp_IntArray_pack(sp_IntArray *arr, const char *fmt) {SP_GC_ROOT(arr)
   char *buf = (char *)malloc(cap);
   if (!buf) { perror("malloc"); exit(1); }
   size_t len = 0;
-  mrb_int idx = 0;
+  sp_int idx = 0;
   const char *p = fmt;
   while (*p) {
     char spec = *p++;
@@ -506,7 +506,7 @@ const char *sp_FloatArray_pack(sp_FloatArray *arr, const char *fmt) {
   char *buf = (char *)malloc(cap);
   if (!buf) { perror("malloc"); exit(1); }
   size_t len = 0;
-  mrb_int idx = 0;
+  sp_int idx = 0;
   const char *p = fmt;
   while (*p) {
     char spec = *p++;
@@ -606,7 +606,7 @@ const char *sp_PolyArray_pack(sp_PolyArray *arr, const char *fmt) {SP_GC_ROOT(ar
   char *buf = (char *)malloc(cap);
   if (!buf) { perror("malloc"); exit(1); }
   size_t len = 0;
-  mrb_int idx = 0;
+  sp_int idx = 0;
   const char *p = fmt;
   while (*p) {
     char spec = *p++;
@@ -754,7 +754,7 @@ const char *sp_StrArray_pack(sp_StrArray *arr, const char *fmt) {
   char *buf = (char *)malloc(cap);
   if (!buf) { perror("malloc"); exit(1); }
   size_t len = 0;
-  mrb_int idx = 0;
+  sp_int idx = 0;
   const char *p = fmt;
   while (*p) {
     char spec = *p++;
@@ -868,12 +868,12 @@ static char *uk_qp_decode(const char *src, size_t n) {
   return out;
 }
 
-sp_PolyArray *sp_str_unpack_off(const char *str, const char *fmt, mrb_int byteoff);
+sp_PolyArray *sp_str_unpack_off(const char *str, const char *fmt, sp_int byteoff);
 sp_PolyArray *sp_str_unpack(const char *str, const char *fmt) {SP_GC_ROOT_STR(str);SP_GC_ROOT_STR(fmt); return sp_str_unpack_off(str, fmt, 0); }
 
 /* String#unpack(fmt, offset: n): decode starting at byte offset n. A negative
    offset or one past the end raises ArgumentError, matching MRI. */
-sp_PolyArray *sp_str_unpack_off(const char *str, const char *fmt, mrb_int byteoff) {
+sp_PolyArray *sp_str_unpack_off(const char *str, const char *fmt, sp_int byteoff) {
   if (!str) sp_nil_recv("unpack");
   /* Root the source string across every allocation below: `str` is very often a
      fresh, otherwise-unrooted substring (`data[4, 4].unpack1('V')` in doom's
@@ -1051,7 +1051,7 @@ else if (spec == 'Z') {
           if ((cb & 0xC0) != 0x80) sp_raise_cls("ArgumentError", "malformed UTF-8 character");
           cp = (cp << 6) | (cb & 0x3F);
         }
-        sp_PolyArray_push(out, sp_box_int((mrb_int)cp));
+        sp_PolyArray_push(out, sp_box_int((sp_int)cp));
         off += len; got++;
       }
       continue;
@@ -1066,7 +1066,7 @@ else if (spec == 'Z') {
           v = (v << 7) | (c & 0x7F);
           if (!(c & 0x80)) break;
         }
-        sp_PolyArray_push(out, sp_box_int((mrb_int)v));
+        sp_PolyArray_push(out, sp_box_int((sp_int)v));
         got++;
       }
       continue;
@@ -1083,7 +1083,7 @@ else if (spec == 'Z') {
       }
       const unsigned char *u = (const unsigned char *)(str + off);
       if (pk_is_flt_spec(spec)) {
-        sp_PolyArray_push(out, sp_box_float((mrb_float)uk_get_flt(spec, u)));
+        sp_PolyArray_push(out, sp_box_float((sp_float)uk_get_flt(spec, u)));
         off += fsize;
         continue;
       }
@@ -1104,7 +1104,7 @@ else if (spec == 'Z') {
         case 'x': break;
       }
       off += fsize;
-      if (spec != 'x') sp_PolyArray_push(out, sp_box_int((mrb_int)v));
+      if (spec != 'x') sp_PolyArray_push(out, sp_box_int((sp_int)v));
     }
   }
   return out;

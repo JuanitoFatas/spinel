@@ -22,14 +22,14 @@ sp_Bigint *sp_bigint_from_le_bytes(int negative, const unsigned char *bytes, siz
 /* Inline sp_RbVal constructors (state-free; avoid pulling spinel_rt.h). Heap
    value types (array/hash/complex/rational) go through the vtable instead. */
 static sp_RbVal mk_nil(void)        { sp_RbVal r; r.tag = SP_TAG_NIL;  r.cls_id = 0; r.v.i = 0; return r; }
-static sp_RbVal mk_bool(mrb_bool b) { sp_RbVal r; r.tag = SP_TAG_BOOL; r.cls_id = 0; r.v.i = (b != 0); return r; }  /* full union word: bool equality reads v.i */
-static sp_RbVal mk_int(mrb_int n)   { sp_RbVal r; r.tag = SP_TAG_INT;  r.cls_id = 0; r.v.i = n; return r; }
-static sp_RbVal mk_float(mrb_float f){ sp_RbVal r; r.tag = SP_TAG_FLT;  r.cls_id = 0; r.v.f = f; return r; }
+static sp_RbVal mk_bool(sp_bool b) { sp_RbVal r; r.tag = SP_TAG_BOOL; r.cls_id = 0; r.v.i = (b != 0); return r; }  /* full union word: bool equality reads v.i */
+static sp_RbVal mk_int(sp_int n)   { sp_RbVal r; r.tag = SP_TAG_INT;  r.cls_id = 0; r.v.i = n; return r; }
+static sp_RbVal mk_float(sp_float f){ sp_RbVal r; r.tag = SP_TAG_FLT;  r.cls_id = 0; r.v.f = f; return r; }
 static sp_RbVal mk_str(const char *s){ sp_RbVal r; r.tag = SP_TAG_STR;  r.cls_id = 0; r.v.s = s; return r; }
-static sp_RbVal mk_sym(sp_sym s)    { sp_RbVal r; r.tag = SP_TAG_SYM;  r.cls_id = 0; r.v.i = (mrb_int)s; return r; }
+static sp_RbVal mk_sym(sp_sym s)    { sp_RbVal r; r.tag = SP_TAG_SYM;  r.cls_id = 0; r.v.i = (sp_int)s; return r; }
 static sp_RbVal mk_bigint(void *p)  { sp_RbVal r; r.tag = SP_TAG_BIGINT; r.cls_id = 0; r.v.p = p; return r; }
-static mrb_float poly_f(sp_RbVal v) { return v.tag == SP_TAG_FLT ? v.v.f : (mrb_float)v.v.i; }
-static mrb_int   poly_i(sp_RbVal v) { return v.tag == SP_TAG_INT ? v.v.i : (mrb_int)v.v.f; }
+static sp_float poly_f(sp_RbVal v) { return v.tag == SP_TAG_FLT ? v.v.f : (sp_float)v.v.i; }
+static sp_int   poly_i(sp_RbVal v) { return v.tag == SP_TAG_INT ? v.v.i : (sp_int)v.v.f; }
 
 static void mar_raise(const char *cls, const char *msg) {
   if (sp_marshal_v.raise) sp_marshal_v.raise(cls, msg);
@@ -96,9 +96,9 @@ static int sp_mar_seen(sp_mar_buf *b, void *ptr) {
 }
 static void sp_mar_w_hash(sp_mar_buf *b, sp_RbVal v) {
   sp_mar_b(b, '{');
-  mrb_int n = sp_json_len_fn(v);
+  sp_int n = sp_json_len_fn(v);
   sp_mar_long(b, n);
-  for (mrb_int i = 0; i < n; i++) {
+  for (sp_int i = 0; i < n; i++) {
     sp_RbVal k, val; sp_json_hpair_fn(v, i, &k, &val);
     sp_mar_w(b, k); sp_mar_w(b, val);
   }
@@ -111,7 +111,7 @@ void sp_mar_w(sp_mar_buf *b, sp_RbVal v) {
     case SP_TAG_FLT: {
       if (sp_mar_seen(b, NULL)) break;
       sp_mar_b(b, 'f');
-      mrb_float f = v.v.f; const char *fs; char fbuf[64];
+      sp_float f = v.v.f; const char *fs; char fbuf[64];
       if (isnan(f)) fs = "nan";
       else if (isinf(f)) fs = f < 0 ? "-inf" : "inf";
       else fs = sp_mar_float_str((double)f, fbuf, sizeof fbuf);
@@ -130,7 +130,7 @@ void sp_mar_w(sp_mar_buf *b, sp_RbVal v) {
     case SP_TAG_OBJ:
       if (v.cls_id == SP_BUILTIN_COMPLEX) {
         if (sp_mar_seen(b, v.v.p)) break;
-        mrb_float *c = (mrb_float *)v.v.p;  /* sp_Complex = {re, im} */
+        sp_float *c = (sp_float *)v.v.p;  /* sp_Complex = {re, im} */
         sp_mar_b(b, 'U'); sp_mar_sym(b, "Complex");
         sp_mar_seen(b, NULL);
         sp_mar_b(b, '['); sp_mar_long(b, 2);
@@ -138,7 +138,7 @@ void sp_mar_w(sp_mar_buf *b, sp_RbVal v) {
       }
       else if (v.cls_id == SP_BUILTIN_RATIONAL) {
         if (sp_mar_seen(b, v.v.p)) break;
-        mrb_int *q = (mrb_int *)v.v.p;  /* sp_Rational = {num, den} */
+        sp_int *q = (sp_int *)v.v.p;  /* sp_Rational = {num, den} */
         sp_mar_b(b, 'U'); sp_mar_sym(b, "Rational");
         sp_mar_seen(b, NULL);
         sp_mar_b(b, '['); sp_mar_long(b, 2);
@@ -148,8 +148,8 @@ void sp_mar_w(sp_mar_buf *b, sp_RbVal v) {
         int kind = sp_json_kind_fn ? sp_json_kind_fn(v) : 0;
         if (kind == 1) {  /* array */
           if (sp_mar_seen(b, v.v.p)) break;
-          sp_mar_b(b, '['); mrb_int n = sp_json_len_fn(v); sp_mar_long(b, n);
-          for (mrb_int i = 0; i < n; i++) sp_mar_w(b, sp_json_aref_fn(v, i));
+          sp_mar_b(b, '['); sp_int n = sp_json_len_fn(v); sp_mar_long(b, n);
+          for (sp_int i = 0; i < n; i++) sp_mar_w(b, sp_json_aref_fn(v, i));
         }
         else if (kind == 2) {  /* hash */
           if (sp_mar_seen(b, v.v.p)) break;
@@ -255,15 +255,15 @@ static sp_RbVal sp_mar_r(sp_mar_rd *r) {
     case '0': return mk_nil();
     case 'T': return mk_bool(TRUE);
     case 'F': return mk_bool(FALSE);
-    case 'i': return mk_int((mrb_int)sp_mar_rlong(r));
+    case 'i': return mk_int((sp_int)sp_mar_rlong(r));
     case 'f': {
       int id = sp_mar_reg(r);
       long n = sp_mar_rlong(r);
       char *s = sp_mar_rstr(r, n); SP_GC_ROOT(s);
-      mrb_float f;
-      if (!strcmp(s, "inf")) f = (mrb_float)INFINITY;
-      else if (!strcmp(s, "-inf")) f = -(mrb_float)INFINITY;
-      else if (!strcmp(s, "nan")) f = (mrb_float)NAN;
+      sp_float f;
+      if (!strcmp(s, "inf")) f = (sp_float)INFINITY;
+      else if (!strcmp(s, "-inf")) f = -(sp_float)INFINITY;
+      else if (!strcmp(s, "nan")) f = (sp_float)NAN;
       else f = strtod(s, NULL);
       sp_RbVal v = mk_float(f); r->objs[id] = v; return v;
     }
@@ -352,7 +352,7 @@ static sp_RbVal sp_mar_r(sp_mar_rd *r) {
     default: mar_raise("ArgumentError", "unsupported type in Marshal.load"); return mk_nil();
   }
 }
-sp_RbVal sp_marshal_load(const char *s, mrb_int len) {
+sp_RbVal sp_marshal_load(const char *s, sp_int len) {
   /* The whole parse reads out of this buffer, and every object it builds
      allocates -- so the source string has to stay rooted for the duration.
      r.s is a plain field, not a root slot; the collector walks registered

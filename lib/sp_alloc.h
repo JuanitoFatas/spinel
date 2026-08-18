@@ -12,7 +12,7 @@
    The hot allocators stay `static inline` here so each including TU still
    inlines them over the shared extern state -- the same shape sp_gc_alloc
    already uses for the extern sp_gc_heap / sp_gc_bytes object heap. */
-#include "sp_types.h"   /* sp_str_hdr, mrb_int, mrb_float */
+#include "sp_types.h"   /* sp_str_hdr, sp_int, sp_float */
 #include "sp_gc.h"      /* sp_gc_collect, sp_oom_die, sp_gc_str_sweep_hook */
 #include "sp_time.h"    /* sp_Time for sp_box_time */
 #include <stdlib.h>
@@ -115,7 +115,7 @@ extern const char sp_str_empty_data[];
 struct sp_str_lcache_entry {
   const char *s;
   size_t byte_len;
-  mrb_int char_len;
+  sp_int char_len;
 };
 /* Per-worker (SP_TLS) in the threaded build: this string-length cache is keyed
    by string pointer and written without the heap lock (sp_str_byte_len is on the
@@ -324,7 +324,7 @@ static inline const char *sp_str_dup_external(const char *s) {
    pre-evaluated dynamic parts, so one sp_str_alloc_raw serves the whole
    string (previously: one heap string per part + an sp_sprintf pass). */
 #define SP_W_INT_MAX 21  /* -9223372036854775808 */
-static inline char *sp_w_int(char *p, mrb_int n) {
+static inline char *sp_w_int(char *p, sp_int n) {
   if (n == SP_INT_NIL) return p;  /* a nil int slot interpolates as "" */
   uint64_t u;
   if (n < 0) { *p++ = '-'; u = (uint64_t)(-(n + 1)) + 1; }
@@ -344,19 +344,19 @@ static inline char *sp_w_str(char *p, const char *s) {
   memcpy(p, s, l);
   return p + l;
 }
-static inline char *sp_w_bool(char *p, mrb_bool v) {
+static inline char *sp_w_bool(char *p, sp_bool v) {
   if (v) { memcpy(p, "true", 4); return p + 4; }
   memcpy(p, "false", 5); return p + 5;
 }
 
-static inline const char *sp_int_to_s(mrb_int n){char*b=sp_str_alloc_raw(32);int len=snprintf(b,32,"%lld",(long long)n);if(len<0)len=0;sp_str_set_len(b,(size_t)len);return b;}
+static inline const char *sp_int_to_s(sp_int n){char*b=sp_str_alloc_raw(32);int len=snprintf(b,32,"%lld",(long long)n);if(len<0)len=0;sp_str_set_len(b,(size_t)len);return b;}
 /* Float#to_s (Ruby semantics): the shortest decimal that round-trips, fixed
    point for a decimal exponent in [-4, 15], scientific otherwise; NaN, ±Infinity
    and -0.0 match CRuby's spelling. */
 /* Float#to_s / #inspect: shortest round-trip decimal. Cold (display only) and
    large, so it lives out-of-line in sp_alloc.c rather than inlining into every
    TU that formats a float. */
-const char *sp_float_to_s(mrb_float f);
+const char *sp_float_to_s(sp_float f);
 
 /* ---- object construction (shared so lib C files can build values) ----
    The built-in cls_id sentinels, the core sp_box_* constructors, the object
@@ -415,20 +415,20 @@ const char *sp_float_to_s(mrb_float f);
 #define SP_BUILTIN_MATCHDATA     (-43)  /* MatchData (sp_MatchData *): boxed so
                                            a match can live in a container */
 
-static inline sp_RbVal sp_box_int(mrb_int v)    { sp_RbVal r; r.tag = SP_TAG_INT;  r.cls_id = 0; r.v.i = v; return r; }
+static inline sp_RbVal sp_box_int(sp_int v)    { sp_RbVal r; r.tag = SP_TAG_INT;  r.cls_id = 0; r.v.i = v; return r; }
 /* A NULL char* IS Ruby nil throughout the string paths (the nullable-string
    invariant); preserve that across the boxing boundary, or a boxed nil-string
    carries SP_TAG_STR and fails tag-keyed comparisons -- `defined?(x).should
    == nil` compared STR(NULL) against NIL and answered false. */
 static inline sp_RbVal sp_box_str(const char *v){ sp_RbVal r; if (!v) { r.tag = SP_TAG_NIL; r.cls_id = 0; r.v.s = NULL; return r; } r.tag = SP_TAG_STR;  r.cls_id = 0; r.v.s = v; return r; }
-static inline sp_RbVal sp_box_float(mrb_float v){ sp_RbVal r; r.tag = SP_TAG_FLT;  r.cls_id = 0; r.v.f = v; return r; }
+static inline sp_RbVal sp_box_float(sp_float v){ sp_RbVal r; r.tag = SP_TAG_FLT;  r.cls_id = 0; r.v.f = v; return r; }
 /* Write the full union word, not just the narrow `b` member: hash keys and
    poly equality compare bool values through `v.i`, so bytes left
    uninitialized here make two `true`s unequal (a garbage-dependent hash). */
-static inline sp_RbVal sp_box_bool(mrb_bool v)  { sp_RbVal r; r.tag = SP_TAG_BOOL; r.cls_id = 0; r.v.i = (v != 0); return r; }
+static inline sp_RbVal sp_box_bool(sp_bool v)  { sp_RbVal r; r.tag = SP_TAG_BOOL; r.cls_id = 0; r.v.i = (v != 0); return r; }
 static inline sp_RbVal sp_box_nil(void)         { sp_RbVal r; r.tag = SP_TAG_NIL;  r.cls_id = 0; r.v.i = 0; return r; }
 static inline sp_RbVal sp_box_obj(void *p, int cls_id) { sp_RbVal r; r.tag = SP_TAG_OBJ; r.cls_id = cls_id; r.v.p = p; return r; }
-static inline sp_RbVal sp_box_sym(sp_sym v)     { if (v == (sp_sym)-1) { sp_RbVal n; n.tag = SP_TAG_NIL; n.cls_id = 0; n.v.i = 0; return n; } sp_RbVal r; r.tag = SP_TAG_SYM;  r.cls_id = 0; r.v.i = (mrb_int)v; return r; }  /* (sp_sym)-1 is the nilable-symbol sentinel: box it as nil, never as :"" */
+static inline sp_RbVal sp_box_sym(sp_sym v)     { if (v == (sp_sym)-1) { sp_RbVal n; n.tag = SP_TAG_NIL; n.cls_id = 0; n.v.i = 0; return n; } sp_RbVal r; r.tag = SP_TAG_SYM;  r.cls_id = 0; r.v.i = (sp_int)v; return r; }  /* (sp_sym)-1 is the nilable-symbol sentinel: box it as nil, never as :"" */
 static inline sp_RbVal sp_box_poly_array(void *p) { return sp_box_obj(p, SP_BUILTIN_POLY_ARRAY); }
 
 /* The inverse of sp_box_int_or_nil / the float sentinel: unbox a poly into a
@@ -437,10 +437,10 @@ static inline sp_RbVal sp_box_poly_array(void *p) { return sp_box_obj(p, SP_BUIL
    Integer -- so nil silently becomes 0 (or 0.0). These map the nil tag to the
    slot's reserved sentinel instead, which is what every nil? / to_s / boxing
    site on a nullable int or float already tests for. */
-static inline mrb_int sp_poly_as_int_or_nil(sp_RbVal v) {
+static inline sp_int sp_poly_as_int_or_nil(sp_RbVal v) {
   return v.tag == SP_TAG_NIL ? SP_INT_NIL : v.v.i;
 }
-static inline mrb_float sp_poly_as_float_or_nil(sp_RbVal v) {
+static inline sp_float sp_poly_as_float_or_nil(sp_RbVal v) {
   return v.tag == SP_TAG_NIL ? sp_float_nil() : v.v.f;
 }
 
@@ -477,8 +477,8 @@ static void __attribute__((noinline, cold)) sp_raise_frozen_array_v(sp_RbVal v) 
 }
 
 /* sp_PolyArray: a growable array of boxed values. */
-typedef struct { sp_RbVal *data; mrb_int len; mrb_int cap; mrb_int frozen; } sp_PolyArray;
-static inline void sp_PolyArray_scan(void *p) { sp_PolyArray *a = (sp_PolyArray *)p; for (mrb_int i = 0; i < a->len; i++) sp_mark_rbval(a->data[i]); }
+typedef struct { sp_RbVal *data; sp_int len; sp_int cap; sp_int frozen; } sp_PolyArray;
+static inline void sp_PolyArray_scan(void *p) { sp_PolyArray *a = (sp_PolyArray *)p; for (sp_int i = 0; i < a->len; i++) sp_mark_rbval(a->data[i]); }
 static inline void sp_PolyArray_fin(void *p) { sp_PolyArray *a = (sp_PolyArray *)p; sp_gc_hdr *h = (sp_gc_hdr *)((char *)a - sizeof(sp_gc_hdr)); sp_gc_bytes_sub(sizeof(sp_RbVal) * a->cap); h->size -= sizeof(sp_RbVal) * a->cap; free(a->data); }
 /* Free-list pool for PolyArray, header AND data buffer kept together. The
    allocation-heaviest programs (per-point tuple building: BabyStark's
@@ -517,7 +517,7 @@ static inline sp_PolyArray *sp_PolyArray_new(void) {
   return a;
 }
 static inline void sp_PolyArray_push(sp_PolyArray *a, sp_RbVal v) { if (!a) return; sp_gc_wb((void*)a); if (a->frozen) { sp_raise_frozen_array(); return; } if (a->len >= a->cap) { sp_gc_hdr *h = (sp_gc_hdr *)((char *)a - sizeof(sp_gc_hdr)); sp_gc_bytes_sub(sizeof(sp_RbVal) * a->cap); h->size -= sizeof(sp_RbVal) * a->cap; a->cap = (a->cap * 2) + 1; void *nd = realloc(a->data, sizeof(sp_RbVal) * a->cap); if (!nd) sp_oom_die(); a->data = (sp_RbVal *)nd; h->size += sizeof(sp_RbVal) * a->cap; sp_gc_bytes_add(sizeof(sp_RbVal) * a->cap); } a->data[a->len++] = v; }
-static inline sp_RbVal sp_PolyArray_get(sp_PolyArray *a, mrb_int i) { if (!a) return sp_box_nil(); if (i < 0) i += a->len; if (i < 0 || i >= a->len) return sp_box_nil(); return a->data[i]; }
+static inline sp_RbVal sp_PolyArray_get(sp_PolyArray *a, sp_int i) { if (!a) return sp_box_nil(); if (i < 0) i += a->len; if (i < 0 || i >= a->len) return sp_box_nil(); return a->data[i]; }
 /* ---- relocated from spinel_rt.h: frozen-string check primitives used
    by lib/sp_cold.c's sp_str_setbyte_cow, and the SPL frozen-literal macro
    used by lib/sp_cold.c's sp_gc_stat. Pure textual move (still static
@@ -528,7 +528,7 @@ static inline sp_RbVal sp_PolyArray_get(sp_PolyArray *a, mrb_int i) { if (!a) re
    so sp_str_freeze_val can set it.  The frozen? predicate and mutation
    guards check for 0xf1; plain rodata 0xff literals are NOT reported
    as frozen (they behave as immutable value-semantics objects). */
-static inline mrb_bool sp_str_is_frozen_val(const char *s) {
+static inline sp_bool sp_str_is_frozen_val(const char *s) {
   if (!s) return TRUE;
   return ((const unsigned char *)s)[-1] == 0xf1;
 }
@@ -550,36 +550,36 @@ static inline void sp_str_check_mutable(const char *s) {
 #endif
 
 #ifdef SP_HAVE_OVERFLOW_BUILTINS
-static inline mrb_bool sp_int_add_overflow_p(mrb_int a, mrb_int b, mrb_int *r) {
+static inline sp_bool sp_int_add_overflow_p(sp_int a, sp_int b, sp_int *r) {
   return __builtin_add_overflow(a, b, r);
 }
-static inline mrb_bool sp_int_sub_overflow_p(mrb_int a, mrb_int b, mrb_int *r) {
+static inline sp_bool sp_int_sub_overflow_p(sp_int a, sp_int b, sp_int *r) {
   return __builtin_sub_overflow(a, b, r);
 }
-static inline mrb_bool sp_int_mul_overflow_p(mrb_int a, mrb_int b, mrb_int *r) {
+static inline sp_bool sp_int_mul_overflow_p(sp_int a, sp_int b, sp_int *r) {
   return __builtin_mul_overflow(a, b, r);
 }
 #else
 /* Portable fallback for compilers lacking __builtin_*_overflow.
-   mrb_int is pointer-width (intptr_t), so compute in uintptr_t --
+   sp_int is pointer-width (intptr_t), so compute in uintptr_t --
    unsigned overflow is well-defined wrap-around in C -- and detect
    signed overflow via the sign-bit XOR trick at the *correct* width
-   (the sign bit is mrb_int's top bit: 63 on 64-bit, 31 on 32-bit).
+   (the sign bit is sp_int's top bit: 63 on 64-bit, 31 on 32-bit).
    Bounds use INTPTR_MAX/MIN, not the int64 MRB_INT_* macros, so this
    path is self-contained and width-correct. Mul checks bounds before
    multiplying because a 2x-width intermediate isn't portable. */
-#define SP_INT_OVF_SIGN ((uintptr_t)1 << (sizeof(mrb_int) * 8 - 1))
-static inline mrb_bool sp_int_add_overflow_p(mrb_int a, mrb_int b, mrb_int *r) {
+#define SP_INT_OVF_SIGN ((uintptr_t)1 << (sizeof(sp_int) * 8 - 1))
+static inline sp_bool sp_int_add_overflow_p(sp_int a, sp_int b, sp_int *r) {
   uintptr_t x = (uintptr_t)a, y = (uintptr_t)b, z = x + y;
-  *r = (mrb_int)z;
+  *r = (sp_int)z;
   return !!(((x ^ z) & (y ^ z)) & SP_INT_OVF_SIGN);
 }
-static inline mrb_bool sp_int_sub_overflow_p(mrb_int a, mrb_int b, mrb_int *r) {
+static inline sp_bool sp_int_sub_overflow_p(sp_int a, sp_int b, sp_int *r) {
   uintptr_t x = (uintptr_t)a, y = (uintptr_t)b, z = x - y;
-  *r = (mrb_int)z;
+  *r = (sp_int)z;
   return !!(((x ^ z) & (~y ^ z)) & SP_INT_OVF_SIGN);
 }
-static inline mrb_bool sp_int_mul_overflow_p(mrb_int a, mrb_int b, mrb_int *r) {
+static inline sp_bool sp_int_mul_overflow_p(sp_int a, sp_int b, sp_int *r) {
   if (a > 0 && b > 0 && a > INTPTR_MAX / b) { *r = a * b; return TRUE; }
   if (a < 0 && b > 0 && a < INTPTR_MIN / b) { *r = a * b; return TRUE; }
   if (a > 0 && b < 0 && b < INTPTR_MIN / a) { *r = a * b; return TRUE; }
@@ -594,42 +594,42 @@ static inline mrb_bool sp_int_mul_overflow_p(mrb_int a, mrb_int b, mrb_int *r) {
 
 /* ---- Integer leaf-op prototypes (bodies relocated to lib/sp_cold.c):
    chr/digits/bit_length/bit_range/to_s_base/opt variants/pow. ---- */
-const char *sp_int_chr(mrb_int n);
-const char *sp_int_chr_utf8(mrb_int n);
-const char *sp_int_codepoint_to_str(mrb_int n);
-sp_IntArray *sp_int_digits(mrb_int n, mrb_int base);
-mrb_int sp_int_bit_length(mrb_int n);
-mrb_int sp_int_bit_range(mrb_int n, mrb_int start, mrb_int len);
-const char *sp_int_interp(mrb_int n);
-const char *sp_int_to_s_base(mrb_int n, mrb_int base);
-const char *sp_int_opt_inspect(mrb_int v);
-const char *sp_int_opt_to_s(mrb_int v);
-mrb_int sp_int_pow(mrb_int base, mrb_int exp);
+const char *sp_int_chr(sp_int n);
+const char *sp_int_chr_utf8(sp_int n);
+const char *sp_int_codepoint_to_str(sp_int n);
+sp_IntArray *sp_int_digits(sp_int n, sp_int base);
+sp_int sp_int_bit_length(sp_int n);
+sp_int sp_int_bit_range(sp_int n, sp_int start, sp_int len);
+const char *sp_int_interp(sp_int n);
+const char *sp_int_to_s_base(sp_int n, sp_int base);
+const char *sp_int_opt_inspect(sp_int v);
+const char *sp_int_opt_to_s(sp_int v);
+sp_int sp_int_pow(sp_int base, sp_int exp);
 
 /* ---- Float leaf-op prototypes (bodies relocated to lib/sp_cold.c). ---- */
-const char *sp_float_opt_inspect(mrb_float v);
-const char *sp_float_opt_to_s(mrb_float v);
-mrb_int sp_float_denominator(mrb_float f);
-sp_RbVal sp_float_numerator(mrb_float f);
-mrb_int sp_float_to_i_checked(mrb_float f);
+const char *sp_float_opt_inspect(sp_float v);
+const char *sp_float_opt_to_s(sp_float v);
+sp_int sp_float_denominator(sp_float f);
+sp_RbVal sp_float_numerator(sp_float f);
+sp_int sp_float_to_i_checked(sp_float f);
 
 /* ---- forward declarations for pointer-only box params (full types stay
    opaque to lib/sp_alloc.h -- these box functions only store the pointer). ---- */
 typedef struct sp_Bigint sp_Bigint;               /* full def: spinel_rt.h bigint block */
 typedef struct sp_OpenStruct_s sp_OpenStruct;      /* full def: spinel_rt.h (SymPolyHash-backed) */
-typedef struct { mrb_float utime, stime, cutime, cstime; } sp_Tms;
+typedef struct { sp_float utime, stime, cutime, cstime; } sp_Tms;
 /* Addrinfo: one resolved endpoint. Immutable; the strings are GC-managed. */
 typedef struct {
   const char *ip;        /* numeric address, or the path for AF_UNIX */
   const char *afname;    /* "AF_INET" / "AF_INET6" / "AF_UNIX", for #inspect */
-  mrb_int afamily;       /* the AF_* value, which is what #afamily answers */
-  mrb_int port;
-  mrb_int socktype;      /* SOCK_STREAM / SOCK_DGRAM */
-  mrb_int protocol;
+  sp_int afamily;       /* the AF_* value, which is what #afamily answers */
+  sp_int port;
+  sp_int socktype;      /* SOCK_STREAM / SOCK_DGRAM */
+  sp_int protocol;
 } sp_Addrinfo;
 /* Socket::Option: what #getsockopt answers. Spinel carries the integer-valued
    options only, so the payload is the int itself rather than a byte string. */
-typedef struct { mrb_int family, level, optname, value; } sp_SockOpt;
+typedef struct { sp_int family, level, optname, value; } sp_SockOpt;
 
 /* ---- Box/Encoding helpers relocated from spinel_rt.h: hot-ish ones
    (sp_box_class 7x / sp_box_nullable_obj 64x / sp_box_int_array 24x /
@@ -656,7 +656,7 @@ static inline sp_RbVal sp_box_nullable_obj(void *p, int cls_id) { return p ? sp_
    publishes the actual class rather than the one that defined the method. */
 static inline sp_RbVal sp_box_nullable_obj_dyn(void *p, int cls_id) {
   (void)cls_id;
-  return p ? sp_box_obj(p, (int)*(mrb_int *)p) : sp_box_nil();
+  return p ? sp_box_obj(p, (int)*(sp_int *)p) : sp_box_nil();
 }
 /* Built-in pointer boxes — share SP_TAG_OBJ with a reserved negative
    cls_id so the dispatch path is uniform. */
@@ -675,12 +675,12 @@ static inline sp_RbVal sp_box_range(sp_Range v) {
 }
 static inline const char*sp_encoding_name(sp_Encoding e){return e.name?e.name:sp_str_empty;}
 static inline const char*sp_encoding_inspect(sp_Encoding e){return sp_sprintf("#<Encoding:%s>",sp_encoding_name(e));}
-static inline mrb_bool sp_encoding_eq(sp_Encoding a,sp_Encoding b){const char*an=sp_encoding_name(a);const char*bn=sp_encoding_name(b);return strcmp(an,bn)==0;}
+static inline sp_bool sp_encoding_eq(sp_Encoding a,sp_Encoding b){const char*an=sp_encoding_name(a);const char*bn=sp_encoding_name(b);return strcmp(an,bn)==0;}
 
 /* ---- Box helper prototypes (0 optcarrot uses; bodies in lib/sp_cold.c). ---- */
-sp_RbVal sp_box_int_or_nil(mrb_int v);
+sp_RbVal sp_box_int_or_nil(sp_int v);
 sp_RbVal sp_unsentinel(sp_RbVal v);
-sp_RbVal sp_box_float_or_nil(mrb_float v);
+sp_RbVal sp_box_float_or_nil(sp_float v);
 sp_RbVal sp_box_bigint(sp_Bigint *b);
 sp_RbVal sp_box_encoding(sp_Encoding e);
 sp_RbVal sp_box_nullable_str(const char *v);
@@ -701,8 +701,8 @@ sp_RbVal sp_box_openstruct(sp_OpenStruct *o);
 /* ---- class-frozen bitmap (Class#freeze / #frozen?): state stays
    per-process like sp_argv, extern instead of spinel_rt.h-static. ---- */
 extern unsigned char sp_class_frozen_map[4096];   /* one definition: lib/sp_cold.c */
-void sp_class_freeze_id(mrb_int cls_id);
-mrb_bool sp_class_frozen_id(mrb_int cls_id);
+void sp_class_freeze_id(sp_int cls_id);
+sp_bool sp_class_frozen_id(sp_int cls_id);
 
 /* ---- rounding helpers relocated from spinel_rt.h (0 optcarrot uses). ---- */
 double sp_round_half_even(double x);
@@ -726,7 +726,7 @@ sp_RbVal sp_box_brat(sp_Bigint *num, sp_Bigint *den);
 sp_RbVal sp_brat_from_bigint(sp_Bigint *n);
 const char *sp_brat_to_s(sp_BigRational *r);
 const char *sp_brat_inspect(sp_BigRational *r);
-mrb_float sp_brat_to_f(sp_BigRational *r);
+sp_float sp_brat_to_f(sp_BigRational *r);
 
 /* ---- Marshal.dump/load helpers (lib/sp_marshal.c calls these): 0
    optcarrot uses. sp_marv_hash_new/set stay in spinel_rt.h instead of
@@ -738,8 +738,8 @@ mrb_float sp_brat_to_f(sp_BigRational *r);
    count for no real gain, so those two stay put instead. */
 sp_RbVal sp_marv_arr_new(void);
 void sp_marv_arr_push(sp_RbVal a, sp_RbVal v);
-sp_RbVal sp_marv_box_complex(mrb_float re, mrb_float im);
-sp_RbVal sp_marv_box_rational(mrb_int n, mrb_int d);
+sp_RbVal sp_marv_box_complex(sp_float re, sp_float im);
+sp_RbVal sp_marv_box_rational(sp_int n, sp_int d);
 void sp_marv_raise(const char *cls, const char *msg);
 
 /* ---- FFI array data pointers, array-kind length probe, sp_Class
@@ -748,7 +748,7 @@ const int64_t *sp_ffi_int_array_data(sp_RbVal v);
 const double *sp_ffi_float_array_data(sp_RbVal v);
 const int64_t *sp_PolyArray_ffi_int_data(sp_PolyArray *a);
 const double *sp_PolyArray_ffi_float_data(sp_PolyArray *a);
-mrb_int sp_array_kind_len(sp_RbVal el);
+sp_int sp_array_kind_len(sp_RbVal el);
 sp_Class sp_unbox_class(sp_RbVal v);
 
 #endif /* SP_ALLOC_H */

@@ -2002,7 +2002,7 @@ static TyKind parse_seed_type(Compiler *c, const char *tok) {
      the base type is right only where that type's C slot still has an
      inhabitant left to spell nil with: a pointer kind uses NULL, and int /
      float / string carry a reserved sentinel every nil? / to_s / boxing site
-     already tests for. `mrb_bool` and `sp_sym` have none -- 0 is `false`, and
+     already tests for. `sp_bool` and `sp_sym` have none -- 0 is `false`, and
      symbol 0 is a real symbol -- so a `bool?` / `Symbol?` pin has nowhere to
      put nil and collapses it onto false / :"" (#3412). Those pin to the tagged
      union, which is what `bool | nil` means anyway. */
@@ -3371,7 +3371,7 @@ static void desugar_enum_chain_shapes(Compiler *c) {
        plus an int index. Only each_char was rewritten, so the other two kept an
        opaque enumerator element and a BOXED index: passed to anything wanting
        an Integer -- a Struct field another site builds with a literal -- the
-       boxed value met an mrb_int parameter and the build failed (#3939). */
+       boxed value met an sp_int parameter and the build failed (#3939). */
     if (sp_streq(nm, "with_index") && nt_ref(nt, recv, "arguments") < 0 &&
         (sp_streq(rn, "each_char") || sp_streq(rn, "each_line") || sp_streq(rn, "each_byte"))) {
       nt_node_set_str(nt, recv, "name",
@@ -12273,7 +12273,7 @@ void analyze_program(Compiler *c) {
   }
 
   /* Backstop step 1: a method reached only via method(:sym) is invoked through
-     the bound Method ABI, which passes mrb_int args -- default its untyped
+     the bound Method ABI, which passes sp_int args -- default its untyped
      params/ret to int rather than dropping it (which would leave it undeclared).
      Done before the drop decision below so the freshly-typed params can
      propagate through poly-dispatch param binding (e.g. a poke dispatch table
@@ -12304,8 +12304,8 @@ void analyze_program(Compiler *c) {
     for (int i = 0; i < msym_n && !taken; i++)
       if (sp_streq(msym_names[i], sc->name)) taken = 1;
     if (taken) {
-      /* The bound-Method ABI is `mrb_int (*)(void *, mrb_int...)`: the dispatch
-         site (sp_poly_arr_get_hash / sp_poly_slice) reads the return as mrb_int
+      /* The bound-Method ABI is `sp_int (*)(void *, sp_int...)`: the dispatch
+         site (sp_poly_arr_get_hash / sp_poly_slice) reads the return as sp_int
          and passes int args. So a method(:sym) target MUST return int and take
          int params -- a poly return (e.g. PPU#peek_2002 returning the poly
          @io_latch) would be misread as a struct through the int cast and yield
@@ -12563,10 +12563,10 @@ void analyze_program(Compiler *c) {
          the poly path while the result never overflows. Keep it int. */
       int is_spaceship = sc->name && sp_streq(sc->name, "<=>");
       /* A lowered self-recursive yield method returns its block's value through
-         a raw mrb_int carrier (a string is laundered through the slot, an int
+         a raw sp_int carrier (a string is laundered through the slot, an int
          rides it directly), and every call site casts that carrier back to its
          own block's concrete type. Widening the return to poly would emit a
-         `sp_box_str(mrb_int)` over that raw carrier and mismatch the per-call
+         `sp_box_str(sp_int)` over that raw carrier and mismatch the per-call
          casts; keep it as the carrier, exactly as default/wrap mode does. */
       if (sc->ret == TY_INT && !is_spaceship && !sc->is_lowered_yield) sc->ret = TY_POLY;
       for (int i = 0; i < sc->nlocals; i++) {
@@ -12613,7 +12613,7 @@ void analyze_program(Compiler *c) {
      type (a captured int local widened to poly), so a proc's caller-side
      proc_ret / a factory method's ret_proc_ret must be re-derived from the
      now-widened body -- else a `.call` reads the wrong return channel (raw
-     mrb_int slot vs the poly side-channel) and yields 0. Re-run JUST the
+     sp_int slot vs the poly side-channel) and yields 0. Re-run JUST the
      proc_ret / ret_proc_ret derivations (mirroring infer_return_types and
      infer_write_types) as a focused fixpoint; this touches only proc-return
      metadata, never the widened slot types, so it cannot undo the widen.

@@ -75,7 +75,7 @@ extern int sp_active_workers;        /* live worker count; sp_sched.c */
 # define SP_NORETURN
 #endif
 
-/* mrb_int follows pointer width (decided at compile time via intptr_t):
+/* sp_int follows pointer width (decided at compile time via intptr_t):
    int64_t on 64-bit hosts -- PCs, no behavior change -- and int32_t on
    32-bit embedded targets, where it gives native-word arithmetic, half
    the memory for every integer/array/hash slot, and a pointer-width
@@ -87,12 +87,12 @@ extern int sp_active_workers;        /* live worker count; sp_sched.c */
 #else
 #error "spinel: unsupported intptr_t width (need 32- or 64-bit)"
 #endif
-typedef intptr_t mrb_int;
-typedef double mrb_float;
-typedef bool mrb_bool;
+typedef intptr_t sp_int;
+typedef double sp_float;
+typedef bool sp_bool;
 
 /* Sentinel value reserved by the int? (scalar-nullable int) type. An
-   int? slot is bit-compatible with mrb_int; SP_INT_NIL marks the
+   int? slot is bit-compatible with sp_int; SP_INT_NIL marks the
    "nil" inhabitant. The pattern is INTPTR_MIN -- INT64_MIN on 64-bit
    (unchanged), INT32_MIN on 32-bit.
    `sp_int_is_nil(v)` is the canonical predicate; treat any int? value
@@ -112,7 +112,7 @@ typedef bool mrb_bool;
    would cost the hot path the embedded build is trying to save). Code that
    must store -2147483648 nullably on 32-bit should box it (poly) rather
    than use a flat int? slot. */
-#define SP_INT_NIL ((mrb_int)INTPTR_MIN)
+#define SP_INT_NIL ((sp_int)INTPTR_MIN)
 #define sp_int_is_nil(v) ((v) == SP_INT_NIL)
 
 /* Nullable float (float?) sentinel: a quiet NaN with a reserved payload.
@@ -120,18 +120,18 @@ typedef bool mrb_bool;
    chosen so the canonical NaN (0x7FF8000000000000) and ordinary
    arithmetic NaNs don't collide; a real Float element with this exact
    bit pattern reads back as nil -- the same documented compromise
-   SP_INT_NIL makes for INTPTR_MIN. mrb_float is double (8 bytes). */
+   SP_INT_NIL makes for INTPTR_MIN. sp_float is double (8 bytes). */
 #define SP_FLOAT_NIL_BITS ((uint64_t)0x7FF8000000000001ULL)
-static inline mrb_float sp_float_nil(void) {
-  union { uint64_t u; mrb_float d; } x; x.u = SP_FLOAT_NIL_BITS; return x.d;
+static inline sp_float sp_float_nil(void) {
+  union { uint64_t u; sp_float d; } x; x.u = SP_FLOAT_NIL_BITS; return x.d;
 }
-static inline int sp_float_is_nil(mrb_float v) {
-  union { mrb_float d; uint64_t u; } x; x.d = v; return x.u == SP_FLOAT_NIL_BITS;
+static inline int sp_float_is_nil(sp_float v) {
+  union { sp_float d; uint64_t u; } x; x.d = v; return x.u == SP_FLOAT_NIL_BITS;
 }
 
 /* sp_sym is defined per-program in emit_sym_runtime, but poly helpers
    below need to reference it by forward declaration. */
-typedef mrb_int sp_sym;
+typedef sp_int sp_sym;
 
 #ifndef TRUE
 #define TRUE true
@@ -145,8 +145,8 @@ typedef mrb_int sp_sym;
    plain ascending range cannot express: n.downto(m) is {first:n,last:m,step:-1}.
    A zero step (every range built by the literal `a..b` / sp_range_new path) is
    treated as +1, so existing constructions need no change. */
-typedef struct{mrb_int first;mrb_int last;mrb_int excl;mrb_int step;}sp_Range;
-/* A Float range (1.0..3.0): endpoints kept as mrb_float so cover?/include?/begin/
+typedef struct{sp_int first;sp_int last;sp_int excl;sp_int step;}sp_Range;
+/* A Float range (1.0..3.0): endpoints kept as sp_float so cover?/include?/begin/
    end are exact (an int-backed sp_Range truncated them). Iteration is a TypeError
    in Ruby (only #step traverses a Float range), so no step/iteration state here.
    beginless/endless ends use -HUGE_VAL / +HUGE_VAL. */
@@ -155,7 +155,7 @@ typedef struct{mrb_int first;mrb_int last;mrb_int excl;mrb_int step;}sp_Range;
    in the value, and only #inspect / #to_s tell them apart -- CRuby prints
    "1.0.." for the first and "1.0..Infinity" for the second (#3670).
    bit 1 = begin omitted, bit 2 = end omitted. */
-typedef struct{mrb_float first;mrb_float last;mrb_int excl;mrb_int omitted;}sp_FloatRange;
+typedef struct{sp_float first;sp_float last;sp_int excl;sp_int omitted;}sp_FloatRange;
 #define SP_FRANGE_NO_BEGIN 1
 #define SP_FRANGE_NO_END   2
 /* A mixed literal (1.5..5) is a Float range whose END was written as an
@@ -168,12 +168,12 @@ typedef struct{mrb_float first;mrb_float last;mrb_int excl;mrb_int omitted;}sp_F
    include?/...) materializes the element array through
    sp_StrArray_from_string_range, which is how the range behaved before it was
    a value of its own. */
-typedef struct{const char *first;const char *last;mrb_int excl;}sp_StrRange;
+typedef struct{const char *first;const char *last;sp_int excl;}sp_StrRange;
 /* A class value. `name`, when non-NULL, is a rodata class name carried by a
    class whose cls_id table entry may not exist (an exception's class -- the
    Errno:: family and many builtin error classes have no assigned cls_id). It
    takes precedence over cls_id for to_s / boxing / equality. */
-typedef struct{mrb_int cls_id;const char *name;}sp_Class;
+typedef struct{sp_int cls_id;const char *name;}sp_Class;
 /* The nil-class sentinel: a TY_CLASS value can be nil (BasicObject#superclass),
    carried in-band via a reserved cls_id with no name -- the same nullable-scalar
    convention as SP_INT_NIL for int?. It is distinct from every real class id
@@ -181,7 +181,7 @@ typedef struct{mrb_int cls_id;const char *name;}sp_Class;
    negative: the class-chain walks route a non-negative cls_id to the user-class
    table (`cur.cls_id>=0 ? sp_class_superclass : sp_builtin_superclass`), so a
    positive sentinel would be looked up as a user class. */
-#define SP_CLASS_NIL_ID ((mrb_int)-900)
+#define SP_CLASS_NIL_ID ((sp_int)-900)
 #define sp_class_nil_p(c) ((c).name == NULL && (c).cls_id == SP_CLASS_NIL_ID)
 #define SP_CLASS_NIL ((sp_Class){SP_CLASS_NIL_ID, NULL})
 /* A class known only by name (see sp_box_class_name in sp_alloc.h): marks a
@@ -191,10 +191,10 @@ typedef struct{mrb_int cls_id;const char *name;}sp_Class;
 /* fl marks a component as Float-classed (renders "2.0"); clear bits keep the
    Integer-style rendering for whole values. Zero-init (every positional
    compound literal) is the Integer-classed default. */
-typedef struct{mrb_float re;mrb_float im;unsigned char fl;}sp_Complex;
+typedef struct{sp_float re;sp_float im;unsigned char fl;}sp_Complex;
 #define SP_CPLX_RE_F 1
 #define SP_CPLX_IM_F 2
-typedef struct{mrb_int num;mrb_int den;}sp_Rational;
+typedef struct{sp_int num;sp_int den;}sp_Rational;
 typedef struct{const char *name;}sp_Encoding;
 
 /* ---- GC headers ---- */
@@ -224,16 +224,16 @@ typedef struct sp_str_hdr { struct sp_str_hdr *next; uint32_t size; uint32_t len
 
 /* ---- Typed arrays ---- */
 #define SP_STRARR_INLINE 4
-typedef struct{mrb_int*data;mrb_int start;mrb_int len;mrb_int cap;mrb_int frozen;}sp_IntArray;
-typedef struct{mrb_float*data;mrb_int len;mrb_int cap;mrb_int frozen;}sp_FloatArray;
-typedef struct{void**data;mrb_int len;mrb_int cap;void(*scan_elem)(void*);mrb_int frozen;}sp_PtrArray;
-typedef struct{const char**data;mrb_int len;mrb_int cap;mrb_int frozen;const char*inline_data[SP_STRARR_INLINE];}sp_StrArray;
+typedef struct{sp_int*data;sp_int start;sp_int len;sp_int cap;sp_int frozen;}sp_IntArray;
+typedef struct{sp_float*data;sp_int len;sp_int cap;sp_int frozen;}sp_FloatArray;
+typedef struct{void**data;sp_int len;sp_int cap;void(*scan_elem)(void*);sp_int frozen;}sp_PtrArray;
+typedef struct{const char**data;sp_int len;sp_int cap;sp_int frozen;const char*inline_data[SP_STRARR_INLINE];}sp_StrArray;
 
 /* ---- Non-poly typed hashes ---- */
-typedef struct{const char**keys;mrb_int*vals;const char**order;mrb_int len;mrb_int cap;mrb_int mask;mrb_int default_v;}sp_StrIntHash;
-typedef struct{const char**keys;const char**vals;const char**order;mrb_int len;mrb_int cap;mrb_int mask;const char*default_v;}sp_StrStrHash;
-typedef struct{mrb_int*keys;const char**vals;mrb_int*order;mrb_bool*used;mrb_int len;mrb_int cap;mrb_int mask;const char*default_v;}sp_IntStrHash;
-typedef struct{mrb_int*keys;mrb_int*vals;mrb_int*order;mrb_bool*used;mrb_int len;mrb_int cap;mrb_int mask;mrb_int default_v;}sp_IntIntHash;
+typedef struct{const char**keys;sp_int*vals;const char**order;sp_int len;sp_int cap;sp_int mask;sp_int default_v;}sp_StrIntHash;
+typedef struct{const char**keys;const char**vals;const char**order;sp_int len;sp_int cap;sp_int mask;const char*default_v;}sp_StrStrHash;
+typedef struct{sp_int*keys;const char**vals;sp_int*order;sp_bool*used;sp_int len;sp_int cap;sp_int mask;const char*default_v;}sp_IntStrHash;
+typedef struct{sp_int*keys;sp_int*vals;sp_int*order;sp_bool*used;sp_int len;sp_int cap;sp_int mask;sp_int default_v;}sp_IntIntHash;
 
 /* Signal table bound (0..64): shared by the trap state in the generated TU
    and the trap machinery in lib/sp_cold.c. */

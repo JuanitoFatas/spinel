@@ -310,7 +310,7 @@ int emit_hash_collect_expr(Compiler *c, int id, Buf *b) {
     buf_printf(g_pre, " _t%d = sp_%sHash_new();\n", tres, hn);
     emit_indent(g_pre, g_indent); buf_printf(g_pre, "SP_GC_ROOT(_t%d);\n", tres);
     emit_indent(g_pre, g_indent);
-    buf_printf(g_pre, "for (mrb_int _t%d = 0; _t%d < _t%d->len; _t%d++) {\n", ti, ti, trecv, ti);
+    buf_printf(g_pre, "for (sp_int _t%d = 0; _t%d < _t%d->len; _t%d++) {\n", ti, ti, trecv, ti);
     char *vb = emit_hash_block_eval(c, block, rt, hn, trecv, ti, 0, NULL);
     emit_indent(g_pre, g_indent + 1);
     TyKind vtt = ty_hash_val(rt);
@@ -347,7 +347,7 @@ int emit_hash_collect_expr(Compiler *c, int id, Buf *b) {
     buf_printf(g_pre, "sp_%sArray *_t%d = sp_%sArray_new();\n", rk, tres, rk);
     emit_indent(g_pre, g_indent); buf_printf(g_pre, "SP_GC_ROOT(_t%d);\n", tres);
     emit_indent(g_pre, g_indent);
-    buf_printf(g_pre, "for (mrb_int _t%d = 0; _t%d < _t%d->len; _t%d++) {\n", ti, ti, trecv, ti);
+    buf_printf(g_pre, "for (sp_int _t%d = 0; _t%d < _t%d->len; _t%d++) {\n", ti, ti, trecv, ti);
     TyKind bret;
     char *vb = emit_hash_block_eval(c, block, rt, hn, trecv, ti, block_param_name(c, block, 1) ? 1 : 2, &bret);
     emit_indent(g_pre, g_indent + 1);
@@ -420,7 +420,7 @@ int emit_hash_reduce_search_expr(Compiler *c, int id, Buf *b) {
   /* Index of the winning entry, or -1 if none qualified. The pair is built
      once after the loop, so no result array is allocated until the walk is
      done (and never at all for a no-match find, which renders as nil). */
-  emit_indent(g_pre, g_indent); buf_printf(g_pre, "mrb_int _t%d = -1;\n", twin);
+  emit_indent(g_pre, g_indent); buf_printf(g_pre, "sp_int _t%d = -1;\n", twin);
   if (is_min || is_max) {
     emit_indent(g_pre, g_indent);
     /* The best-so-far block value is held across allocating iterations, so it
@@ -430,7 +430,7 @@ int emit_hash_reduce_search_expr(Compiler *c, int id, Buf *b) {
     buf_printf(g_pre, "sp_RbVal _bk%d = sp_box_nil(); SP_GC_ROOT_RBVAL(_bk%d);\n", tbest, tbest);
   }
   emit_indent(g_pre, g_indent);
-  buf_printf(g_pre, "for (mrb_int _t%d = 0; _t%d < _t%d->len; _t%d++) {\n", ti, ti, trecv, ti);
+  buf_printf(g_pre, "for (sp_int _t%d = 0; _t%d < _t%d->len; _t%d++) {\n", ti, ti, trecv, ti);
   TyKind bret;
   char *vb = emit_hash_block_eval(c, block, rt, hn, trecv, ti, block_param_name(c, block, 1) ? 0 : 2, &bret);
   if (is_find) {
@@ -489,7 +489,7 @@ int emit_hash_sort_by_expr(Compiler *c, int id, Buf *b) {
   emit_indent(g_pre, g_indent);
   buf_printf(g_pre, "sp_PolyArray *_t%d = sp_PolyArray_new(); SP_GC_ROOT(_t%d);\n", ttmp, ttmp);
   emit_indent(g_pre, g_indent);
-  buf_printf(g_pre, "for (mrb_int _t%d = 0; _t%d < _t%d->len; _t%d++) {\n", ti, ti, trecv, ti);
+  buf_printf(g_pre, "for (sp_int _t%d = 0; _t%d < _t%d->len; _t%d++) {\n", ti, ti, trecv, ti);
   TyKind bret;
   char *vb = emit_hash_block_eval(c, block, rt, hn, trecv, ti, block_param_name(c, block, 1) ? 0 : 2, &bret);
   emit_indent(g_pre, g_indent + 1);
@@ -556,12 +556,12 @@ int emit_hash_reduce_scalar_expr(Compiler *c, int id, Buf *b) {
     emit_indent(g_pre, g_indent); buf_printf(g_pre, "SP_GC_ROOT_RBVAL(_t%d);\n", tacc);
   }
   else if (is_count || is_one)
-    buf_printf(g_pre, "mrb_int _t%d = 0;\n", tacc);   /* one? tallies, checks == 1 */
+    buf_printf(g_pre, "sp_int _t%d = 0;\n", tacc);   /* one? tallies, checks == 1 */
   else
-    buf_printf(g_pre, "mrb_bool _t%d = %s;\n", tacc, (is_all || is_none) ? "TRUE" : "FALSE");
+    buf_printf(g_pre, "sp_bool _t%d = %s;\n", tacc, (is_all || is_none) ? "TRUE" : "FALSE");
 
   emit_indent(g_pre, g_indent);
-  buf_printf(g_pre, "for (mrb_int _t%d = 0; _t%d < _t%d->len; _t%d++) {\n", ti, ti, trecv, ti);
+  buf_printf(g_pre, "for (sp_int _t%d = 0; _t%d < _t%d->len; _t%d++) {\n", ti, ti, trecv, ti);
   TyKind bret;
   char *vb = emit_hash_block_eval(c, block, rt, hn, trecv, ti, block_param_name(c, block, 1) ? 0 : 2, &bret);
   if (is_sum) {
@@ -641,7 +641,7 @@ int emit_hash_transform_expr(Compiler *c, int id, Buf *b) {
     emit_indent(g_pre, g_indent); buf_printf(g_pre, "sp_RbVal _t%d = sp_box_nil(); SP_GC_ROOT_RBVAL(_t%d);\n", tbv, tbv);
   }
   emit_indent(g_pre, g_indent);
-  buf_printf(g_pre, "for (mrb_int _t%d = 0; _t%d < _t%d->len; _t%d++) {\n", ti, ti, trecv, ti);
+  buf_printf(g_pre, "for (sp_int _t%d = 0; _t%d < _t%d->len; _t%d++) {\n", ti, ti, trecv, ti);
   TyKind bret;
   char *vb = emit_hash_block_eval(c, block, rt, hn, trecv, ti, block_param_name(c, block, 1) ? 0 : 2, &bret);
   if (is_part) {
@@ -669,7 +669,7 @@ int emit_hash_transform_expr(Compiler *c, int id, Buf *b) {
     else if (ty_is_array(bret) || bret == TY_POLY_ARRAY) {  /* flat_map, array value */
       int tj = ++g_tmp;
       emit_indent(g_pre, g_indent + 1);
-      buf_printf(g_pre, "for (mrb_int _t%d = 0; _t%d < sp_poly_arr_len(_t%d); _t%d++) sp_PolyArray_push(_t%d, sp_poly_arr_get(_t%d, _t%d));\n",
+      buf_printf(g_pre, "for (sp_int _t%d = 0; _t%d < sp_poly_arr_len(_t%d); _t%d++) sp_PolyArray_push(_t%d, sp_poly_arr_get(_t%d, _t%d));\n",
                  tj, tj, tbv, tj, tres, tbv, tj);
     }
     else {  /* flat_map, runtime-typed value: an array splices one level,
@@ -717,7 +717,7 @@ int emit_hash_group_by_expr(Compiler *c, int id, Buf *b) {
   emit_indent(g_pre, g_indent);
   buf_printf(g_pre, "sp_PolyPolyHash *_t%d = sp_PolyPolyHash_new(); SP_GC_ROOT(_t%d);\n", tres, tres);
   emit_indent(g_pre, g_indent);
-  buf_printf(g_pre, "for (mrb_int _t%d = 0; _t%d < _t%d->len; _t%d++) {\n", ti, ti, trecv, ti);
+  buf_printf(g_pre, "for (sp_int _t%d = 0; _t%d < _t%d->len; _t%d++) {\n", ti, ti, trecv, ti);
   TyKind bret;
   char *vb = emit_hash_block_eval(c, block, rt, hn, trecv, ti, block_param_name(c, block, 1) ? 0 : 2, &bret);
   emit_indent(g_pre, g_indent + 1);
@@ -840,7 +840,7 @@ int emit_transform_hash_expr(Compiler *c, int id, Buf *b) {
     emit_indent(g_pre, g_indent); emit_ctype(c, rt, g_pre);
     buf_printf(g_pre, " _t%d = sp_%sHash_new(); SP_GC_ROOT(_t%d);\n", td2, shn, td2);
     emit_indent(g_pre, g_indent);
-    buf_printf(g_pre, "for (mrb_int _t%d = 0; _t%d < _t%d->len; _t%d++) {\n", ti2, ti2, ts2, ti2);
+    buf_printf(g_pre, "for (sp_int _t%d = 0; _t%d < _t%d->len; _t%d++) {\n", ti2, ti2, ts2, ti2);
     emit_indent(g_pre, g_indent + 1); emit_ctype(c, ty_hash_key(rt), g_pre);
     if (rt == TY_POLY_POLY_HASH)
       buf_printf(g_pre, " _t%d = _t%d->keys[_t%d->order[_t%d]];\n", tk2, ts2, ts2, ti2);
@@ -867,7 +867,7 @@ int emit_transform_hash_expr(Compiler *c, int id, Buf *b) {
   Buf rb; memset(&rb, 0, sizeof rb); emit_expr(c, recv, &rb);  /* recv preludes flush to g_pre first */
   emit_indent(g_pre, g_indent); emit_ctype(c, rt, g_pre); buf_printf(g_pre, " _t%d = ", ts); buf_puts(g_pre, rb.p ? rb.p : ""); buf_puts(g_pre, ";\n"); free(rb.p);
   emit_indent(g_pre, g_indent); emit_ctype(c, dt, g_pre); buf_printf(g_pre, " _t%d = sp_%sHash_new(); SP_GC_ROOT(_t%d);\n", td, dhn, td);
-  emit_indent(g_pre, g_indent); buf_printf(g_pre, "for (mrb_int _t%d = 0; _t%d < _t%d->len; _t%d++) {\n", ti, ti, ts, ti);
+  emit_indent(g_pre, g_indent); buf_printf(g_pre, "for (sp_int _t%d = 0; _t%d < _t%d->len; _t%d++) {\n", ti, ti, ts, ti);
   emit_indent(g_pre, g_indent + 1); emit_ctype(c, skt, g_pre);
   if (rt == TY_POLY_POLY_HASH)
     buf_printf(g_pre, " _t%d = _t%d->keys[_t%d->order[_t%d]];\n", tk, ts, ts, ti);
@@ -964,7 +964,7 @@ int emit_bsearch_expr(Compiler *c, int id, Buf *b) {
   int bn = 0; const int *bb = body >= 0 ? nt_arr(nt, body, "body", &bn) : NULL;
   if (bn < 1) return 0;
   /* Float-range bsearch: a range literal with a float bound cannot ride the
-     mrb_int sp_Range, so bisect the float interval directly (CRuby find-minimum
+     sp_int sp_Range, so bisect the float interval directly (CRuby find-minimum
      over the reals, a fixed ~100-iteration halving to double precision). The
      block is truthy at/after the answer, falsy before. */
   if (recv >= 0 && ((comp_ntype(c, recv) == TY_RANGE && range_float_begin(c, recv)) ||
@@ -984,7 +984,7 @@ int emit_bsearch_expr(Compiler *c, int id, Buf *b) {
       emit_indent(g_pre, g_indent);
       buf_printf(g_pre, "double _t%d = ", fhi); emit_float_expr(c, rright, g_pre); buf_puts(g_pre, ";\n");
       emit_indent(g_pre, g_indent);
-      buf_printf(g_pre, "mrb_float _t%d = sp_float_nil(); int _t%d;\n", fres, fi);
+      buf_printf(g_pre, "sp_float _t%d = sp_float_nil(); int _t%d;\n", fres, fi);
       emit_indent(g_pre, g_indent);
       buf_printf(g_pre, "for (_t%d = 0; _t%d < 100; _t%d++) {\n", fi, fi, fi);
       emit_indent(g_pre, g_indent + 1);
@@ -1053,11 +1053,11 @@ int emit_bsearch_expr(Compiler *c, int id, Buf *b) {
   int find_any = comp_ntype(c, bb[bn - 1]) == TY_INT;
   Buf rb; memset(&rb, 0, sizeof rb); emit_expr(c, recv, &rb);
   emit_indent(g_pre, g_indent); buf_printf(g_pre, "sp_Range _t%d = ", tr); buf_puts(g_pre, rb.p ? rb.p : ""); buf_puts(g_pre, ";\n"); free(rb.p);
-  emit_indent(g_pre, g_indent); buf_printf(g_pre, "mrb_int _t%d = _t%d.first;\n", tlo, tr);
-  emit_indent(g_pre, g_indent); buf_printf(g_pre, "mrb_int _t%d = _t%d.last - _t%d.excl;\n", thi, tr, tr);
-  emit_indent(g_pre, g_indent); buf_printf(g_pre, "mrb_int _t%d = SP_INT_NIL;\n", tres);
+  emit_indent(g_pre, g_indent); buf_printf(g_pre, "sp_int _t%d = _t%d.first;\n", tlo, tr);
+  emit_indent(g_pre, g_indent); buf_printf(g_pre, "sp_int _t%d = _t%d.last - _t%d.excl;\n", thi, tr, tr);
+  emit_indent(g_pre, g_indent); buf_printf(g_pre, "sp_int _t%d = SP_INT_NIL;\n", tres);
   emit_indent(g_pre, g_indent); buf_printf(g_pre, "while (_t%d <= _t%d) {\n", tlo, thi);
-  emit_indent(g_pre, g_indent + 1); buf_printf(g_pre, "mrb_int _t%d = _t%d + (_t%d - _t%d) / 2;\n", tmid, tlo, thi, tlo);
+  emit_indent(g_pre, g_indent + 1); buf_printf(g_pre, "sp_int _t%d = _t%d + (_t%d - _t%d) / 2;\n", tmid, tlo, thi, tlo);
   if (p0) { emit_indent(g_pre, g_indent + 1); buf_printf(g_pre, "lv_%s = _t%d;\n", p0, tmid); }
   for (int j = 0; j < bn - 1; j++) emit_stmt(c, bb[j], g_pre, g_indent + 1);
   int save = g_indent; g_indent++;
@@ -1065,7 +1065,7 @@ int emit_bsearch_expr(Compiler *c, int id, Buf *b) {
   if (find_any) {
     int tcmp = ++g_tmp;
     emit_indent(g_pre, g_indent + 1);
-    buf_printf(g_pre, "mrb_int _t%d = %s;\n", tcmp, cb.p ? cb.p : "0");
+    buf_printf(g_pre, "sp_int _t%d = %s;\n", tcmp, cb.p ? cb.p : "0");
     emit_indent(g_pre, g_indent + 1);
     buf_printf(g_pre, "if (_t%d == 0) { _t%d = _t%d; break; }\n", tcmp, tres, tmid);
     emit_indent(g_pre, g_indent + 1);
@@ -1235,7 +1235,7 @@ int emit_flat_map_expr(Compiler *c, int id, Buf *b) {
   free(rb.p);
   emit_indent(g_pre, g_indent); buf_printf(g_pre, "sp_%sArray *_t%d = sp_%sArray_new(); SP_GC_ROOT(_t%d);\n", bkr, tres, bkr, tres);
   emit_indent(g_pre, g_indent);
-  buf_printf(g_pre, "for (mrb_int _t%d = 0; _t%d < sp_%sArray_length(_t%d); _t%d++) {\n", ti, ti, rk, ta, ti);
+  buf_printf(g_pre, "for (sp_int _t%d = 0; _t%d < sp_%sArray_length(_t%d); _t%d++) {\n", ti, ti, rk, ta, ti);
   if (np <= 1) {
     const char *p0 = block_param_name(c, block, 0);
     if (p0) {
@@ -1309,11 +1309,11 @@ int emit_flat_map_expr(Compiler *c, int id, Buf *b) {
     if (res_boxed) {
       char sv[64]; snprintf(sv, sizeof sv, "sp_%sArray_get(_t%d, _t%d)", bk, tbv, tj);
       Buf bx; memset(&bx, 0, sizeof bx); emit_boxed_text(c, ty_array_elem(bret), sv, &bx);
-      buf_printf(g_pre, "for (mrb_int _t%d = 0; _t%d < sp_%sArray_length(_t%d); _t%d++) sp_PolyArray_push(_t%d, %s);\n",
+      buf_printf(g_pre, "for (sp_int _t%d = 0; _t%d < sp_%sArray_length(_t%d); _t%d++) sp_PolyArray_push(_t%d, %s);\n",
                  tj, tj, bk, tbv, tj, tres, bx.p ? bx.p : sv);
       free(bx.p);
     }
-    else buf_printf(g_pre, "for (mrb_int _t%d = 0; _t%d < sp_%sArray_length(_t%d); _t%d++) sp_%sArray_push(_t%d, sp_%sArray_get(_t%d, _t%d));\n",
+    else buf_printf(g_pre, "for (sp_int _t%d = 0; _t%d < sp_%sArray_length(_t%d); _t%d++) sp_%sArray_push(_t%d, sp_%sArray_get(_t%d, _t%d));\n",
                tj, tj, bk, tbv, tj, bk, tres, bk, tbv, tj);
   }
   emit_indent(g_pre, g_indent); buf_puts(g_pre, "}\n");
@@ -1349,7 +1349,7 @@ int emit_filter_map_expr(Compiler *c, int id, Buf *b) {
   emit_indent(g_pre, g_indent); emit_ctype(c, rt, g_pre); buf_printf(g_pre, " _t%d = %s;\n", ta, rb.p ? rb.p : ""); free(rb.p);
   emit_indent(g_pre, g_indent); buf_printf(g_pre, "SP_GC_ROOT(_t%d);\n", ta);
   emit_indent(g_pre, g_indent); buf_printf(g_pre, "sp_PolyArray *_t%d = sp_PolyArray_new(); SP_GC_ROOT(_t%d);\n", tres, tres);
-  emit_indent(g_pre, g_indent); buf_printf(g_pre, "for (mrb_int _t%d = 0; _t%d < sp_%sArray_length(_t%d); _t%d++) {\n", ti, ti, k, ta, ti);
+  emit_indent(g_pre, g_indent); buf_printf(g_pre, "for (sp_int _t%d = 0; _t%d < sp_%sArray_length(_t%d); _t%d++) {\n", ti, ti, k, ta, ti);
 
   Scope *csc = p0 ? comp_scope_of(c, block) : NULL;
   LocalVar *clv0 = (csc && p0) ? scope_local(csc, p0) : NULL;
@@ -1466,10 +1466,10 @@ int emit_minmax_by_expr(Compiler *c, int id, Buf *b) {
     }
     free(rb.p);
     emit_indent(g_pre, g_indent); buf_printf(g_pre, "SP_GC_ROOT(_t%d);\n", trv);
-    emit_indent(g_pre, g_indent); buf_printf(g_pre, "mrb_int _t%d = sp_%sArray_length(_t%d);\n", tn, k, trv);
+    emit_indent(g_pre, g_indent); buf_printf(g_pre, "sp_int _t%d = sp_%sArray_length(_t%d);\n", tn, k, trv);
     emit_indent(g_pre, g_indent); buf_printf(g_pre, "sp_PolyArray *_t%d = sp_PolyArray_new(); SP_GC_ROOT(_t%d);\n", tkeys, tkeys);
     emit_indent(g_pre, g_indent); buf_printf(g_pre, "sp_IntArray *_t%d = sp_IntArray_new(); SP_GC_ROOT(_t%d);\n", tidx, tidx);
-    emit_indent(g_pre, g_indent); buf_printf(g_pre, "for (mrb_int _t%d = 0; _t%d < _t%d; _t%d++) {\n", ti, ti, tn, ti);
+    emit_indent(g_pre, g_indent); buf_printf(g_pre, "for (sp_int _t%d = 0; _t%d < _t%d; _t%d++) {\n", ti, ti, tn, ti);
     emit_indent(g_pre, g_indent + 1); buf_printf(g_pre, "lv_%s = sp_%sArray_get(_t%d, _t%d);\n", p0, k, trv, ti);
     for (int j = 0; j < bn - 1; j++) emit_stmt(c, bb[j], g_pre, g_indent + 1);
     int save = g_indent; g_indent++;
@@ -1483,9 +1483,9 @@ int emit_minmax_by_expr(Compiler *c, int id, Buf *b) {
     emit_indent(g_pre, g_indent);
     buf_printf(g_pre, "sp_sort_idx_by_poly(_t%d->data + _t%d->start, _t%d->data, _t%d);\n", tidx, tidx, tkeys, tn);
     /* a negative count is an ArgumentError in CRuby, then clamp to the element count */
-    emit_indent(g_pre, g_indent); buf_printf(g_pre, "mrb_int _t%d = ", tcnt); emit_int_expr(c, mb_argv[0], g_pre); buf_puts(g_pre, ";\n");
+    emit_indent(g_pre, g_indent); buf_printf(g_pre, "sp_int _t%d = ", tcnt); emit_int_expr(c, mb_argv[0], g_pre); buf_puts(g_pre, ";\n");
     emit_indent(g_pre, g_indent); buf_printf(g_pre, "if (_t%d < 0) sp_raise_cls(\"ArgumentError\", \"negative size\");\n", tcnt);
-    emit_indent(g_pre, g_indent); buf_printf(g_pre, "mrb_int _t%d = _t%d < _t%d ? _t%d : _t%d;\n", ttake, tcnt, tn, tcnt, tn);
+    emit_indent(g_pre, g_indent); buf_printf(g_pre, "sp_int _t%d = _t%d < _t%d ? _t%d : _t%d;\n", ttake, tcnt, tn, tcnt, tn);
     emit_indent(g_pre, g_indent); buf_printf(g_pre, "sp_PolyArray *_t%d = sp_PolyArray_new(); SP_GC_ROOT(_t%d);\n", tres, tres);
     Buf pushb; memset(&pushb, 0, sizeof pushb);
     {
@@ -1497,7 +1497,7 @@ int emit_minmax_by_expr(Compiler *c, int id, Buf *b) {
       free(eb.p);
     }
     if (is_min) {
-      emit_indent(g_pre, g_indent); buf_printf(g_pre, "for (mrb_int _t%d = 0; _t%d < _t%d; _t%d++)\n", tg, tg, ttake, tg);
+      emit_indent(g_pre, g_indent); buf_printf(g_pre, "for (sp_int _t%d = 0; _t%d < _t%d; _t%d++)\n", tg, tg, ttake, tg);
       emit_indent(g_pre, g_indent + 1); buf_puts(g_pre, pushb.p ? pushb.p : "");
     }
     else {
@@ -1508,16 +1508,16 @@ int emit_minmax_by_expr(Compiler *c, int id, Buf *b) {
          picked the later-encountered elements at a boundary tie). */
       int tii = ++g_tmp, trs = ++g_tmp, tem = ++g_tmp;
       emit_indent(g_pre, g_indent);
-      buf_printf(g_pre, "{ mrb_int _t%d = _t%d - 1; mrb_int _t%d = 0;\n", tii, tn, tem);
+      buf_printf(g_pre, "{ sp_int _t%d = _t%d - 1; sp_int _t%d = 0;\n", tii, tn, tem);
       emit_indent(g_pre, g_indent); buf_printf(g_pre, "while (_t%d >= 0 && _t%d < _t%d) {\n", tii, tem, ttake);
-      emit_indent(g_pre, g_indent + 1); buf_printf(g_pre, "mrb_int _t%d = _t%d;\n", trs, tii);
+      emit_indent(g_pre, g_indent + 1); buf_printf(g_pre, "sp_int _t%d = _t%d;\n", trs, tii);
       emit_indent(g_pre, g_indent + 1);
       buf_printf(g_pre,
                  "while (_t%d > 0 && sp_poly_eq(sp_PolyArray_get(_t%d, sp_IntArray_get(_t%d, _t%d - 1)),"
                  " sp_PolyArray_get(_t%d, sp_IntArray_get(_t%d, _t%d)))) _t%d--;\n",
                  trs, tkeys, tidx, trs, tkeys, tidx, tii, trs);
       emit_indent(g_pre, g_indent + 1);
-      buf_printf(g_pre, "for (mrb_int _t%d = _t%d; _t%d <= _t%d && _t%d < _t%d; _t%d++, _t%d++)\n",
+      buf_printf(g_pre, "for (sp_int _t%d = _t%d; _t%d <= _t%d && _t%d < _t%d; _t%d++, _t%d++)\n",
                  tg, trs, tg, tii, tem, ttake, tg, tem);
       emit_indent(g_pre, g_indent + 2); buf_puts(g_pre, pushb.p ? pushb.p : "");
       emit_indent(g_pre, g_indent + 1); buf_printf(g_pre, "_t%d = _t%d - 1;\n", tii, trs);
@@ -1545,7 +1545,7 @@ int emit_minmax_by_expr(Compiler *c, int id, Buf *b) {
     emit_indent(g_pre, g_indent); emit_ctype(c, bvt, g_pre); buf_printf(g_pre, " _t%d = %s;\n", tbvmin, default_value(bvt));
     emit_indent(g_pre, g_indent); emit_ctype(c, bvt, g_pre); buf_printf(g_pre, " _t%d = %s;\n", tbvmax, default_value(bvt));
     emit_indent(g_pre, g_indent); buf_printf(g_pre, "int _t%d = 1;\n", tf);
-    emit_indent(g_pre, g_indent); buf_printf(g_pre, "for (mrb_int _t%d = 0; _t%d < sp_%sArray_length(_t%d); _t%d++) {\n", ti, ti, k, trecv, ti);
+    emit_indent(g_pre, g_indent); buf_printf(g_pre, "for (sp_int _t%d = 0; _t%d < sp_%sArray_length(_t%d); _t%d++) {\n", ti, ti, k, trecv, ti);
     char mmelem[24];
     if (autosplat) {
       int telem = ++g_tmp;
@@ -1615,7 +1615,7 @@ int emit_minmax_by_expr(Compiler *c, int id, Buf *b) {
   /* A boxed String/Symbol best-so-far key persists across iterations whose block
      bodies allocate, so root its slot (as with the receiver above). */
   if (bvt_slot == TY_POLY) { emit_indent(g_pre, g_indent); buf_printf(g_pre, "SP_GC_ROOT_RBVAL(_t%d);\n", tbv); }
-  emit_indent(g_pre, g_indent); buf_printf(g_pre, "for (mrb_int _t%d = 0; _t%d < sp_%sArray_length(_t%d); _t%d++) {\n", ti, ti, k, trecv, ti);
+  emit_indent(g_pre, g_indent); buf_printf(g_pre, "for (sp_int _t%d = 0; _t%d < sp_%sArray_length(_t%d); _t%d++) {\n", ti, ti, k, trecv, ti);
   char mmelem[24];
   if (autosplat) {
     int telem = ++g_tmp;
@@ -1696,7 +1696,7 @@ int emit_poly_uniq_block(Compiler *c, int id, Buf *b) {
     emit_indent(g_pre, g_indent); buf_printf(g_pre, "SP_GC_ROOT(_t%d);\n", trecv);
     emit_indent(g_pre, g_indent); buf_printf(g_pre, "sp_PolyArray *_t%d = sp_PolyArray_new(); SP_GC_ROOT(_t%d);\n", tseen, tseen);
     emit_indent(g_pre, g_indent); buf_printf(g_pre, "sp_%sArray *_t%d = sp_%sArray_new(); SP_GC_ROOT(_t%d);\n", rk, tres, rk, tres);
-    emit_indent(g_pre, g_indent); buf_printf(g_pre, "for (mrb_int _t%d = 0; _t%d < _t%d->len; _t%d++) {\n", ti, ti, trecv, ti);
+    emit_indent(g_pre, g_indent); buf_printf(g_pre, "for (sp_int _t%d = 0; _t%d < _t%d->len; _t%d++) {\n", ti, ti, trecv, ti);
     int din = g_indent + 1;
     if (use_shadow) {
       clv0->type = et;
@@ -1711,7 +1711,7 @@ int emit_poly_uniq_block(Compiler *c, int id, Buf *b) {
     Buf kb; memset(&kb, 0, sizeof kb); emit_boxed(c, bb[bn - 1], &kb); g_indent = save;
     emit_indent(g_pre, din); buf_printf(g_pre, "sp_RbVal _t%d = %s;\n", tkey, kb.p ? kb.p : "sp_box_nil()"); free(kb.p);
     emit_indent(g_pre, din);
-    buf_printf(g_pre, "int _t%d = 0; for (mrb_int _t%d = 0; _t%d < _t%d->len; _t%d++) if (sp_poly_eq(_t%d->data[_t%d], _t%d)) { _t%d = 1; break; }\n",
+    buf_printf(g_pre, "int _t%d = 0; for (sp_int _t%d = 0; _t%d < _t%d->len; _t%d++) if (sp_poly_eq(_t%d->data[_t%d], _t%d)) { _t%d = 1; break; }\n",
                tdup, tj, tj, tseen, tj, tseen, tj, tkey, tdup);
     emit_indent(g_pre, din);
     buf_printf(g_pre, "if (!_t%d) { sp_PolyArray_push(_t%d, _t%d); sp_%sArray_push(_t%d, lv_%s); }\n", tdup, tseen, tkey, rk, tres, p0);
@@ -1721,7 +1721,7 @@ int emit_poly_uniq_block(Compiler *c, int id, Buf *b) {
     if (bang) {
       int tm = ++g_tmp, tn = ++g_tmp;
       emit_indent(g_pre, g_indent);
-      buf_printf(g_pre, "mrb_int _t%d = _t%d->len; _t%d->len = 0; for (mrb_int _t%d = 0; _t%d < _t%d; _t%d++) sp_%sArray_push(_t%d, sp_%sArray_get(_t%d, _t%d));\n",
+      buf_printf(g_pre, "sp_int _t%d = _t%d->len; _t%d->len = 0; for (sp_int _t%d = 0; _t%d < _t%d; _t%d++) sp_%sArray_push(_t%d, sp_%sArray_get(_t%d, _t%d));\n",
                  tn, tres, trecv, tm, tm, tn, tm, rk, trecv, rk, tres, tm);
       buf_printf(b, "_t%d", trecv);
     }
@@ -1738,7 +1738,7 @@ int emit_poly_uniq_block(Compiler *c, int id, Buf *b) {
   emit_indent(g_pre, g_indent); buf_printf(g_pre, "sp_PolyArray *_t%d = (sp_PolyArray *)_t%d.v.p;\n", tarr, trecv);
   emit_indent(g_pre, g_indent); buf_printf(g_pre, "sp_PolyArray *_t%d = sp_PolyArray_new(); SP_GC_ROOT(_t%d);\n", tseen, tseen);
   emit_indent(g_pre, g_indent); buf_printf(g_pre, "sp_PolyArray *_t%d = sp_PolyArray_new(); SP_GC_ROOT(_t%d);\n", tres, tres);
-  emit_indent(g_pre, g_indent); buf_printf(g_pre, "for (mrb_int _t%d = 0; _t%d < _t%d->len; _t%d++) {\n", ti, ti, tarr, ti);
+  emit_indent(g_pre, g_indent); buf_printf(g_pre, "for (sp_int _t%d = 0; _t%d < _t%d->len; _t%d++) {\n", ti, ti, tarr, ti);
   emit_indent(g_pre, g_indent + 1); buf_printf(g_pre, "lv_%s = _t%d->data[_t%d];\n", p0, tarr, ti);
   int save = g_indent; g_indent++;
   for (int j = 0; j < bn - 1; j++) emit_stmt(c, bb[j], g_pre, g_indent);
@@ -1746,7 +1746,7 @@ int emit_poly_uniq_block(Compiler *c, int id, Buf *b) {
   Buf kb; memset(&kb, 0, sizeof kb); emit_boxed(c, bb[bn - 1], &kb); g_indent = save;
   emit_indent(g_pre, g_indent + 1); buf_printf(g_pre, "sp_RbVal _t%d = %s;\n", tkey, kb.p ? kb.p : "sp_box_nil()"); free(kb.p);
   emit_indent(g_pre, g_indent + 1);
-  buf_printf(g_pre, "int _t%d = 0; for (mrb_int _t%d = 0; _t%d < _t%d->len; _t%d++) if (sp_poly_eq(_t%d->data[_t%d], _t%d)) { _t%d = 1; break; }\n",
+  buf_printf(g_pre, "int _t%d = 0; for (sp_int _t%d = 0; _t%d < _t%d->len; _t%d++) if (sp_poly_eq(_t%d->data[_t%d], _t%d)) { _t%d = 1; break; }\n",
              tdup, tj, tj, tseen, tj, tseen, tj, tkey, tdup);
   emit_indent(g_pre, g_indent + 1);
   buf_printf(g_pre, "if (!_t%d) { sp_PolyArray_push(_t%d, _t%d); sp_PolyArray_push(_t%d, lv_%s); }\n", tdup, tseen, tkey, tres, p0);
@@ -1754,7 +1754,7 @@ int emit_poly_uniq_block(Compiler *c, int id, Buf *b) {
   if (bang) {
     int tm = ++g_tmp;
     emit_indent(g_pre, g_indent);
-    buf_printf(g_pre, "_t%d->len = 0; for (mrb_int _t%d = 0; _t%d < _t%d->len; _t%d++) sp_PolyArray_push(_t%d, _t%d->data[_t%d]);\n",
+    buf_printf(g_pre, "_t%d->len = 0; for (sp_int _t%d = 0; _t%d < _t%d->len; _t%d++) sp_PolyArray_push(_t%d, _t%d->data[_t%d]);\n",
                tarr, tm, tm, tres, tm, tarr, tres, tm);
     buf_printf(b, "_t%d", trecv);
   }
@@ -1795,8 +1795,8 @@ int emit_gsub_block_expr(Compiler *c, int id, Buf *b) {
       tm = ++g_tmp, tms = ++g_tmp, tme = ++g_tmp;
   Buf rb; memset(&rb, 0, sizeof rb); emit_expr(c, recv, &rb);
   emit_indent(g_pre, g_indent); buf_printf(g_pre, "const char *_t%d = ", ts); buf_puts(g_pre, rb.p ? rb.p : ""); buf_puts(g_pre, ";\n"); free(rb.p);
-  emit_indent(g_pre, g_indent); buf_printf(g_pre, "mrb_int _t%d = 0;\n", tpos);
-  emit_indent(g_pre, g_indent); buf_printf(g_pre, "mrb_int _t%d = (mrb_int)strlen(_t%d);\n", tslen, ts);
+  emit_indent(g_pre, g_indent); buf_printf(g_pre, "sp_int _t%d = 0;\n", tpos);
+  emit_indent(g_pre, g_indent); buf_printf(g_pre, "sp_int _t%d = (sp_int)strlen(_t%d);\n", tslen, ts);
   emit_indent(g_pre, g_indent); buf_printf(g_pre, "sp_String *_t%d = sp_String_new(\"\"); SP_GC_ROOT(_t%d);\n", tout, tout);
   int tnd = 0, tnl = 0;
   if (strpat) {
@@ -1806,27 +1806,27 @@ int emit_gsub_block_expr(Compiler *c, int id, Buf *b) {
     buf_printf(g_pre, "const char *_t%d = %s;\n", tnd, ab.p ? ab.p : "\"\"");
     free(ab.p);
     emit_indent(g_pre, g_indent);
-    buf_printf(g_pre, "mrb_int _t%d = (mrb_int)strlen(_t%d);\n", tnl, tnd);
+    buf_printf(g_pre, "sp_int _t%d = (sp_int)strlen(_t%d);\n", tnl, tnd);
   }
   emit_indent(g_pre, g_indent); buf_printf(g_pre, "while (_t%d <= _t%d) {\n", tpos, tslen);
   if (strpat) {
     emit_indent(g_pre, g_indent + 1);
-    buf_printf(g_pre, "mrb_int _t%d = ({ const char *_h = strstr(_t%d + _t%d, _t%d); _h ? (mrb_int)(_h - (_t%d + _t%d)) : (mrb_int)-1; });\n",
+    buf_printf(g_pre, "sp_int _t%d = ({ const char *_h = strstr(_t%d + _t%d, _t%d); _h ? (sp_int)(_h - (_t%d + _t%d)) : (sp_int)-1; });\n",
                tm, ts, tpos, tnd, ts, tpos);
   }
   else {
-    emit_indent(g_pre, g_indent + 1); buf_printf(g_pre, "mrb_int _t%d = sp_re_match_at(sp_re_pat_%d, _t%d, _t%d);\n", tm, reidx, ts, tpos);
+    emit_indent(g_pre, g_indent + 1); buf_printf(g_pre, "sp_int _t%d = sp_re_match_at(sp_re_pat_%d, _t%d, _t%d);\n", tm, reidx, ts, tpos);
   }
   emit_indent(g_pre, g_indent + 1); buf_printf(g_pre, "if (_t%d < 0) { sp_String_append(_t%d, _t%d + _t%d); break; }\n", tm, tout, ts, tpos);
   if (strpat) {
-    emit_indent(g_pre, g_indent + 1); buf_printf(g_pre, "mrb_int _t%d = _t%d;\n", tms, tm);
-    emit_indent(g_pre, g_indent + 1); buf_printf(g_pre, "mrb_int _t%d = _t%d + _t%d;\n", tme, tm, tnl);
+    emit_indent(g_pre, g_indent + 1); buf_printf(g_pre, "sp_int _t%d = _t%d;\n", tms, tm);
+    emit_indent(g_pre, g_indent + 1); buf_printf(g_pre, "sp_int _t%d = _t%d + _t%d;\n", tme, tm, tnl);
   }
   else {
     /* sp_re_match_at leaves sp_re_caps full-string-relative; the scan loop works
        in offsets from `str + pos`, so rebase both onto pos (#2910). */
-    emit_indent(g_pre, g_indent + 1); buf_printf(g_pre, "mrb_int _t%d = sp_re_caps[0] - _t%d;\n", tms, tpos);
-    emit_indent(g_pre, g_indent + 1); buf_printf(g_pre, "mrb_int _t%d = sp_re_caps[1] - _t%d;\n", tme, tpos);
+    emit_indent(g_pre, g_indent + 1); buf_printf(g_pre, "sp_int _t%d = sp_re_caps[0] - _t%d;\n", tms, tpos);
+    emit_indent(g_pre, g_indent + 1); buf_printf(g_pre, "sp_int _t%d = sp_re_caps[1] - _t%d;\n", tme, tpos);
   }
   emit_indent(g_pre, g_indent + 1); buf_printf(g_pre, "sp_String_append(_t%d, sp_str_substr(_t%d + _t%d, 0, _t%d));\n", tout, ts, tpos, tms);
   if (p0) { emit_indent(g_pre, g_indent + 1); buf_printf(g_pre, "lv_%s = sp_str_substr(_t%d + _t%d, _t%d, _t%d - _t%d);\n", p0, ts, tpos, tms, tme, tms); }
@@ -1892,11 +1892,11 @@ int emit_sum_block_poly_expr(Compiler *c, int id, Buf *b) {
   int ta = ++g_tmp, tacc = ++g_tmp, ti = ++g_tmp, tn = ++g_tmp;
   buf_printf(b, "({ sp_PolyArray *_t%d = sp_poly_to_a_arr(", ta);
   emit_expr(c, recv, b);
-  buf_printf(b, "); SP_GC_ROOT(_t%d); mrb_int _t%d = _t%d->len; sp_RbVal _t%d = ",
+  buf_printf(b, "); SP_GC_ROOT(_t%d); sp_int _t%d = _t%d->len; sp_RbVal _t%d = ",
              ta, tn, ta, tacc);
   if (argc == 1) emit_boxed(c, argv[0], b);
   else buf_puts(b, "sp_box_int(0)");
-  buf_printf(b, "; SP_GC_ROOT_RBVAL(_t%d); for (mrb_int _t%d = 0; _t%d < _t%d; _t%d++) { ",
+  buf_printf(b, "; SP_GC_ROOT_RBVAL(_t%d); for (sp_int _t%d = 0; _t%d < _t%d; _t%d++) { ",
              tacc, ti, ti, tn, ti);
   if (p0r) buf_printf(b, "sp_RbVal lv_%s = _t%d->data[_t%d]; ", p0r, ta, ti);
   /* A two-param block over a boxed HASH walks [key, value] pairs, so the
@@ -1952,10 +1952,10 @@ int emit_sum_block_expr(Compiler *c, int id, Buf *b) {
   if (acct == TY_POLY) {
     int ta = ++g_tmp, tacc = ++g_tmp, ti = ++g_tmp, tn = ++g_tmp;
     buf_printf(b, "({ sp_%sArray *_t%d = ", k, ta); emit_expr(c, recv, b);
-    buf_printf(b, "; SP_GC_ROOT(_t%d); mrb_int _t%d = sp_%sArray_length(_t%d); sp_RbVal _t%d = ",
+    buf_printf(b, "; SP_GC_ROOT(_t%d); sp_int _t%d = sp_%sArray_length(_t%d); sp_RbVal _t%d = ",
                ta, tn, k, ta, tacc);
     if (argc == 1) emit_boxed(c, argv[0], b); else buf_puts(b, "sp_box_int(0)");
-    buf_printf(b, "; SP_GC_ROOT_RBVAL(_t%d); for (mrb_int _t%d = 0; _t%d < _t%d; _t%d++) { ",
+    buf_printf(b, "; SP_GC_ROOT_RBVAL(_t%d); for (sp_int _t%d = 0; _t%d < _t%d; _t%d++) { ",
                tacc, ti, ti, tn, ti);
     /* A 2+-param block over an array of sub-arrays auto-splats each element
        into the params (`sum { |v, i| v }` over [v, i] pairs); a single param
@@ -2004,12 +2004,12 @@ int emit_sum_block_expr(Compiler *c, int id, Buf *b) {
   int tc = -1, tx = -1, tt = -1;
   if (acct == TY_FLOAT) { tc = ++g_tmp; tx = ++g_tmp; tt = ++g_tmp; }
   buf_printf(b, "({ sp_%sArray *_t%d = ", k, ta); emit_expr(c, recv, b);
-  buf_printf(b, "; mrb_int _t%d = sp_%sArray_length(_t%d); ", tn, k, ta);
+  buf_printf(b, "; sp_int _t%d = sp_%sArray_length(_t%d); ", tn, k, ta);
   emit_ctype(c, acct, b); buf_printf(b, " _t%d = ", tacc);
   if (argc == 1) {
     TyKind init_t = comp_ntype(c, argv[0]);
     if (acct == TY_FLOAT && init_t == TY_INT) {
-      buf_puts(b, "(mrb_float)("); emit_expr(c, argv[0], b); buf_puts(b, ")");
+      buf_puts(b, "(sp_float)("); emit_expr(c, argv[0], b); buf_puts(b, ")");
     }
     else if (acct == TY_FLOAT && init_t == TY_POLY) {
       buf_puts(b, "sp_poly_to_f("); emit_expr(c, argv[0], b); buf_puts(b, ")");
@@ -2024,9 +2024,9 @@ int emit_sum_block_expr(Compiler *c, int id, Buf *b) {
   else {
     buf_puts(b, acct == TY_FLOAT ? "0.0" : "0");
   }
-  if (acct == TY_FLOAT) buf_printf(b, "; mrb_float _t%d = 0.0", tc);
+  if (acct == TY_FLOAT) buf_printf(b, "; sp_float _t%d = 0.0", tc);
   if (acct == TY_STRING) buf_printf(b, "; SP_GC_ROOT(_t%d)", tacc);
-  buf_printf(b, "; for (mrb_int _t%d = 0; _t%d < _t%d; _t%d++) { ", ti, ti, tn, ti);
+  buf_printf(b, "; for (sp_int _t%d = 0; _t%d < _t%d; _t%d++) { ", ti, ti, tn, ti);
   if (p0) buf_printf(b, "lv_%s = sp_%sArray_get(_t%d, _t%d); ", p0, k, ta, ti);
   /* The block's value expression may spill setup statements to g_pre (e.g.
      a nested count loop). Those must run per iteration: redirect g_pre into
@@ -2050,7 +2050,7 @@ int emit_sum_block_expr(Compiler *c, int id, Buf *b) {
     }
     else {
       /* KBN step: fold the low-order bits dropped by _tacc + _tx into _tc. */
-      buf_printf(b, "mrb_float _t%d = %s; mrb_float _t%d = _t%d + _t%d; "
+      buf_printf(b, "sp_float _t%d = %s; sp_float _t%d = _t%d + _t%d; "
                     "if (fabs(_t%d) >= fabs(_t%d)) _t%d += (_t%d - _t%d) + _t%d; "
                     "else _t%d += (_t%d - _t%d) + _t%d; _t%d = _t%d",
                  tx, valb.p ? valb.p : "0.0", tt, tacc, tx,
@@ -2129,7 +2129,7 @@ int emit_slice_when_chunk_inspect_expr(Compiler *c, int id, Buf *b) {
     emit_indent(g_pre, g_indent);
     buf_printf(g_pre, "sp_IntArray *_t%d = sp_IntArray_new(); SP_GC_ROOT(_t%d);\n", tcur, tcur);
     emit_indent(g_pre, g_indent);
-    buf_printf(g_pre, "for (mrb_int _t%d = 0; _t%d < sp_IntArray_length(_t%d); _t%d++) {\n", ti, ti, ta, ti);
+    buf_printf(g_pre, "for (sp_int _t%d = 0; _t%d < sp_IntArray_length(_t%d); _t%d++) {\n", ti, ti, ta, ti);
     emit_indent(g_pre, g_indent + 1);
     buf_printf(g_pre, "lv_%s = sp_IntArray_get(_t%d, _t%d);\n", p0, ta, ti);
     emit_indent(g_pre, g_indent + 1);
@@ -2180,9 +2180,9 @@ int emit_slice_when_chunk_inspect_expr(Compiler *c, int id, Buf *b) {
   emit_indent(g_pre, g_indent);
   buf_printf(g_pre, "sp_IntArray *_t%d = NULL;\n", tcur);
   emit_indent(g_pre, g_indent);
-  buf_printf(g_pre, "mrb_int _t%d = 0;\n", tpk);
+  buf_printf(g_pre, "sp_int _t%d = 0;\n", tpk);
   emit_indent(g_pre, g_indent);
-  buf_printf(g_pre, "for (mrb_int _t%d = 0; _t%d < sp_IntArray_length(_t%d); _t%d++) {\n", ti, ti, ta, ti);
+  buf_printf(g_pre, "for (sp_int _t%d = 0; _t%d < sp_IntArray_length(_t%d); _t%d++) {\n", ti, ti, ta, ti);
   emit_indent(g_pre, g_indent + 1);
   buf_printf(g_pre, "lv_%s = sp_IntArray_get(_t%d, _t%d);\n", p0, ta, ti);
   /* emit key expression */
@@ -2195,7 +2195,7 @@ int emit_slice_when_chunk_inspect_expr(Compiler *c, int id, Buf *b) {
   Buf kb; memset(&kb, 0, sizeof kb); emit_expr(c, bb[bn - 1], &kb); g_indent = save;
   if (lv0) lv0->type = pt0;
   emit_indent(g_pre, g_indent + 1);
-  buf_printf(g_pre, "mrb_int _tkey_%d = %s;\n", ta, kb.p ? kb.p : "0"); free(kb.p);
+  buf_printf(g_pre, "sp_int _tkey_%d = %s;\n", ta, kb.p ? kb.p : "0"); free(kb.p);
   emit_indent(g_pre, g_indent + 1);
   buf_printf(g_pre, "if (_t%d == 0 || _tkey_%d != _t%d) {\n", ti, ta, tpk);
   emit_indent(g_pre, g_indent + 2);
@@ -2214,7 +2214,7 @@ int emit_slice_when_chunk_inspect_expr(Compiler *c, int id, Buf *b) {
   emit_indent(g_pre, g_indent);
   buf_printf(g_pre, "sp_String *_t%d = sp_String_new(\"[\"); SP_GC_ROOT(_t%d);\n", tstr, tstr);
   emit_indent(g_pre, g_indent);
-  buf_printf(g_pre, "for (mrb_int _t%d = 0; _t%d < _t%d->len; _t%d++) {\n", tj, tj, tkeys, tj);
+  buf_printf(g_pre, "for (sp_int _t%d = 0; _t%d < _t%d->len; _t%d++) {\n", tj, tj, tkeys, tj);
   emit_indent(g_pre, g_indent + 1);
   buf_printf(g_pre, "if (_t%d > 0) sp_String_append(_t%d, \", \");\n", tj, tstr);
   emit_indent(g_pre, g_indent + 1);
@@ -2278,7 +2278,7 @@ static int emit_hash_chunk_first_class(Compiler *c, int pr, TyKind prt, int bloc
   emit_indent(g_pre, g_indent);
   buf_printf(g_pre, "int _t%d = 0, _t%d = 0;\n", thas, tnew);
   emit_indent(g_pre, g_indent);
-  buf_printf(g_pre, "for (mrb_int _t%d = 0; _t%d < _t%d->len; _t%d++) {\n", ti, ti, th, ti);
+  buf_printf(g_pre, "for (sp_int _t%d = 0; _t%d < _t%d->len; _t%d++) {\n", ti, ti, th, ti);
 
   /* typed key/value sources, following the hash-each iteration idiom */
   char ksrc[256], vsrc[256];
@@ -2387,9 +2387,9 @@ int emit_chunk_first_class_expr(Compiler *c, int id, Buf *b) {
   emit_indent(g_pre, g_indent);
   buf_printf(g_pre, "sp_PolyArray *_tpair_%d = NULL; SP_GC_ROOT(_tpair_%d);\n", ta, ta);
   emit_indent(g_pre, g_indent);
-  buf_printf(g_pre, "mrb_int _t%d = 0; int _t%d = 0;\n", tpk, thas);
+  buf_printf(g_pre, "sp_int _t%d = 0; int _t%d = 0;\n", tpk, thas);
   emit_indent(g_pre, g_indent);
-  buf_printf(g_pre, "for (mrb_int _t%d = 0; _t%d < sp_IntArray_length(_t%d); _t%d++) {\n", ti, ti, ta, ti);
+  buf_printf(g_pre, "for (sp_int _t%d = 0; _t%d < sp_IntArray_length(_t%d); _t%d++) {\n", ti, ti, ta, ti);
   emit_indent(g_pre, g_indent + 1);
   buf_printf(g_pre, "lv_%s = sp_IntArray_get(_t%d, _t%d);\n", p0, ta, ti);
   Scope *bsc = comp_scope_of(c, block);
@@ -2401,7 +2401,7 @@ int emit_chunk_first_class_expr(Compiler *c, int id, Buf *b) {
   Buf kb; memset(&kb, 0, sizeof kb); emit_expr(c, bb[bn - 1], &kb); g_indent = save;
   if (lv0) lv0->type = pt0;
   emit_indent(g_pre, g_indent + 1);
-  buf_printf(g_pre, "mrb_int _tkey_%d = %s;\n", ta, kb.p ? kb.p : "0"); free(kb.p);
+  buf_printf(g_pre, "sp_int _tkey_%d = %s;\n", ta, kb.p ? kb.p : "0"); free(kb.p);
   emit_indent(g_pre, g_indent + 1);
   buf_printf(g_pre, "if (!_t%d || _tkey_%d != _t%d) {\n", thas, ta, tpk);
   emit_indent(g_pre, g_indent + 2);
@@ -2459,15 +2459,15 @@ int emit_cycle_bounded_expr(Compiler *c, int id, Buf *b) {
   emit_indent(g_pre, g_indent);
   buf_printf(g_pre, "sp_%sArray *_t%d = %s; SP_GC_ROOT(_t%d);\n", k, ta, rb.p ? rb.p : "", ta); free(rb.p);
   emit_indent(g_pre, g_indent);
-  buf_printf(g_pre, "mrb_int _t%d = %s;\n", tn, nb.p ? nb.p : "0"); free(nb.p);
+  buf_printf(g_pre, "sp_int _t%d = %s;\n", tn, nb.p ? nb.p : "0"); free(nb.p);
   emit_indent(g_pre, g_indent);
   buf_printf(g_pre, "if (_t%d < 0) sp_raise_cls(\"ArgumentError\", \"attempt to take negative size\");\n", tn);
   emit_indent(g_pre, g_indent);
   buf_printf(g_pre, "sp_%sArray *_t%d = sp_%sArray_new(); SP_GC_ROOT(_t%d);\n", k, tr, k, tr);
   emit_indent(g_pre, g_indent);
-  buf_printf(g_pre, "mrb_int _t%d = sp_%sArray_length(_t%d);\n", tlen, k, ta);
+  buf_printf(g_pre, "sp_int _t%d = sp_%sArray_length(_t%d);\n", tlen, k, ta);
   emit_indent(g_pre, g_indent);
-  buf_printf(g_pre, "if (_t%d > 0) for (mrb_int _t%d = 0; _t%d < _t%d; _t%d++) "
+  buf_printf(g_pre, "if (_t%d > 0) for (sp_int _t%d = 0; _t%d < _t%d; _t%d++) "
              "sp_%sArray_push(_t%d, sp_%sArray_get(_t%d, _t%d %% _t%d));\n",
              tlen, ti, ti, tn, ti, k, tr, k, ta, ti, tlen);
   buf_printf(b, "_t%d", tr);
@@ -2522,7 +2522,7 @@ int emit_chunk_while_expr(Compiler *c, int id, Buf *b) {
   emit_indent(g_pre, g_indent);
   buf_printf(g_pre, "sp_IntArray *_t%d = sp_IntArray_new(); SP_GC_ROOT(_t%d);\n", tcur, tcur);
   emit_indent(g_pre, g_indent);
-  buf_printf(g_pre, "for (mrb_int _t%d = 0; _t%d < sp_IntArray_length(_t%d); _t%d++) {\n", ti, ti, ta, ti);
+  buf_printf(g_pre, "for (sp_int _t%d = 0; _t%d < sp_IntArray_length(_t%d); _t%d++) {\n", ti, ti, ta, ti);
   emit_indent(g_pre, g_indent + 1);
   buf_printf(g_pre, "lv_%s = sp_IntArray_get(_t%d, _t%d);\n", p0, ta, ti);
   emit_indent(g_pre, g_indent + 1);
@@ -2643,7 +2643,7 @@ static int emit_chunk_family_runs(Compiler *c, int ck) {
     buf_printf(g_pre, "int _t%d = 0;\n", thas);
   }
   emit_indent(g_pre, g_indent);
-  buf_printf(g_pre, "for (mrb_int _t%d = 0; _t%d < sp_PolyArray_length(_t%d); _t%d++) {\n", ti, ti, ta, ti);
+  buf_printf(g_pre, "for (sp_int _t%d = 0; _t%d < sp_PolyArray_length(_t%d); _t%d++) {\n", ti, ti, ta, ti);
   if (is_ck) {
     int tk = ++g_tmp;
     emit_indent(g_pre, g_indent + 1);
@@ -2840,7 +2840,7 @@ int emit_step_array_expr(Compiler *c, int id, Buf *b) {
   if (sc < 1) return 0;
   /* Rational receiver: walk the exact sequence through the poly numeric tower
      and collect the boxed Rational/Integer values into a PolyArray (#2566). */
-  /* A Bignum limit or step does not fit the mrb_int loop below; walk the
+  /* A Bignum limit or step does not fit the sp_int loop below; walk the
      sequence boxed, exactly as a Rational receiver does (#3006). */
   int bn_bound = 0;
   for (int sk = 0; sk < sc; sk++) if (comp_ntype(c, sv[sk]) == TY_BIGINT) bn_bound = 1;
@@ -2857,7 +2857,7 @@ int emit_step_array_expr(Compiler *c, int id, Buf *b) {
     if (sc >= 2) emit_boxed(c, sv[1], b); else buf_puts(b, "sp_box_int(1)");
     buf_printf(b, "; SP_GC_ROOT_RBVAL(_t%d);", tss);
     buf_printf(b, " if (sp_poly_cmp_ck(_t%d, sp_box_int(0)) == 0) sp_raise_cls(\"ArgumentError\", \"step can't be 0\");", tss);
-    buf_printf(b, " mrb_bool _t%d = sp_poly_cmp_ck(_t%d, sp_box_int(0)) > 0;", tdd, tss);
+    buf_printf(b, " sp_bool _t%d = sp_poly_cmp_ck(_t%d, sp_box_int(0)) > 0;", tdd, tss);
     buf_printf(b, " for (; _t%d ? sp_poly_le(_t%d, _t%d) : sp_poly_ge(_t%d, _t%d); _t%d = sp_poly_add(_t%d, _t%d)) sp_PolyArray_push(_t%d, _t%d);",
                tdd, tcc, tll, tcc, tll, tcc, tcc, tss, trr, tcc);
     buf_printf(b, " _t%d; })", trr);
@@ -2867,26 +2867,26 @@ int emit_step_array_expr(Compiler *c, int id, Buf *b) {
                  (sc >= 2 && comp_ntype(c, sv[1]) == TY_FLOAT);
   int tr = ++g_tmp, tl = ++g_tmp, ts = ++g_tmp, ti = ++g_tmp;
   if (!is_float) {
-    buf_printf(b, "({ sp_IntArray *_t%d = sp_IntArray_new(); SP_GC_ROOT(_t%d); mrb_int _t%d = ", tr, tr, tl);
-    emit_expr(c, sv[0], b); buf_printf(b, "; mrb_int _t%d = ", ts);
+    buf_printf(b, "({ sp_IntArray *_t%d = sp_IntArray_new(); SP_GC_ROOT(_t%d); sp_int _t%d = ", tr, tr, tl);
+    emit_expr(c, sv[0], b); buf_printf(b, "; sp_int _t%d = ", ts);
     if (sc >= 2) emit_expr(c, sv[1], b); else buf_puts(b, "1");
     /* a zero step never advances, so CRuby rejects it outright (#3648) */
     buf_printf(b, "; if (_t%d == 0) sp_raise_cls(\"ArgumentError\", \"step can't be 0\");", ts);
-    buf_printf(b, " for (mrb_int _t%d = ", ti); emit_expr(c, recv, b);
+    buf_printf(b, " for (sp_int _t%d = ", ti); emit_expr(c, recv, b);
     buf_printf(b, "; _t%d >= 0 ? _t%d <= _t%d : _t%d >= _t%d; _t%d += _t%d) sp_IntArray_push(_t%d, _t%d); _t%d; })",
                ts, ti, tl, ti, tl, ti, ts, tr, ti, tr);
     return 1;
   }
   int tb = ++g_tmp, tn = ++g_tmp;
-  buf_printf(b, "({ sp_FloatArray *_t%d = sp_FloatArray_new(); SP_GC_ROOT(_t%d); mrb_float _t%d = ", tr, tr, tb);
-  emit_expr(c, recv, b); buf_printf(b, "; mrb_float _t%d = ", tl); emit_expr(c, sv[0], b);
-  buf_printf(b, "; mrb_float _t%d = ", ts);
+  buf_printf(b, "({ sp_FloatArray *_t%d = sp_FloatArray_new(); SP_GC_ROOT(_t%d); sp_float _t%d = ", tr, tr, tb);
+  emit_expr(c, recv, b); buf_printf(b, "; sp_float _t%d = ", tl); emit_expr(c, sv[0], b);
+  buf_printf(b, "; sp_float _t%d = ", ts);
   if (sc >= 2) emit_expr(c, sv[1], b); else buf_puts(b, "1.0");
   buf_printf(b, "; if (_t%d == 0) sp_raise_cls(\"ArgumentError\", \"step can't be 0\");", ts);
-  buf_printf(b, " mrb_float _t%d_e = (fabs(_t%d)+fabs(_t%d)+fabs(_t%d-_t%d))/fabs(_t%d)*DBL_EPSILON;"
+  buf_printf(b, " sp_float _t%d_e = (fabs(_t%d)+fabs(_t%d)+fabs(_t%d-_t%d))/fabs(_t%d)*DBL_EPSILON;"
                 " if (_t%d_e > 0.5) _t%d_e = 0.5;"
-                " mrb_int _t%d = (mrb_int)floor((_t%d-_t%d)/_t%d + _t%d_e);"
-                " for (mrb_int _t%d = 0; _t%d <= _t%d; _t%d++) sp_FloatArray_push(_t%d, _t%d + _t%d * _t%d); _t%d; })",
+                " sp_int _t%d = (sp_int)floor((_t%d-_t%d)/_t%d + _t%d_e);"
+                " for (sp_int _t%d = 0; _t%d <= _t%d; _t%d++) sp_FloatArray_push(_t%d, _t%d + _t%d * _t%d); _t%d; })",
              tn, tb, tl, tl, tb, ts, tn, tn, tn, tl, tb, ts, tn, ti, ti, tn, ti, tr, tb, ti, ts, tr);
   return 1;
 }
@@ -2921,9 +2921,9 @@ int emit_inject_expr(Compiler *c, int id, Buf *b) {
                       : sp_streq(sop, "|") ? "sp_IntArray_union" : "sp_IntArray_difference";
       int ta = ++g_tmp, tn = ++g_tmp, tacc = ++g_tmp, ti = ++g_tmp;
       buf_printf(b, "({ sp_PolyArray *_t%d = ", ta); emit_expr(c, recv, b);
-      buf_printf(b, "; mrb_int _t%d = sp_PolyArray_length(_t%d); ", tn, ta);
+      buf_printf(b, "; sp_int _t%d = sp_PolyArray_length(_t%d); ", tn, ta);
       buf_printf(b, "sp_IntArray *_t%d = _t%d > 0 ? (sp_IntArray *)sp_PolyArray_get(_t%d, 0).v.p : sp_IntArray_new(); ", tacc, tn, ta);
-      buf_printf(b, "for (mrb_int _t%d = 1; _t%d < _t%d; _t%d++) _t%d = %s(_t%d, (sp_IntArray *)sp_PolyArray_get(_t%d, _t%d).v.p); ",
+      buf_printf(b, "for (sp_int _t%d = 1; _t%d < _t%d; _t%d++) _t%d = %s(_t%d, (sp_IntArray *)sp_PolyArray_get(_t%d, _t%d).v.p); ",
                  ti, ti, tn, ti, tacc, sfn, tacc, ta, ti);
       buf_printf(b, "_t%d; })", tacc);
       return 1;
@@ -2961,17 +2961,17 @@ int emit_inject_expr(Compiler *c, int id, Buf *b) {
     if (pfn) {
       int ta = ++g_tmp, tn = ++g_tmp, tacc = ++g_tmp, ti = ++g_tmp;
       buf_printf(b, "({ sp_PolyArray *_t%d = ", ta); emit_expr(c, recv, b);
-      buf_printf(b, "; SP_GC_ROOT(_t%d); mrb_int _t%d = sp_PolyArray_length(_t%d);"
+      buf_printf(b, "; SP_GC_ROOT(_t%d); sp_int _t%d = sp_PolyArray_length(_t%d);"
                     " sp_RbVal _t%d = ", ta, tn, ta, tacc);
       int start;
       if (init_node >= 0) { emit_boxed(c, init_node, b); start = 0; }
       else { buf_printf(b, "_t%d > 0 ? sp_PolyArray_get(_t%d, 0) : sp_box_nil()", tn, ta); start = 1; }
       buf_printf(b, "; SP_GC_ROOT_RBVAL(_t%d);"
-                    " for (mrb_int _t%d = %d; _t%d < _t%d; _t%d++)"
+                    " for (sp_int _t%d = %d; _t%d < _t%d; _t%d++)"
                     " _t%d = %s(_t%d, sp_PolyArray_get(_t%d, _t%d)); ",
                  tacc, ti, start, ti, tn, ti, tacc, pfn, tacc, ta, ti);
       /* the fold accumulates boxed; unbox to the call's inferred scalar type
-         so `c = [].reduce(5, :+)` lands in an mrb_int slot (#2365) */
+         so `c = [].reduce(5, :+)` lands in an sp_int slot (#2365) */
       {
         TyKind want = comp_ntype(c, id);
         char accs[24]; snprintf(accs, sizeof accs, "_t%d", tacc);
@@ -3027,7 +3027,7 @@ int emit_inject_expr(Compiler *c, int id, Buf *b) {
     const char *boxfn = et == TY_INT ? "sp_box_int" : et == TY_FLOAT ? "sp_box_float"
                       : et == TY_STRING ? "sp_box_str" : NULL;
     buf_printf(b, "({ sp_%sArray *_t%d = ", k, ta); emit_expr(c, recv, b);
-    buf_printf(b, "; mrb_int _t%d = sp_%sArray_length(_t%d); sp_sym _t%d = ", tn, k, ta, tsy);
+    buf_printf(b, "; sp_int _t%d = sp_%sArray_length(_t%d); sp_sym _t%d = ", tn, k, ta, tsy);
     /* a statically-poly operand (a `|sym|` block param over a poly array)
        carries the symbol in its .v.i slot */
     if (comp_ntype(c, symarg) == TY_SYMBOL) emit_expr(c, symarg, b);
@@ -3041,7 +3041,7 @@ int emit_inject_expr(Compiler *c, int id, Buf *b) {
       else buf_printf(b, "sp_%sArray_get(_t%d, 0)", k, ta);
       buf_puts(b, " : sp_box_nil()"); start = 1;
     }
-    buf_printf(b, "; SP_GC_ROOT_RBVAL(_t%d); for (mrb_int _t%d = %d; _t%d < _t%d; _t%d++) _t%d = sp_poly_binop_sym(_t%d, _t%d, ",
+    buf_printf(b, "; SP_GC_ROOT_RBVAL(_t%d); for (sp_int _t%d = %d; _t%d < _t%d; _t%d++) _t%d = sp_poly_binop_sym(_t%d, _t%d, ",
                tacc, ti, start, ti, tn, ti, tacc, tacc, tsy);
     if (boxfn) buf_printf(b, "%s(sp_%sArray_get(_t%d, _t%d))", boxfn, k, ta, ti);
     else buf_printf(b, "sp_%sArray_get(_t%d, _t%d)", k, ta, ti);
@@ -3062,7 +3062,7 @@ int emit_inject_expr(Compiler *c, int id, Buf *b) {
 
   int ta = ++g_tmp, tacc = ++g_tmp, ti = ++g_tmp, tn = ++g_tmp;
   buf_printf(b, "({ sp_%sArray *_t%d = ", k, ta); emit_expr(c, recv, b);
-  buf_printf(b, "; mrb_int _t%d = sp_%sArray_length(_t%d); ", tn, k, ta);
+  buf_printf(b, "; sp_int _t%d = sp_%sArray_length(_t%d); ", tn, k, ta);
   emit_ctype(c, et, b); buf_printf(b, " _t%d = ", tacc);
   int start;
   if (init >= 0) { emit_expr(c, init, b); start = 0; }
@@ -3073,7 +3073,7 @@ int emit_inject_expr(Compiler *c, int id, Buf *b) {
                    : (et == TY_STRING) ? "NULL" : default_value(et);
     buf_printf(b, "_t%d > 0 ? sp_%sArray_get(_t%d, 0) : %s", tn, k, ta, mt); start = 1;
   }
-  buf_printf(b, "; for (mrb_int _t%d = %d; _t%d < _t%d; _t%d++) _t%d = ", ti, start, ti, tn, ti, tacc);
+  buf_printf(b, "; for (sp_int _t%d = %d; _t%d < _t%d; _t%d++) _t%d = ", ti, start, ti, tn, ti, tacc);
   if (ifn)
     buf_printf(b, "%s(_t%d, sp_%sArray_get(_t%d, _t%d))", ifn, tacc, k, ta, ti);
   else if (str_op)
@@ -3305,7 +3305,7 @@ int emit_reduce_block_expr(Compiler *c, int id, Buf *b) {
   if (rlv0) rlv0->type = acc_ty;
   if (rlv1) rlv1->type = et;
   for (int j = 0; j < bn; j++) infer_subtree(c, bb[j]);  /* refresh ntype cache */
-  buf_printf(b, "for (mrb_int _t%d = %d; _t%d < sp_%sArray_length(_t%d); _t%d++) { ",
+  buf_printf(b, "for (sp_int _t%d = %d; _t%d < sp_%sArray_length(_t%d); _t%d++) { ",
              ti, start, ti, k, ta, ti);
   buf_puts(b, "{ ");
   emit_ctype(c, acc_ty, b); buf_printf(b, " lv_%s = _t%d; ", p0, tacc);
@@ -3480,7 +3480,7 @@ int emit_each_with_index_chain(Compiler *c, int id, Buf *b) {
   emit_ctype(c, acc_ty, b); buf_printf(b, " _t%d = ", tacc);
   if (init >= 0) emit_expr(c, init, b); else buf_puts(b, "0");
   buf_puts(b, "; ");
-  buf_printf(b, "mrb_int _t%d = ", tidx);
+  buf_printf(b, "sp_int _t%d = ", tidx);
   if (off >= 0) emit_expr(c, off, b); else buf_puts(b, "0");
   buf_puts(b, "; ");
 
@@ -3501,13 +3501,13 @@ int emit_each_with_index_chain(Compiler *c, int id, Buf *b) {
   }
   for (int j = 0; j < bn; j++) infer_subtree(c, bb[j]);
 
-  buf_printf(b, "for (mrb_int _t%d = 0; _t%d < sp_%sArray_length(_t%d); _t%d++, _t%d++) { ",
+  buf_printf(b, "for (sp_int _t%d = 0; _t%d < sp_%sArray_length(_t%d); _t%d++, _t%d++) { ",
              ti, ti, k, ta, ti, tidx);
   buf_puts(b, "{ ");
   emit_ctype(c, acc_ty, b); buf_printf(b, " lv_%s = _t%d; ", p0, tacc);
   if (multi) {
     emit_ctype(c, elem_t, b); buf_printf(b, " lv_%s = sp_%sArray_get(_t%d, _t%d); ", rename_local(vo), k, ta, ti);
-    buf_printf(b, "mrb_int lv_%s = _t%d; ", rename_local(io), tidx);
+    buf_printf(b, "sp_int lv_%s = _t%d; ", rename_local(io), tidx);
   }
   else {
     buf_printf(b, "sp_%sArray *lv_%s = sp_%sArray_new(); ", pk, rename_local(pairo), pk);
@@ -3606,7 +3606,7 @@ int emit_each_with_index_terminal(Compiler *c, int id, Buf *b) {
   else emit_expr(c, arr, &rb);
   emit_indent(g_pre, g_indent); emit_ctype(c, rt, g_pre); buf_printf(g_pre, " _t%d = %s;\n", ta, rb.p ? rb.p : ""); free(rb.p);
   emit_indent(g_pre, g_indent); buf_printf(g_pre, "SP_GC_ROOT(_t%d);\n", ta);
-  emit_indent(g_pre, g_indent); buf_printf(g_pre, "mrb_int _t%d = ", tidx);
+  emit_indent(g_pre, g_indent); buf_printf(g_pre, "sp_int _t%d = ", tidx);
   if (off >= 0) emit_expr(c, off, g_pre); else buf_puts(g_pre, "0");
   buf_puts(g_pre, ";\n");
 
@@ -3632,7 +3632,7 @@ int emit_each_with_index_terminal(Compiler *c, int id, Buf *b) {
     emit_indent(g_pre, g_indent); buf_printf(g_pre, "sp_%sHash *_t%d = sp_%sHash_new(); SP_GC_ROOT(_t%d);\n", toh_hcn, tres, toh_hcn, tres);
   }
   else if (is_cnt) {
-    tcnt = ++g_tmp; emit_indent(g_pre, g_indent); buf_printf(g_pre, "mrb_int _t%d = 0;\n", tcnt);
+    tcnt = ++g_tmp; emit_indent(g_pre, g_indent); buf_printf(g_pre, "sp_int _t%d = 0;\n", tcnt);
   }
   else if (is_any || is_all || is_none) {
     tflag = ++g_tmp; emit_indent(g_pre, g_indent); buf_printf(g_pre, "int _t%d = %d;\n", tflag, (is_all || is_none) ? 1 : 0);
@@ -3650,7 +3650,7 @@ int emit_each_with_index_terminal(Compiler *c, int id, Buf *b) {
   }
 
   emit_indent(g_pre, g_indent);
-  buf_printf(g_pre, "for (mrb_int _t%d = 0; _t%d < sp_%sArray_length(_t%d); _t%d++, _t%d++) {\n", ti, ti, k, ta, ti, tidx);
+  buf_printf(g_pre, "for (sp_int _t%d = 0; _t%d < sp_%sArray_length(_t%d); _t%d++, _t%d++) {\n", ti, ti, k, ta, ti, tidx);
   int din = g_indent + 1;
 
   int tpair = 0;
@@ -3670,7 +3670,7 @@ int emit_each_with_index_terminal(Compiler *c, int id, Buf *b) {
   }
   if (block >= 0) {
     emit_indent(g_pre, din); emit_ctype(c, elem_t, g_pre); buf_printf(g_pre, " lv_%s = sp_%sArray_get(_t%d, _t%d);\n", rename_local(vo), k, ta, ti);
-    emit_indent(g_pre, din); buf_printf(g_pre, "mrb_int lv_%s = _t%d;\n", rename_local(io), tidx);
+    emit_indent(g_pre, din); buf_printf(g_pre, "sp_int lv_%s = _t%d;\n", rename_local(io), tidx);
   }
 
   int body = block >= 0 ? nt_ref(nt, block, "body") : -1;
@@ -3811,11 +3811,11 @@ int emit_sortby_expr(Compiler *c, int id, Buf *b) {
   /* root the receiver: the key loop allocates (boxing keys, growing the key/index
      arrays), so a freshly-built receiver held only here must survive a mid-build GC */
   emit_indent(g_pre, g_indent); buf_printf(g_pre, "SP_GC_ROOT(_t%d);\n", trv);
-  emit_indent(g_pre, g_indent); buf_printf(g_pre, "mrb_int _t%d = sp_%sArray_length(_t%d);\n", tn, k, trv);
+  emit_indent(g_pre, g_indent); buf_printf(g_pre, "sp_int _t%d = sp_%sArray_length(_t%d);\n", tn, k, trv);
   /* boxed keys (rooted so they survive later iterations' allocations) + indices */
   emit_indent(g_pre, g_indent); buf_printf(g_pre, "sp_PolyArray *_t%d = sp_PolyArray_new(); SP_GC_ROOT(_t%d);\n", tkeys, tkeys);
   emit_indent(g_pre, g_indent); buf_printf(g_pre, "sp_IntArray *_t%d = sp_IntArray_new(); SP_GC_ROOT(_t%d);\n", tidx, tidx);
-  emit_indent(g_pre, g_indent); buf_printf(g_pre, "for (mrb_int _t%d = 0; _t%d < _t%d; _t%d++) {\n", ti, ti, tn, ti);
+  emit_indent(g_pre, g_indent); buf_printf(g_pre, "for (sp_int _t%d = 0; _t%d < _t%d; _t%d++) {\n", ti, ti, tn, ti);
   int np_sb = 0; while (block_param_name(c, block, np_sb)) np_sb++;
   if (np_sb >= 2 && rt == TY_POLY_ARRAY && !block_param_is_multi(c, block, 0)) {
     /* 2-param auto-splat: |name, age| over a poly array of sub-arrays. */
@@ -3842,7 +3842,7 @@ int emit_sortby_expr(Compiler *c, int id, Buf *b) {
   buf_printf(g_pre, "sp_sort_idx_by_poly(_t%d->data + _t%d->start, _t%d->data, _t%d);\n", tidx, tidx, tkeys, tn);
   emit_indent(g_pre, g_indent); emit_ctype(c, rt, g_pre);
   buf_printf(g_pre, " _t%d = sp_%sArray_new(); SP_GC_ROOT(_t%d);\n", tres, k, tres);
-  emit_indent(g_pre, g_indent); buf_printf(g_pre, "for (mrb_int _t%d = 0; _t%d < _t%d; _t%d++)\n", tg, tg, tn, tg);
+  emit_indent(g_pre, g_indent); buf_printf(g_pre, "for (sp_int _t%d = 0; _t%d < _t%d; _t%d++)\n", tg, tg, tn, tg);
   emit_indent(g_pre, g_indent + 1);
   buf_printf(g_pre, "sp_%sArray_push(_t%d, sp_%sArray_get(_t%d, sp_IntArray_get(_t%d, _t%d)));\n", k, tres, k, trv, tidx, tg);
   if (is_bang) {
@@ -3852,7 +3852,7 @@ int emit_sortby_expr(Compiler *c, int id, Buf *b) {
        sorted index would clobber the source. */
     int tw = ++g_tmp;
     emit_indent(g_pre, g_indent);
-    buf_printf(g_pre, "for (mrb_int _t%d = 0; _t%d < _t%d; _t%d++)\n", tw, tw, tn, tw);
+    buf_printf(g_pre, "for (sp_int _t%d = 0; _t%d < _t%d; _t%d++)\n", tw, tw, tn, tw);
     emit_indent(g_pre, g_indent + 1);
     buf_printf(g_pre, "sp_%sArray_set(_t%d, _t%d, sp_%sArray_get(_t%d, _t%d));\n", k, trv, tw, k, tres, tw);
     buf_printf(b, "_t%d", trv);
@@ -3916,22 +3916,22 @@ else {
      holds too, so a collection during the comparator cannot lose one. */
   int tw = ++g_tmp, tlo = ++g_tmp, tmid = ++g_tmp, thi = ++g_tmp, to = ++g_tmp, tbuf = ++g_tmp, tc = ++g_tmp;
   Buf ect; memset(&ect, 0, sizeof ect); emit_ctype(c, et, &ect);
-  const char *ecs = ect.p ? ect.p : "mrb_int";
-  emit_indent(g_pre, g_indent); buf_printf(g_pre, "mrb_int _t%d = sp_%sArray_length(_t%d);\n", tn, k, tr);
+  const char *ecs = ect.p ? ect.p : "sp_int";
+  emit_indent(g_pre, g_indent); buf_printf(g_pre, "sp_int _t%d = sp_%sArray_length(_t%d);\n", tn, k, tr);
   emit_indent(g_pre, g_indent);
   buf_printf(g_pre, "%s *_t%d = _t%d > 1 ? (%s *)malloc(sizeof(%s) * (size_t)_t%d) : NULL;\n", ecs, tbuf, tn, ecs, ecs, tn);
   emit_indent(g_pre, g_indent);
-  buf_printf(g_pre, "for (mrb_int _t%d = 1; _t%d && _t%d < _t%d; _t%d *= 2)\n", tw, tbuf, tw, tn, tw);
+  buf_printf(g_pre, "for (sp_int _t%d = 1; _t%d && _t%d < _t%d; _t%d *= 2)\n", tw, tbuf, tw, tn, tw);
   emit_indent(g_pre, g_indent + 1);
-  buf_printf(g_pre, "for (mrb_int _t%d = 0; _t%d < _t%d; _t%d += 2 * _t%d) {\n", tlo, tlo, tn, tlo, tw);
+  buf_printf(g_pre, "for (sp_int _t%d = 0; _t%d < _t%d; _t%d += 2 * _t%d) {\n", tlo, tlo, tn, tlo, tw);
   emit_indent(g_pre, g_indent + 2);
-  buf_printf(g_pre, "mrb_int _t%d = _t%d + _t%d; if (_t%d > _t%d) _t%d = _t%d;\n", tmid, tlo, tw, tmid, tn, tmid, tn);
+  buf_printf(g_pre, "sp_int _t%d = _t%d + _t%d; if (_t%d > _t%d) _t%d = _t%d;\n", tmid, tlo, tw, tmid, tn, tmid, tn);
   emit_indent(g_pre, g_indent + 2);
-  buf_printf(g_pre, "mrb_int _t%d = _t%d + 2 * _t%d; if (_t%d > _t%d) _t%d = _t%d;\n", thi, tlo, tw, thi, tn, thi, tn);
+  buf_printf(g_pre, "sp_int _t%d = _t%d + 2 * _t%d; if (_t%d > _t%d) _t%d = _t%d;\n", thi, tlo, tw, thi, tn, thi, tn);
   emit_indent(g_pre, g_indent + 2);
   buf_printf(g_pre, "if (_t%d >= _t%d) continue;\n", tmid, thi);
   emit_indent(g_pre, g_indent + 2);
-  buf_printf(g_pre, "mrb_int _t%d = _t%d, _t%d = _t%d, _t%d = _t%d;\n", ti, tlo, tj, tmid, to, tlo);
+  buf_printf(g_pre, "sp_int _t%d = _t%d, _t%d = _t%d, _t%d = _t%d;\n", ti, tlo, tj, tmid, to, tlo);
   emit_indent(g_pre, g_indent + 2);
   buf_printf(g_pre, "while (_t%d < _t%d && _t%d < _t%d) {\n", ti, tmid, tj, thi);
   emit_indent(g_pre, g_indent + 3); buf_printf(g_pre, "%s _t%d = sp_%sArray_get(_t%d, _t%d);\n", ecs, ta, k, tr, ti);
@@ -3953,7 +3953,7 @@ else {
   Buf cb; memset(&cb, 0, sizeof cb); emit_expr(c, bb[bn - 1], &cb);
   emit_indent(g_pre, g_indent);
   /* take from the left on a tie, so equal elements keep their order */
-  buf_printf(g_pre, "mrb_int _t%d = %s%s);\n", tc, cmp_o, cb.p ? cb.p : "0"); free(cb.p);
+  buf_printf(g_pre, "sp_int _t%d = %s%s);\n", tc, cmp_o, cb.p ? cb.p : "0"); free(cb.p);
   emit_indent(g_pre, g_indent);
   buf_printf(g_pre, "if (_t%d > 0) { _t%d[_t%d++] = _t%d; _t%d++; }\nelse { _t%d[_t%d++] = _t%d; _t%d++; }\n",
              tc, tbuf, to, tb, tj, tbuf, to, ta, ti);
@@ -3967,7 +3967,7 @@ else {
   emit_indent(g_pre, g_indent + 2);
   buf_printf(g_pre, "while (_t%d < _t%d) _t%d[_t%d++] = sp_%sArray_get(_t%d, _t%d++);\n", tj, thi, tbuf, to, k, tr, tj);
   emit_indent(g_pre, g_indent + 2);
-  buf_printf(g_pre, "for (mrb_int _q = _t%d; _q < _t%d; _q++) sp_%sArray_set(_t%d, _q, _t%d[_q]);\n", tlo, thi, k, tr, tbuf);
+  buf_printf(g_pre, "for (sp_int _q = _t%d; _q < _t%d; _q++) sp_%sArray_set(_t%d, _q, _t%d[_q]);\n", tlo, thi, k, tr, tbuf);
   emit_indent(g_pre, g_indent + 1); buf_puts(g_pre, "}\n");   /* for lo */
   emit_indent(g_pre, g_indent); buf_printf(g_pre, "free(_t%d);\n", tbuf);
   free(ect.p);
@@ -4068,11 +4068,11 @@ int emit_minmax_cmp_expr(Compiler *c, int id, Buf *b) {
   int trv = ++g_tmp, tn = ++g_tmp, tmin = ++g_tmp, tmax = ++g_tmp, ti = ++g_tmp, te = ++g_tmp, tres = ++g_tmp;
   Buf rb; memset(&rb, 0, sizeof rb); emit_expr(c, recv, &rb);
   emit_indent(g_pre, g_indent); emit_ctype(c, rt, g_pre); buf_printf(g_pre, " _t%d = ", trv); buf_puts(g_pre, rb.p ? rb.p : ""); buf_puts(g_pre, ";\n"); free(rb.p);
-  emit_indent(g_pre, g_indent); buf_printf(g_pre, "mrb_int _t%d = sp_%sArray_length(_t%d);\n", tn, k, trv);
+  emit_indent(g_pre, g_indent); buf_printf(g_pre, "sp_int _t%d = sp_%sArray_length(_t%d);\n", tn, k, trv);
   emit_indent(g_pre, g_indent); emit_ctype(c, et, g_pre);
   buf_printf(g_pre, " _t%d = _t%d > 0 ? sp_%sArray_get(_t%d, 0) : %s;\n", tmin, tn, k, trv, et == TY_RANGE ? "(sp_Range){0}" : default_value(et));
   emit_indent(g_pre, g_indent); emit_ctype(c, et, g_pre); buf_printf(g_pre, " _t%d = _t%d;\n", tmax, tmin);
-  emit_indent(g_pre, g_indent); buf_printf(g_pre, "for (mrb_int _t%d = 1; _t%d < _t%d; _t%d++) {\n", ti, ti, tn, ti);
+  emit_indent(g_pre, g_indent); buf_printf(g_pre, "for (sp_int _t%d = 1; _t%d < _t%d; _t%d++) {\n", ti, ti, tn, ti);
   emit_indent(g_pre, g_indent + 1); emit_ctype(c, et, g_pre); buf_printf(g_pre, " _t%d = sp_%sArray_get(_t%d, _t%d);\n", te, k, trv, ti);
   /* Block params may be widened to TY_POLY across multiple block sites.
      Pin them to the element type for body emission:
@@ -4167,7 +4167,7 @@ int emit_partition_expr(Compiler *c, int id, Buf *b) {
   buf_printf(g_pre, "sp_%sArray *_t%d = sp_%sArray_new();\n", k, tfalse, k);
   emit_indent(g_pre, g_indent); buf_printf(g_pre, "SP_GC_ROOT(_t%d);\n", tfalse);
   emit_indent(g_pre, g_indent);
-  buf_printf(g_pre, "for (mrb_int _t%d = 0; _t%d < sp_%sArray_length(_t%d); _t%d++) {\n",
+  buf_printf(g_pre, "for (sp_int _t%d = 0; _t%d < sp_%sArray_length(_t%d); _t%d++) {\n",
              ti, ti, k, trecv, ti);
 
   int bodyIndent = g_indent + 1;
@@ -4378,12 +4378,12 @@ int emit_collect_expr(Compiler *c, int id, Buf *b) {
             emit_indent(g_pre, g_indent); emit_ctype(c, arr_rt, g_pre);
             buf_printf(g_pre, " _t%d = %s;\n", ta_es, rb_es.p ? rb_es.p : ""); free(rb_es.p);
             emit_indent(g_pre, g_indent);
-            buf_printf(g_pre, "mrb_int _t%d = ", ts_es); emit_int_expr(c, es_argv[0], g_pre); buf_puts(g_pre, ";\n");
+            buf_printf(g_pre, "sp_int _t%d = ", ts_es); emit_int_expr(c, es_argv[0], g_pre); buf_puts(g_pre, ";\n");
             emit_indent(g_pre, g_indent);
             buf_printf(g_pre, "sp_%sArray *_t%d = sp_%sArray_new();\n", rk_es, tres_es, rk_es);
             emit_indent(g_pre, g_indent); buf_printf(g_pre, "SP_GC_ROOT(_t%d);\n", tres_es);
             emit_indent(g_pre, g_indent);
-            buf_printf(g_pre, "for (mrb_int _t%d = 0; _t%d < sp_%sArray_length(_t%d); _t%d += _t%d) {\n",
+            buf_printf(g_pre, "for (sp_int _t%d = 0; _t%d < sp_%sArray_length(_t%d); _t%d += _t%d) {\n",
                        ti_es, ti_es, k, ta_es, ti_es, ts_es);
             if (block_param_is_multi(c, block, 0)) {
               /* |(a, b)| destructuring: assign each leaf from the slice */
@@ -4454,12 +4454,12 @@ int emit_collect_expr(Compiler *c, int id, Buf *b) {
             emit_indent(g_pre, g_indent); emit_ctype(c, arr_ec, g_pre);
             buf_printf(g_pre, " _t%d = %s;\n", ta_ec, rb_ec.p ? rb_ec.p : ""); free(rb_ec.p);
             emit_indent(g_pre, g_indent);
-            buf_printf(g_pre, "mrb_int _t%d = ", tn_ec); emit_int_expr(c, ec_argv[0], g_pre); buf_puts(g_pre, ";\n");
+            buf_printf(g_pre, "sp_int _t%d = ", tn_ec); emit_int_expr(c, ec_argv[0], g_pre); buf_puts(g_pre, ";\n");
             emit_indent(g_pre, g_indent);
             buf_printf(g_pre, "sp_%sArray *_t%d = sp_%sArray_new();\n", rk_ec, tres_ec, rk_ec);
             emit_indent(g_pre, g_indent); buf_printf(g_pre, "SP_GC_ROOT(_t%d);\n", tres_ec);
             emit_indent(g_pre, g_indent);
-            buf_printf(g_pre, "for (mrb_int _t%d = 0; _t%d + _t%d - 1 < sp_%sArray_length(_t%d); _t%d++) {\n",
+            buf_printf(g_pre, "for (sp_int _t%d = 0; _t%d + _t%d - 1 < sp_%sArray_length(_t%d); _t%d++) {\n",
                        ti_ec, ti_ec, tn_ec, kec, ta_ec, ti_ec);
             int np_ec = 0; while (block_param_name(c, block, np_ec)) np_ec++;
             int is_multi_ec = block_param_is_multi(c, block, 0);
@@ -4554,9 +4554,9 @@ int emit_collect_expr(Compiler *c, int id, Buf *b) {
               emit_indent(g_pre, g_indent); emit_ctype(c, arr_wi, g_pre);
               buf_printf(g_pre, " _t%d = %s;\n", ta_wi, rb_wi.p ? rb_wi.p : ""); free(rb_wi.p);
               emit_indent(g_pre, g_indent);
-              buf_printf(g_pre, "mrb_int _t%d = ", tn_wi); emit_int_expr(c, ec_argv2[0], g_pre); buf_puts(g_pre, ";\n");
+              buf_printf(g_pre, "sp_int _t%d = ", tn_wi); emit_int_expr(c, ec_argv2[0], g_pre); buf_puts(g_pre, ";\n");
               emit_indent(g_pre, g_indent);
-              buf_printf(g_pre, "mrb_int _t%d = ", toff_wi);
+              buf_printf(g_pre, "sp_int _t%d = ", toff_wi);
               if (wi_argc > 0 && wi_argv) { emit_expr(c, wi_argv[0], g_pre); }
               else { buf_puts(g_pre, "0"); }
               buf_puts(g_pre, ";\n");
@@ -4564,9 +4564,9 @@ int emit_collect_expr(Compiler *c, int id, Buf *b) {
               buf_printf(g_pre, "sp_%sArray *_t%d = sp_%sArray_new();\n", rk_wi, tres_wi, rk_wi);
               emit_indent(g_pre, g_indent); buf_printf(g_pre, "SP_GC_ROOT(_t%d);\n", tres_wi);
               emit_indent(g_pre, g_indent);
-              buf_printf(g_pre, "mrb_int _t%d = _t%d;\n", tidx_wi, toff_wi);
+              buf_printf(g_pre, "sp_int _t%d = _t%d;\n", tidx_wi, toff_wi);
               emit_indent(g_pre, g_indent);
-              buf_printf(g_pre, "for (mrb_int _t%d = 0; _t%d + _t%d - 1 < sp_%sArray_length(_t%d); _t%d++, _t%d++) {\n",
+              buf_printf(g_pre, "for (sp_int _t%d = 0; _t%d + _t%d - 1 < sp_%sArray_length(_t%d); _t%d++, _t%d++) {\n",
                          ti_wi, ti_wi, tn_wi, kwi, ta_wi, ti_wi, tidx_wi);
               /* assign second param (index) */
               const char *idx_p_wi = block_param_name(c, block, 1);
@@ -4683,13 +4683,13 @@ int emit_collect_expr(Compiler *c, int id, Buf *b) {
     emit_indent(g_pre, g_indent);
     buf_printf(g_pre, "SP_GC_ROOT_RBVAL(_t%d);\n", trecv2);
     emit_indent(g_pre, g_indent);
-    buf_printf(g_pre, "mrb_int _t%d = sp_poly_length(_t%d);\n", tn2, trecv2);
+    buf_printf(g_pre, "sp_int _t%d = sp_poly_length(_t%d);\n", tn2, trecv2);
     emit_indent(g_pre, g_indent);
     buf_printf(g_pre, "sp_%sArray *_t%d = sp_%sArray_new();\n", rk2, tres2, rk2);
     emit_indent(g_pre, g_indent);
     buf_printf(g_pre, "SP_GC_ROOT(_t%d);\n", tres2);
     emit_indent(g_pre, g_indent);
-    buf_printf(g_pre, "for (mrb_int _t%d = 0; _t%d < _t%d; _t%d++) {\n",
+    buf_printf(g_pre, "for (sp_int _t%d = 0; _t%d < _t%d; _t%d++) {\n",
                ti2, ti2, tn2, ti2);
     /* pin block param to TY_POLY via shadow declaration */
     Scope *csc2 = p0p ? comp_scope_of(c, block) : NULL;
@@ -4781,17 +4781,17 @@ int emit_collect_expr(Compiler *c, int id, Buf *b) {
       int tr = ++g_tmp;
       buf_printf(g_pre, "sp_Range _t%d = %s;\n", tr, rb0.p ? rb0.p : "");
       emit_indent(g_pre, g_indent);
-      buf_printf(g_pre, "mrb_int _t%d = _t%d.last - _t%d.excl - _t%d.first + 1; if (_t%d < 0) _t%d = 0;\n",
+      buf_printf(g_pre, "sp_int _t%d = _t%d.last - _t%d.excl - _t%d.first + 1; if (_t%d < 0) _t%d = 0;\n",
                  tlen, tr, tr, tr, tlen, tlen);
     }
     else {
-      buf_printf(g_pre, "mrb_int _t%d = sp_%sArray_length(%s);\n", tlen, k, rb0.p ? rb0.p : "NULL");
+      buf_printf(g_pre, "sp_int _t%d = sp_%sArray_length(%s);\n", tlen, k, rb0.p ? rb0.p : "NULL");
     }
     free(rb0.p);
     emit_indent(g_pre, g_indent);
     buf_printf(g_pre, "sp_PolyArray *_t%d = sp_PolyArray_new(); SP_GC_ROOT(_t%d);\n", tres0, tres0);
     emit_indent(g_pre, g_indent);
-    buf_printf(g_pre, "for (mrb_int _t%d = 0; _t%d < _t%d; _t%d++) sp_PolyArray_push(_t%d, sp_box_nil());\n",
+    buf_printf(g_pre, "for (sp_int _t%d = 0; _t%d < _t%d; _t%d++) sp_PolyArray_push(_t%d, sp_box_nil());\n",
                ti0, ti0, tlen, ti0, tres0);
     buf_printf(b, "_t%d", tres0);
     return 1;
@@ -4826,7 +4826,7 @@ int emit_collect_expr(Compiler *c, int id, Buf *b) {
   emit_indent(g_pre, g_indent);
   buf_printf(g_pre, "SP_GC_ROOT(_t%d);\n", tres);
   emit_indent(g_pre, g_indent);
-  buf_printf(g_pre, "for (mrb_int _t%d = 0; _t%d < sp_%sArray_length(_t%d); _t%d++) {\n", ti, ti, k, trecv, ti);
+  buf_printf(g_pre, "for (sp_int _t%d = 0; _t%d < sp_%sArray_length(_t%d); _t%d++) {\n", ti, ti, k, trecv, ti);
 
   TyKind et_elem = ty_array_elem(rt);
   /* 2-param auto-splat: |a, b| over a poly array whose elements are sub-arrays
@@ -5007,7 +5007,7 @@ int emit_with_index_expr(Compiler *c, int id, Buf *b) {
   buf_printf(g_pre, " _t%d = %s;\n", trecv, rb.p ? rb.p : ""); free(rb.p);
   emit_indent(g_pre, g_indent); buf_printf(g_pre, "SP_GC_ROOT(_t%d);\n", trecv);
   /* running index, seeded with the offset */
-  emit_indent(g_pre, g_indent); buf_printf(g_pre, "mrb_int _t%d = ", tidx);
+  emit_indent(g_pre, g_indent); buf_printf(g_pre, "sp_int _t%d = ", tidx);
   if (wi_argc > 0 && wi_argv) emit_expr(c, wi_argv[0], g_pre); else buf_puts(g_pre, "0");
   buf_puts(g_pre, ";\n");
   if (collecting) {
@@ -5015,7 +5015,7 @@ int emit_with_index_expr(Compiler *c, int id, Buf *b) {
     emit_indent(g_pre, g_indent); buf_printf(g_pre, "SP_GC_ROOT(_t%d);\n", tres);
   }
   emit_indent(g_pre, g_indent);
-  buf_printf(g_pre, "for (mrb_int _t%d = 0; _t%d < sp_%sArray_length(_t%d); _t%d++, _t%d++) {\n",
+  buf_printf(g_pre, "for (sp_int _t%d = 0; _t%d < sp_%sArray_length(_t%d); _t%d++, _t%d++) {\n",
              ti, ti, k, trecv, ti, tidx);
 
   int innerIndent = g_indent + 1;
@@ -5228,7 +5228,7 @@ int emit_enum_find_expr(Compiler *c, int id, Buf *b) {
   buf_puts(g_pre, "}\n");
   if (f_ifnone) {
     emit_indent(g_pre, g_indent);
-    buf_printf(g_pre, "if (!_tf%d) _t%d = ((void)sp_proc_call(_t%d, 0, (mrb_int[16]){0}), _sp_proc_poly_ret);\n",
+    buf_printf(g_pre, "if (!_tf%d) _t%d = ((void)sp_proc_call(_t%d, 0, (sp_int[16]){0}), _sp_proc_poly_ret);\n",
                tfn, tres, tfn);
   }
   buf_printf(b, "_t%d", tres);
@@ -5268,12 +5268,12 @@ int emit_enum_with_index_expr(Compiler *c, int id, Buf *b) {
   buf_printf(g_pre, "sp_PolyArray *_t%d = sp_Enumerator_to_a(_t%d); SP_GC_ROOT(_t%d);\n",
              ta, te, ta);
   emit_indent(g_pre, g_indent);
-  buf_printf(g_pre, "mrb_int _t%d = ", toff);
+  buf_printf(g_pre, "sp_int _t%d = ", toff);
   if (wargc == 1 && wargv) emit_int_expr(c, wargv[0], g_pre);
   else buf_puts(g_pre, "0");
   buf_puts(g_pre, ";\n");
   emit_indent(g_pre, g_indent);
-  buf_printf(g_pre, "for (mrb_int _t%d = 0; _t%d < sp_PolyArray_length(_t%d); _t%d++) {\n",
+  buf_printf(g_pre, "for (sp_int _t%d = 0; _t%d < sp_PolyArray_length(_t%d); _t%d++) {\n",
              ti, ti, ta, ti);
   Scope *bs = comp_scope_of(c, block);
   if (p0) {
@@ -5350,14 +5350,14 @@ int emit_find_index_poly_expr(Compiler *c, int id, Buf *b) {
   emit_indent(g_pre, g_indent);
   buf_printf(g_pre, "SP_GC_ROOT_RBVAL(_t%d);\n", trecv);
   emit_indent(g_pre, g_indent);
-  buf_printf(g_pre, "mrb_int _t%d = sp_poly_arr_len_ex(_t%d);\n", tlen, trecv);
+  buf_printf(g_pre, "sp_int _t%d = sp_poly_arr_len_ex(_t%d);\n", tlen, trecv);
   emit_indent(g_pre, g_indent);
-  buf_printf(g_pre, "mrb_int _t%d = SP_INT_NIL;\n", tres);
+  buf_printf(g_pre, "sp_int _t%d = SP_INT_NIL;\n", tres);
   emit_indent(g_pre, g_indent);
   if (rev)
-    buf_printf(g_pre, "for (mrb_int _t%d = _t%d - 1; _t%d >= 0; _t%d--) {\n", ti, tlen, ti, ti);
+    buf_printf(g_pre, "for (sp_int _t%d = _t%d - 1; _t%d >= 0; _t%d--) {\n", ti, tlen, ti, ti);
   else
-    buf_printf(g_pre, "for (mrb_int _t%d = 0; _t%d < _t%d; _t%d++) {\n", ti, ti, tlen, ti);
+    buf_printf(g_pre, "for (sp_int _t%d = 0; _t%d < _t%d; _t%d++) {\n", ti, ti, tlen, ti);
   int bi = g_indent + 1;
   int nparam = 0; while (block_param_name(c, block, nparam)) nparam++;
   if (nparam >= 2 && !block_param_is_multi(c, block, 0)) {
@@ -5449,11 +5449,11 @@ int emit_predicate_expr(Compiler *c, int id, Buf *b) {
     emit_indent(g_pre, g_indent);
     emit_poly_iter_obj_normalize(c, trecv, g_pre);
     emit_indent(g_pre, g_indent);
-    buf_printf(g_pre, "mrb_int _t%d = sp_poly_arr_len_ex(_t%d);\n", tlen, trecv);
+    buf_printf(g_pre, "sp_int _t%d = sp_poly_arr_len_ex(_t%d);\n", tlen, trecv);
     emit_indent(g_pre, g_indent);
-    buf_printf(g_pre, "mrb_int _t%d = 0;\n", tcnt);
+    buf_printf(g_pre, "sp_int _t%d = 0;\n", tcnt);
     emit_indent(g_pre, g_indent);
-    buf_printf(g_pre, "for (mrb_int _t%d = 0; _t%d < _t%d; _t%d++) {\n", ti, ti, tlen, ti);
+    buf_printf(g_pre, "for (sp_int _t%d = 0; _t%d < _t%d; _t%d++) {\n", ti, ti, tlen, ti);
     int bodyIndentP = g_indent + 1;
     {
       /* A multi-param block over a boxed receiver auto-splats each element,
@@ -5508,9 +5508,9 @@ int emit_predicate_expr(Compiler *c, int id, Buf *b) {
   emit_indent(g_pre, g_indent);
   buf_printf(g_pre, "SP_GC_ROOT(_t%d);\n", trecv);
   emit_indent(g_pre, g_indent);
-  buf_printf(g_pre, "mrb_int _t%d = 0;\n", tcnt);
+  buf_printf(g_pre, "sp_int _t%d = 0;\n", tcnt);
   emit_indent(g_pre, g_indent);
-  buf_printf(g_pre, "for (mrb_int _t%d = 0; _t%d < sp_%sArray_length(_t%d); _t%d++) {\n", ti, ti, k, trecv, ti);
+  buf_printf(g_pre, "for (sp_int _t%d = 0; _t%d < sp_%sArray_length(_t%d); _t%d++) {\n", ti, ti, k, trecv, ti);
   int bodyIndent = g_indent + 1;
   char es_pr[64]; snprintf(es_pr, sizeof es_pr, "sp_%sArray_get(_t%d, _t%d)", k, trecv, ti);
   if (!emit_iter_autosplat(c, block, rt, es_pr, bodyIndent) && p0) {
@@ -5578,7 +5578,7 @@ int emit_grep_pred(Compiler *c, int pat, const char *ev, TyKind et, Buf *b) {
   if (pty && sp_streq(pty, "RangeNode")) {
     int tr = ++g_tmp;
     buf_printf(b, "({ sp_Range _t%d = ", tr); emit_expr(c, pat, b);
-    /* sp_range_include takes mrb_int; coerce a poly scrutinee with sp_poly_to_i. */
+    /* sp_range_include takes sp_int; coerce a poly scrutinee with sp_poly_to_i. */
     if (et == TY_POLY) buf_printf(b, "; sp_range_include(&_t%d, sp_poly_to_i(%s)); })", tr, ev);
     else buf_printf(b, "; sp_range_include(&_t%d, %s); })", tr, ev);
     return 1;
@@ -5719,7 +5719,7 @@ int emit_grep_expr(Compiler *c, int id, Buf *b) {
   emit_indent(g_pre, g_indent);
   buf_printf(g_pre, "SP_GC_ROOT(_t%d);\n", tres);
   emit_indent(g_pre, g_indent);
-  buf_printf(g_pre, "for (mrb_int _t%d = 0; _t%d < sp_%sArray_length(_t%d); _t%d++) {\n", ti, ti, k, trecv, ti);
+  buf_printf(g_pre, "for (sp_int _t%d = 0; _t%d < sp_%sArray_length(_t%d); _t%d++) {\n", ti, ti, k, trecv, ti);
   emit_indent(g_pre, g_indent + 1);
   buf_printf(g_pre, "%s _t%d = sp_%sArray_get(_t%d, _t%d);\n", c_type_name(et), te, k, trecv, ti);
   emit_indent(g_pre, g_indent + 1);
@@ -5929,7 +5929,7 @@ void emit_arg_or_default(Compiler *c, Scope *m, int idx, int provided, Buf *out)
          at bigint rather than widening to poly -- but the promotion was only
          wired into the arithmetic operands, so `def f(x) = x.to_s` called with
          both 1 and 2**200 typed its parameter sp_Bigint* and then passed it a
-         raw mrb_int. */
+         raw sp_int. */
       if (pt == TY_BIGINT && at != TY_BIGINT && at != TY_POLY && ty_is_numeric(at)) {
         buf_puts(out, "sp_bigint_new_int("); emit_int_expr(c, provided, out); buf_puts(out, ")");
         return;
@@ -5970,7 +5970,7 @@ void emit_arg_or_default(Compiler *c, Scope *m, int idx, int provided, Buf *out)
         }
         /* A concrete str-keyed hash arg (StrStrHash / StrIntHash) into a
            poly-valued hash param (StrPolyHash): the two structs store values
-           differently (const char* / mrb_int vs sp_RbVal), so a raw pointer
+           differently (const char* / sp_int vs sp_RbVal), so a raw pointer
            pass reinterprets the layout and corrupts every read. Rebuild via the
            value-boxing converter, mirroring the local-assignment coercion in
            codegen_stmt.c. */
@@ -5999,7 +5999,7 @@ void emit_arg_or_default(Compiler *c, Scope *m, int idx, int provided, Buf *out)
         }
         /* A concrete typed array arg (IntArray/StrArray/FloatArray) into a
            poly-array param: the structs store elements differently (raw
-           mrb_int / const char ptr / mrb_float vs boxed sp_RbVal), a raw pointer
+           sp_int / const char ptr / sp_float vs boxed sp_RbVal), a raw pointer
            pass reinterprets the layout and every read is garbage -- pop
            returned a boxed nil built from a char* (#3137). Rebuild through
            the boxing converter, mirroring the local-assignment coercion. */
@@ -6013,7 +6013,7 @@ void emit_arg_or_default(Compiler *c, Scope *m, int idx, int provided, Buf *out)
         }
         /* poly arg into a concrete param (holds the right type at runtime):
            coerce, else the generated C assigns sp_RbVal to a const char* /
-           mrb_int / mrb_float / sp_<Class>* slot. */
+           sp_int / sp_float / sp_<Class>* slot. */
         const char *ptn = c_type_name(pt);
         /* a literal/derived nil argument into a nullable scalar param carries
            the type's nil sentinel, exactly like a nil DEFAULT does below --
@@ -6114,7 +6114,7 @@ else if (dty && sp_streq(dty, "NilNode")) {
   }
   else if (pt == TY_POLY) emit_boxed(c, dv, out);
   /* Same boundary promotion the supplied-argument path does: an int DEFAULT
-     (`def f(x = 7)`) reaching a bigint parameter is an mrb_int in a
+     (`def f(x = 7)`) reaching a bigint parameter is an sp_int in a
      sp_Bigint* slot without it. */
   else if (pt == TY_BIGINT && comp_ntype(c, dv) != TY_BIGINT &&
            ty_is_numeric(comp_ntype(c, dv))) {
@@ -6288,13 +6288,13 @@ void emit_rest_pack_kwh(Compiler *c, int from, int pos_argc, const int *argv, in
       else at = TY_UNKNOWN;
       const char *ap = arr.p ? arr.p : "NULL";
       if (at == TY_INT_ARRAY)
-        buf_printf(b, " { sp_IntArray *_sa = %s; for (mrb_int _si = 0; _si < _sa->len; _si++) sp_PolyArray_push(_t%d, sp_box_int(_sa->data[_sa->start+_si])); }", ap, t);
+        buf_printf(b, " { sp_IntArray *_sa = %s; for (sp_int _si = 0; _si < _sa->len; _si++) sp_PolyArray_push(_t%d, sp_box_int(_sa->data[_sa->start+_si])); }", ap, t);
       else if (at == TY_STR_ARRAY)
-        buf_printf(b, " { sp_StrArray *_sa = %s; for (mrb_int _si = 0; _si < _sa->len; _si++) sp_PolyArray_push(_t%d, sp_box_str(_sa->data[_si])); }", ap, t);
+        buf_printf(b, " { sp_StrArray *_sa = %s; for (sp_int _si = 0; _si < _sa->len; _si++) sp_PolyArray_push(_t%d, sp_box_str(_sa->data[_si])); }", ap, t);
       else if (at == TY_FLOAT_ARRAY)
-        buf_printf(b, " { sp_FloatArray *_sa = %s; for (mrb_int _si = 0; _si < _sa->len; _si++) sp_PolyArray_push(_t%d, sp_box_float(_sa->data[_si])); }", ap, t);
+        buf_printf(b, " { sp_FloatArray *_sa = %s; for (sp_int _si = 0; _si < _sa->len; _si++) sp_PolyArray_push(_t%d, sp_box_float(_sa->data[_si])); }", ap, t);
       else if (at == TY_POLY_ARRAY)
-        buf_printf(b, " { sp_PolyArray *_sa = %s; for (mrb_int _si = 0; _si < _sa->len; _si++) sp_PolyArray_push(_t%d, _sa->data[_si]); }", ap, t);
+        buf_printf(b, " { sp_PolyArray *_sa = %s; for (sp_int _si = 0; _si < _sa->len; _si++) sp_PolyArray_push(_t%d, _sa->data[_si]); }", ap, t);
       else { /* scalar splat: single element */
         Buf el; memset(&el, 0, sizeof el);
         emit_boxed(c, inner, &el);
@@ -6348,13 +6348,13 @@ void emit_rest_from_splat_and_argv(int tmp, TyKind at, int from_idx,
   buf_printf(b, "({ sp_PolyArray *_t%d = sp_PolyArray_new(); SP_GC_ROOT(_t%d);", t, t);
   /* elements from the splatted array starting at from_idx */
   if (at == TY_INT_ARRAY)
-    buf_printf(b, " if (_t%d) for (mrb_int _si = %d; _si < _t%d->len; _si++) sp_PolyArray_push(_t%d, sp_box_int(_t%d->data[_t%d->start+_si]));", tmp, from_idx, tmp, t, tmp, tmp);
+    buf_printf(b, " if (_t%d) for (sp_int _si = %d; _si < _t%d->len; _si++) sp_PolyArray_push(_t%d, sp_box_int(_t%d->data[_t%d->start+_si]));", tmp, from_idx, tmp, t, tmp, tmp);
   else if (at == TY_STR_ARRAY)
-    buf_printf(b, " if (_t%d) for (mrb_int _si = %d; _si < _t%d->len; _si++) sp_PolyArray_push(_t%d, sp_box_str(_t%d->data[_si]));", tmp, from_idx, tmp, t, tmp);
+    buf_printf(b, " if (_t%d) for (sp_int _si = %d; _si < _t%d->len; _si++) sp_PolyArray_push(_t%d, sp_box_str(_t%d->data[_si]));", tmp, from_idx, tmp, t, tmp);
   else if (at == TY_FLOAT_ARRAY)
-    buf_printf(b, " if (_t%d) for (mrb_int _si = %d; _si < _t%d->len; _si++) sp_PolyArray_push(_t%d, sp_box_float(_t%d->data[_si]));", tmp, from_idx, tmp, t, tmp);
+    buf_printf(b, " if (_t%d) for (sp_int _si = %d; _si < _t%d->len; _si++) sp_PolyArray_push(_t%d, sp_box_float(_t%d->data[_si]));", tmp, from_idx, tmp, t, tmp);
   else if (at == TY_POLY_ARRAY)
-    buf_printf(b, " if (_t%d) for (mrb_int _si = %d; _si < _t%d->len; _si++) sp_PolyArray_push(_t%d, _t%d->data[_si]);", tmp, from_idx, tmp, t, tmp);
+    buf_printf(b, " if (_t%d) for (sp_int _si = %d; _si < _t%d->len; _si++) sp_PolyArray_push(_t%d, _t%d->data[_si]);", tmp, from_idx, tmp, t, tmp);
   /* then suffix args after the splat */
   for (int j = argv_from; j < pos_argc; j++) {
     const char *jty = argv ? nt_type(c->nt, argv[j]) : NULL;
@@ -6364,9 +6364,9 @@ void emit_rest_from_splat_and_argv(int tmp, TyKind at, int from_idx,
       Buf arr2; memset(&arr2, 0, sizeof arr2); emit_expr(c, inner2, &arr2);
       const char *ap2 = arr2.p ? arr2.p : "NULL";
       if (at2 == TY_INT_ARRAY)
-        buf_printf(b, " { sp_IntArray *_sa = %s; for (mrb_int _si = 0; _si < _sa->len; _si++) sp_PolyArray_push(_t%d, sp_box_int(_sa->data[_sa->start+_si])); }", ap2, t);
+        buf_printf(b, " { sp_IntArray *_sa = %s; for (sp_int _si = 0; _si < _sa->len; _si++) sp_PolyArray_push(_t%d, sp_box_int(_sa->data[_sa->start+_si])); }", ap2, t);
       else if (at2 == TY_POLY_ARRAY)
-        buf_printf(b, " { sp_PolyArray *_sa = %s; for (mrb_int _si = 0; _si < _sa->len; _si++) sp_PolyArray_push(_t%d, _sa->data[_si]); }", ap2, t);
+        buf_printf(b, " { sp_PolyArray *_sa = %s; for (sp_int _si = 0; _si < _sa->len; _si++) sp_PolyArray_push(_t%d, _sa->data[_si]); }", ap2, t);
       else { Buf el2; memset(&el2, 0, sizeof el2); emit_boxed(c, inner2, &el2); buf_printf(b, " sp_PolyArray_push(_t%d, %s);", t, el2.p ? el2.p : "sp_box_nil()"); free(el2.p); }
       free(arr2.p);
     }
@@ -6549,7 +6549,7 @@ void emit_ds_param_extract(Compiler *c, Scope *m, int i, int ds_hash_tmp,
       Buf db; memset(&db, 0, sizeof db);
       emit_arg_or_default(c, m, i, -1, &db);
       buf_printf(out,
-                 "({ mrb_bool _f=0; sp_RbVal _v = sp_poly_hash_get_pair_val(_t%d, "
+                 "({ sp_bool _f=0; sp_RbVal _v = sp_poly_hash_get_pair_val(_t%d, "
                  "sp_box_sym(sp_sym_intern(\"%s\")), &_f); _f ? (%s) : (%s); })",
                  ds_hash_tmp, m->pnames[i], ub.p ? ub.p : "_v",
                  db.p ? db.p : default_value(pt));
@@ -6557,7 +6557,7 @@ void emit_ds_param_extract(Compiler *c, Scope *m, int i, int ds_hash_tmp,
     }
     else {
       buf_printf(out,
-                 "({ mrb_bool _f=0; sp_RbVal _v = sp_poly_hash_get_pair_val(_t%d, "
+                 "({ sp_bool _f=0; sp_RbVal _v = sp_poly_hash_get_pair_val(_t%d, "
                  "sp_box_sym(sp_sym_intern(\"%s\")), &_f); (void)_f; (%s); })",
                  ds_hash_tmp, m->pnames[i], ub.p ? ub.p : "_v");
     }
@@ -6951,7 +6951,7 @@ void emit_args_filled(Compiler *c, int callee_idx, int argsNode, const char *lea
               snprintf(expbuf, sizeof expbuf, "expected %d..%d", m->nrequired, m->nparams);
             int gv = ++g_tmp;
             emit_indent(g_pre, g_indent);
-            buf_printf(g_pre, "mrb_int _t%d = %d + (_t%d ? _t%d->len : 0);\n", gv, splat_idx, splat_tmp, splat_tmp);
+            buf_printf(g_pre, "sp_int _t%d = %d + (_t%d ? _t%d->len : 0);\n", gv, splat_idx, splat_tmp, splat_tmp);
             emit_indent(g_pre, g_indent);
             buf_printf(g_pre,
                        "if (_t%d < %d || _t%d > %d) sp_raise_cls(\"ArgumentError\", sp_sprintf(\"wrong number of arguments (given %%lld, %s)\", (long long)_t%d));\n",
@@ -7401,7 +7401,7 @@ void emit_dispatch(Compiler *c, int cid, const char *name,
             snprintf(expbuf, sizeof expbuf, "expected %d..%d", m->nrequired, m->nparams);
           int gv = ++g_tmp;
           emit_indent(g_pre, g_indent);
-          buf_printf(g_pre, "mrb_int _t%d = %d + (_t%d ? _t%d->len : 0);\n", gv, splat_idx_d, splat_tmp_d, splat_tmp_d);
+          buf_printf(g_pre, "sp_int _t%d = %d + (_t%d ? _t%d->len : 0);\n", gv, splat_idx_d, splat_tmp_d, splat_tmp_d);
           emit_indent(g_pre, g_indent);
           buf_printf(g_pre,
                      "if (_t%d < %d || _t%d > %d) sp_raise_cls(\"ArgumentError\", sp_sprintf(\"wrong number of arguments (given %%lld, %s)\", (long long)_t%d));\n",
@@ -7706,7 +7706,7 @@ int emit_group_by_expr(Compiler *c, int id, Buf *b) {
   buf_printf(g_pre, "sp_PolyPolyHash *_t%d = sp_PolyPolyHash_new(); SP_GC_ROOT(_t%d);\n", thash, thash);
   /* loop */
   emit_indent(g_pre, g_indent);
-  buf_printf(g_pre, "for (mrb_int _t%d = 0; _t%d < sp_%sArray_length(_t%d); _t%d++) {\n",
+  buf_printf(g_pre, "for (sp_int _t%d = 0; _t%d < sp_%sArray_length(_t%d); _t%d++) {\n",
              ti, ti, k, trecv, ti);
   /* assign element to block param(s). A 2+-param block over a poly array of
      sub-arrays auto-splats each element across the params (the bucket push below
@@ -7835,7 +7835,7 @@ int emit_each_with_object_expr(Compiler *c, int id, Buf *b) {
     emit_indent(g_pre, g_indent);
     buf_printf(g_pre, "sp_PolyArray *_t%d = sp_PolyArray_new(); SP_GC_ROOT(_t%d);\n", tp, tp);
     emit_indent(g_pre, g_indent);
-    buf_printf(g_pre, "for (mrb_int _t%d = 0; _t%d < sp_PolyArray_length(_t%d); _t%d++) { "
+    buf_printf(g_pre, "for (sp_int _t%d = 0; _t%d < sp_PolyArray_length(_t%d); _t%d++) { "
                       "sp_PolyArray *_pr = sp_PolyArray_new(); sp_PolyArray_push(_pr, sp_PolyArray_get(_t%d, _t%d)); "
                       "sp_PolyArray_push(_pr, _t%d); sp_PolyArray_push(_t%d, sp_box_poly_array(_pr)); }\n",
                ti, ti, tsrc, ti, tsrc, ti, tm, tp);
@@ -7937,7 +7937,7 @@ int emit_each_with_object_expr(Compiler *c, int id, Buf *b) {
     /* Loop */
     int ti = ++g_tmp;
     emit_indent(g_pre, g_indent);
-    buf_printf(g_pre, "for (mrb_int _t%d = 0; _t%d < _t%d->len; _t%d++) {\n", ti, ti, trecv, ti);
+    buf_printf(g_pre, "for (sp_int _t%d = 0; _t%d < _t%d->len; _t%d++) {\n", ti, ti, trecv, ti);
     /* Bind the [k,v] pair for the |element, memo| form (CRuby yields the pair). */
     if (pairname) {
       char kexpr[96], vexpr[96];
@@ -8074,7 +8074,7 @@ int emit_each_with_object_expr(Compiler *c, int id, Buf *b) {
     ts_p0 = ++g_tmp;
     Buf ot; memset(&ot, 0, sizeof ot); emit_ctype(c, outer_p0->type, &ot);
     emit_indent(g_pre, g_indent);
-    buf_printf(g_pre, "%s _t%d = lv_%s;\n", ot.p ? ot.p : "mrb_int", ts_p0, p0); free(ot.p);
+    buf_printf(g_pre, "%s _t%d = lv_%s;\n", ot.p ? ot.p : "sp_int", ts_p0, p0); free(ot.p);
   }
   LocalVar *outer_p1 = (p1 && cs) ? scope_local(cs, p1) : NULL;
   int ts_p1 = 0;
@@ -8083,7 +8083,7 @@ int emit_each_with_object_expr(Compiler *c, int id, Buf *b) {
     ts_p1 = ++g_tmp;
     Buf ot; memset(&ot, 0, sizeof ot); emit_ctype(c, outer_p1->type, &ot);
     emit_indent(g_pre, g_indent);
-    buf_printf(g_pre, "%s _t%d = lv_%s;\n", ot.p ? ot.p : "mrb_int", ts_p1, p1); free(ot.p);
+    buf_printf(g_pre, "%s _t%d = lv_%s;\n", ot.p ? ot.p : "sp_int", ts_p1, p1); free(ot.p);
   }
 
   /* When block params shadow outer vars with different types, open a C scope
@@ -8111,7 +8111,7 @@ int emit_each_with_object_expr(Compiler *c, int id, Buf *b) {
     /* Loop */
     int ti = ++g_tmp;
     emit_indent(g_pre, g_indent);
-    buf_printf(g_pre, "for (mrb_int _t%d = 0; _t%d < sp_%sArray_length(_t%d); _t%d++) {\n",
+    buf_printf(g_pre, "for (sp_int _t%d = 0; _t%d < sp_%sArray_length(_t%d); _t%d++) {\n",
                ti, ti, k, trecv, ti);
     if (p0) {
       emit_indent(g_pre, g_indent + 1);
@@ -8168,7 +8168,7 @@ int emit_each_with_object_expr(Compiler *c, int id, Buf *b) {
     /* Loop */
     int ti = ++g_tmp;
     emit_indent(g_pre, g_indent);
-    buf_printf(g_pre, "for (mrb_int _t%d = 0; _t%d < sp_%sArray_length(_t%d); _t%d++) {\n",
+    buf_printf(g_pre, "for (sp_int _t%d = 0; _t%d < sp_%sArray_length(_t%d); _t%d++) {\n",
                ti, ti, k, trecv, ti);
 
     /* Assign element to p0 */

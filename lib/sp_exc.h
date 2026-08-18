@@ -23,7 +23,7 @@
  *
  * 0 optcarrot uses for every function below.
  */
-#include "sp_types.h"   /* mrb_int, mrb_bool */
+#include "sp_types.h"   /* sp_int, sp_bool */
 #include "sp_gc.h"      /* sp_RbVal, sp_gc_alloc, sp_gc_mark, sp_mark_string */
 #include "sp_alloc.h"   /* sp_box_nil/int, sp_str_empty, sp_raise_cls, sp_sprintf */
 #include <signal.h>     /* SIGINT for sp_exc_new's Interrupt#signo default */
@@ -38,10 +38,10 @@ typedef struct sp_Exception_s {
   sp_RbVal xkey;               /* KeyError#key / UncaughtThrowError#tag / LocalJumpError#reason /
                                   NoMethodError#args; nil otherwise */
   sp_RbVal xrecv;              /* KeyError/NameError/NoMethodError/FrozenError#receiver; nil otherwise */
-  mrb_bool has_recv;           /* was a receiver actually recorded? nil is a legal
+  sp_bool has_recv;           /* was a receiver actually recorded? nil is a legal
                                   receiver (nil.foo), so the box cannot say (#3036) */
-  mrb_bool has_key;            /* likewise for KeyError#key (#3030) */
-  mrb_bool priv_call;          /* NoMethodError#private_call? (#3042) */
+  sp_bool has_key;            /* likewise for KeyError#key (#3030) */
+  sp_bool priv_call;          /* NoMethodError#private_call? (#3042) */
 } sp_Exception;
 
 extern const char *(*sp_user_exc_parent_fn)(const char *);   /* set by the generated main() */
@@ -74,7 +74,7 @@ void *sp_exc_new_sub_sized(size_t sz, const char *cls_name, const char *msg);
 
 void sp_exc_gc_scan(void *p);
 sp_Exception *sp_exc_new(const char *cls_name, const char *msg);
-mrb_bool sp_exc_eq(sp_Exception *a, sp_Exception *b);
+sp_bool sp_exc_eq(sp_Exception *a, sp_Exception *b);
 sp_Exception *sp_exc_new_sub(const char *cls_name, const char *parent_cls, const char *msg);
 sp_Exception *sp_exc_dup(sp_Exception *e);
 void *sp_exc_apply_staged(const char *cls, const char *msg, void *obj);
@@ -90,19 +90,19 @@ sp_RbVal sp_exc_name_acc(sp_Exception *e);
 sp_RbVal sp_exc_key_acc(sp_Exception *e);
 sp_RbVal sp_exc_receiver_acc(sp_Exception *e);
 sp_RbVal sp_exc_args_acc(sp_Exception *e);
-mrb_bool sp_exc_private_call_acc(sp_Exception *e);
+sp_bool sp_exc_private_call_acc(sp_Exception *e);
 sp_RbVal sp_exc_exit_value_acc(sp_Exception *e);
 sp_RbVal sp_exc_throw_value_acc(sp_Exception *e);
-mrb_int sp_exc_status_acc(sp_Exception *e);
-mrb_bool sp_exc_success_acc(sp_Exception *e);
-mrb_int sp_exc_signo_acc(sp_Exception *e);
+sp_int sp_exc_status_acc(sp_Exception *e);
+sp_bool sp_exc_success_acc(sp_Exception *e);
+sp_int sp_exc_signo_acc(sp_Exception *e);
 const char *sp_exc_signm_acc(sp_Exception *e);
 
 /* ---- Signal/Interrupt exception constructors: relocated from
    spinel_rt.h (0 optcarrot uses). sp_signal_resolve/sp_signal_signame
    are already non-static (resolved at the final link). ---- */
 int sp_signal_resolve(sp_RbVal sig);
-const char *sp_signal_signame(mrb_int no);
+const char *sp_signal_signame(sp_int no);
 sp_Exception *sp_signal_exc_new_m(sp_RbVal sig, const char *msg);
 sp_Exception *sp_signal_exc_new(sp_RbVal sig);
 sp_Exception *sp_interrupt_new(const char *msg);

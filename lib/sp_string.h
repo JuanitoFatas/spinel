@@ -14,7 +14,7 @@
 typedef struct { char *data; int64_t len; int64_t cap; } sp_String;
 
 /* Per-mutable-string freeze flag rides in the GC header alongside `marked`. */
-static inline mrb_bool sp_String_is_frozen(sp_String*s){if(!s)return TRUE;sp_gc_hdr*h=(sp_gc_hdr*)((char*)s-sizeof(sp_gc_hdr));return h->frozen;}
+static inline sp_bool sp_String_is_frozen(sp_String*s){if(!s)return TRUE;sp_gc_hdr*h=(sp_gc_hdr*)((char*)s-sizeof(sp_gc_hdr));return h->frozen;}
 static inline sp_String*sp_String_freeze(sp_String*s){if(s){sp_gc_hdr*h=(sp_gc_hdr*)((char*)s-sizeof(sp_gc_hdr));h->frozen=1;}return s;}
 
 /* A mutable String's payload carries the same length-bearing sp_str_hdr that

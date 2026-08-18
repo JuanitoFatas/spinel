@@ -17,15 +17,15 @@
 #include "sp_types.h"   /* sp_Range */
 #include "sp_array.h"   /* sp_IntArray_from_range / _from_range_step */
 
-static inline sp_Range sp_range_new(mrb_int f,mrb_int l,mrb_int e){sp_Range r;r.first=f;r.last=l;r.excl=e;r.step=0;return r;}
-static inline sp_Range sp_range_new_step(mrb_int f,mrb_int l,mrb_int e,mrb_int s){sp_Range r;r.first=f;r.last=l;r.excl=e;r.step=s;return r;}
+static inline sp_Range sp_range_new(sp_int f,sp_int l,sp_int e){sp_Range r;r.first=f;r.last=l;r.excl=e;r.step=0;return r;}
+static inline sp_Range sp_range_new_step(sp_int f,sp_int l,sp_int e,sp_int s){sp_Range r;r.first=f;r.last=l;r.excl=e;r.step=s;return r;}
 /* The effective stride: a literal `a..b` range stores 0, which iterates by +1. */
-static inline mrb_int sp_range_step(sp_Range r){return r.step==0?1:r.step;}
+static inline sp_int sp_range_step(sp_Range r){return r.step==0?1:r.step;}
 /* Number of elements the range enumerates (0 for an empty one), honoring step. */
-static inline mrb_int sp_range_count(sp_Range r){
-  mrb_int s=sp_range_step(r);
-  mrb_int lastv=r.excl?(r.last-(s>0?1:-1)):r.last;
-  mrb_int n=(lastv-r.first)/s+1;
+static inline sp_int sp_range_count(sp_Range r){
+  sp_int s=sp_range_step(r);
+  sp_int lastv=r.excl?(r.last-(s>0?1:-1)):r.last;
+  sp_int n=(lastv-r.first)/s+1;
   return n<0?0:n;
 }
 /* Materialize the range into an int array (ascending or descending per step).
@@ -36,49 +36,49 @@ static inline sp_IntArray *sp_range_to_ia(sp_Range r){
   /* an endless range cannot materialize (CRuby raises instead of hanging) */
   if(r.last==INTPTR_MAX)sp_raise_cls("RangeError","cannot convert endless range to an array");
   if(r.first==INTPTR_MIN)sp_raise_cls("TypeError","can't iterate from NilClass");
-  mrb_int s=sp_range_step(r);
+  sp_int s=sp_range_step(r);
   if(s==1)return sp_IntArray_from_range(r.first,r.last-r.excl);
   return sp_IntArray_from_range_step(r.first,r.last,s,r.excl);
 }
 /* Last enumerated element (== first for an empty range), and the min/max of the
    enumerated set -- direction-aware, so a descending range reports them right. */
-static inline mrb_int sp_range_last_elem(sp_Range r){
-  mrb_int n=sp_range_count(r);
+static inline sp_int sp_range_last_elem(sp_Range r){
+  sp_int n=sp_range_count(r);
   return n<=0?r.first:r.first+(n-1)*sp_range_step(r);
 }
 /* min/max of an EMPTY (backwards, or exclusive single-point) range is nil
    (SP_INT_NIL, the nullable-int sentinel) -- CRuby returns nil there. A
    descending step range (5.downto(1)) still enumerates, so only a
    positive-step empty span is nil (#2412). */
-static inline mrb_int sp_range_min_v(sp_Range r){
+static inline sp_int sp_range_min_v(sp_Range r){
   /* a beginless range has no minimum; an endless one's is its begin (#3668) */
   if(r.first==INTPTR_MIN)sp_raise_cls("RangeError","cannot get the minimum of beginless range");
   if(r.last==INTPTR_MAX)return r.first;
-  if(sp_range_count(r)<=0)return SP_INT_NIL; mrb_int a=r.first,b=sp_range_last_elem(r); return a<b?a:b; }
-static inline mrb_int sp_range_max_v(sp_Range r){
+  if(sp_range_count(r)<=0)return SP_INT_NIL; sp_int a=r.first,b=sp_range_last_elem(r); return a<b?a:b; }
+static inline sp_int sp_range_max_v(sp_Range r){
   /* a beginless range's maximum is its end; an endless one has none (#3668) */
   if(r.last==INTPTR_MAX)sp_raise_cls("RangeError","cannot get the maximum of endless range");
   if(r.first==INTPTR_MIN)return r.excl?r.last-1:r.last;
-  if(sp_range_count(r)<=0)return SP_INT_NIL; mrb_int a=r.first,b=sp_range_last_elem(r); return a>b?a:b; }
-static inline mrb_bool sp_range_eq(sp_Range a,sp_Range b){return a.first==b.first&&a.last==b.last&&a.excl==b.excl;}
+  if(sp_range_count(r)<=0)return SP_INT_NIL; sp_int a=r.first,b=sp_range_last_elem(r); return a>b?a:b; }
+static inline sp_bool sp_range_eq(sp_Range a,sp_Range b){return a.first==b.first&&a.last==b.last&&a.excl==b.excl;}
 
-mrb_bool sp_range_include(sp_Range *r, mrb_int x);
+sp_bool sp_range_include(sp_Range *r, sp_int x);
 const char *sp_range_str(sp_Range r);
 const char *sp_range_inspect(sp_Range r);
 
 /* Float/String Range value-type ops -- 0 optcarrot uses, bodies in
    lib/sp_cold.c (see sp_types.h for sp_FloatRange/sp_StrRange). */
-sp_FloatRange sp_frange_new(mrb_float f, mrb_float l, mrb_int e);
-sp_FloatRange sp_frange_new_o(mrb_float f, mrb_float l, mrb_int e, mrb_int om);
-mrb_bool sp_frange_cover(sp_FloatRange r, mrb_float x);
-mrb_bool sp_frange_eq(sp_FloatRange a, sp_FloatRange b);
+sp_FloatRange sp_frange_new(sp_float f, sp_float l, sp_int e);
+sp_FloatRange sp_frange_new_o(sp_float f, sp_float l, sp_int e, sp_int om);
+sp_bool sp_frange_cover(sp_FloatRange r, sp_float x);
+sp_bool sp_frange_eq(sp_FloatRange a, sp_FloatRange b);
 const char *sp_frange_inspect(sp_FloatRange r);
 sp_RbVal sp_box_frange(sp_FloatRange v);
-mrb_float sp_frange_max(sp_FloatRange r);
-sp_StrRange sp_srange_new(const char *f, const char *l, mrb_int e);
+sp_float sp_frange_max(sp_FloatRange r);
+sp_StrRange sp_srange_new(const char *f, const char *l, sp_int e);
 sp_StrArray *sp_srange_to_a(sp_StrRange r);
-mrb_bool sp_srange_eq(sp_StrRange a, sp_StrRange b);
-mrb_bool sp_srange_cover(sp_StrRange r, const char *x);
+sp_bool sp_srange_eq(sp_StrRange a, sp_StrRange b);
+sp_bool sp_srange_cover(sp_StrRange r, const char *x);
 const char *sp_srange_to_s(sp_StrRange r);
 const char *sp_srange_inspect(sp_StrRange r);
 sp_RbVal sp_box_srange(sp_StrRange v);

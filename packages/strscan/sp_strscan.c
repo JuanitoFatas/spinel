@@ -39,14 +39,14 @@ extern int re_exec(const mrb_regexp_pattern *pat, const char *str, int64_t len, 
    ncaps is the number of valid ints (2 per group, group 0 included). */
 #define SP_SS_MAXCAP 20
 typedef struct sp_StringScanner_s {
-  mrb_int     cls_id;    /* object header: runtime class id, compiler-stamped */
+  sp_int     cls_id;    /* object header: runtime class id, compiler-stamped */
   const char *source;
   const char *matched;
   int64_t     pos;
   int64_t     last_pos;    /* pos before the last advance (unscan rewinds here) */
   int64_t     match_start; /* where the last match begins (pre/post_match) --
                               differs from last_pos after scan_until */
-  int         matched_p; /* int (not mrb_bool) — keep the layout
+  int         matched_p; /* int (not sp_bool) — keep the layout
                             compact; FALSE=0, TRUE=1 */
   int         ncaps;
   int         caps[SP_SS_MAXCAP];
@@ -58,7 +58,7 @@ static void sp_StringScanner_scan_gc(void *p) {
   if (sc->matched) sp_mark_string(sc->matched);
 }
 
-sp_StringScanner *sp_StringScanner_new(mrb_int cls_id, const char *str) {SP_GC_ROOT_STR(str);
+sp_StringScanner *sp_StringScanner_new(sp_int cls_id, const char *str) {SP_GC_ROOT_STR(str);
   sp_StringScanner *sc = (sp_StringScanner *)sp_gc_alloc(sizeof(sp_StringScanner), NULL, sp_StringScanner_scan_gc);
   sc->cls_id = cls_id;
   sc->source = str ? str : sp_str_empty;
@@ -234,7 +234,7 @@ sp_RbVal sp_StringScanner_match_q(sp_StringScanner *sc, mrb_regexp_pattern *pat)
   sc->match_start = sc->pos;
   sc->matched = sc_substr(sc->source, sc->pos, mlen);
   sc->matched_p = 1;
-  return sp_box_int((mrb_int)mlen);
+  return sp_box_int((sp_int)mlen);
 }
 
 /* StringScanner#skip: anchored like scan, advances, returns the matched byte
@@ -254,7 +254,7 @@ sp_RbVal sp_StringScanner_skip(sp_StringScanner *sc, mrb_regexp_pattern *pat) {
   sc->matched = sc_substr(sc->source, sc->pos, mlen);
   sc->matched_p = 1;
   sc->pos += mlen;
-  return sp_box_int((mrb_int)mlen);
+  return sp_box_int((sp_int)mlen);
 }
 
 /* StringScanner#exist?: forward search without advancing; returns the byte
@@ -274,7 +274,7 @@ sp_RbVal sp_StringScanner_exist_q(sp_StringScanner *sc, mrb_regexp_pattern *pat)
   sc->match_start = mstart;
   sc->matched = sc_substr(sc->source, mstart, mlen);
   sc->matched_p = 1;
-  return sp_box_int((mrb_int)((mstart + mlen) - sc->pos));
+  return sp_box_int((sp_int)((mstart + mlen) - sc->pos));
 }
 
 /* StringScanner#skip_until: forward search, advances past the match, returns
@@ -296,14 +296,14 @@ sp_RbVal sp_StringScanner_skip_until(sp_StringScanner *sc, mrb_regexp_pattern *p
   sc->matched = sc_substr(sc->source, mstart, mlen);
   sc->matched_p = 1;
   sc->pos = mstart + mlen;
-  return sp_box_int((mrb_int)consumed);
+  return sp_box_int((sp_int)consumed);
 }
 
 /* StringScanner#[n] -- the nth capture group of the last scan/check.
    Group 0 is the whole match; a negative index counts back from the last
    group. Returns NULL (Ruby nil) when there was no match, the index is out
    of range, or the group didn't participate. */
-const char *sp_StringScanner_aref(sp_StringScanner *sc, mrb_int n) {
+const char *sp_StringScanner_aref(sp_StringScanner *sc, sp_int n) {
   if (!sc || !sc->matched_p) return NULL;
   int idx = (int)n;
   if (idx < 0) idx += sc->ncaps / 2;
@@ -320,17 +320,17 @@ const char *sp_StringScanner_matched(sp_StringScanner *sc) {
   return sc->matched ? sc->matched : NULL;
 }
 
-mrb_bool sp_StringScanner_matched_p(sp_StringScanner *sc) {
+sp_bool sp_StringScanner_matched_p(sp_StringScanner *sc) {
   if (!sc) return FALSE;
   return sc->matched_p ? TRUE : FALSE;
 }
 
-mrb_int sp_StringScanner_pos(sp_StringScanner *sc) {
+sp_int sp_StringScanner_pos(sp_StringScanner *sc) {
   if (!sc) return 0;
-  return (mrb_int)sc->pos;
+  return (sp_int)sc->pos;
 }
 
-mrb_int sp_StringScanner_pos_set(sp_StringScanner *sc, mrb_int p) {SP_GC_ROOT(sc);
+sp_int sp_StringScanner_pos_set(sp_StringScanner *sc, sp_int p) {SP_GC_ROOT(sc);
   if (!sc) return 0;
   /* CRuby: a negative position counts from the end; anything out of the
      [0, bytesize] range raises RangeError (never index out of the buffer). */
@@ -342,7 +342,7 @@ mrb_int sp_StringScanner_pos_set(sp_StringScanner *sc, mrb_int p) {SP_GC_ROOT(sc
   return p;
 }
 
-mrb_bool sp_StringScanner_eos_p(sp_StringScanner *sc) {
+sp_bool sp_StringScanner_eos_p(sp_StringScanner *sc) {
   if (!sc) return TRUE;
   int64_t slen = (int64_t)sp_str_byte_len(sc->source);
   return (sc->pos >= slen) ? TRUE : FALSE;
@@ -366,7 +366,7 @@ const char *sp_StringScanner_getch(sp_StringScanner *sc) {
   return c;
 }
 
-const char *sp_StringScanner_peek(sp_StringScanner *sc, mrb_int n) {
+const char *sp_StringScanner_peek(sp_StringScanner *sc, sp_int n) {
   if (!sc) return sp_str_empty;
   int64_t slen = (int64_t)sp_str_byte_len(sc->source);
   int64_t avail = slen - sc->pos;
@@ -398,14 +398,14 @@ const char *sp_StringScanner_rest(sp_StringScanner *sc) {
   return sc_substr(sc->source, sc->pos, rem);
 }
 
-mrb_int sp_StringScanner_rest_size(sp_StringScanner *sc) {
+sp_int sp_StringScanner_rest_size(sp_StringScanner *sc) {
   if (!sc) return 0;
   int64_t slen = (int64_t)sp_str_byte_len(sc->source);
   int64_t rem = slen - sc->pos;
-  return rem < 0 ? 0 : (mrb_int)rem;
+  return rem < 0 ? 0 : (sp_int)rem;
 }
 
-mrb_bool sp_StringScanner_rest_p(sp_StringScanner *sc) {
+sp_bool sp_StringScanner_rest_p(sp_StringScanner *sc) {
   if (!sc) return FALSE;
   int64_t slen = (int64_t)sp_str_byte_len(sc->source);
   return (sc->pos < slen) ? TRUE : FALSE;

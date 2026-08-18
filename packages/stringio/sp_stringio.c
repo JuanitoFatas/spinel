@@ -28,15 +28,15 @@ static int64_t sio_write(sp_StringIO *sio, const char *d, int64_t dl) { sio_grow
 
 void sp_StringIO_free(void *p) { sp_StringIO *s = (sp_StringIO *)p; if (!s->borrowed) free(s->buf); s->buf = NULL; }
 static void sp_StringIO_scan_gc(void *p) { sp_StringIO *s = (sp_StringIO *)p; if (s->borrowed && s->buf) sp_mark_string(s->buf); }
-sp_StringIO *sp_StringIO_new(mrb_int cls_id) { sp_StringIO *s = (sp_StringIO *)sp_gc_alloc(sizeof(sp_StringIO), sp_StringIO_free, sp_StringIO_scan_gc); memset(s, 0, sizeof *s); s->cls_id = cls_id; s->buf = (char *)calloc(1, 64); if (!s->buf) sp_oom_die(); s->cap = 63; return s; }
+sp_StringIO *sp_StringIO_new(sp_int cls_id) { sp_StringIO *s = (sp_StringIO *)sp_gc_alloc(sizeof(sp_StringIO), sp_StringIO_free, sp_StringIO_scan_gc); memset(s, 0, sizeof *s); s->cls_id = cls_id; s->buf = (char *)calloc(1, 64); if (!s->buf) sp_oom_die(); s->cap = 63; return s; }
 /* Adopt the incoming GC string without copying so #string keeps identity
    with the constructor argument; the first mutation copies (sio_own). */
-sp_StringIO *sp_StringIO_new_s(mrb_int cls_id, const char *init) {SP_GC_ROOT_STR(init); if (!init) sp_raise_cls("TypeError", "no implicit conversion of nil into String"); sp_StringIO *s = (sp_StringIO *)sp_gc_alloc(sizeof(sp_StringIO), sp_StringIO_free, sp_StringIO_scan_gc); memset(s, 0, sizeof *s); s->cls_id = cls_id; int64_t l = (int64_t)sp_str_byte_len(init); s->buf = (char *)init; s->len = l; s->cap = l; s->borrowed = 1; return s; }
+sp_StringIO *sp_StringIO_new_s(sp_int cls_id, const char *init) {SP_GC_ROOT_STR(init); if (!init) sp_raise_cls("TypeError", "no implicit conversion of nil into String"); sp_StringIO *s = (sp_StringIO *)sp_gc_alloc(sizeof(sp_StringIO), sp_StringIO_free, sp_StringIO_scan_gc); memset(s, 0, sizeof *s); s->cls_id = cls_id; int64_t l = (int64_t)sp_str_byte_len(init); s->buf = (char *)init; s->len = l; s->cap = l; s->borrowed = 1; return s; }
 /* StringIO.new(str, mode): the mode's first char selects the initial
    content/position. "w"/"w+" truncate to empty; "a"/"a+" keep the content and
    seek to the end; "r"/"r+" and anything else keep the content at position 0.
    Read-only enforcement ("r" rejecting writes) is not modelled. */
-sp_StringIO *sp_StringIO_new_sm(mrb_int cls_id, const char *init, const char *mode) {SP_GC_ROOT_STR(init);SP_GC_ROOT_STR(mode);
+sp_StringIO *sp_StringIO_new_sm(sp_int cls_id, const char *init, const char *mode) {SP_GC_ROOT_STR(init);SP_GC_ROOT_STR(mode);
   if (!init) sp_raise_cls("TypeError", "no implicit conversion of nil into String");
   if (!mode || !mode[0]) return sp_StringIO_new_s(cls_id, init);
   char m0 = mode[0];
@@ -56,37 +56,37 @@ const char *sp_StringIO_string(sp_StringIO *s) {SP_GC_ROOT(s);
   if (s->borrowed) return s->buf;
   return sp_str_from_bytes(s->buf, (size_t)s->len);
 }
-mrb_int sp_StringIO_pos(sp_StringIO *s) { return s->pos; }
-mrb_int sp_StringIO_size(sp_StringIO *s) { return s->len; }
+sp_int sp_StringIO_pos(sp_StringIO *s) { return s->pos; }
+sp_int sp_StringIO_size(sp_StringIO *s) { return s->len; }
 /* Binary-safe: a Ruby String may carry an embedded NUL (`[0].pack("C")`),
    so the operand is measured with its recorded length, not strlen. */
-mrb_int sp_StringIO_write(sp_StringIO *s, const char *str) { return sio_write(s, str, (int64_t)sp_str_byte_len(str)); }
-mrb_int sp_StringIO_puts(sp_StringIO *s, const char *str) { int64_t l = (int64_t)sp_str_byte_len(str); sio_write(s, str, l); if (l == 0 || str[l-1] != '\n') sio_write(s, "\n", 1); return 0; }
-mrb_int sp_StringIO_puts_empty(sp_StringIO *s) { sio_write(s, "\n", 1); return 0; }
-mrb_int sp_StringIO_print(sp_StringIO *s, const char *str) { return sio_write(s, str, (int64_t)sp_str_byte_len(str)); }
-mrb_int sp_StringIO_putc(sp_StringIO *s, mrb_int ch) { char c = (char)(ch & 0xFF); sio_write(s, &c, 1); return ch; }
+sp_int sp_StringIO_write(sp_StringIO *s, const char *str) { return sio_write(s, str, (int64_t)sp_str_byte_len(str)); }
+sp_int sp_StringIO_puts(sp_StringIO *s, const char *str) { int64_t l = (int64_t)sp_str_byte_len(str); sio_write(s, str, l); if (l == 0 || str[l-1] != '\n') sio_write(s, "\n", 1); return 0; }
+sp_int sp_StringIO_puts_empty(sp_StringIO *s) { sio_write(s, "\n", 1); return 0; }
+sp_int sp_StringIO_print(sp_StringIO *s, const char *str) { return sio_write(s, str, (int64_t)sp_str_byte_len(str)); }
+sp_int sp_StringIO_putc(sp_StringIO *s, sp_int ch) { char c = (char)(ch & 0xFF); sio_write(s, &c, 1); return ch; }
 const char *sp_StringIO_read(sp_StringIO *s) {SP_GC_ROOT(s); if (s->pos >= s->len) return sp_str_empty; size_t rem = s->len - s->pos; char *r = sp_str_alloc(rem); memcpy(r, s->buf + s->pos, rem); r[rem] = 0; s->pos = s->len; return r; }
-const char *sp_StringIO_read_n(sp_StringIO *s, mrb_int n) {SP_GC_ROOT(s); if (s->pos >= s->len) return sp_str_empty; int64_t rem = s->len - s->pos; if (n > rem) n = rem; char *r = sp_str_alloc_raw(n+1); memcpy(r, s->buf + s->pos, n); r[n] = '\0'; sp_str_set_len(r, (size_t)n); s->pos += n; return r; }
+const char *sp_StringIO_read_n(sp_StringIO *s, sp_int n) {SP_GC_ROOT(s); if (s->pos >= s->len) return sp_str_empty; int64_t rem = s->len - s->pos; if (n > rem) n = rem; char *r = sp_str_alloc_raw(n+1); memcpy(r, s->buf + s->pos, n); r[n] = '\0'; sp_str_set_len(r, (size_t)n); s->pos += n; return r; }
 const char *sp_StringIO_gets(sp_StringIO *s) {SP_GC_ROOT(s); if (s->pos >= s->len) return NULL; const char *st = s->buf + s->pos; const char *nl = memchr(st, '\n', s->len - s->pos); int64_t ll = nl ? (nl - st) + 1 : s->len - s->pos; char *r = sp_str_alloc_raw(ll+1); memcpy(r, st, ll); r[ll] = '\0'; sp_str_set_len(r, (size_t)ll); s->pos += ll; s->lineno++; return r; }
 const char *sp_StringIO_getc(sp_StringIO *s) {SP_GC_ROOT(s); if (s->pos >= s->len) return NULL; char *gc = sp_str_alloc_raw(2); gc[0] = s->buf[s->pos++]; gc[1] = '\0'; sp_str_set_len(gc, 1); return gc; }
-mrb_int sp_StringIO_getbyte(sp_StringIO *s) { if (s->pos >= s->len) return -1; return (int64_t)(unsigned char)s->buf[s->pos++]; }
-mrb_int sp_StringIO_rewind(sp_StringIO *s) { s->pos = 0; s->lineno = 0; return 0; }
-mrb_int sp_StringIO_seek(sp_StringIO *s, mrb_int off) { if (off < 0) off = 0; s->pos = off; return 0; }
-mrb_int sp_StringIO_tell(sp_StringIO *s) { return s->pos; }
-mrb_bool sp_StringIO_eof_p(sp_StringIO *s) { return s->pos >= s->len; }
-mrb_int sp_StringIO_truncate(sp_StringIO *s, mrb_int l) { if (l < 0) l = 0; if (l < s->len) { sio_own(s); s->len = l; s->buf[l] = '\0'; } return 0; }
-mrb_int sp_StringIO_close(sp_StringIO *s) { s->closed = 1; return 0; }
-mrb_bool sp_StringIO_closed_p(sp_StringIO *s) { return s->closed; }
+sp_int sp_StringIO_getbyte(sp_StringIO *s) { if (s->pos >= s->len) return -1; return (int64_t)(unsigned char)s->buf[s->pos++]; }
+sp_int sp_StringIO_rewind(sp_StringIO *s) { s->pos = 0; s->lineno = 0; return 0; }
+sp_int sp_StringIO_seek(sp_StringIO *s, sp_int off) { if (off < 0) off = 0; s->pos = off; return 0; }
+sp_int sp_StringIO_tell(sp_StringIO *s) { return s->pos; }
+sp_bool sp_StringIO_eof_p(sp_StringIO *s) { return s->pos >= s->len; }
+sp_int sp_StringIO_truncate(sp_StringIO *s, sp_int l) { if (l < 0) l = 0; if (l < s->len) { sio_own(s); s->len = l; s->buf[l] = '\0'; } return 0; }
+sp_int sp_StringIO_close(sp_StringIO *s) { s->closed = 1; return 0; }
+sp_bool sp_StringIO_closed_p(sp_StringIO *s) { return s->closed; }
 sp_StringIO *sp_StringIO_flush(sp_StringIO *s) { return s; }
-mrb_bool sp_StringIO_sync(sp_StringIO *s) { (void)s; return 1; }
-mrb_bool sp_StringIO_isatty(sp_StringIO *s) { (void)s; return 0; }
+sp_bool sp_StringIO_sync(sp_StringIO *s) { (void)s; return 1; }
+sp_bool sp_StringIO_isatty(sp_StringIO *s) { (void)s; return 0; }
 
 /* Normalized helpers so the binding stays a plain method->symbol map:
    putc with a string arg writes its first byte; lineno is a field read;
    fsync/fileno/pid are always 0 on an in-memory stream. */
-mrb_int sp_StringIO_putc_s(sp_StringIO *s, const char *str) {SP_GC_ROOT(s);SP_GC_ROOT_STR(str); return sp_StringIO_putc(s, (mrb_int)(unsigned char)(str && str[0] ? str[0] : 0)); }
-mrb_int sp_StringIO_lineno(sp_StringIO *s) { return s->lineno; }
-mrb_int sp_StringIO_zero(sp_StringIO *s) { (void)s; return 0; }
+sp_int sp_StringIO_putc_s(sp_StringIO *s, const char *str) {SP_GC_ROOT(s);SP_GC_ROOT_STR(str); return sp_StringIO_putc(s, (sp_int)(unsigned char)(str && str[0] ? str[0] : 0)); }
+sp_int sp_StringIO_lineno(sp_StringIO *s) { return s->lineno; }
+sp_int sp_StringIO_zero(sp_StringIO *s) { (void)s; return 0; }
 
 /* << writes and returns the receiver (chainable), unlike write's byte count. */
 sp_StringIO *sp_StringIO_shl(sp_StringIO *s, const char *str) { sio_write(s, str, (int64_t)sp_str_byte_len(str)); return s; }
@@ -114,7 +114,7 @@ const char *sp_StringIO_gets_sep(sp_StringIO *s, const char *sep) {SP_GC_ROOT(s)
 }
 
 /* seek(off, whence): 0=SET, 1=CUR, 2=END; a negative result is EINVAL. */
-mrb_int sp_StringIO_seek2(sp_StringIO *s, mrb_int off, mrb_int whence) {SP_GC_ROOT(s);
+sp_int sp_StringIO_seek2(sp_StringIO *s, sp_int off, sp_int whence) {SP_GC_ROOT(s);
   int64_t base = whence == 1 ? s->pos : whence == 2 ? s->len : 0;
   int64_t np = base + off;
   if (np < 0) sp_raise_cls("Errno::EINVAL", "Invalid argument");
@@ -150,8 +150,8 @@ static void sio_write_val(sp_StringIO *s, sp_RbVal v, int is_puts) {SP_GC_ROOT(s
     case SP_TAG_NIL: break;  /* puts nil -> bare newline; print nil -> nothing */
     default:
       if (is_puts && sp_json_kind_fn && sp_json_kind_fn(v) == 1) {
-        mrb_int n = sp_json_len_fn(v);
-        for (mrb_int i = 0; i < n; i++) sio_write_val(s, sp_json_aref_fn(v, i), 1);
+        sp_int n = sp_json_len_fn(v);
+        for (sp_int i = 0; i < n; i++) sio_write_val(s, sp_json_aref_fn(v, i), 1);
         return;  /* elements each terminated their own line */
       }
       sp_raise_cls("TypeError", "can't write value to StringIO");
@@ -160,9 +160,9 @@ static void sio_write_val(sp_StringIO *s, sp_RbVal v, int is_puts) {SP_GC_ROOT(s
   if (is_puts && (s->pos == p0 || s->buf[s->pos - 1] != '\n')) sio_write(s, "\n", 1);
 }
 
-mrb_int sp_StringIO_print_v1(sp_StringIO *s, sp_RbVal a) { sio_write_val(s, a, 0); return 0; }
-mrb_int sp_StringIO_print_v2(sp_StringIO *s, sp_RbVal a, sp_RbVal b) { sio_write_val(s, a, 0); sio_write_val(s, b, 0); return 0; }
-mrb_int sp_StringIO_print_v3(sp_StringIO *s, sp_RbVal a, sp_RbVal b, sp_RbVal c2) { sio_write_val(s, a, 0); sio_write_val(s, b, 0); sio_write_val(s, c2, 0); return 0; }
-mrb_int sp_StringIO_puts_v1(sp_StringIO *s, sp_RbVal a) { sio_write_val(s, a, 1); return 0; }
-mrb_int sp_StringIO_puts_v2(sp_StringIO *s, sp_RbVal a, sp_RbVal b) { sio_write_val(s, a, 1); sio_write_val(s, b, 1); return 0; }
-mrb_int sp_StringIO_puts_v3(sp_StringIO *s, sp_RbVal a, sp_RbVal b, sp_RbVal c2) { sio_write_val(s, a, 1); sio_write_val(s, b, 1); sio_write_val(s, c2, 1); return 0; }
+sp_int sp_StringIO_print_v1(sp_StringIO *s, sp_RbVal a) { sio_write_val(s, a, 0); return 0; }
+sp_int sp_StringIO_print_v2(sp_StringIO *s, sp_RbVal a, sp_RbVal b) { sio_write_val(s, a, 0); sio_write_val(s, b, 0); return 0; }
+sp_int sp_StringIO_print_v3(sp_StringIO *s, sp_RbVal a, sp_RbVal b, sp_RbVal c2) { sio_write_val(s, a, 0); sio_write_val(s, b, 0); sio_write_val(s, c2, 0); return 0; }
+sp_int sp_StringIO_puts_v1(sp_StringIO *s, sp_RbVal a) { sio_write_val(s, a, 1); return 0; }
+sp_int sp_StringIO_puts_v2(sp_StringIO *s, sp_RbVal a, sp_RbVal b) { sio_write_val(s, a, 1); sio_write_val(s, b, 1); return 0; }
+sp_int sp_StringIO_puts_v3(sp_StringIO *s, sp_RbVal a, sp_RbVal b, sp_RbVal c2) { sio_write_val(s, a, 1); sio_write_val(s, b, 1); sio_write_val(s, c2, 1); return 0; }

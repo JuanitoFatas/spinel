@@ -28,7 +28,7 @@ typedef struct sp_thread {
   sp_RbVal          retval;      /* block result (copied from fiber->yielded_value at death) */
   sp_RbVal          name;        /* #name / #name= (a string or nil) */
   const char       *birth_file;  /* creation site for #inspect (#3126); rodata */
-  mrb_int           birth_line;
+  sp_int           birth_line;
   sp_thread_state   state;
   int               has_exc;     /* body left an unhandled exception (re-raised at #join/#value) */
   const char       *exc_cls, *exc_msg;
@@ -67,7 +67,7 @@ void       sp_sched_init(void);
    a green thread and enqueue it RUNNABLE. It runs the next time the current
    thread yields, or at drain. Returns the thread (boxed SP_BUILTIN_THREAD). */
 sp_thread *sp_Thread_spawn_fiber(sp_Fiber *f, sp_RbVal arg);
-sp_thread *sp_Thread_spawn_fiber_at(sp_Fiber *f, sp_RbVal arg, const char *file, mrb_int line);
+sp_thread *sp_Thread_spawn_fiber_at(sp_Fiber *f, sp_RbVal arg, const char *file, sp_int line);
 
 /* #join: block until the thread has finished, re-raise its unhandled exception
    in the caller, then return the thread. #value: same, but return its result. */
@@ -81,7 +81,7 @@ void       sp_Thread_pass(void);          /* Thread.pass: cooperative yield */
    green threads; a monitor thread wakes it after the duration. Falls back to a
    plain blocking sleep only in the single-threaded build (spinel_rt.h). */
 void       sp_sched_sleep(double seconds);
-void       sp_sleep(mrb_float s);   /* Kernel#sleep; relocated from spinel_rt.h to lib/sp_cold.c */
+void       sp_sleep(sp_float s);   /* Kernel#sleep; relocated from spinel_rt.h to lib/sp_cold.c */
 /* Scheduler-aware blocking I/O: park the calling green thread until `fd` is ready
    for `events` (POLLIN/POLLOUT), freeing its OS worker for other threads; the
    monitor polls the fd and wakes it. Returns 1 to retry the syscall (fd ready or
@@ -89,21 +89,21 @@ void       sp_sleep(mrb_float s);   /* Kernel#sleep; relocated from spinel_rt.h 
    single-threaded build / before the monitor starts. */
 int        sp_sched_wait_io(int fd, short events);
 sp_thread *sp_Thread_current(void);       /* Thread.current */
-mrb_bool   sp_Thread_alive(sp_thread *t); /* #alive? */
-mrb_bool   sp_Thread_set_report_default(mrb_bool v);  /* Thread.report_on_exception= */
-mrb_bool   sp_Thread_get_report_default(void);        /* Thread.report_on_exception */
-mrb_bool   sp_Thread_set_report(sp_thread *t, mrb_bool v); /* #report_on_exception= */
-mrb_bool   sp_Thread_get_report(sp_thread *t);            /* #report_on_exception */
+sp_bool   sp_Thread_alive(sp_thread *t); /* #alive? */
+sp_bool   sp_Thread_set_report_default(sp_bool v);  /* Thread.report_on_exception= */
+sp_bool   sp_Thread_get_report_default(void);        /* Thread.report_on_exception */
+sp_bool   sp_Thread_set_report(sp_thread *t, sp_bool v); /* #report_on_exception= */
+sp_bool   sp_Thread_get_report(sp_thread *t);            /* #report_on_exception */
 sp_thread *sp_Thread_main(void);          /* Thread.main */
-mrb_int    sp_Thread_list_count(void);     /* Thread.list (built by the TU) */
-sp_thread *sp_Thread_list_at(mrb_int i);
+sp_int    sp_Thread_list_count(void);     /* Thread.list (built by the TU) */
+sp_thread *sp_Thread_list_at(sp_int i);
 sp_RbVal   sp_Thread_get_name(sp_thread *t);                       /* #name */
 sp_RbVal   sp_Thread_set_name(sp_thread *t, sp_RbVal v);           /* #name= */
 sp_RbVal   sp_Thread_status(sp_thread *t); /* #status: "run"/"sleep"/false/nil */
 const char *sp_Thread_inspect(sp_thread *t); /* #inspect / #to_s */
 sp_RbVal   sp_Thread_tls_get(sp_thread *t, sp_sym k);              /* Thread#[] */
 sp_RbVal   sp_Thread_tls_set(sp_thread *t, sp_sym k, sp_RbVal v);  /* Thread#[]= */
-mrb_bool   sp_Thread_tls_key(sp_thread *t, sp_sym k);             /* Thread#key? */
+sp_bool   sp_Thread_tls_key(sp_thread *t, sp_sym k);             /* Thread#key? */
 
 /* Run any remaining runnable threads to completion. Emitted at the end of
    main() so a fire-and-forget Thread still runs its body. */
@@ -148,22 +148,22 @@ extern void (*sp_safepoint_publish_hook)(void);
  * the coordination the lazy Thread model could not express. */
 typedef struct sp_queue {
   sp_RbVal         *buf;          /* ring buffer of queued values */
-  mrb_int           head, len, cap;
-  mrb_int           max;          /* SizedQueue capacity; 0 = unbounded Queue */
+  sp_int           head, len, cap;
+  sp_int           max;          /* SizedQueue capacity; 0 = unbounded Queue */
   struct sp_thread *pop_waiters;  /* threads blocked in #pop on an empty queue */
   struct sp_thread *push_waiters; /* threads blocked in #push on a full SizedQueue */
   int               closed;
 } sp_queue;
 
 sp_queue  *sp_Queue_new(void);
-sp_queue  *sp_SizedQueue_new(mrb_int max);          /* SizedQueue.new(max) */
+sp_queue  *sp_SizedQueue_new(sp_int max);          /* SizedQueue.new(max) */
 void       sp_Queue_push(sp_queue *q, sp_RbVal v);  /* #push / #<< / #enq (blocks when full) */
 sp_RbVal   sp_Queue_pop(sp_queue *q);               /* #pop / #shift / #deq (blocks when empty) */
-mrb_int    sp_Queue_size(sp_queue *q);              /* #size / #length */
-mrb_bool   sp_Queue_empty(sp_queue *q);             /* #empty? */
-mrb_int    sp_Queue_max(sp_queue *q);               /* SizedQueue#max */
+sp_int    sp_Queue_size(sp_queue *q);              /* #size / #length */
+sp_bool   sp_Queue_empty(sp_queue *q);             /* #empty? */
+sp_int    sp_Queue_max(sp_queue *q);               /* SizedQueue#max */
 void       sp_Queue_close(sp_queue *q);             /* #close */
-mrb_bool   sp_Queue_closed(sp_queue *q);            /* #closed? */
+sp_bool   sp_Queue_closed(sp_queue *q);            /* #closed? */
 void       sp_Queue_clear(sp_queue *q);             /* #clear */
 
 /* ---- Mutex (non-recursive lock; owner + wait list) ----
@@ -188,9 +188,9 @@ const char *sp_Mutex_class_name(sp_mutex *m); /* "Monitor" or "Thread::Mutex" */
 const char *sp_Queue_class_name(sp_queue *q);  /* "Thread::SizedQueue" or "Thread::Queue" */
 void       sp_Mutex_lock(sp_mutex *m);
 void       sp_Mutex_unlock(sp_mutex *m);
-mrb_bool   sp_Mutex_try_lock(sp_mutex *m);   /* #try_lock: true if acquired */
-mrb_bool   sp_Mutex_locked(sp_mutex *m);     /* #locked? */
-mrb_bool   sp_Mutex_owned(sp_mutex *m);      /* #owned? */
+sp_bool   sp_Mutex_try_lock(sp_mutex *m);   /* #try_lock: true if acquired */
+sp_bool   sp_Mutex_locked(sp_mutex *m);     /* #locked? */
+sp_bool   sp_Mutex_owned(sp_mutex *m);      /* #owned? */
 
 /* ---- ConditionVariable (wait/signal/broadcast over a Mutex) ---- */
 typedef struct sp_condvar {

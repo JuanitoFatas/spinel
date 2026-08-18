@@ -513,7 +513,7 @@ static void sp_str_sweep_gated(void) {
 }
 
 /* Non-inline sp_str_alloc, for a TU that cannot include sp_alloc.h.
-   lib/sp_bigint.c is the one: it pulls mruby_shim.h, whose mrb_bool disagrees
+   lib/sp_bigint.c is the one: it pulls mruby_shim.h, whose sp_bool disagrees
    with sp_types.h's, so the header cannot be added alongside. Its Integer#to_s
    still has to answer a string-heap string like every other producer (#3396). */
 char *sp_str_alloc_ext(size_t len) { return sp_str_alloc(len); }
@@ -530,7 +530,7 @@ __attribute__((constructor)) static void sp_alloc_install_hooks(void) {
    with no locale dependency (pure integer arithmetic; see sp_dtoa.c); the
    fixed vs scientific layout is Ruby's Float#to_s rule (which differs from
    %g's), preserved from the previous strtod-probe implementation. */
-const char *sp_float_to_s(mrb_float f) {
+const char *sp_float_to_s(sp_float f) {
   if(f!=f){char*r=sp_str_alloc_raw(4);r[0]='N';r[1]='a';r[2]='N';r[3]=0;return r;}
   if(f==HUGE_VAL||f==-HUGE_VAL){if(f<0){char*r=sp_str_alloc_raw(10);memcpy(r,"-Infinity",10);return r;}char*r=sp_str_alloc_raw(9);memcpy(r,"Infinity",9);return r;}
   if(f==0.0){if(signbit(f)){char*r=sp_str_alloc_raw(5);memcpy(r,"-0.0",5);return r;}char*r=sp_str_alloc_raw(4);memcpy(r,"0.0",4);return r;}

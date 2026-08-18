@@ -745,7 +745,7 @@ static void sp_thread_scan(void *p) {
   if (t->tls) sp_gc_mark(t->tls);
 }
 
-sp_thread *sp_Thread_spawn_fiber_at(sp_Fiber *f, sp_RbVal arg, const char *file, mrb_int line) {SP_GC_ROOT_RBVAL(arg);SP_GC_ROOT(f);SP_GC_ROOT_STR(file);
+sp_thread *sp_Thread_spawn_fiber_at(sp_Fiber *f, sp_RbVal arg, const char *file, sp_int line) {SP_GC_ROOT_RBVAL(arg);SP_GC_ROOT(f);SP_GC_ROOT_STR(file);
   sp_thread *t = sp_Thread_spawn_fiber(f, arg);
   t->birth_file = file;
   t->birth_line = line;
@@ -840,15 +840,15 @@ void sp_Thread_pass(void) {
 
 sp_thread *sp_Thread_current(void) { return g_current; }
 
-mrb_bool sp_Thread_alive(sp_thread *t) { return t->state != SP_TH_DEAD; }
+sp_bool sp_Thread_alive(sp_thread *t) { return t->state != SP_TH_DEAD; }
 
 /* Thread.report_on_exception=(v): set the default for threads spawned after.
    Thread.report_on_exception: read the default. Per-thread #report_on_exception
    reads/sets the thread's own flag. */
-mrb_bool sp_Thread_set_report_default(mrb_bool v) { g_report_default = v ? 1 : 0; return v; }
-mrb_bool sp_Thread_get_report_default(void) { return g_report_default; }
-mrb_bool sp_Thread_set_report(sp_thread *t, mrb_bool v) { t->report_on_exception = v ? 1 : 0; return v; }
-mrb_bool sp_Thread_get_report(sp_thread *t) { return t->report_on_exception; }
+sp_bool sp_Thread_set_report_default(sp_bool v) { g_report_default = v ? 1 : 0; return v; }
+sp_bool sp_Thread_get_report_default(void) { return g_report_default; }
+sp_bool sp_Thread_set_report(sp_thread *t, sp_bool v) { t->report_on_exception = v ? 1 : 0; return v; }
+sp_bool sp_Thread_get_report(sp_thread *t) { return t->report_on_exception; }
 
 sp_thread *sp_Thread_main(void) { return &g_main_thread; }
 
@@ -858,15 +858,15 @@ sp_RbVal sp_Thread_set_name(sp_thread *t, sp_RbVal v) { sp_gc_wb((void*)t); t->n
 /* Thread.list enumeration: the main thread followed by every live spawned
    thread (dead ones are off the registry). The generated TU builds the array
    over these accessors since it owns sp_PolyArray. */
-mrb_int sp_Thread_list_count(void) {
-  mrb_int n = 1;   /* the main thread */
+sp_int sp_Thread_list_count(void) {
+  sp_int n = 1;   /* the main thread */
   for (sp_thread *t = g_all; t; t = t->all_next) n++;
   return n;
 }
-sp_thread *sp_Thread_list_at(mrb_int i) {
+sp_thread *sp_Thread_list_at(sp_int i) {
   if (i <= 0) return &g_main_thread;
   sp_thread *t = g_all;
-  for (mrb_int k = 1; t && k < i; k++) t = t->all_next;
+  for (sp_int k = 1; t && k < i; k++) t = t->all_next;
   return t ? t : &g_main_thread;
 }
 
@@ -881,23 +881,23 @@ sp_RbVal sp_Thread_status(sp_thread *t) {
 }
 
 /* ---- thread-local storage (Thread#[] / #[]=), a small sym->value map ---- */
-typedef struct { sp_sym *keys; sp_RbVal *vals; mrb_int len, cap; } sp_tls_map;
-static void sp_tls_scan(void *p) { sp_tls_map *m = (sp_tls_map *)p; for (mrb_int i = 0; i < m->len; i++) sp_mark_rbval(m->vals[i]); }
+typedef struct { sp_sym *keys; sp_RbVal *vals; sp_int len, cap; } sp_tls_map;
+static void sp_tls_scan(void *p) { sp_tls_map *m = (sp_tls_map *)p; for (sp_int i = 0; i < m->len; i++) sp_mark_rbval(m->vals[i]); }
 static void sp_tls_fin(void *p)  { sp_tls_map *m = (sp_tls_map *)p; free(m->keys); free(m->vals); }
 
 sp_RbVal sp_Thread_tls_get(sp_thread *t, sp_sym k) {
   sp_tls_map *m = (sp_tls_map *)t->tls;
-  if (m) for (mrb_int i = 0; i < m->len; i++) if (m->keys[i] == k) return m->vals[i];
+  if (m) for (sp_int i = 0; i < m->len; i++) if (m->keys[i] == k) return m->vals[i];
   return sp_box_nil();
 }
-mrb_bool sp_Thread_tls_key(sp_thread *t, sp_sym k) { sp_gc_wb((void*)t);
+sp_bool sp_Thread_tls_key(sp_thread *t, sp_sym k) { sp_gc_wb((void*)t);
   sp_tls_map *m = (sp_tls_map *)t->tls;
-  if (m) for (mrb_int i = 0; i < m->len; i++) if (m->keys[i] == k) return 1;
+  if (m) for (sp_int i = 0; i < m->len; i++) if (m->keys[i] == k) return 1;
   return 0;
 }
 sp_RbVal sp_Thread_tls_set(sp_thread *t, sp_sym k, sp_RbVal v) { sp_gc_wb((void*)t);
   sp_tls_map *m = (sp_tls_map *)t->tls;
-  if (m) for (mrb_int i = 0; i < m->len; i++) if (m->keys[i] == k) { m->vals[i] = v; return v; }
+  if (m) for (sp_int i = 0; i < m->len; i++) if (m->keys[i] == k) { m->vals[i] = v; return v; }
   if (!m) {
     SP_GC_ROOT(t); SP_GC_ROOT_RBVAL(v);
     m = (sp_tls_map *)sp_gc_alloc(sizeof(sp_tls_map), sp_tls_fin, sp_tls_scan);
@@ -908,7 +908,7 @@ sp_RbVal sp_Thread_tls_set(sp_thread *t, sp_sym k, sp_RbVal v) { sp_gc_wb((void*
     t->tls = m;
   }
   if (m->len == m->cap) {
-    mrb_int nc = m->cap * 2;
+    sp_int nc = m->cap * 2;
     sp_sym *nk = (sp_sym *)realloc(m->keys, sizeof(sp_sym) * nc);
     if (!nk) sp_raise_cls("NoMemoryError", "failed to grow thread storage");
     m->keys = nk;
@@ -1394,7 +1394,7 @@ sp_thread *sp_Thread_raise(sp_thread *t, const char *cls, const char *msg, void 
 
 static void sp_queue_scan(void *p) {
   sp_queue *q = (sp_queue *)p;
-  for (mrb_int i = 0; i < q->len; i++)
+  for (sp_int i = 0; i < q->len; i++)
     sp_mark_rbval(q->buf[(q->head + i) % q->cap]);
 }
 static void sp_queue_fin(void *p) { sp_queue *q = (sp_queue *)p; free(q->buf); }
@@ -1412,7 +1412,7 @@ sp_queue *sp_Queue_new(void) {
   return q;
 }
 
-sp_queue *sp_SizedQueue_new(mrb_int max) {
+sp_queue *sp_SizedQueue_new(sp_int max) {
   if (max <= 0) sp_raise_cls("ArgumentError", "queue size must be positive");
   sp_queue *q = sp_Queue_new();
   q->max = max;
@@ -1431,10 +1431,10 @@ void sp_Queue_push(sp_queue *q, sp_RbVal v) { sp_gc_wb((void*)q);
     sp_sched_block(&q->push_waiters);   /* releases+reacquires the lock around its transfer */
   }
   if (q->len == q->cap) {
-    mrb_int nc = q->cap * 2;
+    sp_int nc = q->cap * 2;
     sp_RbVal *nb = (sp_RbVal *)malloc(sizeof(sp_RbVal) * nc);
     if (!nb) { SCHED_UNLOCK(); sp_raise_cls("NoMemoryError", "failed to grow queue"); }
-    for (mrb_int i = 0; i < q->len; i++) nb[i] = q->buf[(q->head + i) % q->cap];
+    for (sp_int i = 0; i < q->len; i++) nb[i] = q->buf[(q->head + i) % q->cap];
     free(q->buf);
     q->buf = nb; q->cap = nc; q->head = 0;
   }
@@ -1460,10 +1460,10 @@ sp_RbVal sp_Queue_pop(sp_queue *q) {
   return v;
 }
 
-mrb_int  sp_Queue_size(sp_queue *q)   { SCHED_LOCK(); mrb_int n = q->len;       SCHED_UNLOCK(); return n; }
-mrb_bool sp_Queue_empty(sp_queue *q)  { SCHED_LOCK(); mrb_bool e = q->len == 0;  SCHED_UNLOCK(); return e; }
-mrb_int  sp_Queue_max(sp_queue *q)    { SCHED_LOCK(); mrb_int m = q->max;        SCHED_UNLOCK(); return m; }
-mrb_bool sp_Queue_closed(sp_queue *q) { SCHED_LOCK(); mrb_bool c = q->closed != 0; SCHED_UNLOCK(); return c; }
+sp_int  sp_Queue_size(sp_queue *q)   { SCHED_LOCK(); sp_int n = q->len;       SCHED_UNLOCK(); return n; }
+sp_bool sp_Queue_empty(sp_queue *q)  { SCHED_LOCK(); sp_bool e = q->len == 0;  SCHED_UNLOCK(); return e; }
+sp_int  sp_Queue_max(sp_queue *q)    { SCHED_LOCK(); sp_int m = q->max;        SCHED_UNLOCK(); return m; }
+sp_bool sp_Queue_closed(sp_queue *q) { SCHED_LOCK(); sp_bool c = q->closed != 0; SCHED_UNLOCK(); return c; }
 void     sp_Queue_clear(sp_queue *q)  {
   SCHED_LOCK();
   q->head = q->len = 0;
@@ -1531,17 +1531,17 @@ void sp_Mutex_unlock(sp_mutex *m) {
   SCHED_UNLOCK();
 }
 
-mrb_bool sp_Mutex_try_lock(sp_mutex *m) {
+sp_bool sp_Mutex_try_lock(sp_mutex *m) {
   SCHED_LOCK();
-  mrb_bool r;
+  sp_bool r;
   if (m->owner == g_current && m->reentrant) { m->depth++; r = 1; }
   else if (m->owner != NULL) r = 0;
   else { m->owner = g_current; r = 1; }
   SCHED_UNLOCK();
   return r;
 }
-mrb_bool sp_Mutex_locked(sp_mutex *m) { SCHED_LOCK(); mrb_bool r = m->owner != NULL;      SCHED_UNLOCK(); return r; }
-mrb_bool sp_Mutex_owned(sp_mutex *m)  { SCHED_LOCK(); mrb_bool r = m->owner == g_current;  SCHED_UNLOCK(); return r; }
+sp_bool sp_Mutex_locked(sp_mutex *m) { SCHED_LOCK(); sp_bool r = m->owner != NULL;      SCHED_UNLOCK(); return r; }
+sp_bool sp_Mutex_owned(sp_mutex *m)  { SCHED_LOCK(); sp_bool r = m->owner == g_current;  SCHED_UNLOCK(); return r; }
 
 /* ---- ConditionVariable ----
  * #wait releases the mutex, parks on the CV, and re-acquires the mutex on

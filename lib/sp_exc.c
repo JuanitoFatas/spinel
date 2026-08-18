@@ -156,7 +156,7 @@ sp_Exception *sp_exc_new(const char *cls_name, const char *msg) {SP_GC_ROOT_STR(
   /* An Interrupt carries SIGINT as its #signo however it was constructed --
      including the bare `raise Interrupt` class form (#3039). */
   e->xkey = (e->cls_name && !strcmp(e->cls_name, "Interrupt"))
-              ? sp_box_int((mrb_int)SIGINT) : sp_box_nil();
+              ? sp_box_int((sp_int)SIGINT) : sp_box_nil();
   e->xrecv = sp_box_nil();
   e->has_recv = 1;   /* cleared by the explicit .new emits that record neither */
   e->has_key = 1;
@@ -171,7 +171,7 @@ sp_Exception *sp_exc_new(const char *cls_name, const char *msg) {SP_GC_ROOT_STR(
 }
 /* Exception#==: same class and message (CRuby value equality); #equal?
    stays pointer identity at the emit site. */
-mrb_bool sp_exc_eq(sp_Exception *a, sp_Exception *b) {
+sp_bool sp_exc_eq(sp_Exception *a, sp_Exception *b) {
   if (a == b) return 1;
   if (!a || !b) return 0;
   if (strcmp(a->cls_name ? a->cls_name : "", b->cls_name ? b->cls_name : "") != 0) return 0;
@@ -351,7 +351,7 @@ sp_RbVal sp_exc_args_acc(sp_Exception *e) {SP_GC_ROOT(e);
   sp_exc_acc_gate(e, "NoMethodError", "args");
   return e->xkey;
 }
-mrb_bool sp_exc_private_call_acc(sp_Exception *e) {SP_GC_ROOT(e);
+sp_bool sp_exc_private_call_acc(sp_Exception *e) {SP_GC_ROOT(e);
   sp_exc_acc_gate(e, "NoMethodError", "private_call?");
   return e ? e->priv_call : 0;   /* set only by the explicit .new (#3042) */
 }
@@ -363,15 +363,15 @@ sp_RbVal sp_exc_throw_value_acc(sp_Exception *e) {SP_GC_ROOT(e);
   sp_exc_acc_gate(e, "UncaughtThrowError", "value");
   return e->result;
 }
-mrb_int sp_exc_status_acc(sp_Exception *e) {SP_GC_ROOT(e);
+sp_int sp_exc_status_acc(sp_Exception *e) {SP_GC_ROOT(e);
   sp_exc_acc_gate(e, "SystemExit", "status");
-  return (mrb_int)sp_exc_exit_status(e);
+  return (sp_int)sp_exc_exit_status(e);
 }
-mrb_bool sp_exc_success_acc(sp_Exception *e) {SP_GC_ROOT(e);
+sp_bool sp_exc_success_acc(sp_Exception *e) {SP_GC_ROOT(e);
   sp_exc_acc_gate(e, "SystemExit", "success?");
   return sp_exc_exit_status(e) == 0;
 }
-mrb_int sp_exc_signo_acc(sp_Exception *e) {SP_GC_ROOT(e);
+sp_int sp_exc_signo_acc(sp_Exception *e) {SP_GC_ROOT(e);
   sp_exc_acc_gate(e, "SignalException", "signo");
   return (e->xkey.tag == SP_TAG_INT) ? e->xkey.v.i : 0;
 }

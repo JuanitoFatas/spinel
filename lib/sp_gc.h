@@ -39,7 +39,7 @@
    lib/sp_marshal.c can recognize them by cls_id. */
 #define SP_BUILTIN_COMPLEX  (-26)
 #define SP_BUILTIN_RATIONAL (-27)
-/* A Rational whose numerator/denominator exceed mrb_int: a boxed object with
+/* A Rational whose numerator/denominator exceed sp_int: a boxed object with
    two sp_Bigint* fields, distinct from the by-value int Rational (#2469). */
 #define SP_BUILTIN_BIG_RATIONAL (-35)
 /* A Float range (1.0..3.0): a boxed sp_FloatRange, distinct from the int-backed
@@ -52,7 +52,7 @@
                                          so it was neither a Range nor
                                          enumerable through a poly slot (#3619) */
 #define SP_BUILTIN_OPENSTRUCT  (-41)  /* OpenStruct: dynamic symbol->value members */
-typedef struct { int tag; int cls_id; union { mrb_int i; const char *s; mrb_float f; mrb_bool b; void *p; } v; } sp_RbVal;
+typedef struct { int tag; int cls_id; union { sp_int i; const char *s; sp_float f; sp_bool b; void *p; } v; } sp_RbVal;
 
 /* ---- Collector globals shared with the generated TU ----
  * Only the globals touched by both the kept hot path (sp_gc_alloc, the
@@ -309,9 +309,9 @@ extern void (*sp_gc_str_sweep_hook)(void);
  * iterate any array; hpair yields a hash's (key,value) at insertion index i. */
 extern const char *(*sp_sym_name_fn)(sp_sym);
 extern int (*sp_json_kind_fn)(sp_RbVal);
-extern mrb_int (*sp_json_len_fn)(sp_RbVal);
-extern sp_RbVal (*sp_json_aref_fn)(sp_RbVal, mrb_int);
-extern void (*sp_json_hpair_fn)(sp_RbVal, mrb_int, sp_RbVal *, sp_RbVal *);
+extern sp_int (*sp_json_len_fn)(sp_RbVal);
+extern sp_RbVal (*sp_json_aref_fn)(sp_RbVal, sp_int);
+extern void (*sp_json_hpair_fn)(sp_RbVal, sp_int, sp_RbVal *, sp_RbVal *);
 /* Container BUILDERS for JSON.parse (installed by the generated TU, which owns
    the hash type): make an empty string-keyed hash, and set a (key, value) pair
    -- CRuby's JSON.parse returns String keys. Arrays are built directly from the
@@ -377,7 +377,7 @@ static inline void sp_mark_rbval(sp_RbVal v) {
   else if (v.tag == SP_TAG_BIGINT) sp_gc_mark(v.v.p);
 }
 /* Closure-cell content markers. A captured non-int local is laundered into the
-   pointer-sized mrb_int cell as (uintptr_t)<ptr>; the cell's GC scan marks the
+   pointer-sized sp_int cell as (uintptr_t)<ptr>; the cell's GC scan marks the
    referent so it survives as long as the capturing proc does. */
 static inline void sp_cell_scan_str(void *p) { sp_mark_string(*(const char **)p); }
 static inline void sp_cell_scan_ptr(void *p) { sp_gc_mark(*(void **)p); }
