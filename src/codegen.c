@@ -245,6 +245,41 @@ TyKind yield_site_type(Compiler *c, int node) {
   return (t == TY_UNKNOWN || t == TY_VOID || t == TY_NIL) ? u : t;
 }
 
+/* A user object in a concretely-typed slot: CRuby's implicit conversion
+   protocol. The argument's class is static here, so a class defining the
+   conversion method (#to_str for a const char* slot, #to_int for sp_int)
+   converts through a DIRECT call to the compiled method; a class without it
+   is CRuby's TypeError ("no implicit conversion of X into Y") -- where the
+   raw object pointer previously went into the scalar slot and stopped the C
+   build. Handles only a conversion method taking no parameters whose static
+   return type is the slot's type; anything else keeps the prior behavior.
+   Returns 1 when it emitted, 0 to fall through. */
+static int emit_obj_conv(Compiler *c, int node, const char *conv, TyKind want,
+                         const char *into, const char *zero, Buf *b) {
+  TyKind t = comp_ntype(c, node);
+  if (!ty_is_object(t)) return 0;
+  int cid = ty_object_class(t);
+  if (cid < 0 || cid >= c->nclasses) return 0;
+  int def = -1, mi = comp_method_in_chain(c, cid, conv, &def);
+  if (mi >= 0) {
+    Scope *um = &c->scopes[mi];
+    if (um->ret != want || um->nparams != 0) return 0;
+    buf_printf(b, "sp_%s_%s(", c->classes[def].c_name, mc(conv));
+    if (!comp_ty_value_obj(c, t)) buf_printf(b, "(sp_%s *)", c->classes[def].c_name);
+    buf_puts(b, "(");
+    emit_expr(c, node, b);
+    buf_puts(b, "))");
+    return 1;
+  }
+  const char *cn = class_ruby_name(c, cid);
+  buf_puts(b, "({ (void)(");
+  emit_expr(c, node, b);
+  buf_printf(b, "); sp_raise_cls(\"TypeError\","
+                " (&(\"\\xff\" \"no implicit conversion of %s into %s\")[1])); %s; })",
+             cn ? cn : "Object", into, zero);
+  return 1;
+}
+
 void emit_int_expr(Compiler *c, int node, Buf *b) {
   const char *nty = nt_type(c->nt, node);
   /* `*a` forwarded into a scalar int slot (a builtin arg): the value is the
@@ -274,6 +309,7 @@ void emit_int_expr(Compiler *c, int node, Buf *b) {
     buf_puts(b, "(sp_int)("); emit_scalar_operand(c, node, "0", b); buf_puts(b, ")");
     return;
   }
+  if (emit_obj_conv(c, node, "to_int", TY_INT, "Integer", "(sp_int)0", b)) return;
   emit_scalar_operand(c, node, "0", b);
 }
 
@@ -320,6 +356,7 @@ void emit_str_expr(Compiler *c, int node, Buf *b) {
     buf_puts(b, "sp_poly_to_s("); emit_expr(c, node, b); buf_puts(b, ")");
     return;
   }
+  if (emit_obj_conv(c, node, "to_str", TY_STRING, "String", "(const char *)0", b)) return;
   /* The unresolved-call gate's sp_raise_nomethod(...) is a side-effecting poly
      value (it raises): coerce it to the const char* slot, keeping the call,
      rather than passing the sp_RbVal through raw (doom's
