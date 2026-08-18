@@ -38,6 +38,10 @@ struct re_compiler_s {
      repeatable atom, so a quantifier after it is CRuby's "no target" error,
      unlike the empty group `(?:)` which repeats to an empty match */
   mrb_bool last_atom_comment;
+  /* where the atom a quantifier binds to begins: compile_quantified sets it to
+     the code position before the atom, and a `\u{...}` list moves it forward so
+     the quantifier repeats the last codepoint alone */
+  uint32_t atom_start;
   char *stripped;           /* allocated buffer for x-mode preprocessing */
   /* Code range of each capture group, so `\g<name>` can re-emit a copy of the
      group it calls (#3637). Indexed by group number; len 0 = not (yet) known. */
@@ -62,6 +66,7 @@ static mrb_bool re_src_has_named_group(const char *p, const char *end) {
 }
 
 static void compile_alt(re_compiler *c);  /* forward */
+static void emit_codepoint(re_compiler *c, uint32_t cp);  /* forward */
 
 /* Issue #781: error handler hook so the library can route through
    the user program's sp_raise_cls (which is `static inline` per
@@ -471,14 +476,122 @@ parse_escape(re_compiler *c)
   }
 }
 
+/* Reject what has no UTF-8 encoding. CRuby reports both a surrogate and a
+   value past the last plane as "invalid Unicode range", so neither ever
+   reaches re_utf8_encode(). (ported from mruby-regexp 048e5da5f) */
+static void
+check_unicode_cp(re_compiler *c, uint32_t cp)
+{
+  if (cp > 0x10ffff || (cp >= 0xd800 && cp <= 0xdfff)) {
+    compile_error(c, "invalid Unicode range");
+  }
+}
+
+/* Separator between the codepoints of a `\u{...}` list. */
+static mrb_bool
+unicode_list_space(int ch)
+{
+  return ch == ' ' || ch == '\t' || ch == '\n' || ch == '\v' || ch == '\f' || ch == '\r';
+}
+
+static int hex_digit_value(int ch)
+{
+  if (ch >= '0' && ch <= '9') return ch - '0';
+  if (ch >= 'a' && ch <= 'f') return ch - 'a' + 10;
+  if (ch >= 'A' && ch <= 'F') return ch - 'A' + 10;
+  return -1;
+}
+
+/* Read the next codepoint of an open `\u{...}` list, or close it. Returns
+   FALSE once the `}` is consumed, leaving *more FALSE so the caller's loop
+   ends. */
+static mrb_bool
+unicode_escape_next(re_compiler *c, mrb_bool *more, uint32_t *out)
+{
+  if (!*more) return FALSE;
+  while (unicode_list_space(peek(c))) next_char(c);
+  if (peek(c) == '}') {
+    next_char(c);
+    *more = FALSE;
+    return FALSE;
+  }
+
+  uint32_t cp = 0;
+  int n = 0;
+  for (;;) {
+    int v = hex_digit_value(peek(c));
+    if (v < 0) break;
+    next_char(c);
+    cp = cp * 16 + (uint32_t)v;
+    /* Six digits reach U+FFFFFF, past the last plane, so a seventh can only
+       be an overlong spelling. CRuby rejects `\u{0000061}` rather than
+       reading it as U+0061. */
+    if (++n > 6) compile_error(c, "invalid Unicode range");
+  }
+  /* Anything that is neither a hex digit nor the closing brace ends the
+     list: a separator CRuby does not take (`\u{61,62}`), or the end of the
+     pattern (`\u{61`). */
+  if (n == 0) compile_error(c, "invalid Unicode list");
+  check_unicode_cp(c, cp);
+  *out = cp;
+  return TRUE;
+}
+
+/* Read a `\u` escape and return its first codepoint; the backslash and the
+   `u` are already consumed. `\uXXXX` is exactly four hex digits and yields
+   one codepoint. `\u{...}` holds one or more, so *more is set and the rest
+   come from unicode_escape_next(). */
+static uint32_t
+unicode_escape_first(re_compiler *c, mrb_bool *more)
+{
+  *more = FALSE;
+  if (peek(c) == '{') {
+    next_char(c);
+    *more = TRUE;
+    uint32_t cp;
+    /* The list has to hold something: `\u{}` and `\u{ }` are errors, not an
+       escape that contributes nothing. */
+    if (!unicode_escape_next(c, more, &cp)) compile_error(c, "invalid Unicode list");
+    return cp;
+  }
+
+  /* Nothing at all after `\u` is reported apart from a bad digit, as CRuby
+     does: /\u/ is "too short escape sequence" while /\u6/ is not. */
+  if (peek(c) < 0) compile_error(c, "too short escape sequence");
+  uint32_t cp = 0;
+  for (int i = 0; i < 4; i++) {
+    int v = hex_digit_value(peek(c));
+    if (v < 0) compile_error(c, "invalid Unicode escape");
+    next_char(c);
+    cp = cp * 16 + (uint32_t)v;
+  }
+  check_unicode_cp(c, cp);
+  return cp;
+}
+
 /* Read one character class atom: either an ASCII byte (0-127), a
    `\escape`, or a full multi-byte UTF-8 codepoint. Returns the
    codepoint and advances c->p. */
 static uint32_t
-read_class_atom(re_compiler *c)
+read_class_atom(re_compiler *c, re_charclass *cc)
 {
   if (peek(c) == '\\') {
     next_char(c);
+    if (peek(c) == 'u') {
+      next_char(c);
+      mrb_bool more;
+      uint32_t cp = unicode_escape_first(c, &more);
+      uint32_t nx;
+      /* Every codepoint of a `\u{...}` list is a member of its own. All but
+         the last join the class here; the last is returned, so it can open a
+         range as any other atom would: `[\u{61 62}-z]` is `a` plus `b-z`. */
+      while (unicode_escape_next(c, &more, &nx)) {
+        if (cp < 128) class_set_bit(cc, (uint8_t)cp);
+        else class_add_codepoint(cc, cp);
+        cp = nx;
+      }
+      return cp;
+    }
     return (uint32_t)parse_escape(c);
   }
   uint8_t b = (uint8_t)*c->p;
@@ -550,12 +663,12 @@ compile_charclass(re_compiler *c)
          '[' literally (e.g. `[[:]` is the literal set {'[', ':'}). */
     }
 
-    uint32_t cp = read_class_atom(c);
+    uint32_t cp = read_class_atom(c, cc);
 
     /* check for range a-z (or U+xxxx-U+yyyy) */
     if (peek(c) == '-' && c->p + 1 < c->src_end && c->p[1] != ']') {
       next_char(c);  /* skip '-' */
-      uint32_t hi = read_class_atom(c);
+      uint32_t hi = read_class_atom(c, cc);
       /* Issue #778: reversed range like [z-a] is a hard error in
          CRuby (RegexpError "empty range in char class"). Spinel
          used to silently accept it and emit a class that matched
@@ -1126,6 +1239,22 @@ compile_atom(re_compiler *c)
       emit(c, RE_BACKREF, (uint8_t)group, 0);
       c->has_backref = TRUE;
     }
+    else if (ch == 'u') {
+      next_char(c);  /* skip u */
+      mrb_bool more;
+      uint32_t cp = unicode_escape_first(c, &more);
+      uint32_t nx;
+      /* A `\u{...}` list is a sequence of atoms rather than one, so a
+         quantifier after it repeats the last codepoint only: /\u{61 62}+/ is
+         `a` followed by `b+`. Moving atom_start past the codepoints already
+         emitted is what leaves the last one as the target. */
+      while (unicode_escape_next(c, &more, &nx)) {
+        emit_codepoint(c, cp);
+        c->atom_start = c->code_len;
+        cp = nx;
+      }
+      emit_codepoint(c, cp);
+    }
     else {
       ch = parse_escape(c);
       if (c->flags & RE_FLAG_IGNORECASE) {
@@ -1236,14 +1365,47 @@ wrap_atomic(re_compiler *c, uint32_t start)
   c->needs_backtrack = TRUE;
 }
 
+/* Emit one codepoint as an atom: a run of RE_CHAR, one per UTF-8 byte. This is
+   the literal path for a codepoint the pattern NAMES rather than spells, so the
+   bytes come from the encoder instead of from the pattern. The run has to be a
+   single atom just the same, or a following quantifier binds to the last byte
+   alone. (ported from mruby-regexp 048e5da5f) */
+static void
+emit_codepoint(re_compiler *c, uint32_t cp)
+{
+  if (cp < 128) {
+    if ((c->flags & RE_FLAG_IGNORECASE) &&
+        ((cp >= 'A' && cp <= 'Z') || (cp >= 'a' && cp <= 'z'))) {
+      uint16_t id = add_class(c);
+      class_set_bit(&c->classes[id], (uint8_t)cp);
+      class_set_bit(&c->classes[id], (uint8_t)(cp >= 'a' ? cp - 32 : cp + 32));
+      emit(c, RE_CLASS, (uint8_t)id, 0);
+      return;
+    }
+    emit(c, RE_CHAR, (uint8_t)cp, 0);
+    return;
+  }
+  char buf[4];
+  int len = re_utf8_encode(cp, buf);
+  for (int i = 0; i < len; i++) emit(c, RE_CHAR, (uint8_t)buf[i], 0);
+}
+
 /* Compile atom with quantifiers (*, +, ?, {n,m}) */
 static void
 compile_quantified(re_compiler *c)
 {
-  uint32_t start = c->code_len;
+  uint32_t begin = c->code_len;
   const char *atom_start = c->p;
+  /* atom_start normally stays at `begin`; compile_atom moves it only for a
+     `\u{...}` list, whose leading codepoints are atoms of their own. Saving and
+     restoring it keeps a nested compile_quantified (inside a group) from
+     leaving its own atom behind for this one. */
+  uint32_t saved_atom_start = c->atom_start;
+  c->atom_start = begin;
   compile_atom(c);
-  if (c->code_len == start) {
+  uint32_t start = c->atom_start;
+  c->atom_start = saved_atom_start;
+  if (c->code_len == begin) {
     /* Issue #825: when compile_atom emitted nothing AND the next
        char is a bare quantifier (star, plus, question), the
        surrounding seq loop has nothing to advance with and spins

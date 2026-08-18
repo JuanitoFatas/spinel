@@ -166,6 +166,7 @@ void sp_re_set_error_handler(void (*fn)(const char *msg));
 /* UTF-8 helpers */
 int re_utf8_charlen(const char *s, const char *end);
 uint32_t re_utf8_decode(const char *s, const char *end, int *len);
+int re_utf8_encode(uint32_t cp, char *buf);
 mrb_bool re_is_word_char(uint32_t c);
 
 static inline int
