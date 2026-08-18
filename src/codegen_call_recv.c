@@ -8501,12 +8501,14 @@ int emit_object_call(Compiler *c, int id, Buf *b) {
         buf_puts(b, m->csym); buf_puts(b, "("); emit_expr(c, recv, b);
         for (int ai = 0; ai < m->nargs && ai < argc; ai++) {
           buf_puts(b, ", ");
+          TyKind aw = ffi_spec_to_ty(m->args[ai]);
           if (sp_streq(m->args[ai], "any")) emit_boxed(c, argv[ai], b);
           else if (sp_streq(m->args[ai], "regexp"))
             buf_printf(b, "sp_re_pat_%d", re_lit_index(c, argv[ai]));
-          else if (sp_streq(m->args[ai], "string") && comp_ntype(c, argv[ai]) == TY_POLY) {
-            buf_puts(b, "sp_poly_to_s("); emit_expr(c, argv[ai], b); buf_puts(b, ")");
-          }
+          /* the typed-slot emitters carry the implicit conversion protocol
+             (poly unboxing, #to_str / #to_int on a user object) */
+          else if (aw == TY_STRING) emit_str_expr(c, argv[ai], b);
+          else if (aw == TY_INT) emit_int_expr(c, argv[ai], b);
           else emit_expr(c, argv[ai], b);
         }
         buf_puts(b, ")");

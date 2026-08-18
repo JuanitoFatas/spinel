@@ -5380,6 +5380,52 @@ static void emit_obj_with_dispatch(Compiler *c, Buf *b) {
    so nested containers, strings (quoted), nil and nested objects (via the
    sp_obj_inspect_fn hook recursion) all render like CRuby's
    #<Name:0xADDR @a=1, @b="x">. Mirrors sp_marshal_obj_dump's shape. */
+/* One conversion-bridge switch (see the caller's comment): forward decls for
+   every callee it names, then the cls_id switch. `with_ok` adds the *ok
+   out-flag the sp_int form needs (NULL can carry "no method" for a string). */
+static int conv_bridge_callee(Compiler *c, int i, const char *mname, TyKind want,
+                              int *out_mi) {
+  ClassInfo *ci2 = &c->classes[i];
+  if (is_builtin_reopen(ci2->name) || ci2->is_native_class) return -1;
+  if (comp_ty_value_obj(c, ty_object(i))) return -1;
+  int dn = ci2->def_node;
+  const char *dt = dn >= 0 ? nt_type(c->nt, dn) : NULL;
+  if (dt && sp_streq(dt, "ModuleNode")) return -1;   /* no instances */
+  int tdef = -1;
+  int tmi = comp_method_in_chain(c, i, mname, &tdef);
+  if (tmi < 0 || !c->scopes[tmi].reachable || c->scopes[tmi].ret != want ||
+      c->scopes[tmi].nparams != 0) return -1;
+  int ddn = c->classes[tdef].def_node;
+  const char *ddt = ddn >= 0 ? nt_type(c->nt, ddn) : NULL;
+  *out_mi = tmi;
+  /* a module def is copied into the includer; an ancestor CLASS def is one
+     real function the child casts into */
+  return (ddt && sp_streq(ddt, "ModuleNode")) ? i : tdef;
+}
+static void emit_conv_bridge(Compiler *c, Buf *b, const char *mname, TyKind want,
+                             const char *rett, const char *sig, int with_ok,
+                             const char *dflt) {
+  for (int i = 0; i < c->nclasses; i++) {
+    int tmi = -1;
+    int callee = conv_bridge_callee(c, i, mname, want, &tmi);
+    if (callee != i) continue;   /* an ancestor's own row declares it */
+    buf_printf(b, "%s%s sp_%s_%s(sp_%s *self);\n", g_debug ? "" : "static ",
+               rett, c->classes[callee].c_name, mc(c->scopes[tmi].name),
+               c->classes[callee].c_name);
+  }
+  buf_printf(b, "%s {\n  switch (cls_id) {\n", sig);
+  for (int i = 0; i < c->nclasses; i++) {
+    int tmi = -1;
+    int callee = conv_bridge_callee(c, i, mname, want, &tmi);
+    if (callee < 0) continue;
+    buf_printf(b, "    case %d: %sreturn sp_%s_%s((sp_%s *)p);\n",
+               i, with_ok ? "*ok = 1; " : "",
+               c->classes[callee].c_name, mc(c->scopes[tmi].name),
+               c->classes[callee].c_name);
+  }
+  buf_printf(b, "    default: %s\n  }\n}\n", dflt);
+}
+
 static int class_inspectable(Compiler *c, int i) {
   ClassInfo *ci = &c->classes[i];
   if (is_builtin_reopen(ci->name)) return 0;
@@ -5425,6 +5471,22 @@ static void emit_obj_inspect_dispatch(Compiler *c, Buf *b) {
                i, c->classes[tdef].c_name, mc(c->scopes[tmi].name), c->classes[tdef].c_name);
   }
   buf_puts(b, "    default: return NULL;\n  }\n}\n");
+  /* user #to_int / #to_str bridges: the runtime's implicit-conversion sites
+     (pack and friends) reach a compiled conversion method on a BOXED object
+     through these; a class without one falls to the default (not-ok / NULL)
+     and the caller raises CRuby's TypeError. Same shape as the #to_s
+     dispatcher above, with two extra rules: a module row has no instances
+     (and no standalone body -- module methods are copied per includer), so
+     module rows are skipped, and a def that RESOLVES to a module calls the
+     includer's own copy. */
+  emit_conv_bridge(c, b, "to_int", TY_INT,
+                   "sp_int", "static sp_int sp_obj_to_int_sw(int cls_id, void *p, int *ok)",
+                   1, "*ok = 0; return 0;");
+  emit_conv_bridge(c, b, "to_str", TY_STRING,
+                   "const char *", "static const char *sp_obj_to_str_sw(int cls_id, void *p)",
+                   0, "return NULL;");
+  buf_puts(b, "static const char *sp_obj_cls_name_rt(int cls_id) {\n"
+              "  sp_Class _c = {cls_id}; return sp_class_to_s(_c);\n}\n");
   buf_puts(b, "static const char *sp_obj_inspect_sw(int cls_id, void *p) {\n");
   buf_puts(b, "  switch (cls_id) {\n");
   for (int i = 0; i < c->nclasses; i++) {
@@ -6442,6 +6504,9 @@ void emit_regex_section(Compiler *c, Buf *b) {
   if (g_emit_obj_dispatch) {
     buf_puts(b, "  sp_obj_inspect_fn = sp_obj_inspect_sw;\n");
     buf_puts(b, "  sp_obj_to_s_fn = sp_obj_to_s_sw;\n");
+    buf_puts(b, "  sp_obj_to_int_fn = sp_obj_to_int_sw;\n");
+    buf_puts(b, "  sp_obj_to_str_fn = sp_obj_to_str_sw;\n");
+    buf_puts(b, "  sp_obj_cls_name_fn = sp_obj_cls_name_rt;\n");
   }
   if (g_uses_marshal) {
     buf_puts(b,
@@ -8029,6 +8094,9 @@ char *codegen_program(const NodeTable *nt) {
   if (g_emit_obj_dispatch) {
     buf_puts(&b, "static const char *sp_obj_inspect_sw(int cls_id, void *p) __attribute__((cold, noinline));\n");
     buf_puts(&b, "static const char *sp_obj_to_s_sw(int cls_id, void *p) __attribute__((cold, noinline));\n");
+    buf_puts(&b, "static sp_int sp_obj_to_int_sw(int cls_id, void *p, int *ok) __attribute__((cold, noinline));\n");
+    buf_puts(&b, "static const char *sp_obj_to_str_sw(int cls_id, void *p) __attribute__((cold, noinline));\n");
+    buf_puts(&b, "static const char *sp_obj_cls_name_rt(int cls_id) __attribute__((cold, noinline));\n");
   }
   /* The #message / #to_s dispatchers below call these bodies unconditionally,
      so a program that defines an override without ever querying it left the

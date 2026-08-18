@@ -57,6 +57,9 @@ int (*sp_obj_is_data_fn)(int) = NULL;
 sp_RbVal (*sp_obj_with_fn)(sp_RbVal, sp_RbVal) = NULL;
 const char *(*sp_obj_inspect_fn)(int cls_id, void *p) = NULL;
 const char *(*sp_obj_to_s_fn)(int cls_id, void *p) = NULL;
+sp_int (*sp_obj_to_int_fn)(int cls_id, void *p, int *ok) = NULL;
+const char *(*sp_obj_to_str_fn)(int cls_id, void *p) = NULL;
+const char *(*sp_obj_cls_name_fn)(int cls_id) = NULL;
 sp_marshal_vt sp_marshal_v = {0};   /* filled by the generated TU (sp_re_init) */
 
 /* ---- Collector-private globals ---- */

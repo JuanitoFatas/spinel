@@ -58,3 +58,33 @@ begin
 ensure
   File.delete(path) if File.exist?(path)
 end
+
+# the runtime bridge: a BOXED user object converts inside a generic runtime
+# walk (pack), including a conversion method that arrives through a mixin
+module IntLike
+  def to_int
+    7
+  end
+end
+
+class Mixed
+  include IntLike
+end
+
+p [Idx.new].pack("C").bytes
+p [Mixed.new, Idx.new].pack("C2").bytes
+begin
+  [Inert.new].pack("C")
+rescue TypeError => e
+  p [e.class, e.message]
+end
+begin
+  [nil].pack("C")
+rescue TypeError => e
+  p [e.class, e.message]
+end
+p [2**64 + 65].pack("Q")[0]
+
+# native package bindings: a declared :string argument converts too
+require "stringio"
+p StringIO.new(Stringish.new).read

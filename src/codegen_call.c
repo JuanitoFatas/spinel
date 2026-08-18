@@ -5468,6 +5468,11 @@ void native_arg_check(Compiler *c, int id, const char *what, NativeMethod *m,
                       got == TY_SYMBOL || got == TY_BIGINT);
     int bad = (want_scalar && !got_scalar) ||
               (want == TY_STRING && got != TY_STRING && got != TY_STRBUF);
+    /* a user object reaches a string/int slot through the typed-slot
+       emitters, which carry the implicit conversion protocol: #to_str /
+       #to_int converts, anything else raises CRuby's TypeError at run
+       time -- either way the emitted C is well-typed */
+    if (bad && ty_is_object(got) && (want == TY_STRING || want == TY_INT)) bad = 0;
     if (!bad) continue;
     char msg[256];
     snprintf(msg, sizeof msg, "%s `%s` argument %d (declared :%s, given %s)",
@@ -5492,10 +5497,12 @@ int emit_native_ctor(Compiler *c, int id, int ci, int argc, const int *argv, Buf
   buf_printf(b, "%s(%d", m->csym, ci);
   for (int ai = 0; ai < m->nargs && ai < argc; ai++) {
     buf_puts(b, ", ");
+    TyKind aw = ffi_spec_to_ty(m->args[ai]);
     if (sp_streq(m->args[ai], "any")) emit_boxed(c, argv[ai], b);
-    else if (sp_streq(m->args[ai], "string") && comp_ntype(c, argv[ai]) == TY_POLY) {
-      buf_puts(b, "sp_poly_to_s("); emit_expr(c, argv[ai], b); buf_puts(b, ")");
-    }
+    /* the typed-slot emitters carry the implicit conversion protocol
+       (poly unboxing, #to_str / #to_int on a user object) */
+    else if (aw == TY_STRING) emit_str_expr(c, argv[ai], b);
+    else if (aw == TY_INT) emit_int_expr(c, argv[ai], b);
     else emit_expr(c, argv[ai], b);
   }
   buf_puts(b, ")");
