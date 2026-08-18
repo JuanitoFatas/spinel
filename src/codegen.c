@@ -674,6 +674,18 @@ void emit_boxed(Compiler *c, int node, Buf *b) {
           buf_printf(b, "sp_box_obj(%s, SP_BUILTIN_STRBUF)", srefX);
           return;
         } }
+      /* An ivar WRITE in value position lowers to `({ iv_x = ...; iv_x; })`,
+         so its value IS the slot -- the same handle the read above boxes, not
+         a string to wrap a fresh handle around (#3993). */
+      if (nt_kind(c->nt, node) == NK_InstanceVariableWriteNode) {
+        buf_puts(b, "sp_box_obj(");
+        unsigned char sv_mw = c->strbuf_box[node];
+        c->strbuf_box[node] = 0;
+        emit_expr(c, node, b);
+        c->strbuf_box[node] = sv_mw;
+        buf_puts(b, ", SP_BUILTIN_STRBUF)");
+        return;
+      }
       /* an element read is ALREADY a boxed handle when the container holds
          one: pass it through (as a handle box either way) so the alias keeps
          the container's own string rather than a fresh copy of it (#3941) */

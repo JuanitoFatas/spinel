@@ -11767,6 +11767,25 @@ void analyze_program(Compiler *c) {
     int iv = comp_ivar_index(ci, nt_str(c->nt, id, "name"));
     if (iv >= 0 && ci->ivar_types[iv] == TY_UNKNOWN) ci->ivar_types[iv] = TY_INT_ARRAY;
   }
+  /* An ivar write in VALUE position evaluates to the slot, so when the slot is
+     a strbuf the value is the live sp_String handle -- box it as one. The node
+     type is TY_STRBUF either way; what tells codegen to keep the handle is the
+     strbuf_box mark, and without it the boxing chose sp_box_str, whose
+     parameter is a `const char *` (#3993). The slot only becomes a strbuf
+     after the promotion above, so the mark is placed here rather than where
+     the write is typed. */
+  for (int id = 0; id < c->nt->count; id++) {
+    if (nt_kind(c->nt, id) != NK_InstanceVariableWriteNode) continue;
+    if (c->strbuf_box[id]) continue;
+    const char *nm = nt_str(c->nt, id, "name");
+    Scope *s = comp_scope_of(c, id);
+    int wcls = s && s->class_id >= 0 ? s->class_id : -1;
+    if (wcls < 0 || !nm) continue;
+    ClassInfo *ci = &c->classes[wcls];
+    int iv = comp_ivar_index(ci, nm);
+    if (iv >= 0 && ci->ivar_types[iv] == TY_STRBUF) c->strbuf_box[id] = 1;
+  }
+
   /* Backstop: a local variable assigned only empty array literals with no
      push evidence stays TY_UNKNOWN. Default it to TY_POLY_ARRAY so array
      operations (map!, p, etc.) can dispatch. */

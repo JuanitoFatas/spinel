@@ -1,0 +1,3 @@
+class Box
+  attr_reader body: String?
+end
