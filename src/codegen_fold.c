@@ -2027,7 +2027,32 @@ int emit_sum_block_expr(Compiler *c, int id, Buf *b) {
   if (acct == TY_FLOAT) buf_printf(b, "; sp_float _t%d = 0.0", tc);
   if (acct == TY_STRING) buf_printf(b, "; SP_GC_ROOT(_t%d)", tacc);
   buf_printf(b, "; for (sp_int _t%d = 0; _t%d < _t%d; _t%d++) { ", ti, ti, tn, ti);
-  if (p0) buf_printf(b, "lv_%s = sp_%sArray_get(_t%d, _t%d); ", p0, k, ta, ti);
+  /* A 2+-param block over an array of sub-arrays auto-splats each element into
+     the params -- `sum { |v, i| a[i] }` over the [value, index] pairs an
+     each_with_index enumerator answers. The poly-accumulator branch above does
+     the same; without it here only the first param was bound and the rest
+     stayed nil, so `a[i]` read index nil on every iteration (#3989). Only a
+     poly element can BE a sub-array, so a typed array keeps the plain bind. */
+  {
+    int nps = 0; while (block_param_name(c, block, nps)) nps++;
+    if (nps >= 2 && sp_streq(k, "Poly") && !block_param_is_multi(c, block, 0)) {
+      int te = ++g_tmp;
+      buf_printf(b, "sp_RbVal _t%d = sp_PolyArray_get(_t%d, _t%d); ", te, ta, ti);
+      Scope *bsc = comp_scope_of(c, block);
+      for (int pj = 0; pj < nps; pj++) {
+        const char *pn = block_param_name(c, block, pj);
+        LocalVar *plv = (pn && bsc) ? scope_local(bsc, pn) : NULL;
+        if (!plv) continue;
+        char src[96];
+        snprintf(src, sizeof src, "sp_poly_index_poly(_t%d, sp_box_int(%d))", te, pj);
+        buf_printf(b, "lv_%s = ", rename_local(pn));
+        if (plv->type == TY_POLY || plv->type == TY_UNKNOWN) buf_puts(b, src);
+        else emit_unbox_text(c, plv->type, src, b);
+        buf_puts(b, "; ");
+      }
+    }
+    else if (p0) buf_printf(b, "lv_%s = sp_%sArray_get(_t%d, _t%d); ", p0, k, ta, ti);
+  }
   /* The block's value expression may spill setup statements to g_pre (e.g.
      a nested count loop). Those must run per iteration: redirect g_pre into
      a local buffer while emitting the value, then splice it into the loop
