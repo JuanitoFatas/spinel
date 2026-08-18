@@ -593,6 +593,10 @@ lookbehind_start(const mrb_regexp_pattern *pat, const char *str,
   (void)str_end;
   if (binary) {
     int lb_len = pat->code[pc].a;
+    /* zero bytes for a sub-pattern that consumes characters means the
+       alternation's branches have no single byte width (see
+       compute_fixed_len); a byte-indexed subject has no rewind to make. */
+    if (lb_len == 0 && pat->code[pc + 1].a > 0) return NULL;
     return (sp - str < lb_len) ? NULL : sp - lb_len;
   }
   int nchars = pat->code[pc + 1].a;

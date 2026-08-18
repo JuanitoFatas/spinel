@@ -873,11 +873,34 @@ compute_fixed_len(re_compiler *c, uint32_t start, uint32_t end, int *chars_out)
       pc = inst.offset;
       break;
     case RE_SPLIT: {
-      /* alternation: both branches must have the same fixed length */
-      /* branch 1: pc+1 to next JMP before branch 2 */
-      /* branch 2: inst.offset to ... */
-      /* For simplicity, reject alternation in lookbehind */
-      return -1;
+      /* Alternation: measure both branches and accept when they agree. The
+         rewind is one number, so branches of different widths have no single
+         answer and are refused as before; equal ones are as measurable as a
+         plain sequence (`(?<=[^ab]|x)` is one character either way). Branch 1
+         runs from pc+1 to the JMP that skips branch 2, whose target is where
+         the two join. */
+      uint32_t b2 = inst.offset;
+      if (b2 <= pc + 1 || b2 > end) return -1;
+      uint32_t jmp = b2 - 1;
+      if (c->code[jmp].op != RE_JMP) return -1;
+      uint32_t join = c->code[jmp].offset;
+      /* The join may sit past this range: a branch of an OUTER alternation
+         ends at a JMP to the outer join, and the walk of this range stops
+         there of its own accord. */
+      if (join < b2 || join > c->code_len) return -1;
+      int ch1 = 0, ch2 = 0;
+      int len1 = compute_fixed_len(c, pc + 1, jmp, &ch1);
+      int len2 = compute_fixed_len(c, b2, join, &ch2);
+      if (len1 < 0 || len2 < 0 || ch1 != ch2) return -1;
+      /* Branches of the same character width may still differ in bytes
+         (`[^ab]|µ`), and the rewind is by characters everywhere but a
+         byte-indexed subject. Report a byte width of zero for that case: the
+         executor takes it as "no byte width" and declines to rewind there,
+         rather than rewinding by a width only one branch has. */
+      len += (len1 == len2) ? len1 : 0;
+      chars += ch1;
+      pc = join;
+      break;
     }
     case RE_MATCH:
       *chars_out = chars;
