@@ -3013,7 +3013,25 @@ else {
       if (g_pre) {
         int hoisted = cheap ? 0 : emit_index_opw_hoist(c, id, g_pre, g_indent);
         if (cheap || hoisted) {
-          emit_index_op_write(c, id, g_pre, g_indent);
+          /* The mutation cannot be emitted straight into g_pre: an RHS that
+             wants a prelude of its own (a user method call hoists its receiver
+             and spills each argument into a temp) drains into g_pre too, and
+             appending to the buffer mid-statement dropped the declaration
+             INSIDE the sp_..._set(...) argument list -- structurally invalid C,
+             an unbalanced paren and a _tN used before its declaration. Collect
+             the RHS's prelude and the statement separately, then splice them in
+             prelude-first, as the no-g_pre branch below already does. */
+          Buf *sv_pre = g_pre;
+          Buf pre; memset(&pre, 0, sizeof pre);
+          Buf stmt; memset(&stmt, 0, sizeof stmt);
+          g_pre = &pre;
+          emit_index_op_write(c, id, &stmt, g_indent);
+          g_pre = sv_pre;
+          if (pre.p) buf_puts(sv_pre, pre.p);
+          if (stmt.p) buf_puts(sv_pre, stmt.p);
+          free(pre.p); free(stmt.p);
+          /* the read-back runs after the mutation, so its own prelude (if any)
+             belongs at the end of g_pre -- where it now lands naturally. */
           emit_index_get(c, ir, iav[0], b);
           if (hoisted) emit_index_opw_unhoist();
           return;
