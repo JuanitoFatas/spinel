@@ -13,7 +13,7 @@
 #   2. The class method's parameter type must widen from the
 #      class-constant call site (`T_issue207_factory_pattern_T.from_raw(p)` → params: obj_P).
 #   3. The setter's poly arg must widen the receiving ivar's slot
-#      type (sp_RbVal field, not mrb_int).
+#      type (sp_RbVal field, not sp_int).
 #   4. The fetch's nil-default param must widen from the call-site
 #      string default ("" → string?).
 

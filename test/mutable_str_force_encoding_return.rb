@@ -4,7 +4,7 @@
 # mutable_str dispatches the inner call against `rc + "->data"`,
 # so force_encoding's body emits `return lv_out->data` — a
 # `const char *`. The function signature still committed to
-# mrb_int from the default infer_call_type fallback, tripping
+# sp_int from the default infer_call_type fallback, tripping
 # the C compile with int-from-pointer.
 #
 # Add the mutable_str arm: return "string" (the body's `->data`

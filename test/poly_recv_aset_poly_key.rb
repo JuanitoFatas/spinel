@@ -1,6 +1,6 @@
 # #464: `merged[k] = v` where merged is poly-recv AND k is also
 # poly. Pre-fix, the poly recv `[]=` dispatcher emitted only
-# Array setter arms which expect mrb_int index, so passing
+# Array setter arms which expect sp_int index, so passing
 # sp_RbVal as the index argument failed C compile.
 #
 # Fix: when idx is poly, dispatch by both recv cls_id AND

@@ -25,7 +25,7 @@ module M
   end
   # Same shape as #513's top-level Server: same method name (`run`),
   # different param type (int instead of string). After the fix,
-  # M::Server#run keeps `mrb_int lv_port` and M::Server is dropped
+  # M::Server#run keeps `sp_int lv_port` and M::Server is dropped
   # from the M::Holder.use dispatch table.
   class Server
     def run(port); port + 1; end

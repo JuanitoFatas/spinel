@@ -2,7 +2,7 @@
 # evidence of a Hash: `xs = src.map { }` is an Array once the block's return
 # settles, and pinning xs to an int-keyed hash in between poisons every method
 # it reaches -- parameters only widen, so the later unify(hash, array) is poly
-# for good. Every parameter and return below must stay mrb_int.
+# for good. Every parameter and return below must stay sp_int.
 module M
   def self.sub(a, b) = (a - b) % 97
   def self.mul(a, b) = (a * b) % 97

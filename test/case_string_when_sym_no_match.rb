@@ -1,6 +1,6 @@
 # Issue #378: `case <string> when :sym_literal` (and the
 # symmetric `case <symbol> when "string_literal"`) used to lower
-# to `strcmp(str, SPS_<sym>) == 0` / `mrb_int == const char *` —
+# to `strcmp(str, SPS_<sym>) == 0` / `sp_int == const char *` —
 # C type errors on every such arm because `compile_expr` on a
 # SymbolNode returns the `sp_sym` numeric id (a long long), and
 # strcmp expects `const char *`.

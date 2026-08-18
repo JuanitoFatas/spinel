@@ -5,7 +5,7 @@
 # downstream the call site sees `at == "int"` and skips the
 # poly→int unbox. The actual C emit is sp_<*PolyHash>_get(...)
 # returning sp_RbVal — the call then passes sp_RbVal into a
-# mrb_int slot.
+# sp_int slot.
 #
 # Codegen-side fix: expr_emits_poly_rb_val recognizes the shape
 # at emit time (independent of analyze cache) and the unbox

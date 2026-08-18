@@ -1,5 +1,5 @@
 # #490. A method with no reachable caller defaults its params to
-# mrb_int, then any operation in the body that's invalid on Int
+# sp_int, then any operation in the body that's invalid on Int
 # fires "cannot resolve call to '<m>' on int (emitting 0)". The
 # previous warning omitted the source method and was a debugging
 # papercut for library-style entry points: the user had to bisect

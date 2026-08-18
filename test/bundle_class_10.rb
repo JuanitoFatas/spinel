@@ -51,7 +51,7 @@ puts o.report
 # === forward_call_class_method_int_array ===
 # `Class.new(int_array_arg)` where the callee class is defined later
 # than the call site. Pre-fix codegen left T_forward_call_class_method_int_array_Target's `arr` param at
-# the default `mrb_int`; the int→class fallback then emitted the
+# the default `sp_int`; the int→class fallback then emitted the
 # call with a Wint-conversion error. Source order kept caller-first.
 
 class T_forward_call_class_method_int_array_Caller
@@ -155,10 +155,10 @@ puts c.show
 # File-order caller-first / callee-second: a T_forward_call_param_type_int_array_Caller class invokes a
 # method on a yet-untyped ivar (because the callee class is defined
 # later in the source). Pre-fix codegen left the callee's params at
-# the default `mrb_int` so the IntArray + bool args produced
+# the default `sp_int` so the IntArray + bool args produced
 # "incompatible-pointer" / "Wint-conversion" errors when the
 # int→class fallback emitted the call. With the forward-ref widening
-# in place the callee picks up `sp_IntArray *` + `mrb_bool` from
+# in place the callee picks up `sp_IntArray *` + `sp_bool` from
 # this single call site.
 
 class T_forward_call_param_type_int_array_Caller

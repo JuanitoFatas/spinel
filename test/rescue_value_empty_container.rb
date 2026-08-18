@@ -3,7 +3,7 @@
 # "does this arm carry a value?", the two were conflated: the modifier form
 # built the array and threw it away (`x = ([] rescue 0)` assigned nil), and the
 # begin/rescue form took the other arm's type alone and put a container pointer
-# in an mrb_int slot (#3495, #3496). Both arms of both forms are covered here.
+# in an sp_int slot (#3495, #3496). Both arms of both forms are covered here.
 a = ([] rescue 0)
 p a
 p a.class

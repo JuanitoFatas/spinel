@@ -10,7 +10,7 @@
 def t_int_array_each_with_index
   # Array#each_with_index on an int_array. The element block param must
   # shadow an outer same-named local of a different C type, and the
-  # index block param must be block-local mrb_int (not leak the outer
+  # index block param must be block-local sp_int (not leak the outer
   # `j`). Body skips reading the params to keep this scope-shadow case
   # separate from the format-specifier path.
   
@@ -30,7 +30,7 @@ def t_int_array_each_with_object
   # Array#each_with_object on an int_array. The element block param
   # must shadow an outer same-named local of a different C type, and
   # the accumulator block param must take the C type of the seed
-  # (here mrb_int) — not leak the outer `acc` (string). Body avoids
+  # (here sp_int) — not leak the outer `acc` (string). Body avoids
   # reading the params to keep this scope-shadow case separate from
   # the separate type-inferer behavior when reading the param inside
   # the block.

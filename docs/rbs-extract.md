@@ -134,12 +134,12 @@ the *storage kind*:
 
 ```c
 // no seed
-struct sp_PinBox_s { mrb_int cls_id; sp_RbVal iv_kids; sp_RbVal iv_meta; };
+struct sp_PinBox_s { sp_int cls_id; sp_RbVal iv_kids; sp_RbVal iv_meta; };
 static sp_RbVal sp_PinBox_kids(sp_PinBox *self);
 sp_poly_length(sp_PinBox_kids(...))          // runtime tag dispatch
 
 // Array[untyped] + Hash[String, untyped]
-struct sp_PinBox_s { mrb_int cls_id; sp_PolyArray * iv_kids; sp_StrPolyHash * iv_meta; };
+struct sp_PinBox_s { sp_int cls_id; sp_PolyArray * iv_kids; sp_StrPolyHash * iv_meta; };
 static sp_PolyArray * sp_PinBox_kids(sp_PinBox *self);
 sp_PolyArray_length(sp_PinBox_kids(...))     // direct call
 ```
@@ -282,12 +282,12 @@ type's C slot still has an inhabitant left to spell nil with:
 
 | Token                         | Pinned to        | nil is        |
 |-------------------------------|------------------|---------------|
-| `int?`                        | `mrb_int`        | `SP_INT_NIL`  |
-| `float?`                      | `mrb_float`      | a NaN payload |
+| `int?`                        | `sp_int`        | `SP_INT_NIL`  |
+| `float?`                      | `sp_float`      | a NaN payload |
 | `string?`, `obj_X?`, `*_array?`, `*_hash?` | the pointer | `NULL`   |
 | `bool?`, `symbol?`            | `sp_RbVal`       | `SP_TAG_NIL`  |
 
-`mrb_bool` and `sp_sym` have no spare inhabitant -- `0` is `false`, and
+`sp_bool` and `sp_sym` have no spare inhabitant -- `0` is `false`, and
 symbol `0` is a real symbol -- so `bool?` and `Symbol?` pin to the boxed
 tagged union rather than collapsing nil onto `false` / `:""` (#3412).
 A poly value narrowed into one of the sentinel-carrying slots goes

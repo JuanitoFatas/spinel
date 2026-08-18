@@ -8,7 +8,7 @@
 #      celled -- writes to the captured local were silently dropped (printed 0).
 #   2. the celled-int compound-assign path did not coerce a poly RHS, so folding
 #      a poly value (e.g. a poly array element) into a captured int accumulator
-#      failed C compilation (`mrb_int + sp_RbVal`).
+#      failed C compilation (`sp_int + sp_RbVal`).
 #
 # All deterministic here: each Thread is joined / Fiber resumed before the
 # captured value is read, so there is no concurrent mutation.

@@ -3,8 +3,8 @@
 # When a factor of the size widens to poly (here Mat#initialize's `ncols`, bound
 # poly at the `Mat.new(1, @d)` call site where `@d` is an untyped ivar), the
 # size `nrows * ncols` emits `sp_poly_mul(...)` which returns sp_RbVal — but the
-# Array.new lowering declared the size temp `mrb_int` and assigned the sp_RbVal
-# straight into it ("incompatible types when initializing 'mrb_int' using
+# Array.new lowering declared the size temp `sp_int` and assigned the sp_RbVal
+# straight into it ("incompatible types when initializing 'sp_int' using
 # 'sp_RbVal'"). The element type (float, from 0.0) was inferred correctly; only
 # the size operand was uncoerced. Fix: emit the size via emit_int_expr
 # (sp_poly_to_i for a poly value), like other array-bound sites.

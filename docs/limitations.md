@@ -293,7 +293,7 @@ are exact.
 
 #### A `Range` object needs `Integer`/`Float`/`String` bounds
 
-A `Range` is an unboxed value with `mrb_int` bounds, so a Range **object** over
+A `Range` is an unboxed value with `sp_int` bounds, so a Range **object** over
 user objects cannot be built (`rng = (Ver.new(1)..Ver.new(9))` is a compile
 error naming the class). Comparing against such a range does not need one:
 `Comparable#clamp` folds the bounds straight into the comparison, so the inline
@@ -305,7 +305,7 @@ x.clamp(lo, hi)     # works
 x.clamp(..hi)       # works (one-sided)
 x.clamp(lo..)       # works
 rng = (lo..hi)      # compile error: a Range of Ver objects cannot be built
-rng = (0..2**70)    # compile error: a Bignum bound does not fit mrb_int
+rng = (0..2**70)    # compile error: a Bignum bound does not fit sp_int
 ```
 
 #### A call that cannot exist is refused at compile time, not raised at run time
@@ -346,7 +346,7 @@ an `unsupported call` naming the node, not as a `NoMethodError`.
 
 #### A `Float::INFINITY` bound reports the other bound as a `Float`
 
-An integer `Range` is a value with `mrb_int` bounds, which have no
+An integer `Range` is a value with `sp_int` bounds, which have no
 representation for an infinity: the value can only record "unbounded". Where
 that loses information CRuby keeps, Spinel resolves it as follows.
 
@@ -548,8 +548,8 @@ Foo = Struct.new(:a, :b)   # not Struct.new("Foo", :a, :b)
 
 #### `Rational` precision and `Complex` components
 
-`Rational` is stored as a pair of fixed `mrb_int` numerator/denominator. The
-arithmetic is exact while the reduced terms fit in `mrb_int`; an operation whose
+`Rational` is stored as a pair of fixed `sp_int` numerator/denominator. The
+arithmetic is exact while the reduced terms fit in `sp_int`; an operation whose
 result would overflow raises `RangeError` rather than promoting to a Bigint as
 CRuby does:
 
@@ -557,7 +557,7 @@ CRuby does:
 Rational(10**18, 1) * Rational(10**18, 1)   # RangeError (CRuby: a Bigint Rational)
 ```
 
-`Complex` stores its components as `mrb_float` plus a per-component class tag,
+`Complex` stores its components as `sp_float` plus a per-component class tag,
 so `#real` / `#imaginary` / `#abs2` and display report `Integer` components like
 CRuby for integer-valued inputs. What the representation cannot express is a
 `Rational` component: operations that would produce one compute in floats

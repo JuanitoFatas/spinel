@@ -4,7 +4,7 @@
 # an array of int arrays.
 #
 # The point of the benchmark is TYPES, not throughput. Every value here is an
-# Integer or an array of them, so the whole thing should compile to mrb_int and
+# Integer or an array of them, so the whole thing should compile to sp_int and
 # sp_IntArray. It is a regression gate for the ways that has failed:
 #
 #   - `acc = ExtField.add(acc, x)` -- a value flowing back into the parameter

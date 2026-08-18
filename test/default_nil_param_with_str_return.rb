@@ -1,6 +1,6 @@
 # A method with `default = nil` whose body also returns a String from
 # another path: the function return type was `const char *` (string?)
-# but the param slot stayed `mrb_int` (the literal nil's int default),
+# but the param slot stayed `sp_int` (the literal nil's int default),
 # so `return default` failed C compile. Fixed in #447.
 
 class Bag

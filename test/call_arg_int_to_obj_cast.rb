@@ -1,6 +1,6 @@
 # Issue #379: when a method returns `obj_<C> | nil` and Spinel
-# collapses the union to `mrb_int` upstream, the local catching
-# the call ends up declared `mrb_int`. Use sites that need the
+# collapses the union to `sp_int` upstream, the local catching
+# the call ends up declared `sp_int`. Use sites that need the
 # concrete class then differ in their handling: property accesses
 # (`local.id`) get a runtime cast inserted by
 # `compile_int_class_fallback_expr`, while call args that pass
@@ -29,7 +29,7 @@ class Wrapper
 end
 
 # Force the helper's return to widen across two concrete obj
-# returns so the resulting union collapses (`mrb_int`):
+# returns so the resulting union collapses (`sp_int`):
 def maybe_holder(flag)
   if flag == 0
     Holder.new("h0")
@@ -51,5 +51,5 @@ all << h
 
 # Without the fix this call site would emit
 # `consume_holder(lv_h)` against a `consume_holder(sp_Holder *)`
-# signature, with lv_h still typed mrb_int — type-mismatched C.
+# signature, with lv_h still typed sp_int — type-mismatched C.
 puts consume_holder(h)

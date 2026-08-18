@@ -1,5 +1,5 @@
 # Regression (#1602): mapping an untyped block result into a poly array must
-# not emit sp_box_int(sp_box_nil()) (an mrb_int slot fed an already-boxed
+# not emit sp_box_int(sp_box_nil()) (an sp_int slot fed an already-boxed
 # value). `@model` is an unassigned (untyped) ivar, so `@model.build(row)` is
 # untyped; the map collects it into a poly array and must box it correctly
 # (yield nil), not wrap it in sp_box_int. `rows` is empty, so the body never

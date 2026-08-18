@@ -1,6 +1,6 @@
 # Array#[] with a Range held in a variable/parameter (not a literal RangeNode)
 # routes to the slice path instead of the scalar integer-index accessor, which
-# previously passed an sp_Range to an mrb_int parameter and failed to compile.
+# previously passed an sp_Range to an sp_int parameter and failed to compile.
 # Each method keeps its array parameter monomorphic so the typed-array path is
 # exercised.
 def si(a, rng); a[rng]; end

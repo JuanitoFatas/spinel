@@ -2,7 +2,7 @@
 # hash's type to the caller's block-param local. Pre-fix
 # block_param_type_at returned `int` for no-recv user yield methods
 # (only the receiver-typed `arr.each` / `c.each` arms had yield-arg
-# lookup wired up), so the block-local was declared `mrb_int` and
+# lookup wired up), so the block-local was declared `sp_int` and
 # the typed pointer was silently coerced to an int slot. Downstream
 # `row["k"]` then dispatched on int and folded to 0. Issue #628.
 

@@ -86,7 +86,7 @@ p a.go { |v| v + 1 }
 p a.twice { |v| v }
 
 # a yield nested inside a block of the method's own body: the clone's locals
-# widen with the yield, so `t` is a boxed carrier rather than an mrb_int
+# widen with the yield, so `t` is a boxed carrier rather than an sp_int
 class Looper
   def looped
     t = 0

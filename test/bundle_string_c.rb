@@ -12,7 +12,7 @@ def t_str_index_range_eq
   # `s[i..i] == "/"` used to skip compile_string_method_expr's `[]`
   # RangeNode arm and hit the `s[i] == "/"` single-char fast path
   # instead (compile_eq_char_index), which cast the RangeNode to
-  # mrb_int and emitted `lv_s[(mrb_int)sp_range_new(i, i)] == '/'` —
+  # sp_int and emitted `lv_s[(sp_int)sp_range_new(i, i)] == '/'` —
   # C compile failure ("aggregate value used where an integer was
   # expected"). Issue #644.
   #
@@ -157,7 +157,7 @@ t_string_index_from
 # === string_index_nullable ===
 def t_string_index_nullable
   # #532. `String#index` / `String#rindex` previously returned
-  # mrb_int with -1 as the not-found sentinel. The CRuby idiom
+  # sp_int with -1 as the not-found sentinel. The CRuby idiom
   #
   #   pos = body.index('"content"', i)
   #   break if pos.nil?
@@ -235,7 +235,7 @@ t_string_index_oob_returns_nil
 def t_string_to_i_underscore
   # CRuby's `String#to_i` accepts `_` between consecutive digits and
   # stops at the first non-digit. spinel previously emitted
-  # `(mrb_int)atoll(s)` which stops at the first `_`, returning 1
+  # `(sp_int)atoll(s)` which stops at the first `_`, returning 1
   # for "1_2_3asdf" instead of 123. Now routes through
   # sp_str_to_i_cruby. Issue #619 puzzle 1.
   

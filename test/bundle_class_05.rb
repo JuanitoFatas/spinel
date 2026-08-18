@@ -56,8 +56,8 @@ T_cvar_op_write_Counter.report     # 12, 130, 7
 # === def_aset_mixed_ivar_widen ===
 # `def []=(name, value)` whose body dispatches on `name` and writes
 # `value` into ivars of differing types (`@id = value` and
-# `@name = value`, with `@id: mrb_int` and `@name: const char *`).
-# Pre-fix the param was pinned at `mrb_int` from the initialize-time
+# `@name = value`, with `@id: sp_int` and `@name: const char *`).
+# Pre-fix the param was pinned at `sp_int` from the initialize-time
 # observation, and the second ivar assignment errored with
 # "incompatible integer to pointer conversion".
 #
@@ -136,12 +136,12 @@ T_default_argv_narrows_from_string_call_site_Entry.new("hello").show     # 5
 # receiver index read) failed C compile when the lookup result
 # landed in a concretely-typed pointer field. With no caller
 # passing a non-nil `other`, spinel typed the param at the
-# `mrb_int` default; `other["key"]` fell through to the
+# `sp_int` default; `other["key"]` fell through to the
 # unresolved-call warning (emits 0); and the resulting `lv_v`
 # assigned to the typed `iv_s` slot tripped
 # -Wint-conversion. Both the `return if other.nil?` and the
 # `if !v.nil?` guards folded away because spinel reasoned about
-# `mrb_int 0` as Integer 0 whose `.nil?` is false.
+# `sp_int 0` as Integer 0 whose `.nil?` is false.
 #
 # Fix: a new back-propagation pass detects an int-typed param
 # with `nil` default whose body uses it as a String-keyed Hash

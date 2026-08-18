@@ -8,7 +8,7 @@
 # Fix: `sp_str_length` and `sp_utf8_byte_offset` consume the
 # header-tracked byte length instead of terminating at the first
 # NUL byte. `bytesize` codegen now emits
-# `sp_str_byte_len(...)` instead of `(mrb_int)strlen(...)`.
+# `sp_str_byte_len(...)` instead of `(sp_int)strlen(...)`.
 # Issue #593.
 
 # Single-byte NUL.

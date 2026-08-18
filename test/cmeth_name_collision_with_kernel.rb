@@ -6,7 +6,7 @@
 # shape `if mname == "hash"; return "int"; end` regardless of
 # receiver, so a `def self.hash(plain) -> String` on a class
 # resolved to "int" through the Kernel-side hash hardcode and
-# downstream locals widened to mrb_int -- the C compile then
+# downstream locals widened to sp_int -- the C compile then
 # tripped at the next site that fed the supposed-integer to a
 # `const char *` parameter.
 #

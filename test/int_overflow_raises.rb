@@ -1,4 +1,4 @@
-# Integer arithmetic that overflows mrb_int (int64) raises
+# Integer arithmetic that overflows sp_int (int64) raises
 # RangeError rather than silently wrapping. spinel uses
 # `__builtin_add_overflow` / `_sub_overflow` / `_mul_overflow`
 # at the codegen-emit step for binary `+ - *` on int operands;

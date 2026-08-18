@@ -1,7 +1,7 @@
 # Issue #395 string-yield sub-variant. The previous fix only
 # covered int-yielding `each` over a user class; a string-yielding
 # variant still tripped a type mismatch (block param `k` got
-# declared `mrb_int` at the parent scope, but the yield expansion
+# declared `sp_int` at the parent scope, but the yield expansion
 # assigned a `const char *` from the iterating method's body).
 #
 # Fix: scan_locals' obj-recv branch now scans the yielding method's

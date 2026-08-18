@@ -1,6 +1,6 @@
 # sort_by on str_array previously bombed at C compile time:
 # `cannot resolve call to 'sort_by' on str_array`, then the
-# pointer slot got assigned (mrb_int)0. Explicit block and the
+# pointer slot got assigned (sp_int)0. Explicit block and the
 # `&:length` / `&:bytesize` / `&:to_i` symbol-to-proc shortcuts
 # are now handled.
 puts ["bb", "a", "ccc"].sort_by(&:length).inspect

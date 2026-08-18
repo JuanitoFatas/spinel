@@ -1,5 +1,5 @@
 # to_r / rationalize / quo on a Bignum build a boxed big Rational (numerator
-# exceeds mrb_int); construction, inspect/to_s/puts, to_f, class, and == are
+# exceeds sp_int); construction, inspect/to_s/puts, to_f, class, and == are
 # wired. Arithmetic and <=> on a big Rational are follow-up work. The by-value
 # int Rational is unchanged. (#2469)
 p((10**30).to_r)

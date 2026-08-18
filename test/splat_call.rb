@@ -45,7 +45,7 @@ collect(7, *args)     # length 4, total 13
 collect(7, 8, *args, 9) # length 6, total 36
 
 # Mixed-type splat sources: poly_array source, mixed prefix/suffix.
-# Spinel's *rest is always int_array so element values are mrb_int bits
+# Spinel's *rest is always int_array so element values are sp_int bits
 # for non-int elements — but the length is correct and the bundle
 # round-trips intact for downstream splatting.
 def count(*xs)
@@ -63,7 +63,7 @@ count(*left, *right)          # 5
 
 # Splat into a method with str fixed prefix + rest — exercises the
 # splat-aware param-type inference (without it, "first" would default to
-# mrb_int and we'd print garbage instead of "alpha").
+# sp_int and we'd print garbage instead of "alpha").
 def head_str(first, *tail)
   puts first
   puts tail.length

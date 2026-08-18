@@ -11,7 +11,7 @@
 # `string` while `infer_type` reported it as `symbol`. The mismatch
 # tripped `update_ivar_type`'s "old != new_type" branch, widening the
 # field to `sp_RbVal`. Subsequent assignments emitted `self->s = SPS_bar`
-# (sp_sym = mrb_int) into an `sp_RbVal` slot — a T_symbol_ivar_reassign_C type error.
+# (sp_sym = sp_int) into an `sp_RbVal` slot — a T_symbol_ivar_reassign_C type error.
 
 class T_symbol_ivar_reassign_C
   def initialize
@@ -36,7 +36,7 @@ puts c.show
 # `emit_poly_builtin_dispatch` referenced `arg_types` out of scope.
 # Without the fix, `(poly_recv)[poly_idx]` produced
 # `sp_PolyArray_get(arr, sp_RbVal_idx)` — passing sp_RbVal where
-# mrb_int is expected and failing the T_unbox_poly_index_in_dispatch_C compile.
+# sp_int is expected and failing the T_unbox_poly_index_in_dispatch_C compile.
 #
 # Trigger: poly recv (from heterogeneous Hash) + poly idx (also).
 
@@ -56,7 +56,7 @@ puts T_unbox_poly_index_in_dispatch_C.new.at("i").to_s    # use .to_s (handled s
 
 # === uncalled_method_dce ===
 # Issue #393. An uncalled `def f(x); @typed = x; end` whose param
-# defaulted to `mrb_int` (no caller pinned the type) tripped a T_uncalled_method_dce_C
+# defaulted to `sp_int` (no caller pinned the type) tripped a T_uncalled_method_dce_C
 # type mismatch against a narrower ivar slot like `const char *`.
 #
 # Fix: instance methods not reachable from any call site / SymbolNode
@@ -69,7 +69,7 @@ class T_uncalled_method_dce_C
     @body = ""
   end
 
-  # Never called. Param defaults to mrb_int; @body is const char *.
+  # Never called. Param defaults to sp_int; @body is const char *.
   # Pre-fix: emit assigns `self->iv_body = lv_html` -- type mismatch.
   # Post-fix: body becomes `(void)lv_html; return 0;`.
   def render(html)

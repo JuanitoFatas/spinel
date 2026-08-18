@@ -64,7 +64,7 @@ def t_times_map_nested_array
   # now collects into a sp_PtrArray rather than sp_IntArray.
   # Pre-fix codegen always built sp_IntArray for the outer
   # accumulator, then `sp_IntArray_push` was handed an sp_IntArray
-  # pointer as its mrb_int second argument -- -Wint-conversion
+  # pointer as its sp_int second argument -- -Wint-conversion
   # warning at compile time, garbage values at runtime.
   #
   # The fix routes any block-returns-array shape (int_array,

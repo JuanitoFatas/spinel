@@ -7,8 +7,8 @@
 #   end
 #
 # with no concrete-typed caller (or callers passing a still-int default
-# from a deeper chain) used to leave `pattern` / `path` typed mrb_int.
-# `.split("/")` on a mrb_int then failed C compile. Now the analyze
+# from a deeper chain) used to leave `pattern` / `path` typed sp_int.
+# `.split("/")` on a sp_int then failed C compile. Now the analyze
 # pass infers "string" for params that have String-specific methods
 # called on them in the body.
 

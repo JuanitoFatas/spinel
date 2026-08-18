@@ -2,7 +2,7 @@
 #
 # Sibling of Integer#divmod(0) which was fixed in the parent
 # rescue/raise overhaul (test/integer_div_by_zero.rb). Without
-# this guard, `(mrb_int)floor(rc / 0.0)` would consume an
+# this guard, `(sp_int)floor(rc / 0.0)` would consume an
 # Infinity/NaN and produce undefined C behaviour at the cast.
 #
 # Test uses `puts e` directly (which prints the message string in
@@ -38,7 +38,7 @@ rescue => e
 end
 
 # NaN divisor → FloatDomainError("NaN"). Without this guard the
-# `(mrb_int)floor(1.0 / NaN)` cast on the result would also be
+# `(sp_int)floor(1.0 / NaN)` cast on the result would also be
 # C undefined behaviour.
 nan = 0.0 / 0.0
 begin

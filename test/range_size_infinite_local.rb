@@ -2,7 +2,7 @@
 # local variable: the sole-assignment lookthrough types/serves it like the
 # literal receiver (Float Infinity), and the range VALUE materializes its
 # infinite end as INTPTR_MAX instead of passing (1.0/0.0) through an
-# mrb_int parameter (UB: the converted value was a stale register, so the
+# sp_int parameter (UB: the converted value was a stale register, so the
 # previous range's size leaked through).
 a = (1..10); p(a.size)
 b = (1..Float::INFINITY); p(b.size)

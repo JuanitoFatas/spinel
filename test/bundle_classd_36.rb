@@ -11,7 +11,7 @@
 #
 # Result: `Bar.new(@x, ...)` inside `Foo#initialize` resolved
 # `@x` against an empty scope (returned the int default), so
-# Bar.initialize's first param wedged at mrb_int. The fix pins
+# Bar.initialize's first param wedged at sp_int. The fix pins
 # `@current_class_idx` while recursing into ClassNode bodies.
 
 class T_scan_new_calls_class_scope_A
@@ -48,7 +48,7 @@ puts c.b.a.n   # 7
 # `describe` always landed on `T_self_class_subclass_dispatch_Base.label`.
 #
 # Fix shape:
-#   - lib structs: every non-value-type sp_<C> gets `mrb_int
+#   - lib structs: every non-value-type sp_<C> gets `sp_int
 #     cls_id` as its first field (layout-roots emit it; subclasses
 #     inherit via parent-fields-first ordering, so a cast preserves
 #     the offset).

@@ -10,7 +10,7 @@
 #   - `Use.label` takes an RBS `Thing` but is called with a poly array element
 #     (object argument path).
 # Without the coercion the generated C assigns sp_RbVal to a const char* /
-# mrb_bool / sp_IntArray* / sp_Thing* slot and fails to compile.
+# sp_bool / sp_IntArray* / sp_Thing* slot and fails to compile.
 module Outer
   class Thing
     def initialize(n)

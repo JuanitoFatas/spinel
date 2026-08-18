@@ -69,7 +69,7 @@ puts "done"
 #   - infer_method_name_type returned int_array, so the ivar `@rows`
 #     was typed as int_array. The outer accumulator was an
 #     sp_IntArray pushed via sp_IntArray_push — but each iteration's
-#     value was an sp_IntArray pointer reinterpreted as mrb_int,
+#     value was an sp_IntArray pointer reinterpreted as sp_int,
 #     which gcc rejects on -Wint-conversion.
 #   - Even if the cast were silent, the inner arrays would not be
 #     traced from an IntArray slot and could be collected mid-loop.

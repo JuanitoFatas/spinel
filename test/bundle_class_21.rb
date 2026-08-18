@@ -28,7 +28,7 @@ puts bag[:id].to_i + 1          # 43
 # .length: routes through String#length
 puts bag[:id].length            # 2
 
-# Chained into a method expecting mrb_int
+# Chained into a method expecting sp_int
 class T_issue219_aref_chain_M
   def self.find(id); id + 1; end
 end
@@ -50,7 +50,7 @@ puts ib[:n].to_s                # "42"
 # which fires for literal RHS but not for CallNode/expression RHS.
 # A `@a = @b = make_int` with `@a`/`@b` previously string-typed left
 # `@b`'s slot at `const char *` while compile_chained_ivar_writes
-# emitted `iv_b = _t1;` with `_t1 : mrb_int`. Same T_issue235_chain_tail_widening_C error shape
+# emitted `iv_b = _t1;` with `_t1 : sp_int`. Same T_issue235_chain_tail_widening_C error shape
 # #234 was fixing for the head, just on the tail.
 
 class T_issue235_chain_tail_widening_C

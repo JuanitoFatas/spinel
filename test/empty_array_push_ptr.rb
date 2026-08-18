@@ -1,6 +1,6 @@
 # #688: empty `[]` followed by `.push(:ptr)` must promote to
 # ptr_ptr_array, not silently retain the IntArray default (which
-# would round-trip the pointer through mrb_int).
+# would round-trip the pointer through sp_int).
 
 module LibC
   ffi_func :malloc, [:size_t], :ptr

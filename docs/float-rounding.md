@@ -21,7 +21,7 @@ is a literal integer** -- the common case:
 - **literal `ndigits <= 0`** -> `Integer`  (`x.round(0)`, `x.round(-1)`)
 - **literal `ndigits > 0`** -> `Float`  (`x.round(2)`)
 
-For an `ndigits <= 0` result the float formula is cast to `mrb_int`, so
+For an `ndigits <= 0` result the float formula is cast to `sp_int`, so
 both the value and `#class` match CRuby (`1234.5.round(-1)` is the
 Integer `1230`).
 

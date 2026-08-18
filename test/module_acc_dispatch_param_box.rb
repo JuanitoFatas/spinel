@@ -18,7 +18,7 @@
 # Surfaced via Roundhouse's `ActiveRecord.adapter.update(table,
 # @id, attrs)` — `@id` widened to poly across heterogeneous
 # subclasses, but the call site emitted `lv_id` (sp_RbVal) into
-# `InMemoryAdapter.update`'s pre-widening `mrb_int lv_id` slot.
+# `InMemoryAdapter.update`'s pre-widening `sp_int lv_id` slot.
 
 module Backend
   class << self

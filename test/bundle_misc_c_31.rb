@@ -7,14 +7,14 @@
 def t_str_rindex_optional_narrow
   # Issue #645: `slash = p.rindex("/")` followed by a nil-check
   # ternary used to leak sp_RbVal into sp_str_sub_range_r (which
-  # expects mrb_int):
+  # expects sp_int):
   #
   #   tail = slash == nil ? p : p[(slash + 1)..(p.length - 1)]
   #
   # Root cause: spinel widened `String#rindex` return to "poly"
   # unconditionally (sp_str_rindex_poly returns sp_RbVal), even
   # when the arg was a plain string. `slash + 1` then went through
-  # sp_poly_add and the result couldn't pass as the mrb_int start
+  # sp_poly_add and the result couldn't pass as the sp_int start
   # arg.
   #
   # Fix: split rindex like index — plain-string arg returns int?

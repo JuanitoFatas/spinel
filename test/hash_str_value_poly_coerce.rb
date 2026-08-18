@@ -1,7 +1,7 @@
 # Storing a poly value (one that holds a String/Integer at runtime) into a
 # typed-value hash (Hash[String,String] / Hash[String,Integer]) must coerce the
 # poly to the hash's value representation -- the setter takes const char* /
-# mrb_int, not sp_RbVal. The receiver is a method-return hash (its value type is
+# sp_int, not sp_RbVal. The receiver is a method-return hash (its value type is
 # fixed by the body, so an external poly store can't re-widen it to a poly hash).
 
 def fresh_strs

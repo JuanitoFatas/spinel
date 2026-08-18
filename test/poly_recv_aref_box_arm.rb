@@ -2,7 +2,7 @@
 # `def [](k)` parameter to `sp_RbVal` (poly) when callers pass
 # heterogeneous key types, compile_poly_method_call's per-class
 # dispatch arm passed the raw call-site value (`const char *`,
-# `mrb_int`, ...) directly to the `sp_RbVal` parameter — gcc
+# `sp_int`, ...) directly to the `sp_RbVal` parameter — gcc
 # errored `incompatible type for argument 2 of 'sp_<C>__aref'`.
 #
 # Fix: at the per-arm emit, when the arm's ptype is `poly` (base

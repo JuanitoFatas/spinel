@@ -31,7 +31,7 @@ def t_array_eq_int_vs_sym_literal
   # `[0,0,0] == %i[a a a]` must answer FALSE -- CRuby compares element
   # classes too, so int 0 != sym :a even when their encoded ids match.
   # Spinel's sym_array storage shares the sp_IntArray layout with
-  # int_array (sym ids stored as raw mrb_int), and sp_IntArray_eq
+  # int_array (sym ids stored as raw sp_int), and sp_IntArray_eq
   # compares raw bytes. With SPS_a == 0, both arrays' bytes are
   # [0,0,0] and the eq returned `true`, breaking `!=` to false.
   #
@@ -188,7 +188,7 @@ def t_array_sum_init
   # Array#sum's init argument was silently dropped on the IntArray /
   # FloatArray dispatch paths -- spinel emitted sp_IntArray_sum(rc)
   # (no init parameter) and the block-form accumulator in
-  # compile_array_sum_block was hardcoded to `mrb_int t = 0;`.
+  # compile_array_sum_block was hardcoded to `sp_int t = 0;`.
   # Pre-fix:
   #   [1,2,3].sum(10)             # => 6   (CRuby: 16)
   #   [].sum(7)                   # => 0   (CRuby: 7)
@@ -219,23 +219,23 @@ def t_array_sum_init
   
   # Poly init: a heterogeneous-array element resolves to a poly local.
   # compile_arg0_as_int / compile_arg0_as_float unbox via `.v.i` / `.v.f`;
-  # without them gcc rejects passing sp_RbVal to mrb_int / mrb_float.
+  # without them gcc rejects passing sp_RbVal to sp_int / sp_float.
   poly_arr = [10, "x"]
   init_p = poly_arr[0]
-  puts [1, 2].sum(init_p)           # 13 (poly init unboxed as mrb_int)
+  puts [1, 2].sum(init_p)           # 13 (poly init unboxed as sp_int)
   
   fpoly_arr = [1.5, "x"]
   finit_p = fpoly_arr[0]
-  puts [1.0, 2.0].sum(finit_p)      # 4.5 (poly init unboxed as mrb_float)
+  puts [1.0, 2.0].sum(finit_p)      # 4.5 (poly init unboxed as sp_float)
   
-  # Tag-mixed: poly is INT-tagged but the FloatArray expects mrb_float.
+  # Tag-mixed: poly is INT-tagged but the FloatArray expects sp_float.
   # sp_poly_to_f dispatches on the tag so the int value is coerced to
   # float rather than reinterpreted bit-for-bit from `.v.f`.
   ipoly_for_float = [1, "x"][0]
   puts [1.0, 2.0].sum(ipoly_for_float)   # 4.0 (poly INT->float via sp_poly_to_f)
   
   # FloatArray + block + float init: compile_array_sum_block now picks
-  # an mrb_float accumulator and compile_arg0_as_float when recv_type is
+  # an sp_float accumulator and compile_arg0_as_float when recv_type is
   # float_array, so the 0.5 seed and the float block result are no
   # longer truncated. Use distinct block-param names (`fx` / `fy`) so
   # they don't get widened by the earlier int blocks' `|x|` -- spinel

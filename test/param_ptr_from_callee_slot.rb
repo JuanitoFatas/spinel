@@ -1,7 +1,7 @@
 # A method param passed unmodified to a callee whose corresponding
 # slot is `ptr` / a specific class pointer used to leave the caller's
-# param typed `mrb_int`. The C compile then failed at the call site
-# when the caller passed its mrb_int param into a `void *`-expecting
+# param typed `sp_int`. The C compile then failed at the call site
+# when the caller passed its sp_int param into a `void *`-expecting
 # slot.
 #
 # Mirrors the Db.column_bool shape in real-blog: a thin wrapper

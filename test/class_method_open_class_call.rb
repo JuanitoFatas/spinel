@@ -11,7 +11,7 @@
 # inferred return came out as `int` (the enclosing C class has no
 # `to_pair`), but the actual emit returns `sp_SymIntHash *` →
 # "returning sp_SymIntHash * from a function with return type
-# mrb_int" -Wint-conversion error.
+# sp_int" -Wint-conversion error.
 
 class Integer
   def to_pair

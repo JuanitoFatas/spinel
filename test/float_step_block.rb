@@ -1,5 +1,5 @@
 # Issue #870: Float#step yields floats. Pre-fix the LV slot was
-# typed as mrb_int so `lv_x += 0.5` truncated to `+= 0` and looped
+# typed as sp_int so `lv_x += 0.5` truncated to `+= 0` and looped
 # forever.
 result = []
 1.0.step(3.0, 0.5) { |x| result << x }

@@ -1,9 +1,9 @@
 # A Mutex yielded to a block from inside Thread.new. Two separate faults met
-# here: the proc ABI packs arguments into an mrb_int[] and only knew how to
+# here: the proc ABI packs arguments into an sp_int[] and only knew how to
 # launder strings, arrays, hashes and objects through it -- every runtime
 # handle (Mutex, IO, Thread, Queue, Dir, ...) went in and came back out with no
 # cast at all -- and the ensure funnel that Mutex#synchronize emits returned an
-# sp_RbVal straight out of the mrb_int proc function.
+# sp_RbVal straight out of the sp_int proc function.
 def race(label)
   h = { "a" => 0 }
   lock = Mutex.new

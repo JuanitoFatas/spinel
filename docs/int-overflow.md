@@ -1,7 +1,7 @@
 # Integer overflow (`--int-overflow`)
 
 CRuby's `Integer` is arbitrary precision: it never overflows, it grows. Spinel
-compiles `Integer` to a fixed-width **64-bit** machine integer (`mrb_int`,
+compiles `Integer` to a fixed-width **64-bit** machine integer (`sp_int`,
 range `-2**63 .. 2**63 - 1`) because a machine word is what makes the generated
 C fast. `--int-overflow=MODE` chooses what happens when an `Integer` result
 crosses that 64-bit boundary.

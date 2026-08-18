@@ -9,7 +9,7 @@
 # But the *emit-time* int-recv fallback (`compile_int_class_fallback
 # _expr`) still walked every user class and picked the first one
 # whose method-name matched. When the receiver flowed in as
-# `mrb_int` (e.g. unpinned param, IntArray-of-pointer fallback),
+# `sp_int` (e.g. unpinned param, IntArray-of-pointer fallback),
 # the fallback would route `raw_key.index("[")` to
 # `ArticlesController#index` regardless of the receiver's actual
 # nature.
@@ -28,7 +28,7 @@ class ArticlesController
 end
 
 # A param with no upstream pinning. Spinel defaults the param to
-# mrb_int when no call site supplies a non-int. Without the fix,
+# sp_int when no call site supplies a non-int. Without the fix,
 # the body's `.index` call hits compile_int_class_fallback_expr,
 # which walks the user-class table and picks ArticlesController
 # (the first class defining `def index`), emitting a typed cast

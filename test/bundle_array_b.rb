@@ -94,7 +94,7 @@ t_array_push
 def t_array_range
   # IntArray slicing: a[range] and a[start, len].
   # Previously a[1..2] failed with `incompatible type for argument 2 of
-  # 'sp_IntArray_get'` (Range passed where mrb_int was expected), and
+  # 'sp_IntArray_get'` (Range passed where sp_int was expected), and
   # a[1, 2] silently dropped the second arg and returned a single int.
   
   a = [10, 20, 30, 40, 50]

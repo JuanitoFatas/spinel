@@ -53,7 +53,7 @@ c3.overwrite_sym; c3.show            # sym
 c3.init(false); c3.show              # 42
 
 # 4. Same-type ternary — regression guard. Both branches int, slot
-#    stays mrb_int, no boxing overhead.
+#    stays sp_int, no boxing overhead.
 class C4
   def init(big)
     @x = big ? 1000 : 1

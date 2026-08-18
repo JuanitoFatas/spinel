@@ -47,7 +47,7 @@ sign_minus_sp = (Integer("- 7") rescue -1); puts sign_minus_sp
 sign_double   = (Integer("++7") rescue -1); puts sign_double    # double-sign → invalid
 sign_bare     = (Integer("+")   rescue -1); puts sign_bare      # bare sign → invalid
 
-# Edge magnitudes within mrb_int range
+# Edge magnitudes within sp_int range
 ll_max = (Integer("9223372036854775807")  rescue -1); puts ll_max   # LLONG_MAX
 ll_min = (Integer("-9223372036854775808") rescue -1); puts ll_min   # LLONG_MIN
 

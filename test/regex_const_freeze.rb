@@ -1,6 +1,6 @@
 # Issue #394: a top-level `PATTERN = /regex/.freeze` constant
 # was not recognised as a regex source. `gsub(PATTERN, ...)` then
-# fell through to `sp_str_gsub(... cst_PATTERN ...)` (mrb_int -> char *
+# fell through to `sp_str_gsub(... cst_PATTERN ...)` (sp_int -> char *
 # C-compile error). The non-`.freeze` form already worked because
 # find_regexp_index recursed through @const_expr_ids; .freeze
 # wraps the literal in a CallNode so the recursion missed.

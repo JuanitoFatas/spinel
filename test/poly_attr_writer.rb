@@ -68,7 +68,7 @@ puts res.body
 # --- 3. Two classes share `slot` with *different* value types ---------
 # Pre-fix poly_dispatch_return_type returned "int" for any setter
 # whose name didn't appear as an explicit method, so the result temp
-# was mrb_int and the string arm's `tmp = lv` mismatched. The new
+# was sp_int and the string arm's `tmp = lv` mismatched. The new
 # arm now also unboxes the rhs to the slot's concrete type when
 # the function param widened to poly.
 

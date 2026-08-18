@@ -1,4 +1,4 @@
-# Complex arithmetic over float components (re/im are mrb_float; CRuby keeps
+# Complex arithmetic over float components (re/im are sp_float; CRuby keeps
 # Integer/Rational components, so .real and exact division differ -- see
 # limitations). Operators and display for the common cases match CRuby.
 a = Complex(1, 2)

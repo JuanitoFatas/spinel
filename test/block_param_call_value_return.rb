@@ -1,7 +1,7 @@
 # An &block-param method called with a literal block returns the
 # value of blk.call, typed by the block body's return type rather than
 # the int default. The block value is carried through sp_proc_call's
-# mrb_int slot (a uniform C signature) and cast back per call site, so
+# sp_int slot (a uniform C signature) and cast back per call site, so
 # distinct literal blocks coexist without an ABI change.
 
 def applies(&blk)

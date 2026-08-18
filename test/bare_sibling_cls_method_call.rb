@@ -1,7 +1,7 @@
 # Issue #405. A bare call to a sibling `def self.X` inside another
 # `def self.Y` body in the same module/class used to emit a
 # `cannot resolve call to 'X' on (no receiver) (emitting 0)`
-# warning, with the callee's params defaulting to mrb_int (no
+# warning, with the callee's params defaulting to sp_int (no
 # call-site signal reached the inference pass). CRuby treats the
 # bare call as `self.X(...)`, which spinel now mirrors via:
 #   - infer_type bare-call arm extended to look up
@@ -15,7 +15,7 @@
 
 # 1. Module case -- the shape from the issue: outer cmeth makes
 # a bare call to a sibling cmeth that takes a string param. The
-# bug widened the sibling's param to mrb_int because the bare
+# bug widened the sibling's param to sp_int because the bare
 # call site contributed no signal.
 module Inv
   def self.outer(table)
@@ -24,7 +24,7 @@ module Inv
   end
 
   def self.inner(name)
-    # If `name` widens to mrb_int (the bug), this str-concat
+    # If `name` widens to sp_int (the bug), this str-concat
     # expression would fail to C-compile.
     "rows-for-" + name
   end

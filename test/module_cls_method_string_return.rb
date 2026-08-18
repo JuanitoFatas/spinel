@@ -1,6 +1,6 @@
 # Issue #127: a module-level singleton method (`module M; def self.X; ... end; end`)
-# whose body returns a non-int value used to be typed as `mrb_int` at every
-# call site. Capturing to a local emitted `mrb_int = const char *` (compile
+# whose body returns a non-int value used to be typed as `sp_int` at every
+# call site. Capturing to a local emitted `sp_int = const char *` (compile
 # error under -Werror); inline `puts M.X` compiled but printed the pointer
 # as an integer. The class form (same shape inside `class C`) already worked.
 # Fix is in `infer_constant_recv_type`: walk `@meth_return_types` for

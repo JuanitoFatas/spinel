@@ -10,8 +10,8 @@ p removed
 p arr.size
 arr.insert(-1, 9.5)
 p arr[arr.size - 1]
-# boxed (TY_POLY) index: a poly-array element read must unbox to mrb_int, not
-# pass an sp_RbVal into the mrb_int slot.
+# boxed (TY_POLY) index: a poly-array element read must unbox to sp_int, not
+# pass an sp_RbVal into the sp_int slot.
 idxs = [0, "x"]
 arr.insert(idxs[0], :head)
 p arr[0]

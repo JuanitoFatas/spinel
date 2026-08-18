@@ -2,7 +2,7 @@
 # The narrowing that gives the table its typed representation used to run only
 # after the fixpoint, so during parameter binding `@t[k][j]` was still poly --
 # and parameters only widen, so the helper took sp_RbVal for good. Every
-# signature below must stay mrb_int.
+# signature below must stay sp_int.
 module F
   P = 97
   def self.add(a, b) = (a + b) % P

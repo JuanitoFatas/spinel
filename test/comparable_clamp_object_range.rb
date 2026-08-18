@@ -1,6 +1,6 @@
 # Comparable#clamp with a one-sided (beginless/endless) or two-sided literal
 # Range whose bounds are instances of the receiver's class. An sp_Range cannot
-# carry the endpoints' class (its bounds are mrb_int), so these unfold to
+# carry the endpoints' class (its bounds are sp_int), so these unfold to
 # sp_obj_clamp with a nil bound for the missing side. Regression for #2558.
 class Ver
   include Comparable

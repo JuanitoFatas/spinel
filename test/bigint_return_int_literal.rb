@@ -50,4 +50,4 @@ end
 Base.new.handle(1)   # zero base -> the early `return 0` path
 Sub.new.handle(0)    # 100 * 2**0
 Sub.new.handle(3)    # 100 * 2**3
-Sub.new.handle(62)   # overflows mrb_int: the promotion that types the slot
+Sub.new.handle(62)   # overflows sp_int: the promotion that types the slot

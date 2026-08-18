@@ -6,7 +6,7 @@
 # Ensure that pushing a Proc into an ivar array (int_array default
 # from []) promotes the array to poly_array so .each { |b| b.call }
 # actually dispatches the proc. Without the fix, .call on the
-# iteration variable is a no-op because b stays typed as mrb_int.
+# iteration variable is a no-op because b stays typed as sp_int.
 class T_proc_array_push_Runner
   def initialize
     @procs = []

@@ -1,4 +1,4 @@
-# Spinel's integers are mrb_int (long long); Ruby integers don't
+# Spinel's integers are sp_int (long long); Ruby integers don't
 # overflow in the same range. But emitting a plain `24329 * 256 *
 # 500` in C lets the C compiler fold the constant using `int`
 # arithmetic, overflowing at 3,114,112,000 to a wrong negative
@@ -11,7 +11,7 @@
 #
 # Fix: emit the `LL` suffix on every IntegerNode literal so
 # operands carry `long long` type at the C level. Runtime
-# expressions assigned to `mrb_int` slots already promoted
+# expressions assigned to `sp_int` slots already promoted
 # implicitly; only constant-init contexts (where the C compiler
 # folds before any assignment) saw the overflow.
 

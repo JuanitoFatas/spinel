@@ -48,7 +48,7 @@ def t_local_hash_cross_type_widen
   # Cross-type `[]=` write on a non-empty hash literal should widen the
   # LV's hash type so the store accepts the new value via boxing.
   # Before this fix, `m = {"a" => "1"}; m["k"] = 42` lowered to
-  # `sp_StrStrHash_set(m, "k", 42LL)` -- gcc rejected the mrb_int passed
+  # `sp_StrStrHash_set(m, "k", 42LL)` -- gcc rejected the sp_int passed
   # where a `const char *` was expected.
   #
   # Fix: scan_locals's CallNode `[]=` arm widens the LV from a narrow

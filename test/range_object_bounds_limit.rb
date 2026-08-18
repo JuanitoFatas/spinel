@@ -1,6 +1,6 @@
 # Comparable#clamp against a range of user objects: the bounds fold straight
 # into the comparison, so no Range object is built and every inline form works.
-# Materializing such a Range is the part that cannot work (sp_Range has mrb_int
+# Materializing such a Range is the part that cannot work (sp_Range has sp_int
 # bounds); that is a compile error, covered by docs/limitations.md. #2558
 class Ver
   include Comparable

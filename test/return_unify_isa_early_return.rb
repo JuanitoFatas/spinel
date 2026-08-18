@@ -2,7 +2,7 @@
 # returns the param when `value.is_a?(Hash)` is false, then falls
 # through to a pointer-shaped value, declared its return type as
 # the pointer-shaped path and the early `return value` (int) tried
-# to return mrb_int from a pointer-typed function -- fatal under
+# to return sp_int from a pointer-typed function -- fatal under
 # -Werror.
 #
 # The function-signature side surfaces the same widen-to-poly fix

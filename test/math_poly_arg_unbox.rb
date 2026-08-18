@@ -1,7 +1,7 @@
 # Math.* with a poly-typed argument (a value that unifies to Integer|Float)
 # must unbox at the call boundary via sp_poly_to_f. Previously only a plain
 # TY_INT arg got a (double) cast; a poly arg passed straight through as an
-# sp_RbVal into the mrb_float parameter -- invalid C. Shape from the Doom
+# sp_RbVal into the sp_float parameter -- invalid C. Shape from the Doom
 # gem's distance helpers (player_physics.rb, sector_actions.rb):
 #   Math.sqrt(dx * dx + dy * dy)  # dx, dy flow both Integer and Float
 

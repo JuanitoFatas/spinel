@@ -7,7 +7,7 @@
 # Multi-write `a, b = rhs` where rhs's static type is `poly` (an
 # sp_RbVal that carries a poly_array at runtime).  Pre-fix:
 # `multi_write_target_type` fell through to the default `int` for
-# rt == "poly", so `a` / `b` were declared as mrb_int and the
+# rt == "poly", so `a` / `b` were declared as sp_int and the
 # emit-side dispatch (which DOES handle `val_t_local == "poly"` by
 # unboxing to sp_PolyArray*) wrote `(sp_PolyArray_get(...)).v.i`,
 # truncating the poly elements to garbage ints.

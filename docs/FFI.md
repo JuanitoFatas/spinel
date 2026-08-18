@@ -111,7 +111,7 @@ Recognized type specs:
 | `:int_array` | `const int64_t *` | `Array<Int>` (`.data` pointer) |
 | `:void` | `void` | `void` (return only) |
 
-All integer types collapse to `mrb_int` (int64) inside Spinel and are
+All integer types collapse to `sp_int` (int64) inside Spinel and are
 cast to the declared C type at the call boundary. Floats collapse to
 `double` the same way.
 

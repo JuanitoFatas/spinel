@@ -1,6 +1,6 @@
 # A poly (sp_RbVal) value assigned to a CONCRETE record member via Data#with was
 # passed straight into the generated constructor's typed slot (const char* /
-# mrb_int / mrb_float / ...) with no coercion -- a C type error at compile time --
+# sp_int / sp_float / ...) with no coercion -- a C type error at compile time --
 # even though the regular `.new` call path (emit_arg_or_default) already coerces
 # such an argument. Data#with now applies the same poly->concrete coercion.
 M = Data.define(:entry, :xs)

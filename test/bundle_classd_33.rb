@@ -6,7 +6,7 @@
 # === proc_hash_value ===
 # Issue #65: an ivar initialized as `{}` and later assigned `&block`
 # captured procs lowered the slot to str_int_hash, then fed
-# `sp_Proc *` into `sp_StrIntHash_set` (which expects mrb_int).
+# `sp_Proc *` into `sp_StrIntHash_set` (which expects sp_int).
 #
 # Two fixes:
 #   - Issue #64's empty-hash promotion now resolves the slot to

@@ -21,7 +21,7 @@ g
 
 # Reverse direction: int seed must shadow an outer string acc without
 # the outer binding leaking into the block's `acc + x` (which would
-# dispatch as string concat instead of mrb_int addition).
+# dispatch as string concat instead of sp_int addition).
 def h
   acc = "outer"
   sum = [1, 2, 3, 4, 5].reduce(0) { |acc, x| acc + x }

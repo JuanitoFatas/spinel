@@ -1,6 +1,6 @@
 # #449: `unless cond; return {hash}; end; nil` — the function's
 # return type used to ignore the unless-arm's `return {hash}` and
-# infer mrb_int (the trailing nil), failing C compile. Now the
+# infer sp_int (the trailing nil), failing C compile. Now the
 # UnlessNode arm in collect_return_types mirrors IfNode, so both
 # the unless-body's return and the trailing nil contribute to
 # return type unification.

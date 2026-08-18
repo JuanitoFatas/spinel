@@ -1,5 +1,5 @@
 # Polymorphic (sp_RbVal) values flowing through proc parameters. A 16-byte
-# sp_RbVal does not fit the 8-byte mrb_int arg slot, so a poly arg rides the
+# sp_RbVal does not fit the 8-byte sp_int arg slot, so a poly arg rides the
 # _sp_proc_poly_args side-channel the call site publishes before the call.
 # Covers single/multi poly params, mixed poly+int, poly return, and the
 # re-entrancy case (a nested poly-proc call inside an arg list).

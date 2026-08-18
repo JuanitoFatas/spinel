@@ -1,4 +1,4 @@
-# Integer methods whose argument the runtime takes as an mrb_int must unbox a
+# Integer methods whose argument the runtime takes as an sp_int must unbox a
 # polymorphic argument (here an element of a mixed array, poly-typed but an
 # integer at runtime) rather than emitting it as a raw boxed value.
 mix = [6, "x"]

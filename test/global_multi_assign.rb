@@ -1,7 +1,7 @@
 # Multi-assignment into global variables must declare and type every
 # target from the right-hand side, not only the first. A non-int RHS
 # (string / float / array) or a splat-rest target previously left the C
-# global declared as mrb_int and failed to compile.
+# global declared as sp_int and failed to compile.
 $g1, $g2 = 1, 2
 p [$g1, $g2]
 

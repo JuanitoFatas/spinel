@@ -4,7 +4,7 @@
 # default.
 
 # `h[k] ||= v` USED AS A VALUE. The store test has to be spelled per slot type:
-# an mrb_int's nil is SP_INT_NIL, not 0, so a plain `!x` both skipped the store
+# an sp_int's nil is SP_INT_NIL, not 0, so a plain `!x` both skipped the store
 # on an absent key and would overwrite a legitimately stored 0. The statement
 # form always spelled it correctly; the value form did not.
 h = { 0 => 0, 1 => 7 }

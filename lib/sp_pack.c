@@ -27,7 +27,7 @@
 #include <stdint.h>
 #include <math.h>
 
-/* The shared runtime types (sp_RbVal, sp_IntArray, sp_sym, mrb_*, SP_TAG_*) and
+/* The shared runtime types (sp_RbVal, sp_IntArray, sp_sym, sp_int, SP_TAG_*) and
    the string allocator (sp_str_alloc / _set_len / _byte_len / sp_str_empty) come
    straight from the shared headers: this separate TU can now allocate GC strings
    directly onto the one shared heap, so no sp_ext_str_* shim is needed. */

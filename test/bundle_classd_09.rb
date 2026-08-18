@@ -104,7 +104,7 @@ puts Math.log(1.0).to_i.to_s
 # at the call sites need to be boxed via `sp_box_*`. That boxing
 # branch was also missing from `compile_typed_call_args`, so even
 # after unify produced "poly", the call sites still passed raw
-# mrb_int / pointers to a sp_RbVal-typed parameter.
+# sp_int / pointers to a sp_RbVal-typed parameter.
 
 class T_method_param_unify_to_poly_CPU
   def feed(x, val)
@@ -165,13 +165,13 @@ puts f.test
 # Multi-argument `block.call(a, b, ...)` on the proc-object path.
 #
 # Pre-fix, `compile_proc_literal` hardcoded the lambda's signature
-# as `static mrb_int <fn>(void *_cap, mrb_int lv_<bp>)` — a single
-# `mrb_int` slot — and the call site always lowered to
+# as `static sp_int <fn>(void *_cap, sp_int lv_<bp>)` — a single
+# `sp_int` slot — and the call site always lowered to
 # `sp_proc_call(lv_<rname>, <arg0>)`, so any second/third positional
 # arg was silently dropped.
 #
 # Fix collects every block param at proc-literal time and emits
-# `(void *_cap, mrb_int lv_<bp1>, mrb_int lv_<bp2>, ...)`, then
+# `(void *_cap, sp_int lv_<bp1>, sp_int lv_<bp2>, ...)`, then
 # dispatches the call site to `sp_proc_call_N` (added to the
 # runtime: cast the stored function pointer to the matching N-arg
 # signature and invoke).

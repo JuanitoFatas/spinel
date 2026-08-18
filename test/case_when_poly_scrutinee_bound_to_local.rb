@@ -3,7 +3,7 @@
 # branch values) and a scrutinee temp (used inside
 # `sp_class_for_poly(...)`). The scrutinee temp wrongly inherited
 # the result type. For a poly scrutinee with int result, the
-# emit produced `mrb_int _t2 = lv_v;` (a value-conversion that
+# emit produced `sp_int _t2 = lv_v;` (a value-conversion that
 # discards the sp_RbVal struct), then `sp_class_for_poly(_t2)`
 # failed C compile because the helper expects sp_RbVal.
 #

@@ -2,7 +2,7 @@
 #
 # Bigint detection: `a = a * 2` inside a `while` loop promotes the
 # local to bigint via scan_bigint_in_loop_node. Raising 1 by *2 50
-# times overflows the mrb_int range so `a` is bigint-typed by the
+# times overflows the sp_int range so `a` is bigint-typed by the
 # time we hit the / 0 expression.
 #
 # Runtime path: sp_bigint_div / sp_bigint_mod call into mini-gmp,
@@ -19,7 +19,7 @@ while i < 50
   i = i + 1
 end
 
-# `a` is now 2^50, well above the mrb_int range — bigint-typed.
+# `a` is now 2^50, well above the sp_int range — bigint-typed.
 
 begin
   x = a / 0

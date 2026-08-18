@@ -1,4 +1,4 @@
-# A length-like poly method dispatch fixes its result slot to mrb_int, but an
+# A length-like poly method dispatch fixes its result slot to sp_int, but an
 # attr-reader arm can name a poly-typed ivar (a struct member fed from a poly
 # source): the read must unbox into the scalar slot, mirroring the method-arm
 # coercion (doom: `@file.read(entry.size)` on a WAD directory entry whose

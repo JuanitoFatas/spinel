@@ -3,7 +3,7 @@
 # receiver, not the *enclosing* class's `self`.
 #
 # Note: Method#call(x) lowers to a function pointer cast to
-# `(void *, mrb_int...) -> mrb_int`, so the bound underlying method
+# `(void *, sp_int...) -> sp_int`, so the bound underlying method
 # must return an int. Non-int returns are out of scope for this PR.
 
 class Worker

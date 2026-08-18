@@ -1,5 +1,5 @@
 # A by-value struct (Range, Time, Rational, Complex) reaching a lambda or proc
-# parameter rides the boxed side channel, as a Float already did: the mrb_int
+# parameter rides the boxed side channel, as a Float already did: the sp_int
 # argument slot cannot hold one, and the emitted C did not compile (#3962).
 f = ->(r) { r.cover?(5) }
 p f.call(1..10)

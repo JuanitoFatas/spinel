@@ -23,7 +23,7 @@
 
 /* Issue #799: clamp e-s+1 against size_t overflow + an arbitrary sanity
    cap (1 << 30 elements; ~8 GB at 8 bytes/elem). Without the cap,
-   `(1..MRB_INT_MAX).to_a` overflows the realloc size_t to a tiny number,
+   `(1..INTPTR_MAX).to_a` overflows the realloc size_t to a tiny number,
    then writes past the allocation. */
 sp_IntArray*sp_IntArray_from_range(sp_int s,sp_int e){sp_IntArray*a=sp_IntArray_new();sp_int n=e-s+1;if(n<0)n=0;if(n>(sp_int)(1LL<<30))n=(sp_int)(1LL<<30);if(n>a->cap){sp_gc_hdr*h=(sp_gc_hdr*)((char*)a-sizeof(sp_gc_hdr));sp_gc_bytes_sub(sizeof(sp_int)*a->cap);h->size-=sizeof(sp_int)*a->cap;a->cap=n;a->data=(sp_int*)realloc(a->data,sizeof(sp_int)*a->cap);h->size+=sizeof(sp_int)*a->cap;sp_gc_bytes_add(sizeof(sp_int)*a->cap);}for(sp_int i=0;i<n;i++)a->data[i]=s+i;a->len=n;return a;}
 /* (beg..end).step(step) materialised as an IntArray. step==0 raises like

@@ -1,5 +1,5 @@
 # Issue #341: user-defined `def [](k)` got its parameter type
-# inferred as `mrb_int` regardless of caller arg types. When the
+# inferred as `sp_int` regardless of caller arg types. When the
 # receiver was poly (e.g. a method param widened to accept multiple
 # user classes) and callers passed a String key, the per-class
 # arms emitted by compile_poly_method_call called each class's
@@ -10,7 +10,7 @@
 # emitted `(recv.v.i >> key) & 1` unconditionally, which is invalid
 # C when `key` isn't an int. The same shape applies to the built-in
 # array dispatches in emit_poly_builtin_dispatch (sp_IntArray_get
-# etc. all expect `mrb_int` keys).
+# etc. all expect `sp_int` keys).
 #
 # Fix:
 #   1. scan_new_calls' receiver-method widening adds a poly arm:

@@ -6,7 +6,7 @@
 # pointer.
 
 # A `length` poly dispatch — every built-in array type contributes a
-# branch returning mrb_int.
+# branch returning sp_int.
 def lenof(a)
   a.length
 end

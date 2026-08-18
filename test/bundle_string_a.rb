@@ -13,7 +13,7 @@
 # === str_array_each ===
 def t_str_array_each
   # Array#each on a str_array. The block param must shadow an outer
-  # same-named mrb_int local. Body skips `puts i` to keep this scope-
+  # same-named sp_int local. Body skips `puts i` to keep this scope-
   # shadow case separate from the format-specifier path.
   
   3.times do |i|
@@ -61,7 +61,7 @@ def t_str_array_map
   # Block parameter is block-local: reusing the same name as an outer
   # differently-typed local must not leak. Issue #43 originally hit this
   # (3.times do |i| ... end then foo.map {|i| ...} where the times-block
-  # had typed lv_i as mrb_int).
+  # had typed lv_i as sp_int).
   rs = []
   3.times do |i|
     rs << "row#{i}"

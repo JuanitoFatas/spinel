@@ -1,8 +1,8 @@
 # A Float argument to a proc / lambda `.call` (or a lowered `yield`) must read
 # back as itself inside the block, not 0.0.
 #
-# Proc/lambda arguments ride an mrb_int[16] slot in the sp_proc_call ABI. A
-# Float placed in that slot was written by an arithmetic double->mrb_int
+# Proc/lambda arguments ride an sp_int[16] slot in the sp_proc_call ABI. A
+# Float placed in that slot was written by an arithmetic double->sp_int
 # conversion (0.7 -> 0) and the callee, binding a concretely-Float-typed param,
 # read the truncated int slot back as a double -> 0.0. An Integer arg rides the
 # slot losslessly and a `def` method passes floats as real C doubles, so only

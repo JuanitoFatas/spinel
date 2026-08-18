@@ -61,7 +61,7 @@ c4.set_str; c4.show                  # txt
 c4.set_float; c4.show                # 2.5
 
 # 5. Single-type ivar — regression guard. The pre-#130 happy path stays
-#    happy. No widening, slot stays mrb_int.
+#    happy. No widening, slot stays sp_int.
 class C5
   def set; @x = 42; end
   def show; puts @x; end

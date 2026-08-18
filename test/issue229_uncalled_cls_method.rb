@@ -56,7 +56,7 @@ puts Leaf.create(42).x                 # 42
 # Variant 3: default-arg initialize. `sp_Base3_new` is synthesized
 # as `sp_Base3_new(sp_StrIntHash *)` from the default literal, but
 # the uncalled `Base3.create` can't infer its `attrs` ptype so the
-# body's `sp_Base3_new(lv_attrs)` had `lv_attrs : mrb_int` against
+# body's `sp_Base3_new(lv_attrs)` had `lv_attrs : sp_int` against
 # the declared `sp_StrIntHash *`. DCE drops the body entirely.
 class Base3
   def initialize(attrs = {})

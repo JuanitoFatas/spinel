@@ -1,15 +1,15 @@
 # Issue #411. A class method that initializes a local to `nil`,
 # conditionally reassigns it through an intermediate variable, and
-# returns the local emitted with return type `mrb_int` even though
+# returns the local emitted with return type `sp_int` even though
 # the local itself was correctly typed `sp_Foo *`:
 #
-#   static mrb_int sp_Bar_cls_find(void) {
+#   static sp_int sp_Bar_cls_find(void) {
 #       sp_Foo * lv_result = NULL;
 #       sp_Foo * lv_instance = NULL;
 #       lv_result = NULL;
 #       lv_instance = sp_Foo_new();
 #       lv_result = lv_instance;
-#       return lv_result;       // sp_Foo * -> mrb_int — fails
+#       return lv_result;       // sp_Foo * -> sp_int — fails
 #   }
 #
 # Root cause: `infer_all_returns`'s cmeth branch ran a single
@@ -17,7 +17,7 @@
 # pass typed `result` as "nil" (only the initial `result = nil`
 # was visible), so the tail expression `result` inferred as nil
 # and `unify_return_type` collapsed the cmeth's return to "nil"
-# -> `mrb_int`. The local-decl precompute later upgraded the
+# -> `sp_int`. The local-decl precompute later upgraded the
 # local correctly via `refine_method_body_locals`'s 2-pass logic
 # ("nil + nullable_pointer_type -> obj_<C>?"), but by that point
 # `@cls_cmeth_returns` was already pinned at "nil".

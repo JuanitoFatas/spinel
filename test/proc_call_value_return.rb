@@ -1,5 +1,5 @@
 # `lambda {}` / `proc {}` (method-call form) record their block's return
-# type so `.call` unboxes the sp_proc_call mrb_int result back to the
+# type so `.call` unboxes the sp_proc_call sp_int result back to the
 # real type instead of rendering the pointer as an integer.
 f = lambda { "hello" }
 puts f.call
@@ -15,6 +15,6 @@ p h.call
 r = lambda { begin; raise "boom"; rescue => e; "msg:#{e.message}"; end }
 puts r.call
 
-# Int return still works (no cast, ABI passes mrb_int through).
+# Int return still works (no cast, ABI passes sp_int through).
 n = proc { 42 }
 puts n.call

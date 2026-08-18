@@ -59,7 +59,7 @@ puts d.attrs.has_key?(:c)   # false
 # return int at runtime, but spinel statically types `[]`
 # dispatch as poly. Spinel previously emitted `(addr +
 # <sp_RbVal>)` and the C compile failed (`invalid operands to
-# binary + (have 'mrb_int' and 'sp_RbVal')`). The operator-site
+# binary + (have 'sp_int' and 'sp_RbVal')`). The operator-site
 # fall-through now unboxes the poly arg via .v.i, mirroring PR
 # #347's LV-write semantics.
 

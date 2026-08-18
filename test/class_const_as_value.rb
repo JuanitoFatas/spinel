@@ -7,7 +7,7 @@
 #
 # Phase 1 wires the minimum surface needed for class-as-value to
 # round-trip through a local:
-#   - sp_Class struct (mrb_int cls_id) in sp_runtime.h.
+#   - sp_Class struct (sp_int cls_id) in sp_runtime.h.
 #   - infer_type for ConstantReadNode / ConstantPathNode resolving
 #     to a registered class returns "class".
 #   - c_type "class" -> "sp_Class"; c_default_val "class" ->

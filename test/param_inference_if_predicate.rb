@@ -25,7 +25,7 @@
 # `class_has_all_methods` picks a class that defines `title`.
 #
 # Surfaced via Roundhouse's emitted real-blog where `Article#update
-# (p)`'s body has exactly this shape and the resulting `mrb_int lv_p`
+# (p)`'s body has exactly this shape and the resulting `sp_int lv_p`
 # routed `p.title` and `p.body` to two different user classes
 # (ArticleRow for one, ActionResponse for the other) — same `lv_p`
 # cast to two different struct pointers, structurally invalid C.

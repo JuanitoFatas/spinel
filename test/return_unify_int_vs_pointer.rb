@@ -4,7 +4,7 @@
 # implicit), the analyzer's lenient unify_return_type previously
 # demoted the int as a default sentinel and picked the hash
 # type, declaring the function as `sp_StrStrHash *`. The early
-# `return value` then emitted `return mrb_int` from a
+# `return value` then emitted `return sp_int` from a
 # pointer-typed function -- fatal -Wint-conversion under -Werror.
 #
 # Fix: post-fixpoint pass widens the function's stored return

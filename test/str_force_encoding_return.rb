@@ -1,7 +1,7 @@
 # `def f(s); s.force_encoding(...); end` whose body's last
 # expression is `force_encoding` (a receiver passthrough at codegen)
-# previously had its return type inferred as mrb_int — the function
-# signature returned mrb_int while the body returned a const char *.
+# previously had its return type inferred as sp_int — the function
+# signature returned sp_int while the body returned a const char *.
 #
 # Codegen already lowers force_encoding (and encode / b) as a
 # receiver passthrough at line 13953; the analyze side just had no

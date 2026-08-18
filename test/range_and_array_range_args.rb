@@ -1,10 +1,10 @@
-# Cluster of "Range struct passed where mrb_int expected" C errors:
+# Cluster of "Range struct passed where sp_int expected" C errors:
 #   #1247 rand(range) / rand(float)
 #   #1234 Range#cover? with a Range argument
 #   #1228 Range#first(n) / #last(n) / #count
 #   #1240 Array#values_at with a Range argument
 #   #1224 Array#fill(value, range)
-# Each used to either emit a C type error (sp_Range fed to an mrb_int
+# Each used to either emit a C type error (sp_Range fed to an sp_int
 # operand) or silently return the wrong value.
 
 # #1247 — rand with a range / float arg. Values are nondeterministic,

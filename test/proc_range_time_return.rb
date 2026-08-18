@@ -1,5 +1,5 @@
 # A proc/lambda returning a Range or Time (by-value structs that don't fit the
-# mrb_int proc-ABI carrier) boxes through the poly return slot; the call site
+# sp_int proc-ABI carrier) boxes through the poly return slot; the call site
 # dereferences the boxed heap copy back to the value. Step-ranges (downto)
 # carry their direction through the box.
 f = ->(n) { (1..n) }

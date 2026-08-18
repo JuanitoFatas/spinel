@@ -1,7 +1,7 @@
 # A `<=>` with a `return nil` guard has an sp_RbVal return, and its body's
 # compare goes through the polymorphic helper as soon as the ivar holds more
 # than one type -- or simply when a second class in the program also defines
-# `<=>`. The helper answers an mrb_int (the sentinel for nil), which went out
+# `<=>`. The helper answers an sp_int (the sentinel for nil), which went out
 # through the boxed signature unboxed and failed the C build (#3498).
 class A
   include Comparable

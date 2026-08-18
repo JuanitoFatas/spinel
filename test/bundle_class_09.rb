@@ -103,7 +103,7 @@ File.delete(path)
 # the child's #initialize ptype from the call site but never
 # propagated the type through the bare `super` to the parent's
 # #initialize, leaving the parent's `owner` param at the default
-# `mrb_int`. The parent's body `@owner = owner` then stored the
+# `sp_int`. The parent's body `@owner = owner` then stored the
 # int payload; subsequent `@owner.<method>` dispatches on a child
 # instance landed on the wrong class via the int→class fallback.
 
@@ -138,7 +138,7 @@ puts o.report
 # === forward_call_class_method_inherited_init_int_array ===
 # Inherited-init forward-ref with an IntArray param flowing through
 # the super call. The parent's `arr` param must end up
-# `sp_IntArray *` (not the default `mrb_int`) so the body's
+# `sp_IntArray *` (not the default `sp_int`) so the body's
 # `@arr = arr` stores the right pointer type and a parent-defined
 # accessor reads the typed value.
 

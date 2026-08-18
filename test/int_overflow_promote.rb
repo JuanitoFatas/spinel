@@ -8,7 +8,7 @@
 # though the bigint internally held the correct unsigned value.
 #
 # The linear-sum / non-multiplicative shapes that require the new
-# `promote` mode to escape mrb_int width are exercised manually
+# `promote` mode to escape sp_int width are exercised manually
 # (the test harness here always builds with the raise/wrap
 # helpers, not promote, so an analyzer-side rewrite of int
 # locals isn't visible to it).

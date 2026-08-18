@@ -10,7 +10,7 @@
 # pick up k's narrowed string type from the hash variant -- the
 # cmeth param `s` stayed at the int default and the C compile
 # of the call site failed with `passing 'const char *' to
-# parameter of type 'mrb_int'`. Fix runs a targeted pre-scan
+# parameter of type 'sp_int'`. Fix runs a targeted pre-scan
 # (widen_cmeths_via_hash_each_blocks) that walks hash-typed
 # params for `<p>.each |k, v|` blocks and widens any nested
 # `<Class>.<cmeth>(k|v)` call's param types from the hash's
@@ -94,7 +94,7 @@ puts d.each_pair(1)         # 100 + 0 + 5 + 0 = 105 (string `to_i` of "x" / "y" 
 # === empty_hash_ivar_string_value ===
 # Issue #64: an ivar initialized as `{}` defaulted to `str_int_hash`,
 # and a later `@h[k] = "string"` write fed `const char *` into
-# `sp_StrIntHash_set` (which expects `mrb_int`). Three pieces of the
+# `sp_StrIntHash_set` (which expects `sp_int`). Three pieces of the
 # fix:
 #   - scan_writer_calls now recognises `@h[k] = v` against an ivar
 #     still typed as the empty-hash default and promotes the slot

@@ -9,7 +9,7 @@
 # #488. A class method writing a param into a typed ivar hash —
 # `@data[key] = value` where @data is pinned to e.g. str_str_hash
 # by another method — left the writer's `key` and `value` params
-# at the `mrb_int` default. The C emit then passed mrb_int into
+# at the `sp_int` default. The C emit then passed sp_int into
 # the const char * key / value slots and failed -Wint-conversion.
 # Sibling to #482's nil-default + Hash-receiver back-propagation
 # pass; this one covers the @hash-write side of the same
@@ -28,7 +28,7 @@ class T_ivar_hash_aset_param_widen_Bag
   end
 
   # No caller; without back-propagation `key` and `value` stayed
-  # at mrb_int and the body's sp_StrStrHash_set fired
+  # at sp_int and the body's sp_StrStrHash_set fired
   # -Wint-conversion.
   def []=(key, value)
     @data[key] = value
@@ -49,7 +49,7 @@ puts b.fetch("x")
 # the ivar stayed inferred as IntArray (from the empty `[]`
 # literal) even when pushes through a getter method handed in
 # string values. sp_IntArray_push then took the string as a
-# mrb_int -- C compile error.
+# sp_int -- C compile error.
 #
 # Fix: scan_writer_calls now also matches the bare-call shape
 # `<getter>(*args) << v` / `<getter>.push(v)` by resolving

@@ -2,7 +2,7 @@
 # literal (`LOG = []`) was typed as `sp_IntArray *`, regardless of
 # how it was used. A later `LOG << some_hash` then emitted
 # `sp_IntArray_push(cst_M_LOG, hash_ptr)`, mistyping the pointer as
-# mrb_int.
+# sp_int.
 #
 # Fix: extend the existing `refine_module_ivar_types` pass (which
 # already handled `@slots = {}` shape per #303) to also walk

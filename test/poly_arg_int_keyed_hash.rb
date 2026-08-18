@@ -3,7 +3,7 @@
 # uses status as the key into an Int-keyed hash. Pre-fix the
 # IntStrHash dispatch (`[]`, has_key?, fetch) compiled the key
 # arg via compile_arg0 / compile_expr without unboxing the poly
-# value, and the C call passed sp_RbVal to a mrb_int param,
+# value, and the C call passed sp_RbVal to a sp_int param,
 # tripping the C compile with int-from-pointer.
 #
 # IntStrHash's three key-receiving arms now route through
@@ -15,7 +15,7 @@
 # type-pun is defined, just non-meaningful).
 #
 # The broader is_a? narrowing for other Int-context use sites
-# (method call args expecting mrb_int, arithmetic ops, etc.)
+# (method call args expecting sp_int, arithmetic ops, etc.)
 # remains a separate concern.
 
 def lookup(status)

@@ -3,7 +3,7 @@
 # (symbol / int / float / bool). Pre-fix the per-call-site
 # unifier picked the typed `at` over the `nil` default, so the
 # param's C storage was the scalar type and `f()` defaulted the
-# missing arg to that scalar's zero value (`sp_sym 0`, `mrb_int
+# missing arg to that scalar's zero value (`sp_sym 0`, `sp_int
 # 0`, etc.) — the user's `x.nil?` branch became dead code.
 # Issue #634 shape A.
 

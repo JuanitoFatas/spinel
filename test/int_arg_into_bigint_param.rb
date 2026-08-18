@@ -3,7 +3,7 @@
 # that an int is promoted at the boundary.
 #
 # The promotion was only ever wired into the arithmetic operands, so a
-# parameter that reached bigint any other way got an mrb_int handed to an
+# parameter that reached bigint any other way got an sp_int handed to an
 # sp_Bigint* slot: ill-typed C, caught only by -Werror.
 
 def any(x)

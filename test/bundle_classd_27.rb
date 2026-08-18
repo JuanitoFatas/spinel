@@ -94,7 +94,7 @@ class T_poly_recv_dispatch_narrow_Server
   end
 end
 
-# The fix: T_poly_recv_dispatch_narrow_Server#run's `port` stays mrb_int (not widened to
+# The fix: T_poly_recv_dispatch_narrow_Server#run's `port` stays sp_int (not widened to
 # sp_RbVal by the @w.run(item) dispatch), so the int arithmetic
 # `port + 1` compiles cleanly and the direct call
 # `T_poly_recv_dispatch_narrow_Server.new.run(80)` doesn't have a poly-cast/unbox layer.

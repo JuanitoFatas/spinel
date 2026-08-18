@@ -1,6 +1,6 @@
 # Issue #666: heterogeneous call sites against a `def f(*args)` method
 # previously left the splat slot at the default `int_array` and packed
-# subsequent string args through `(mrb_int)<char*>` casts. Each was
+# subsequent string args through `(sp_int)<char*>` casts. Each was
 # then re-interpreted by `puts x.to_s` as a giant integer (the pointer
 # bit-pattern). Fix widens the splat slot to `poly_array` when call
 # sites disagree, and emits a PolyArray builder at the heterogeneous

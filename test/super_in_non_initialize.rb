@@ -1,7 +1,7 @@
 # Issue #401: `super` in a non-`initialize` instance method
 # previously emitted literal `0` instead of a call to the parent
 # method. Compiled cleanly when the method's return type was
-# `mrb_int` (silent wrong-result), failed C-compile when types
+# `sp_int` (silent wrong-result), failed C-compile when types
 # diverged.
 #
 # Fix: SuperNode / ForwardingSuperNode in compile_expr now resolve

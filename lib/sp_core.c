@@ -487,7 +487,7 @@ sp_float sp_float_clamp(sp_float v,sp_float lo,sp_float hi){return v<lo?lo:v>hi?
 /* Integer square root via Newton's method -- exact for the full
    sp_int range. CRuby raises Math::DomainError on negative input
    (flattened runtime name "Math::DomainError"). The seed is n/2, not
-   (n+1)/2: at n == MRB_INT_MAX the latter overflows (signed UB), and
+   (n+1)/2: at n == INTPTR_MAX the latter overflows (signed UB), and
    n/2 is a valid Newton seed for all n >= 2. */
 sp_int sp_int_sqrt(sp_int n){if(n<0)sp_raise_cls("Math::DomainError","Numerical argument is out of domain - \"isqrt\"");if(n<2)return n;sp_int x=n,y=n/2;while(y<x){x=y;y=(x+n/x)/2;}return x;}
 /* Integer#round/ceil/floor/truncate at 10^(-ndigits). Pure integer

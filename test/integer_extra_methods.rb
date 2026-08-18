@@ -1,7 +1,7 @@
 # Issues #875 #876 #873 #860 #894:
 # Integer methods that were not dispatched - magnitude (alias for abs),
 # modulo (alias for %), remainder (truncated division remainder, differs
-# from % for mixed-sign), size (bytes per mrb_int = 8), gcdlcm.
+# from % for mixed-sign), size (bytes per sp_int = 8), gcdlcm.
 puts (-42).magnitude
 puts 7.modulo(3)
 puts (-7).modulo(3)

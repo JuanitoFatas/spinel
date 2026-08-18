@@ -18,7 +18,7 @@
 #
 # The accompanying `lv_value` parameter monomorphisation
 # concern from the issue body (the function signature was said
-# to commit `lv_value` to `mrb_int`) was already addressed by
+# to commit `lv_value` to `sp_int`) was already addressed by
 # unrelated inference passes by the time this fix landed — the
 # signature now correctly reads `sp_RbVal lv_value` for the
 # multi-type-ivar shape. The remaining gap was purely the

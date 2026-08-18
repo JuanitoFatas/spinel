@@ -1,5 +1,5 @@
 # A value with no static type (an sp_RbVal) reaching a builtin parameter
-# declared mrb_int was emitted with no unbox step, so the generated C did not
+# declared sp_int was emitted with no unbox step, so the generated C did not
 # compile. An empty array literal as a parameter default is the shortest way to
 # produce one: the parameter has no element type, so a read of it answers the
 # polymorphic accessor's boxed value.
