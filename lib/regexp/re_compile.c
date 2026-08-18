@@ -34,6 +34,10 @@ struct re_compiler_s {
   /* Ruby stops capturing plain `(...)` groups once the pattern names one, so
      the whole source is scanned for a name before compiling (#3678). */
   mrb_bool has_named_group;
+  /* the atom just read was a (?#...) comment: it consumes source but is not a
+     repeatable atom, so a quantifier after it is CRuby's "no target" error,
+     unlike the empty group `(?:)` which repeats to an empty match */
+  mrb_bool last_atom_comment;
   char *stripped;           /* allocated buffer for x-mode preprocessing */
   /* Code range of each capture group, so `\g<name>` can re-emit a copy of the
      group it calls (#3637). Indexed by group number; len 0 = not (yet) known. */
@@ -769,6 +773,7 @@ static void
 compile_atom(re_compiler *c)
 {
   int ch = peek(c);
+  c->last_atom_comment = FALSE;
 
   switch (ch) {
   case '(':
@@ -793,6 +798,7 @@ compile_atom(re_compiler *c)
           while (c->p < c->src_end && peek(c) != ')') next_char(c);
           if (peek(c) != ')') compile_error(c, "unterminated (?#comment");
           next_char(c);
+          c->last_atom_comment = TRUE;
           return;  /* an empty atom: emits nothing */
         }
         if (c->p[1] == ':') {
@@ -1219,6 +1225,7 @@ static void
 compile_quantified(re_compiler *c)
 {
   uint32_t start = c->code_len;
+  const char *atom_start = c->p;
   compile_atom(c);
   if (c->code_len == start) {
     /* Issue #825: when compile_atom emitted nothing AND the next
@@ -1228,7 +1235,27 @@ compile_quantified(re_compiler *c)
        repeat operator is not specified". */
     int qch = peek(c);
     if (qch == '*' || qch == '+' || qch == '?') {
-      compile_error(c, "target of repeat operator is not specified");
+      /* Unless an atom WAS read and simply had nothing to emit -- an empty
+         group. Repeating an empty match answers the same empty match
+         however many times it runs, so the quantifier is consumed and nothing
+         is emitted: a quantified empty group matches "" as it does in CRuby,
+         where the raise is reserved for a quantifier with no atom at all. */
+      if (c->p == atom_start || c->last_atom_comment) {
+        compile_error(c, "target of repeat operator is not specified");
+      }
+      next_char(c);                                   /* the quantifier */
+      if (peek(c) == '?' || peek(c) == '+') next_char(c);  /* lazy / possessive */
+    }
+    else if (qch == '{' && c->p != atom_start && !c->last_atom_comment) {
+      /* the counted form over the same empty atom, with a literal '{' left
+         to the seq loop when it spells no quantifier */
+      const char *brace = c->p;
+      next_char(c);
+      int qmin, qmax;
+      if (parse_quantifier(c, &qmin, &qmax)) {
+        if (peek(c) == '?' || peek(c) == '+') next_char(c);
+      }
+      else c->p = brace;
     }
     return;  /* no atom emitted, no quantifier -- caller handles */
   }
