@@ -3701,8 +3701,16 @@ int infer_param_types(Compiler *c) {
         else if (ci >= 0)
           changed |= bind_call_params(c, id, comp_cmethod_in_chain(c, ci, name, NULL));
       }
-      if (rty && sp_streq(rty, "ConstantReadNode")) {
-        int ci = comp_class_index(c, nt_str(nt, recv, "name"));
+      /* An anonymous Struct held in a LOCAL (`st = Struct.new(:x, :y)`) is the
+         same class as the constant form -- class_var_static_ci resolves the
+         local's reads to it -- so its construction types the members the same
+         way. Without this every member of such a struct stayed poly and each
+         field read and arithmetic on it went through the boxed path (#3984). */
+      int lci = (rty && sp_streq(rty, "LocalVariableReadNode") && sp_streq(name, "new"))
+                ? class_var_static_ci(c, recv) : -1;
+      if (lci >= 0 && !c->classes[lci].is_struct) lci = -1;
+      if ((rty && sp_streq(rty, "ConstantReadNode")) || lci >= 0) {
+        int ci = lci >= 0 ? lci : comp_class_index(c, nt_str(nt, recv, "name"));
         if (ci >= 0) {
           if (sp_streq(name, "new") && c->classes[ci].is_struct) {
             /* Struct construction: positional args set member ivars in order. */
