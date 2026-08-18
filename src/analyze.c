@@ -12475,6 +12475,7 @@ void analyze_program(Compiler *c) {
      clobbering the TY_POLY the block-param pass pinned for a poly-collection
      `.each`. Re-pin block-param types so poly elements stay poly. */
   for (int iter = 0; iter < 8; iter++) if (!infer_block_params(c)) break;
+  intern_block_params(c);   /* a parameter nothing reads still needs its slot */
   /* infer_write_types resets non-param locals, undoing the earlier bigint
      loop-variable promotion, so re-apply it. */
   detect_bigint_loop_vars(c);

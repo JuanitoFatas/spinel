@@ -17023,7 +17023,18 @@ else { memcpy(dir, sf, n); dir[n] = 0; } }
             }
             else emit_ie_param_default(c, plv ? plv->type : TY_POLY, g_pre);
           }
-          else buf_printf(g_pre, "_t%d", tr);  /* instance_eval yields self */
+          else {
+            /* instance_eval yields self. A poly slot takes it boxed: the
+               parameter's slot exists whether or not the body reads it, and
+               the receiver is an object (a pointer, or a struct for a value
+               type), which is not an sp_RbVal. */
+            if (ppoly) {
+              char selfsrc[32];
+              snprintf(selfsrc, sizeof selfsrc, "_t%d", tr);
+              emit_boxed_text(c, ty_object(cls_id), selfsrc, g_pre);
+            }
+            else buf_printf(g_pre, "_t%d", tr);
+          }
           buf_puts(g_pre, pdecl ? ";\n" : ");\n");
         }
         /* a rest param (`*xs`) collects the call-site args past the requireds

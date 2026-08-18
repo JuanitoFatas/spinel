@@ -1124,6 +1124,43 @@ int widen_arrays_from_map_bang(Compiler *c) {
   }
   return changed;
 }
+/* Every block parameter gets a slot, whether or not anything reads it. The loop
+   emitters bind the parameter either way, so a name nothing else interned named
+   an undeclared identifier in the generated C -- once for a tap/then parameter
+   (#3979) and again for one of a sum over an enumerator (#3988). The slot is
+   claimed with no type: what types it, if anything does, is unchanged, and
+   codegen gives an untyped block parameter boxed storage. */
+void intern_block_params(Compiler *c) {
+  const NodeTable *nt = c->nt;
+  NT_FOREACH_KIND(nt, NK_BlockNode, id) {
+    int pn = nt_ref(nt, id, "parameters");
+    if (pn < 0) continue;
+    const char *pnty = nt_type(nt, pn);
+    if (!pnty || !sp_streq(pnty, "BlockParametersNode")) continue;
+    int inner = nt_ref(nt, pn, "parameters");
+    if (inner < 0) continue;
+    Scope *bs = comp_scope_of(c, id);
+    if (!bs) continue;
+    int rn = 0; const int *reqs = nt_arr(nt, inner, "requireds", &rn);
+    for (int k = 0; k < rn && reqs; k++) {
+      /* a destructuring parameter `|(a, b)|` is a node of its own, whose
+         leaves the massign lowering interns where it binds them */
+      if (nt_kind(nt, reqs[k]) != NK_RequiredParameterNode) continue;
+      const char *nm = nt_str(nt, reqs[k], "name");
+      if (!nm || scope_local(bs, nm)) continue;
+      LocalVar *lv = scope_local_intern(bs, nm);
+      if (lv) lv->is_block_param = 1;
+    }
+    int on = 0; const int *opts = nt_arr(nt, inner, "optionals", &on);
+    for (int k = 0; k < on && opts; k++) {
+      const char *nm = nt_str(nt, opts[k], "name");
+      if (!nm || scope_local(bs, nm)) continue;
+      LocalVar *lv = scope_local_intern(bs, nm);
+      if (lv) lv->is_block_param = 1;
+    }
+  }
+}
+
 int reconcile_locals_reading_ivars(Compiler *c) {
   const NodeTable *nt = c->nt;
   int changed = 0;
