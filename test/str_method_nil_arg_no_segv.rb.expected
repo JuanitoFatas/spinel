@@ -1,5 +1,5 @@
-count: no implicit conversion of nil into String
-"foo"
+count: wrong number of arguments (given 0, expected 1+)
+delete: wrong number of arguments (given 0, expected 1+)
 nil
 6
 send-lshift: can't modify frozen String: "foo"

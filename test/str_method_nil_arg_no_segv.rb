@@ -1,33 +1,30 @@
 # #504. Several String methods receiving the wrong arg shape used
-# to SEGV. CRuby raises ArgumentError; spinel can't raise but we
-# should at least not crash. Codegen emits compile_arg0 -> "0"
-# (NULL) for missing args and the runtime helpers then ran
-# strlen(NULL) or worse.
-#
-# Fix: NULL guards in sp_str_count / sp_str_delete /
-# sp_str_rindex / sp_str_concat; setbyte (which would have
-# written through a read-only string literal) is now warned and
-# returns 0 without mutating; rindex with a regex arg routes
-# through the new sp_re_rindex helper instead of the plain
-# string-substring path; `<<` on a string return-types as
-# `string` instead of falling through to the catch-all `int`.
+# to SEGV. CRuby raises ArgumentError; spinel originally could only
+# avoid the crash (TypeError / silent no-op / FrozenError stood in),
+# and the builtin positional-arity guard now raises CRuby's own
+# ArgumentError for these counts, so the outputs below match CRuby.
 
-# count / rindex / include? / start_with? / end_with? with no arg
-# (NULL at C level): spinel now raises TypeError, matching CRuby's
-# nil-arg path more closely than the old silent sentinel return.
+# count / delete with no arg: CRuby's ArgumentError, message and all
 begin
   +"foo".count
   puts "BUG count: no raise"
-rescue TypeError => e
+rescue ArgumentError => e
   puts "count: #{e.message}"
 end
-p +"foo".delete   # CRuby: ArgumentError. spinel: +"foo" unchanged (was: SEGV)
+begin
+  p +"foo".delete
+  puts "BUG delete: no raise"
+rescue ArgumentError => e
+  puts "delete: #{e.message}"
+end
 p +"foo".rindex(/missing/)  # CRuby + spinel post-#532: nil. (was: -1)
 p "abcdabcd".rindex(/c/)   # CRuby & spinel: 6 (new sp_re_rindex helper)
 begin
-  "foo".send(:<<)           # CRuby: ArgumentError. spinel: FrozenError (after #886)
+  "foo".send(:<<)           # CRuby: ArgumentError. spinel: FrozenError -- the
+                            # send desugar reaches the mutation emitter before
+                            # the arity guard (after #886)
   puts "no raise"
-rescue FrozenError => e
+rescue FrozenError, ArgumentError => e
   puts "send-lshift: " + e.message
 end
 
