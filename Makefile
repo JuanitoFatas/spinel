@@ -448,6 +448,11 @@ bin/spinel-%: tools/%.rb tools/tool_common.rb $(SPINEL) $(SP_RT_LIB)
 # ---- Test ----
 
 TESTS := $(wildcard test/*.rb)
+# Build-incompatible: regexp_unicode_casefold pins what the Unicode fold table
+# answers, and -DRE_NO_UNICODE_CASE is the build that leaves the table out.
+ifneq (,$(findstring RE_NO_UNICODE_CASE,$(RE_CASE_FLAGS)))
+TESTS := $(filter-out test/regexp_unicode_casefold.rb,$(TESTS))
+endif
 # Mode-incompatible: int_overflow_raises pins raise-mode semantics; under
 # --int-overflow=promote the same code auto-promotes and output diverges.
 ifeq ($(SPINEL_INT_OVERFLOW),promote)
