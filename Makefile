@@ -206,9 +206,13 @@ endif
 RE_SRC = lib/regexp/re_compile.c lib/regexp/re_exec.c lib/regexp/re_utf8.c
 RE_OBJ = $(patsubst lib/regexp/%.c,build/regexp/%.o,$(RE_SRC))
 
-build/regexp/%.o: lib/regexp/%.c lib/regexp/re_internal.h
+# RE_CASE_FLAGS: pass -DRE_NO_UNICODE_CASE to build the regexp engine with
+# ASCII-only /i folding, leaving out the ~3KB Unicode fold table.
+RE_CASE_FLAGS ?=
+
+build/regexp/%.o: lib/regexp/%.c lib/regexp/re_internal.h lib/regexp/re_casefold.h
 	@mkdir -p build/regexp
-	$(CC) -c $(COPT) $(SEC_FLAGS) -Ilib/regexp $< -o $@
+	$(CC) -c $(COPT) $(SEC_FLAGS) $(RE_CASE_FLAGS) -Ilib/regexp $< -o $@
 
 build/sp_bigint.o: lib/sp_bigint.c lib/sp_bigint.h lib/mruby_shim.h
 	@mkdir -p build

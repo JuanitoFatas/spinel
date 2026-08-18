@@ -421,6 +421,14 @@ its immediate values -- `1.equal?(1)`, `:s.equal?(:s)`, and (on 64-bit)
 The same applies to `freeze` on these values: they are value-frozen already
 (`frozen?` is `true`), and `freeze` is an identity no-op.
 
+**`/i` folds one codepoint to one.** Case-insensitive matching uses Unicode
+simple case folding, so `/ä/i` matches "Ä" and `/k/i` matches "K" (U+212A).
+A source whose fold is several codepoints has no single counterpart to fold
+to and is matched literally: `"ß" =~ /ss/i` is `nil` where CRuby answers `0`.
+Building the regexp engine with `-DRE_NO_UNICODE_CASE` (`make
+RE_CASE_FLAGS=-DRE_NO_UNICODE_CASE`) leaves the ~3KB fold table out and folds
+ASCII alone; a non-ASCII literal then matches literally under `/i` too.
+
 **Regexp literals share one compiled object.** Each pattern is compiled once
 at startup and every textually-equal literal names that one object, so
 `/ab/.equal?(/ab/)` is `true` (CRuby allocates per literal: `false`). Same

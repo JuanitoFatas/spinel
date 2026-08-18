@@ -557,14 +557,25 @@ bt_match(const mrb_regexp_pattern *pat, const char *str, const char *str_end,
    folds only A-Z and a-z into a class bitmap). (ported from mruby-regexp
    f9adb3017) */
 static mrb_bool
-memcmp_ci(const char *a, const char *b, int len)
+memcmp_ci(const char *a, const char *a_end, const char *b, int len, int *used)
 {
-  for (int i = 0; i < len; i++) {
-    uint8_t ca = (uint8_t)a[i], cb = (uint8_t)b[i];
-    if (ca >= 'A' && ca <= 'Z') ca += 32;
-    if (cb >= 'A' && cb <= 'Z') cb += 32;
-    if (ca != cb) return FALSE;
+  const char *b_end = b + len;
+  const char *a0 = a;
+  while (b < b_end) {
+    if (a >= a_end) return FALSE;
+    int alen = 0, blen = 0;
+    uint32_t ca = re_utf8_decode(a, a_end, &alen);
+    uint32_t cb = re_utf8_decode(b, b_end, &blen);
+    if (alen < 1) alen = 1;
+    if (blen < 1) blen = 1;
+    if (re_case_fold(ca) != re_case_fold(cb)) return FALSE;
+    a += alen;
+    b += blen;
   }
+  /* A folded comparison need not consume as many bytes as the captured text
+     holds -- U+212A against `k` is three against one -- so report what it did.
+     (ported from mruby-regexp 618ba9435) */
+  *used = (int)(a - a0);
   return TRUE;
 }
 
@@ -732,12 +743,13 @@ bt_match_depth(const mrb_regexp_pattern *pat, const char *str, const char *str_e
         int ge = captures[group * 2 + 1];
         if (gs < 0 || ge < 0) return FALSE;
         int blen = ge - gs;
-        if (sp + blen > str_end) return FALSE;
+        if (!inst.offset && sp + blen > str_end) return FALSE;
+        int used = blen;
         if (inst.offset) {
-          if (!memcmp_ci(sp, str + gs, blen)) return FALSE;
+          if (!memcmp_ci(sp, str_end, str + gs, blen, &used)) return FALSE;
         }
         else if (memcmp(sp, str + gs, blen) != 0) return FALSE;
-        sp += blen;
+        sp += used;
         pc++;
       }
       break;

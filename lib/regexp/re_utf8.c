@@ -125,3 +125,60 @@ re_utf8_encode(uint32_t cp, char *buf)
   buf[3] = (char)(0x80 | (cp & 0x3f));
   return 4;
 }
+
+/* ---- simple case folding (see re_internal.h) ---- */
+#ifdef RE_UNICODE_CASE
+#include "re_casefold.h"
+
+static mrb_bool
+fold_run_holds(const re_fold_run *r, uint32_t cp)
+{
+  return cp >= r->lo && cp <= r->hi && ((cp - r->lo) % r->stride) == 0;
+}
+
+uint32_t
+re_case_fold(uint32_t cp)
+{
+  for (int i = 0; i < RE_FOLD_RUN_COUNT; i++) {
+    const re_fold_run *r = &re_fold_runs[i];
+    if (cp < r->lo) break;               /* runs are sorted by lo */
+    if (fold_run_holds(r, cp)) return (uint32_t)((int32_t)cp + r->delta);
+  }
+  return cp;
+}
+
+int
+re_case_alts(uint32_t cp, uint32_t *out)
+{
+  uint32_t f = re_case_fold(cp);
+  int n = 0;
+  out[n++] = f;
+  /* every source that folds to f is a counterpart; the walk is over runs
+     rather than codepoints, so a wide range costs the run count */
+  for (int i = 0; i < RE_FOLD_RUN_COUNT && n < RE_CASE_ALTS_MAX; i++) {
+    const re_fold_run *r = &re_fold_runs[i];
+    int64_t src = (int64_t)f - r->delta;
+    if (src < 0) continue;
+    if (!fold_run_holds(r, (uint32_t)src)) continue;
+    if ((uint32_t)src == f) continue;
+    out[n++] = (uint32_t)src;
+  }
+  return n;
+}
+#else
+uint32_t
+re_case_fold(uint32_t cp)
+{
+  if (cp >= 'A' && cp <= 'Z') return cp + 32;
+  return cp;
+}
+
+int
+re_case_alts(uint32_t cp, uint32_t *out)
+{
+  uint32_t f = re_case_fold(cp);
+  out[0] = f;
+  if (f >= 'a' && f <= 'z') { out[1] = f - 32; return 2; }
+  return 1;
+}
+#endif  /* RE_UNICODE_CASE */

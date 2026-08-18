@@ -67,6 +67,7 @@ static mrb_bool re_src_has_named_group(const char *p, const char *end) {
 
 static void compile_alt(re_compiler *c);  /* forward */
 static void emit_codepoint(re_compiler *c, uint32_t cp);  /* forward */
+static mrb_bool emit_cp_folded(re_compiler *c, uint32_t cp);  /* forward */
 
 /* Issue #781: error handler hook so the library can route through
    the user program's sp_raise_cls (which is `static inline` per
@@ -242,6 +243,37 @@ class_add_range(re_charclass *cc, uint32_t lo, uint32_t hi)
   cc->ranges[2 * cc->num_ranges] = lo;
   cc->ranges[2 * cc->num_ranges + 1] = hi;
   cc->num_ranges++;
+}
+
+static void class_add_codepoint(re_charclass *cc, uint32_t cp);  /* forward */
+
+/* Add every case counterpart of the class's codepoint members. The members are
+   ranges, so the walk is over the range list as it stood on entry (the count is
+   read once, since the counterparts are appended to the same list), and each
+   range is intersected with the folding runs rather than enumerated: a member
+   of a wide range that carries no folding costs nothing.
+   (ported from mruby-regexp 618ba9435) */
+static void
+class_fold_codepoints(re_compiler *c, re_charclass *cc)
+{
+  (void)c;
+  uint32_t n = cc->num_ranges;
+  for (uint32_t i = 0; i < n; i++) {
+    uint32_t lo = cc->ranges[2 * i], hi = cc->ranges[2 * i + 1];
+    /* A range wider than this is a bulk range (`[^\x00-\x{10FFFF}]`-shaped);
+       its counterparts are inside it already. */
+    if (hi - lo > 0x1000) continue;
+    for (uint32_t cp = lo; cp <= hi; cp++) {
+      uint32_t alts[RE_CASE_ALTS_MAX];
+      int na = re_case_alts(cp, alts);
+      for (int k = 0; k < na; k++) {
+        if (alts[k] == cp) continue;
+        if (alts[k] < 128) class_set_bit(cc, (uint8_t)alts[k]);
+        else class_add_codepoint(cc, alts[k]);
+      }
+      if (cp == hi) break;  /* cp is unsigned: hi == UINT32_MAX would wrap */
+    }
+  }
 }
 
 /* Add a single non-ASCII codepoint to the class. */
@@ -703,6 +735,11 @@ compile_charclass(re_compiler *c)
       if (cc->bitmap[lc >> 3] & (1 << (lc & 7))) class_set_bit(cc, (uint8_t)uc);
       if (cc->bitmap[uc >> 3] & (1 << (uc & 7))) class_set_bit(cc, (uint8_t)lc);
     }
+    /* The same for the codepoint members, which the bitmap does not cover:
+       every counterpart of a member is a member too. The ranges are walked
+       over the FOLD runs rather than over their own length, so a wide range
+       costs the run count. (ported from mruby-regexp 618ba9435) */
+    class_fold_codepoints(c, cc);
   }
 
   cc->negated = negated;
@@ -1343,6 +1380,17 @@ compile_atom(re_compiler *c)
       }
     }
     if (ch >= 128) {
+      /* Under /i the character is emitted as the class of its counterparts
+         instead: a counterpart need not have the same width, so a run of bytes
+         could not express it. */
+      {
+        int dlen = 0;
+        uint32_t dcp = re_utf8_decode(c->p - 1, c->src_end, &dlen);
+        if (dlen > 1 && emit_cp_folded(c, dcp)) {
+          c->p += dlen - 1;
+          break;
+        }
+      }
       /* Emit every byte of a multibyte character here, so the whole character
          is one atom. Leaving the continuation bytes to the parse loop made
          each of them an atom of its own, and a quantifier binds to the last
@@ -1404,6 +1452,29 @@ wrap_atomic(re_compiler *c, uint32_t start)
   c->needs_backtrack = TRUE;
 }
 
+/* Emit a non-ASCII codepoint under /i as the class of its case counterparts
+   rather than as a run of bytes, and report whether it did. A counterpart need
+   not have the same byte length -- U+212A folds to `k` -- and RE_CLASS decodes
+   one codepoint and compares that, so the widths need not agree. FALSE when the
+   codepoint has no counterpart, or when this build carries no folding for it.
+   (ported from mruby-regexp 618ba9435) */
+static mrb_bool
+emit_cp_folded(re_compiler *c, uint32_t cp)
+{
+  if (cp < 128 || !(c->flags & RE_FLAG_IGNORECASE)) return FALSE;
+  uint32_t alts[RE_CASE_ALTS_MAX];
+  int n = re_case_alts(cp, alts);
+  if (n <= 1 && re_case_fold(cp) == cp) return FALSE;
+  uint16_t id = add_class(c);
+  for (int i = 0; i < n; i++) {
+    if (alts[i] < 128) class_set_bit(&c->classes[id], (uint8_t)alts[i]);
+    else class_add_codepoint(&c->classes[id], alts[i]);
+  }
+  if (cp >= 128) class_add_codepoint(&c->classes[id], cp);
+  emit(c, RE_CLASS, (uint8_t)id, 0);
+  return TRUE;
+}
+
 /* Emit one codepoint as an atom: a run of RE_CHAR, one per UTF-8 byte. This is
    the literal path for a codepoint the pattern NAMES rather than spells, so the
    bytes come from the encoder instead of from the pattern. The run has to be a
@@ -1424,6 +1495,7 @@ emit_codepoint(re_compiler *c, uint32_t cp)
     emit(c, RE_CHAR, (uint8_t)cp, 0);
     return;
   }
+  if (emit_cp_folded(c, cp)) return;
   char buf[4];
   int len = re_utf8_encode(cp, buf);
   for (int i = 0; i < len; i++) emit(c, RE_CHAR, (uint8_t)buf[i], 0);
