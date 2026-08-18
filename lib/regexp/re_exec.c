@@ -491,6 +491,22 @@ bt_match(const mrb_regexp_pattern *pat, const char *str, const char *str_end,
   return bt_match_depth(pat, str, str_end, sp, pc, captures, ncap, steps, 0, binary, NULL, gpos);
 }
 
+/* Compare two byte spans ignoring ASCII case. Folding stops at ASCII, like
+   every other ignorecase decision in this engine (compile_atom's /i handling
+   folds only A-Z and a-z into a class bitmap). (ported from mruby-regexp
+   f9adb3017) */
+static mrb_bool
+memcmp_ci(const char *a, const char *b, int len)
+{
+  for (int i = 0; i < len; i++) {
+    uint8_t ca = (uint8_t)a[i], cb = (uint8_t)b[i];
+    if (ca >= 'A' && ca <= 'Z') ca += 32;
+    if (cb >= 'A' && cb <= 'Z') cb += 32;
+    if (ca != cb) return FALSE;
+  }
+  return TRUE;
+}
+
 static mrb_bool
 bt_match_depth(const mrb_regexp_pattern *pat, const char *str, const char *str_end,
                const char *sp, uint32_t pc, int *captures, int ncap, int *steps,
@@ -630,7 +646,10 @@ bt_match_depth(const mrb_regexp_pattern *pat, const char *str, const char *str_e
         if (gs < 0 || ge < 0) return FALSE;
         int blen = ge - gs;
         if (sp + blen > str_end) return FALSE;
-        if (memcmp(sp, str + gs, blen) != 0) return FALSE;
+        if (inst.offset) {
+          if (!memcmp_ci(sp, str + gs, blen)) return FALSE;
+        }
+        else if (memcmp(sp, str + gs, blen) != 0) return FALSE;
         sp += blen;
         pc++;
       }
