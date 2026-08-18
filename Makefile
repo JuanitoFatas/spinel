@@ -691,6 +691,12 @@ rbs-seed-test: $(SPINEL) $(RBS_EXTRACT_BIN) $(SP_RT_LIB)
 	  "$$tmp/mh" > "$$tmp/mh.out" 2>/dev/null; \
 	  cmp -s "$$tmp/mh.out" test/rbs-seed/memo_civ_hash.expected || { echo "rbs-seed-test: FAIL (#3779 memoized class-ivar hash pin output mismatch)"; diff -u test/rbs-seed/memo_civ_hash.expected "$$tmp/mh.out" || true; ok=0; }; \
 	else echo "rbs-seed-test: FAIL (#3779 memoized class-ivar hash pin: C did not compile)"; ok=0; fi; \
+	$(SPINEL) test/rbs-seed/hash_kind_arg_boundary.rb --rbs test/rbs-seed/sig \
+	  -c --no-line-map -o "$$tmp/hk.c" 2>/dev/null; \
+	if $(CC) -O0 -Ilib $(RBS_SEED_STRICT) "$$tmp/hk.c" $(SP_RT_LIB) $(LDFLAGS) -lm -o "$$tmp/hk" 2>"$$tmp/hk.err"; then \
+	  "$$tmp/hk" > "$$tmp/hk.out" 2>/dev/null; \
+	  cmp -s "$$tmp/hk.out" test/rbs-seed/hash_kind_arg_boundary.expected || { echo "rbs-seed-test: FAIL (#3994 hash-kind argument boundary output mismatch)"; diff -u test/rbs-seed/hash_kind_arg_boundary.expected "$$tmp/hk.out" || true; ok=0; }; \
+	else echo "rbs-seed-test: FAIL (#3994 hash-kind argument boundary: C did not compile)"; ok=0; fi; \
 	$(SPINEL) test/rbs-seed/strbuf_ivar_write_value.rb --rbs test/rbs-seed/sig \
 	  -c --no-line-map -o "$$tmp/sw.c" 2>/dev/null; \
 	if $(CC) -O0 -Ilib $(RBS_SEED_STRICT) "$$tmp/sw.c" $(SP_RT_LIB) $(LDFLAGS) -lm -o "$$tmp/sw" 2>"$$tmp/sw.err"; then \

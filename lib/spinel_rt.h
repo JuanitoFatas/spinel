@@ -8187,6 +8187,24 @@ static sp_PolyPolyHash *sp_poly_hash_merge(sp_RbVal a, sp_RbVal b) {
    one, rebuilt when every key is a Symbol (a hash folded through the general
    merge path is a PolyPolyHash regardless of its keys), and a TypeError only
    when a key really is not a Symbol (#3452). */
+/* The same conversion at a parameter boundary an RBS seed pinned to a
+   Symbol-keyed hash: the caller's value may be the boxed-key hash, which is a
+   different C struct. A key the declared type cannot hold is the seed being
+   wrong about the program, so say that rather than naming to_h (#3994). */
+static sp_SymPolyHash *sp_poly_as_sym_hash(sp_RbVal v);
+static sp_SymPolyHash *sp_seed_sym_hash_arg(sp_RbVal v) {
+  if (v.tag == SP_TAG_OBJ && sp_poly_is_hash_kind(v.cls_id)) {
+    sp_PolyArray *pairs = sp_enum_items_from(v);
+    SP_GC_ROOT(pairs);
+    for (sp_int i = 0; pairs && i < pairs->len; i++) {
+      sp_RbVal k = sp_poly_arr_get(pairs->data[i], 0);
+      if (k.tag != SP_TAG_SYM)
+        sp_raise_cls("TypeError",
+                     "a Hash[Symbol, ...] parameter was passed a hash with a non-Symbol key");
+    }
+  }
+  return sp_poly_as_sym_hash(v);
+}
 static sp_SymPolyHash *sp_poly_as_sym_hash(sp_RbVal v) {
   if (v.tag == SP_TAG_OBJ && v.cls_id == SP_BUILTIN_SYM_POLY_HASH)
     return (sp_SymPolyHash *)v.v.p;

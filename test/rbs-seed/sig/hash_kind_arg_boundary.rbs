@@ -1,0 +1,6 @@
+module SVG
+  class T
+    @o: Hash[Symbol, untyped]
+    def initialize: (Hash[Symbol, untyped] o) -> void
+  end
+end

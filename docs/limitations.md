@@ -429,6 +429,13 @@ Building the regexp engine with `-DRE_NO_UNICODE_CASE` (`make
 RE_CASE_FLAGS=-DRE_NO_UNICODE_CASE`) leaves the ~3KB fold table out and folds
 ASCII alone; a non-ASCII literal then matches literally under `/i` too.
 
+**An `--rbs` seed is enforced where a value crosses into it.** A parameter
+seeded `Hash[Symbol, untyped]` handed a hash whose keys the caller widened to
+any type converts at the call, and a key the declared type cannot hold raises
+`TypeError` there. CRuby ignores the signature, so a program whose keys really
+are Symbols agrees with it and one whose keys are not diverges: the seed is a
+claim about the program, and this is where the claim is checked.
+
 **Regexp literals share one compiled object.** Each pattern is compiled once
 at startup and every textually-equal literal names that one object, so
 `/ab/.equal?(/ab/)` is `true` (CRuby allocates per literal: `false`). Same

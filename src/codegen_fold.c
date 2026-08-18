@@ -5863,6 +5863,22 @@ int arg_slot_for_param(Compiler *c, Scope *m, int idx, int argc) {
 void emit_arg_or_default(Compiler *c, Scope *m, int idx, int provided, Buf *out) {
   LocalVar *p = scope_local(m, m->pnames[idx]);
   TyKind pt = p ? p->type : TY_INT;
+  /* A hash argument of a different KIND than the parameter's slot: the two are
+     different C structs, so the assignment is not one C accepts. It is reachable
+     through an RBS seed, which pins a parameter to `Hash[Symbol, untyped]` while
+     the caller's own inference widens the value to the boxed-key hash (#3994).
+     Convert through the runtime, which walks the pairs and raises on a key the
+     target kind cannot hold. */
+  if (provided >= 0 && ty_is_hash(pt) && hash_box_cls(pt)) {
+    TyKind at = comp_ntype(c, provided);
+    const char *conv = pt == TY_SYM_POLY_HASH ? "sp_seed_sym_hash_arg" : NULL;
+    if (conv && ty_is_hash(at) && at != pt && hash_box_cls(at)) {
+      buf_printf(out, "%s(sp_box_obj(", conv);
+      emit_expr(c, provided, out);
+      buf_printf(out, ", %s))", hash_box_cls(at));
+      return;
+    }
+  }
   /* An empty `[]` argument carries no element type of its own and otherwise
      falls back to an IntArray, which mismatches a parameter typed from another
      call site (`P.new(deps: ["d1"])` then `P.new(deps: [])`). Build it at the
