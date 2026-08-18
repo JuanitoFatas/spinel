@@ -81,6 +81,23 @@ typedef struct {
 #define RE_MAX_NAME_LEN UINT16_MAX
 #define RE_NAME_LEN_FITS(n) ((uintmax_t)(n) <= RE_MAX_NAME_LEN)
 
+/* A pike_vm step walks a repetition's body once per nesting level, so that a
+   loop's final empty iteration can finish even when the closure resumed inside
+   the body and already marked that iteration's tail (see add_thread). The cap
+   keeps a pathologically nested pattern from growing the thread lists with the
+   square of the program; past it, such a pattern keeps the older, stale-capture
+   behaviour rather than costing memory. (ported from mruby-regexp 45c588a83) */
+#define RE_MAX_PASS 4
+#define RE_PASS_SPAN(depth) \
+  ((uint32_t)((depth) < RE_MAX_PASS ? (depth) : RE_MAX_PASS) + 1)
+
+/* Capacity of one pike_vm thread list, shared by the VM and by the cache the
+   compiler pre-allocates for it so the two cannot drift. An instruction
+   enqueues at most one thread per pass, and threads waiting on a later sp are
+   carried over from the previous step on top of that. */
+#define RE_LIST_CAPA(code_len, depth) \
+  ((int)(code_len) * (int)(RE_PASS_SPAN(depth) + 1) + 16)
+
 /* Named capture entry */
 typedef struct {
   const char *name;
@@ -106,6 +123,8 @@ typedef struct mrb_regexp_pattern {
   mrb_bool has_first_bytes; /* true if first_bytes is usable for skipping */
   mrb_bool is_literal;     /* true if pattern is pure literal (no metacharacters) */
   /* Cached VM state for pike_vm (avoids malloc per re_exec call) */
+  uint8_t loop_depth;           /* deepest nesting of repetitions whose body
+                                   can match empty (see RE_MAX_PASS) */
   uint32_t *cached_visited;     /* generation-based visited array */
   void *cached_threads[2];      /* curr/next thread lists */
   int cached_list_capa;         /* capacity of cached thread lists */

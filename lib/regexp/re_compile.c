@@ -1785,6 +1785,70 @@ first_set_walk(const re_inst *code, uint32_t code_len,
   return FALSE;
 }
 
+/* Is there a path from `pc` to `goal` that consumes nothing? The walk follows
+   the epsilon opcodes only, so a body that must consume input answers FALSE.
+   `seen` is stamped with `mark` to keep the walk finite. (ported from
+   mruby-regexp 45c588a83) */
+static mrb_bool
+epsilon_path(const re_inst *code, uint32_t pc, uint32_t goal,
+             uint32_t *seen, uint32_t mark)
+{
+  while (pc != goal) {
+    if (pc > goal || seen[pc] == mark) return FALSE;
+    seen[pc] = mark;
+    switch (code[pc].op) {
+    case RE_SAVE:
+    case RE_BOL: case RE_EOL: case RE_BOT: case RE_EOT: case RE_EOTNL:
+    case RE_WBOUND: case RE_NWBOUND:
+      pc++;
+      break;
+    case RE_JMP:
+      pc = code[pc].offset;
+      break;
+    case RE_SPLIT:
+    case RE_SPLITNG:
+      if (epsilon_path(code, code[pc].offset, goal, seen, mark)) return TRUE;
+      pc++;
+      break;
+    default:
+      return FALSE;  /* consumes input, or is an assertion this walk cannot judge */
+    }
+  }
+  return TRUE;
+}
+
+/* Flag every backward edge that closes a repetition whose body can run empty,
+   in `a` on the edge opcode (which nothing else uses), and answer how deeply
+   such repetitions nest -- the number of passes one VM step may need. */
+static uint8_t
+mark_empty_loops(re_inst *code, uint32_t code_len)
+{
+  uint32_t n = code_len + 1;
+  int32_t *delta = (int32_t*)calloc(2 * (size_t)n, sizeof(int32_t));
+  if (!delta) return 0;
+  uint32_t *seen = (uint32_t*)(delta + n);
+  uint32_t mark = 0;
+
+  for (uint32_t pc = 0; pc < code_len; pc++) {
+    re_inst in = code[pc];
+    if (in.op != RE_JMP && in.op != RE_SPLIT && in.op != RE_SPLITNG) continue;
+    code[pc].a = 0;                /* this pass owns `a` on the edge opcodes */
+    if (in.offset > pc) continue;  /* forward edge: alternation, not a loop */
+    if (!epsilon_path(code, in.offset, pc, seen, ++mark)) continue;
+    code[pc].a = 1;
+    delta[in.offset]++;
+    delta[pc + 1]--;  /* the closing edge itself still sits inside the loop */
+  }
+
+  int32_t depth = 0, max = 0;
+  for (uint32_t pc = 0; pc < code_len; pc++) {
+    depth += delta[pc];
+    if (depth > max) max = depth;
+  }
+  free(delta);
+  return max > UINT8_MAX ? UINT8_MAX : (uint8_t)max;
+}
+
 static mrb_bool
 compute_first_set(const re_inst *code, uint32_t code_len,
                   const re_charclass *classes, uint8_t *bm)
@@ -1900,9 +1964,13 @@ re_compile(const char *pattern, mrb_int len, uint32_t flags)
     }
   }
 
+  /* Which backward edges close a repetition whose body can run empty, and how
+     deeply such repetitions nest: the VM needs both (see add_thread). */
+  pat->loop_depth = mark_empty_loops(pat->code, pat->code_len);
+
   /* Pre-allocate VM state cache for pike_vm */
   {
-    int list_capa = (int)pat->code_len * 2 + 16;
+    int list_capa = RE_LIST_CAPA(pat->code_len, pat->loop_depth);
     pat->cached_visited = (uint32_t*)calloc(pat->code_len + 1, sizeof(uint32_t));
     pat->cached_threads[0] = malloc(sizeof(re_thread_cache) * list_capa);
     pat->cached_threads[1] = malloc(sizeof(re_thread_cache) * list_capa);
