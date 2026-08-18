@@ -9016,6 +9016,79 @@ sp_builtin_arity_spec_tbl[] = {
   {NULL, NULL, 0, 0, NULL, NULL}
 };
 
+/* Class/module-method positional arity, probed from ruby 4.0.6 the same
+   way as the instance table above (tools/gen_builtin_arity_spec.rb).
+   These are the constructors and module functions whose emitters index
+   argv[] unconditionally (File.open with no arguments was a compile-time
+   SIGSEGV). */
+static const struct { const char *cls; const char *m; int min; int max;
+                      const char *lo_exp; const char *hi_exp; }
+sp_builtin_cmeth_arity_spec_tbl[] = {
+  {"File","open",1,3,"1..3","1..3"},{"File","new",1,3,"1..3","1..3"},
+  {"File","read",1,4,"1..4","1..4"},{"File","write",2,3,"2..3","2..3"},
+  {"File","binread",1,3,"1..3","1..3"},{"File","binwrite",2,3,"2..3","2..3"},
+  {"File","readlines",1,3,"1..3","1..3"},{"File","foreach",1,3,"1..3","1..3"},
+  {"File","rename",2,2,"2","2"},{"File","exist?",1,1,"1","1"},
+  {"File","size",1,1,"1","1"},{"File","basename",1,2,"1..2","1..2"},
+  {"File","dirname",1,2,"1..2","1..2"},{"File","extname",1,1,"1","1"},
+  {"File","split",1,1,"1","1"},{"File","expand_path",1,2,"1..2","1..2"},
+  {"File","chmod",1,-1,"1+",NULL},{"File","utime",2,-1,"2+",NULL},
+  {"File","umask",0,1,NULL,"0..1"},{"File","truncate",2,2,"2","2"},
+  {"File","symlink",2,2,"2","2"},{"File","link",2,2,"2","2"},
+  {"File","readlink",1,1,"1","1"},{"File","realpath",1,2,"1..2","1..2"},
+  {"File","stat",1,1,"1","1"},{"File","lstat",1,1,"1","1"},
+  {"File","ftype",1,1,"1","1"},{"File","mtime",1,1,"1","1"},
+  {"File","atime",1,1,"1","1"},{"File","ctime",1,1,"1","1"},
+  {"File","empty?",1,1,"1","1"},{"File","zero?",1,1,"1","1"},
+  {"File","identical?",2,2,"2","2"},{"File","absolute_path",1,2,"1..2","1..2"},
+  {"IO","for_fd",1,2,"1..2","1..2"},{"IO","sysopen",1,3,"1..3","1..3"},
+  {"IO","new",1,2,"1..2","1..2"},{"IO","open",1,2,"1..2","1..2"},
+  {"IO","read",1,4,"1..4","1..4"},{"IO","write",2,3,"2..3","2..3"},
+  {"IO","binread",1,3,"1..3","1..3"},{"IO","binwrite",2,3,"2..3","2..3"},
+  {"IO","readlines",1,3,"1..3","1..3"},{"IO","pipe",0,2,NULL,"0..2"},
+  {"Dir","new",1,1,"1","1"},{"Dir","open",1,1,"1","1"},
+  {"Dir","mkdir",1,2,"1..2","1..2"},{"Dir","rmdir",1,1,"1","1"},
+  {"Dir","delete",1,1,"1","1"},{"Dir","unlink",1,1,"1","1"},
+  {"Dir","entries",1,1,"1","1"},{"Dir","children",1,1,"1","1"},
+  {"Dir","glob",1,2,"1..2","1..2"},{"Dir","exist?",1,1,"1","1"},
+  {"Dir","empty?",1,1,"1","1"},{"Dir","home",0,1,NULL,"0..1"},
+  {"Dir","pwd",0,0,NULL,"0"},{"Dir","getwd",0,0,NULL,"0"},
+  {"Dir","chdir",0,1,NULL,"0..1"},{"Time","at",1,3,"1..3","1..3"},
+  {"Time","now",0,0,NULL,"0"},{"Hash","new",0,1,NULL,"0..1"},
+  {"Array","new",0,2,NULL,"0..2"},{"String","new",0,1,NULL,"0..1"},
+  {"Integer","sqrt",1,1,"1","1"},{"Math","sqrt",1,1,"1","1"},
+  {"Math","cbrt",1,1,"1","1"},{"Math","sin",1,1,"1","1"},
+  {"Math","cos",1,1,"1","1"},{"Math","tan",1,1,"1","1"},
+  {"Math","asin",1,1,"1","1"},{"Math","acos",1,1,"1","1"},
+  {"Math","atan",1,1,"1","1"},{"Math","atan2",2,2,"2","2"},
+  {"Math","sinh",1,1,"1","1"},{"Math","cosh",1,1,"1","1"},
+  {"Math","tanh",1,1,"1","1"},{"Math","asinh",1,1,"1","1"},
+  {"Math","acosh",1,1,"1","1"},{"Math","atanh",1,1,"1","1"},
+  {"Math","log",1,2,"1..2","1..2"},{"Math","log2",1,1,"1","1"},
+  {"Math","log10",1,1,"1","1"},{"Math","exp",1,1,"1","1"},
+  {"Math","hypot",2,2,"2","2"},{"Math","ldexp",2,2,"2","2"},
+  {"Math","frexp",1,1,"1","1"},{"Math","erf",1,1,"1","1"},
+  {"Math","erfc",1,1,"1","1"},{"Math","gamma",1,1,"1","1"},
+  {"Math","lgamma",1,1,"1","1"},{"Process","getpriority",2,2,"2","2"},
+  {"Process","setpriority",3,3,"3","3"},{"Process","getsid",0,1,NULL,"0..1"},
+  {"Process","kill",2,-1,"2+",NULL},{"Process","clock_gettime",1,2,"1..2","1..2"},
+  {"Process","clock_getres",1,2,"1..2","1..2"},{"Process","pid",0,0,NULL,"0"},
+  {"Process","ppid",0,0,NULL,"0"},{"Process","uid",0,0,NULL,"0"},
+  {"Process","gid",0,0,NULL,"0"},{"Process","euid",0,0,NULL,"0"},
+  {"Process","egid",0,0,NULL,"0"},{"Process","setproctitle",1,1,"1","1"},
+  {"Regexp","new",1,2,"1..2","1..2"},{"Regexp","escape",1,1,"1","1"},
+  {"Regexp","quote",1,1,"1","1"},{"Random","new",0,1,NULL,"0..1"},
+  {"Random","rand",0,1,NULL,"0..1"},{"Random","srand",0,1,NULL,"0..1"},
+  {"ENV","fetch",1,2,"1..2","1..2"},{"ENV","key?",1,1,"1","1"},
+  {"ENV","has_key?",1,1,"1","1"},{"ENV","include?",1,1,"1","1"},
+  {"ENV","member?",1,1,"1","1"},{"ENV","assoc",1,1,"1","1"},
+  {"ENV","rassoc",1,1,"1","1"},{"Kernel","Integer",1,2,"1..2","1..2"},
+  {"Kernel","Float",1,1,"1","1"},{"Kernel","String",1,1,"1","1"},
+  {"Kernel","Array",1,1,"1","1"},{"Kernel","Hash",1,1,"1","1"},
+  {"Kernel","Rational",1,2,"1..2","1..2"},{"Kernel","Complex",1,2,"1..2","1..2"},
+  {"Marshal","dump",1,3,"1..3","1..3"},{"Marshal","load",1,2,"1..2","1..2"},
+  {NULL, NULL, 0, 0, NULL, NULL}
+};
 static int emit_builtin_arity_guard(Compiler *c, int id, Buf *b) {
   const NodeTable *nt = c->nt;
   const char *name = nt_str(nt, id, "name");
@@ -9038,10 +9111,30 @@ static int emit_builtin_arity_guard(Compiler *c, int id, Buf *b) {
       return 0;
   }
   char exp[32]; exp[0] = 0;
-  /* class methods (File.open) are a separate surface; not guarded here */
+  int eval_recv = 1;
   const char *rty2 = nt_type(nt, recv);
-  if (rty2 && sp_streq(rty2, "ConstantReadNode")) return 0;
-  {
+  if (rty2 && sp_streq(rty2, "ConstantReadNode")) {
+    const char *cn = nt_str(nt, recv, "name");
+    if (!cn) return 0;
+    /* a user class by this name owns its own methods */
+    int uc = comp_class_index(c, cn);
+    if (uc >= 0 && !c->classes[uc].is_native_class) return 0;
+    for (int i = 0; sp_builtin_cmeth_arity_spec_tbl[i].cls; i++) {
+      if (!sp_streq(sp_builtin_cmeth_arity_spec_tbl[i].cls, cn) ||
+          !sp_streq(sp_builtin_cmeth_arity_spec_tbl[i].m, name)) continue;
+      if (argc < sp_builtin_cmeth_arity_spec_tbl[i].min &&
+          sp_builtin_cmeth_arity_spec_tbl[i].lo_exp)
+        snprintf(exp, sizeof exp, "%s", sp_builtin_cmeth_arity_spec_tbl[i].lo_exp);
+      else if (sp_builtin_cmeth_arity_spec_tbl[i].max >= 0 &&
+               argc > sp_builtin_cmeth_arity_spec_tbl[i].max &&
+               sp_builtin_cmeth_arity_spec_tbl[i].hi_exp)
+        snprintf(exp, sizeof exp, "%s", sp_builtin_cmeth_arity_spec_tbl[i].hi_exp);
+      break;
+    }
+    if (!exp[0]) return 0;
+    eval_recv = 0;  /* a constant read has no effect to evaluate */
+  }
+  else {
     TyKind rt = comp_ntype(c, recv);
     const char *bcn = rt == TY_STRING || rt == TY_STRBUF ? "String"
                     : rt == TY_INT ? "Integer" : rt == TY_FLOAT ? "Float"
@@ -9069,7 +9162,8 @@ static int emit_builtin_arity_guard(Compiler *c, int id, Buf *b) {
   }
   TyKind rty = comp_ntype(c, id);
   const char *dv = default_value(rty);
-  buf_puts(b, "({ (void)("); emit_expr(c, recv, b); buf_puts(b, "); ");
+  buf_puts(b, "({ ");
+  if (eval_recv) { buf_puts(b, "(void)("); emit_expr(c, recv, b); buf_puts(b, "); "); }
   for (int i = 0; i < argc; i++) {
     buf_puts(b, "(void)("); emit_expr(c, argv[i], b); buf_puts(b, "); ");
   }
