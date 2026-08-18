@@ -11784,7 +11784,35 @@ void analyze_program(Compiler *c) {
     /* Also reset any hash type that crept in via premature [] read
        promotion: a variable whose only write is an empty array literal
        is definitively an array, not a hash. */
-    if (lv && !lv->rbs_seeded && (lv->type == TY_UNKNOWN || ty_is_hash(lv->type))) lv->type = TY_POLY_ARRAY;
+    if (!lv || lv->rbs_seeded) continue;
+    if (lv->type == TY_UNKNOWN) {
+      /* Another write of a hash literal makes the slot hold both kinds, and
+         only the boxed one does: the two empty literals otherwise agreed on
+         "no type" and the array backstop claimed the slot for arrays, so the
+         hash literal was built into an array-shaped slot. */
+      int has_hash_write = 0;
+      for (int w = 0; w < c->nt->count && !has_hash_write; w++) {
+        if (nt_kind(c->nt, w) != NK_LocalVariableWriteNode) continue;
+        const char *wn = nt_str(c->nt, w, "name");
+        if (!wn || !nm || !sp_streq(wn, nm) || comp_scope_of(c, w) != s) continue;
+        int wv = nt_ref(c->nt, w, "value");
+        if (wv >= 0 && nt_kind(c->nt, wv) == NK_HashNode) has_hash_write = 1;
+      }
+      lv->type = has_hash_write ? TY_POLY : TY_POLY_ARRAY;
+    }
+    /* A hash type here is usually one a premature `[]` read promoted, and a
+       local whose every write is an empty array literal is definitively an
+       array. A local that really is written a hash somewhere else holds both,
+       and only the boxed slot does. */
+    else if (ty_is_hash(lv->type))
+      lv->type = local_all_writes_empty_array(c, s, nm) ? TY_POLY_ARRAY : TY_POLY;
+    /* A slot another write typed as something that cannot hold an array (a
+       String, an Integer, an object) has to widen: the empty literal carries
+       no type of its own, so the union kept the other write's type and the
+       array was emitted into a slot shaped for it (`a = ""; a = []` assigned
+       an sp_IntArray to a const char *). A non-empty literal already widens
+       this way -- the union of the two types is the boxed one (#3990). */
+    else if (!ty_is_array(lv->type) && lv->type != TY_POLY) lv->type = TY_POLY;
   }
   /* Backstop: a local assigned only empty hash literals `{}` that no key-write
      ever narrowed stays TY_UNKNOWN, so its hash block methods (select/reject/

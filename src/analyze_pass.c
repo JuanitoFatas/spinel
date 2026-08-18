@@ -416,7 +416,7 @@ int local_all_writes_empty_hash(Compiler *c, Scope *sc, const char *name) {
    assigns an empty `[]` array literal -- the array analogue of
    local_all_writes_empty_hash. Such a local carries no element evidence of
    its own, so it can adopt the poly element type a callee's push forced. */
-static int local_all_writes_empty_array(Compiler *c, Scope *sc, const char *name) {
+int local_all_writes_empty_array(Compiler *c, Scope *sc, const char *name) {
   const NodeTable *nt = c->nt;
   int saw = 0;
   int si = (int)(sc - c->scopes);

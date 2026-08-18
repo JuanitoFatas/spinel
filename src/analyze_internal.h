@@ -208,6 +208,7 @@ int reconcile_locals_reading_ivars(Compiler *c);
 int widen_object_locals_from_poly_writes(Compiler *c);
 int widen_arrays_from_map_bang(Compiler *c);
 void intern_block_params(Compiler *c);
+int local_all_writes_empty_array(Compiler *c, Scope *sc, const char *name);
 int infer_param_hash_value(Compiler *c);
 int bind_call_params(Compiler *c, int call_id, int mi);
 /* The type a READ of ivar slot `iv` yields (a shared-mutable string slot
