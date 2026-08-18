@@ -5911,7 +5911,7 @@ void emit_arg_or_default(Compiler *c, Scope *m, int idx, int provided, Buf *out)
         const char *vn = nt_str(c->nt, provided, "name");
         if (g_cap_struct && g_cap_names && vn && nameset_has(g_cap_names, vn)) {
           /* inside a proc body: the capture struct holds the cell pointer */
-          buf_printf(out, "((%s *)_cap)->%s", g_cap_struct, vn);
+          buf_printf(out, "((%s *)_cap)->c_%s", g_cap_struct, vn);
           return;
         }
         LocalVar *clv = vn ? scope_local(comp_scope_of(c, provided), vn) : NULL;

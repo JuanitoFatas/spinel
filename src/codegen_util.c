@@ -553,9 +553,9 @@ void emit_local_ref(Compiler *c, int scope_node, const char *name, Buf *b) {
        typed pointer, so its deref is already the right lvalue (no cast). */
     LocalVar *clv = scope_node >= 0 ? scope_local(comp_scope_of(c, scope_node), name) : NULL;
     if (clv && clv->type == TY_PROC)
-      buf_printf(b, "(sp_Proc *)(uintptr_t)(*((%s *)_cap)->%s)", g_cap_struct, name);
+      buf_printf(b, "(sp_Proc *)(uintptr_t)(*((%s *)_cap)->c_%s)", g_cap_struct, name);
     else
-      buf_printf(b, "(*((%s *)_cap)->%s)", g_cap_struct, name);
+      buf_printf(b, "(*((%s *)_cap)->c_%s)", g_cap_struct, name);
     return;
   }
   LocalVar *lv = scope_node >= 0 ? scope_local(comp_scope_of(c, scope_node), name) : NULL;
@@ -572,7 +572,7 @@ void emit_yblk_ref(Buf *b) {
   const char *nm =
       (g_lowered_blk_name && g_lowered_blk_name[0]) ? g_lowered_blk_name : "__yblk__";
   if (g_cap_struct && g_cap_names && nameset_has(g_cap_names, nm)) {
-    buf_printf(b, "(sp_Proc *)(uintptr_t)(*(((%s *)_cap)->%s))", g_cap_struct, nm);
+    buf_printf(b, "(sp_Proc *)(uintptr_t)(*(((%s *)_cap)->c_%s))", g_cap_struct, nm);
   }
   /* A yield inside a lifted Thread/Fiber body reaches the forwarded block
      through the shared cell the body's frame carries, not a local (#3355). */

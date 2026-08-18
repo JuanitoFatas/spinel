@@ -1009,6 +1009,18 @@ void emit_scope_decls(Compiler *c, Scope *s, Buf *b) {
         else buf_printf(b, "    *_cell_%s = 0.0;\n", lv->name);
         continue;
       }
+      /* A class value is a small struct of a cls_id and a rodata name -- no
+         GC pointer in it, so its cell needs no scan, as the float cell does
+         not. Without a cell of its own a captured class variable hit the
+         "non-integer capture" reject: `k = Struct.new(:x); a.each { k.new }`
+         over a boxed receiver, where the block is a real closure (#3995). */
+      if (lv->type == TY_CLASS) {
+        buf_printf(b, "    sp_Class *_cell_%s = (sp_Class *)sp_gc_alloc(sizeof(sp_Class), NULL, NULL);\n", lv->name);
+        buf_printf(b, "    SP_GC_ROOT(_cell_%s);\n", lv->name);
+        if (lv->is_param) buf_printf(b, "    *_cell_%s = lv_%s;\n", lv->name, lv->name);
+        else buf_printf(b, "    *_cell_%s = ((sp_Class){-1, NULL});\n", lv->name);
+        continue;
+      }
       if (lv->type == TY_POLY) {
         buf_printf(b, "    sp_RbVal *_cell_%s = (sp_RbVal *)sp_gc_alloc(sizeof(sp_RbVal), NULL, sp_cell_scan_rbval);\n", lv->name);
         buf_printf(b, "    SP_GC_ROOT(_cell_%s);\n", lv->name);
@@ -2759,6 +2771,7 @@ int cell_is_typed_ptr(Compiler *c, LocalVar *lv) {
 void emit_cell_elem_type(Compiler *c, LocalVar *lv, Buf *b) {
   if (lv && lv->type == TY_FLOAT) { buf_puts(b, "sp_float"); return; }
   if (lv && lv->type == TY_POLY) { buf_puts(b, "sp_RbVal"); return; }
+  if (lv && lv->type == TY_CLASS) { buf_puts(b, "sp_Class"); return; }
   if (cell_is_typed_ptr(c, lv)) { emit_ctype(c, lv->type, b); return; }
   buf_puts(b, "sp_int");
 }
@@ -3043,12 +3056,12 @@ void emit_fiber_new(Compiler *c, int id, Buf *b, int as_gen, int size_node) {
         /* a shared cell pointer (see emit_scope_decls): float -> sp_float*,
            poly -> sp_RbVal*, heap object -> its typed pointer, else sp_int*. */
         buf_puts(&g_proc_protos, " "); emit_cell_elem_type(c, lv, &g_proc_protos);
-        buf_printf(&g_proc_protos, " *%s;", caps.v[i]);
+        buf_printf(&g_proc_protos, " *c_%s;", caps.v[i]);
       }
       else {
         TyKind ct = lv ? lv->type : TY_POLY;
         buf_printf(&g_proc_protos, " "); emit_ctype(c, ct, &g_proc_protos);
-        buf_printf(&g_proc_protos, " %s;", caps.v[i]);
+        buf_printf(&g_proc_protos, " c_%s;", caps.v[i]);
       }
     }
     buf_printf(&g_proc_protos, " } _fib_cap_%d;\n", fid);
@@ -3063,11 +3076,11 @@ void emit_fiber_new(Compiler *c, int id, Buf *b, int as_gen, int size_node) {
       LocalVar *lv = encl ? scope_local(encl, caps.v[i]) : NULL;
       TyKind ct = lv ? lv->type : TY_POLY;
       if (lv && lv->is_cell) {
-        buf_printf(&g_proc_protos, "  if (_c->%s) sp_gc_mark((void *)_c->%s);\n", caps.v[i], caps.v[i]);
+        buf_printf(&g_proc_protos, "  if (_c->c_%s) sp_gc_mark((void *)_c->c_%s);\n", caps.v[i], caps.v[i]);
       }
       else if (fiber_cap_needs_root(ct)) {
-        if (ct == TY_POLY) buf_printf(&g_proc_protos, "  sp_mark_rbval(_c->%s);\n", caps.v[i]);
-        else buf_printf(&g_proc_protos, "  if (_c->%s) sp_gc_mark((void *)_c->%s);\n", caps.v[i], caps.v[i]);
+        if (ct == TY_POLY) buf_printf(&g_proc_protos, "  sp_mark_rbval(_c->c_%s);\n", caps.v[i]);
+        else buf_printf(&g_proc_protos, "  if (_c->c_%s) sp_gc_mark((void *)_c->c_%s);\n", caps.v[i], caps.v[i]);
       }
     }
     buf_printf(&g_proc_protos, "}\n");
@@ -3131,14 +3144,14 @@ void emit_fiber_new(Compiler *c, int id, Buf *b, int as_gen, int size_node) {
         /* unpack the shared cell pointer; reads/writes go through (*_cell_<name>)
            (emit_local_ref), so the write reaches the enclosing scope. */
         buf_puts(pb, "    "); emit_cell_elem_type(c, lv, pb);
-        buf_printf(pb, " *_cell_%s = _fc->%s;\n", caps.v[i], caps.v[i]);
+        buf_printf(pb, " *_cell_%s = _fc->c_%s;\n", caps.v[i], caps.v[i]);
         buf_printf(pb, "    SP_GC_ROOT(_cell_%s);\n", caps.v[i]);
         continue;
       }
       TyKind ct = lv ? lv->type : TY_POLY;
       const char *rn = rename_local(caps.v[i]);
       buf_printf(pb, "    "); emit_ctype(c, ct, pb);
-      buf_printf(pb, " lv_%s = _fc->%s;\n", rn, caps.v[i]);
+      buf_printf(pb, " lv_%s = _fc->c_%s;\n", rn, caps.v[i]);
       if (fiber_cap_needs_root(ct)) {
         if (ct == TY_POLY) buf_printf(pb, "    SP_GC_ROOT_RBVAL(lv_%s);\n", rn);
         else buf_printf(pb, "    SP_GC_ROOT(lv_%s);\n", rn);
@@ -3327,11 +3340,11 @@ void emit_fiber_new(Compiler *c, int id, Buf *b, int as_gen, int size_node) {
         emit_cell_shadow_store(c, encl, caps.v[i], g_pre, g_indent);
       emit_indent(g_pre, g_indent);
       if (g_cap_struct && g_cap_names && nameset_has(g_cap_names, caps.v[i]))
-        buf_printf(g_pre, "_t%d->%s = ((%s *)_cap)->%s;\n", tc, caps.v[i], g_cap_struct, caps.v[i]);
+        buf_printf(g_pre, "_t%d->c_%s = ((%s *)_cap)->c_%s;\n", tc, caps.v[i], g_cap_struct, caps.v[i]);
       else if (lv && lv->is_cell)
-        buf_printf(g_pre, "_t%d->%s = _cell_%s;\n", tc, caps.v[i], caps.v[i]);   /* the shared cell pointer */
+        buf_printf(g_pre, "_t%d->c_%s = _cell_%s;\n", tc, caps.v[i], caps.v[i]);   /* the shared cell pointer */
       else
-        buf_printf(g_pre, "_t%d->%s = lv_%s;\n", tc, caps.v[i], rename_local(caps.v[i]));
+        buf_printf(g_pre, "_t%d->c_%s = lv_%s;\n", tc, caps.v[i], rename_local(caps.v[i]));
     }
     if (as_gen) {
       buf_printf(b, "sp_Enumerator_new_gen(%s, _t%d, ", fname, tc);
@@ -3559,9 +3572,12 @@ void emit_proc_literal(Compiler *c, int create, Buf *b) {
          side-channel (sp_box_float / sp_poly_to_f), not the truncating slot. */
       int float_cell = lv->type == TY_FLOAT;
       int poly_cell = lv->type == TY_POLY;
+      /* a class value rides its own cell, like a float: a cls_id and a rodata
+         name, with no GC pointer of its own (#3995) */
+      int class_cell = lv->type == TY_CLASS;
       if (lv->type != TY_INT && lv->type != TY_BOOL && lv->type != TY_SYMBOL &&
           lv->type != TY_UNKNOWN &&
-          lv->type != TY_PROC && !float_cell && !ptr_cell && !poly_cell) {
+          lv->type != TY_PROC && !float_cell && !ptr_cell && !poly_cell && !class_cell) {
         free(params.v); free(used.v); free(locals.v); free(caps.v);
         unsupported(c, create, "proc capturing a non-integer variable (later slice)");
         return;
@@ -3900,7 +3916,7 @@ else if (orecv >= 0 && onm) {
       /* a float capture rides a native sp_float cell, a poly capture an
          sp_RbVal cell, a heap object its typed pointer (see emit_scope_decls). */
       buf_puts(&g_procs, " "); emit_cell_elem_type(c, clv, &g_procs);
-      buf_printf(&g_procs, " *%s;", caps.v[i]);
+      buf_printf(&g_procs, " *c_%s;", caps.v[i]);
     }
     if (cap_self && self_is_value) buf_printf(&g_procs, " sp_%s __self_val;", self_cls);
     else if (cap_self) buf_puts(&g_procs, " void *__self;");
@@ -3910,7 +3926,7 @@ else if (orecv >= 0 && onm) {
     buf_printf(&g_procs, "static void _proc_cap_scan_%d(void *p) {\n", pid);
     buf_printf(&g_procs, "  sp_gc_mark(p);\n");
     buf_printf(&g_procs, "  _proc_cap_%d *_c = (_proc_cap_%d *)p;\n", pid, pid);
-    for (int i = 0; i < ncap; i++) buf_printf(&g_procs, "  if (_c->%s) sp_gc_mark((void *)_c->%s);\n", caps.v[i], caps.v[i]);
+    for (int i = 0; i < ncap; i++) buf_printf(&g_procs, "  if (_c->c_%s) sp_gc_mark((void *)_c->c_%s);\n", caps.v[i], caps.v[i]);
     if (cap_self && self_is_value) {
       if (class_needs_scan(&c->classes[bs->class_id]))
         buf_printf(&g_procs, "  sp_%s_scan(&_c->__self_val);\n", self_cls);
@@ -4106,6 +4122,10 @@ else if (orecv >= 0 && onm) {
     }
     else if (lv->type == TY_POLY) {
       buf_printf(pb, "    sp_RbVal *_cell_%s = (sp_RbVal *)sp_gc_alloc(sizeof(sp_RbVal), NULL, sp_cell_scan_rbval);"
+                     " SP_GC_ROOT(_cell_%s); *_cell_%s = lv_%s;%c", p, p, p, p, 10);
+    }
+    else if (lv->type == TY_CLASS) {
+      buf_printf(pb, "    sp_Class *_cell_%s = (sp_Class *)sp_gc_alloc(sizeof(sp_Class), NULL, NULL);"
                      " SP_GC_ROOT(_cell_%s); *_cell_%s = lv_%s;%c", p, p, p, p, 10);
     }
     else if (proc_slot_is_ptr(lv->type) && !comp_ty_value_obj(c, lv->type)) {
@@ -4376,9 +4396,9 @@ else if (orecv >= 0 && onm) {
           emit_cell_shadow_store(c, bs, caps.v[i], g_pre, g_indent);
         emit_indent(g_pre, g_indent);
         if (g_cap_struct && g_cap_names && nameset_has(g_cap_names, caps.v[i]))
-          buf_printf(g_pre, "_capv_%d->%s = ((%s *)_cap)->%s;\n", pid, caps.v[i], g_cap_struct, caps.v[i]);
+          buf_printf(g_pre, "_capv_%d->c_%s = ((%s *)_cap)->c_%s;\n", pid, caps.v[i], g_cap_struct, caps.v[i]);
         else
-          buf_printf(g_pre, "_capv_%d->%s = _cell_%s;\n", pid, caps.v[i], caps.v[i]);
+          buf_printf(g_pre, "_capv_%d->c_%s = _cell_%s;\n", pid, caps.v[i], caps.v[i]);
       }
       /* Capture the enclosing instance self: by value for a value-type class
          (deref if the enclosing method holds self as a pointer, e.g. an

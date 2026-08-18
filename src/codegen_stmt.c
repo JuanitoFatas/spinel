@@ -865,7 +865,7 @@ static int emit_proc_cell_lvalue(Compiler *c, int scope_node, const char *nm, Bu
   if (!lv || lv->type != TY_PROC) return 0;
   int captured = g_cap_struct && g_cap_names && nameset_has(g_cap_names, nm);
   if (!lv->is_cell && !captured) return 0;
-  if (captured) buf_printf(b, "*((%s *)_cap)->%s", g_cap_struct, nm);
+  if (captured) buf_printf(b, "*((%s *)_cap)->c_%s", g_cap_struct, nm);
   else buf_printf(b, "*_cell_%s", nm);
   buf_puts(b, " = (sp_int)(uintptr_t)(");
   return 1;
@@ -949,7 +949,7 @@ void emit_assign(Compiler *c, int id, Buf *b, int indent) {
   if (laundered_cell &&
       (lv->is_cell || (g_cap_struct && g_cap_names && nameset_has(g_cap_names, nm)))) {
     if (g_cap_struct && g_cap_names && nameset_has(g_cap_names, nm))
-      buf_printf(b, "*((%s *)_cap)->%s", g_cap_struct, nm);
+      buf_printf(b, "*((%s *)_cap)->c_%s", g_cap_struct, nm);
     else
       buf_printf(b, "*_cell_%s", nm);
     buf_puts(b, " = (sp_int)(uintptr_t)(");
