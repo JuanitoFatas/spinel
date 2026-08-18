@@ -5965,14 +5965,16 @@ int emit_scalar_call(Compiler *c, int id, Buf *b) {
       else if ((sp_streq(name, "gsub") || sp_streq(name, "sub")) && argc == 2 && re_lit_index(c, argv[0]) >= 0) {
         const char *suf = comp_ntype(c, argv[1]) == TY_STR_STR_HASH ? "_str_str_hash" : "";
         buf_printf(b, "sp_re_%s%s(sp_re_pat_%d, %s, ", name, suf, re_lit_index(c, argv[0]), r);
-        emit_expr(c, argv[1], b); buf_puts(b, ")");
+        if (comp_ntype(c, argv[1]) == TY_STR_STR_HASH) emit_expr(c, argv[1], b);
+        else emit_str_expr(c, argv[1], b);
+        buf_puts(b, ")");
       }
       else if ((sp_streq(name, "gsub") || sp_streq(name, "sub")) && argc == 2 &&
                nt_type(nt, argv[0]) && sp_streq(nt_type(nt, argv[0]), "InterpolatedRegularExpressionNode")) {
         Buf rp; memset(&rp, 0, sizeof rp);
         emit_regex_pat_to_buf(c, argv[0], &rp);
         buf_printf(b, "sp_re_%s(%s, %s, ", name, rp.p ? rp.p : "NULL", r);
-        emit_expr(c, argv[1], b); buf_puts(b, ")");
+        emit_str_expr(c, argv[1], b); buf_puts(b, ")");
         free(rp.p);
       }
       else if ((sp_streq(name, "gsub") || sp_streq(name, "sub")) && argc == 2 &&
@@ -5983,7 +5985,9 @@ int emit_scalar_call(Compiler *c, int id, Buf *b) {
         const char *suf = comp_ntype(c, argv[1]) == TY_STR_STR_HASH ? "_str_str_hash" : "";
         buf_printf(b, "sp_re_%s%s(", name, suf);
         emit_expr(c, argv[0], b); buf_printf(b, ", %s, ", r);
-        emit_expr(c, argv[1], b); buf_puts(b, ")");
+        if (comp_ntype(c, argv[1]) == TY_STR_STR_HASH) emit_expr(c, argv[1], b);
+        else emit_str_expr(c, argv[1], b);
+        buf_puts(b, ")");
       }
       else if (sp_streq(name, "split") && argc == 1 && re_lit_index(c, argv[0]) >= 0) {
         buf_printf(b, "sp_re_split(sp_re_pat_%d, %s)", re_lit_index(c, argv[0]), r);
@@ -6289,7 +6293,7 @@ int emit_scalar_call(Compiler *c, int id, Buf *b) {
       }
       else if ((sp_streq(name, "partition") || sp_streq(name, "rpartition")) && argc == 1 &&
                re_lit_index(c, argv[0]) < 0) {
-        buf_printf(b, "sp_str_%s(%s, ", name, r); emit_expr(c, argv[0], b); buf_puts(b, ")");
+        buf_printf(b, "sp_str_%s(%s, ", name, r); emit_str_expr(c, argv[0], b); buf_puts(b, ")");
       }
       else if (sp_streq(name, "partition") && argc == 1 && re_lit_index(c, argv[0]) >= 0) {
         /* [before, match, after] from the first regex match, else [s, "", ""] */
@@ -6403,7 +6407,7 @@ int emit_scalar_call(Compiler *c, int id, Buf *b) {
         int ws = nil_arg || (aty && sp_streq(aty, "StringNode") && nt_str(c->nt, argv[0], "content") &&
                  sp_streq(nt_str(c->nt, argv[0], "content"), " "));
         if (ws) buf_printf(b, "sp_str_split_ws(%s)", r);
-        else { buf_printf(b, "sp_str_split_drop_trailing(%s, ", r); emit_expr(c, argv[0], b); buf_puts(b, ")"); }
+        else { buf_printf(b, "sp_str_split_drop_trailing(%s, ", r); emit_str_expr(c, argv[0], b); buf_puts(b, ")"); }
       }
       else if (sp_streq(name, "split") && argc == 2) {
         buf_printf(b, "sp_str_split_limit(%s, ", r); emit_expr(c, argv[0], b); buf_puts(b, ", "); emit_int_expr(c, argv[1], b); buf_puts(b, ")");
