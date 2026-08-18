@@ -72,6 +72,12 @@ typedef struct {
   mrb_bool utf8_any;  /* match any non-ASCII byte if true */
 } re_charclass;
 
+/* The stored name length is bounded by the field that holds it: a longer name
+   is refused rather than silently truncated into a different name (ported from
+   mruby-regexp, which widened the field instead). */
+#define RE_MAX_NAME_LEN UINT16_MAX
+#define RE_NAME_LEN_FITS(n) ((uintmax_t)(n) <= RE_MAX_NAME_LEN)
+
 /* Named capture entry */
 typedef struct {
   const char *name;

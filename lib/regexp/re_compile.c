@@ -853,13 +853,26 @@ compile_atom(re_compiler *c)
           c->flags = saved_flags;
           break;
         }
-        else if (c->p[1] == '<' && c->p + 2 < c->src_end && c->p[2] != '=' && c->p[2] != '!') {
-          next_char(c); next_char(c);  /* skip ?< */
+        else if (c->p[1] == '\'' ||
+                 (c->p[1] == '<' && c->p + 2 < c->src_end &&
+                  c->p[2] != '=' && c->p[2] != '!')) {
+          /* A named capture, in either spelling: (?<name>...) or (?'name'...).
+             The quoted one needs none of the ruling out the angled one does
+             above, since no lookbehind is spelled with a quote. The name runs
+             to its own terminator, so a '>' inside quotes and a quote inside
+             angles are both members of the name. The scan that decides
+             whether a plain group still captures already read both spellings,
+             so the parser reading only one left `(?'x'a)` demoting the plain
+             groups and then falling through to a stray `?`. */
+          int close = (c->p[1] == '<') ? '>' : '\'';
+          next_char(c); next_char(c);  /* skip ?< or ?' */
           cap_name = c->p;
-          while (peek(c) != '>' && peek(c) >= 0) next_char(c);
-          if (peek(c) != '>') compile_error(c, "unterminated named capture");
+          while (peek(c) != close && peek(c) >= 0) next_char(c);
+          if (peek(c) != close) compile_error(c, "unterminated named capture");
+          if (c->p == cap_name) compile_error(c, "group name is empty");
+          if (!RE_NAME_LEN_FITS(c->p - cap_name)) compile_error(c, "group name too long");
           cap_name_len = (uint16_t)(c->p - cap_name);
-          next_char(c);  /* skip > */
+          next_char(c);  /* skip the closing > or ' */
         }
         else if (c->p[1] == 'i' || c->p[1] == 'm' || c->p[1] == 'x' || c->p[1] == '-') {
           /* Inline options (imported from mruby): the toggle form
