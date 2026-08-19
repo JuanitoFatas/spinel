@@ -1,0 +1,6 @@
+class C
+  def sym_hash: () -> Hash[Symbol, untyped]
+  def str_hash: () -> Hash[String, untyped]
+  def int_array: () -> Array[Integer]
+  def real_str_hash: () -> Hash[String, untyped]
+end

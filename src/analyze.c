@@ -9842,6 +9842,15 @@ static void check_seed_contradictions(Compiler *c) {
   for (int s = 0; s < c->nscopes; s++) {
     Scope *sc = &c->scopes[s];
     if (!sc->ret_rbs_seeded || sc->body < 0 || !sc->reachable) continue;
+    /* A definition a later `def` has REPLACED cannot be called: dispatch
+       resolves to the last one, and did before this rule existed. Judging the
+       replaced body refused a program spinel compiles and runs correctly
+       (#4024). Only the definition the chain actually resolves to is judged. */
+    if (sc->class_id >= 0 && sc->name) {
+      int eff = sc->is_cmethod ? comp_cmethod_in_chain(c, sc->class_id, sc->name, NULL)
+                               : comp_method_in_chain(c, sc->class_id, sc->name, NULL);
+      if (eff >= 0 && eff != s) continue;
+    }
     TyKind slot = sc->ret;
     /* every value the method can answer with: the body's tail, and each
        explicit return inside this scope */
@@ -9856,6 +9865,38 @@ static void check_seed_contradictions(Compiler *c) {
       if (av && an == 1) sites[nsites++] = av[0];
     }
     for (int k = 0; k < nsites; k++) {
+      /* An EMPTY container literal carries a default kind, not evidence: a
+         bare `{}` reads as the String-keyed variant and so contradicted every
+         Symbol-keyed seed, though it has no keys to disagree about and the
+         seed is the only thing in the program that says which kind it is
+         (#4025). The seed wins; there is nothing here to judge. */
+      { int lit = sites[k];
+        if (nt_kind(nt, lit) == NK_StatementsNode) {
+          int bn2 = 0; const int *bb2 = nt_arr(nt, lit, "body", &bn2);
+          lit = (bn2 > 0 && bb2) ? bb2[bn2 - 1] : -1;
+        }
+        if (lit >= 0) {
+        NodeKind sk = nt_kind(nt, lit);
+        if (sk == NK_HashNode || sk == NK_KeywordHashNode || sk == NK_ArrayNode) {
+          int en = 0; nt_arr(nt, lit, "elements", &en);
+          if (en == 0) {
+            /* An EMPTY container literal carries a DEFAULT kind, not evidence:
+               a bare `{}` reads as the String-keyed variant and contradicted
+               every Symbol-keyed seed, though it has no keys to disagree about.
+               The seed is the only thing in the program that says which kind it
+               is, so the seed wins -- and the literal is built at it, or the
+               emitted return would still be the default kind (#4025). */
+            if (lit < c->node_cap &&
+                ((ty_is_hash(slot) && (sk == NK_HashNode || sk == NK_KeywordHashNode)) ||
+                 (ty_is_array(slot) && sk == NK_ArrayNode))) {
+              c->ntype[lit] = slot;
+              if (c->hash_want && ty_is_hash(slot)) c->hash_want[lit] = slot;
+            }
+            continue;
+          }
+        }
+        }
+      }
       TyKind val = infer_type(c, sites[k]);
       if (!seed_contradicts(c, slot, val, 1)) continue;
       int ln  = (int)nt_int(nt, sites[k], "node_line", 0);
