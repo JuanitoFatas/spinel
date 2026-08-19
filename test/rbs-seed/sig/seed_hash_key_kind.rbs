@@ -1,0 +1,3 @@
+class V
+  def self.render: (Hash[String, untyped] attrs) -> String
+end

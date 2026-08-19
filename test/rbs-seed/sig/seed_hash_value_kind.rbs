@@ -1,0 +1,4 @@
+class V
+  def self.render: (Hash[String, untyped] attrs) -> String
+  def self.take_sym: (Hash[Symbol, untyped] h) -> Integer
+end

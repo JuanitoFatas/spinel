@@ -9693,6 +9693,32 @@ static int seed_ptr_kind(TyKind t) {
   return 0;
 }
 
+/* 1 iff a value of type `val` placed in a slot the seed pinned to `slot` would
+   be REINTERPRETED rather than converted -- the whole point of the rule. `ret`
+   selects the wider judgement a return slot allows (see seed_ret_family). */
+static int seed_ret_family(Compiler *c, TyKind t);
+static int seed_ret_kind(TyKind t);
+static int seed_contradicts(Compiler *c, TyKind slot, TyKind val, int ret) {
+  int fs = ret ? seed_ret_family(c, slot) : seed_repr_family(c, slot);
+  int fv = ret ? seed_ret_family(c, val)  : seed_repr_family(c, val);
+  if (!fs || !fv) return 0;
+  if (fs != fv) return 1;
+  int ks = ret ? seed_ret_kind(slot) : seed_ptr_kind(slot);
+  int kv = ret ? seed_ret_kind(val)  : seed_ptr_kind(val);
+  /* Two HASHES differ convertibly in their VALUE kind -- the emitter rebuilds
+     one variant from another -- but never in their KEY kind. A Symbol-keyed
+     hash can never satisfy a `Hash[String, ...]` slot, and passing that
+     pointer unconverted had a Symbol dereferenced as a char * (#3975). A poly
+     key holds either, so it is not a clash. */
+  if (fs == 2 && ks == 2 && kv == 2) {
+    TyKind kslot = ty_hash_key(slot), kval = ty_hash_key(val);
+    return kslot != kval && kslot != TY_POLY && kval != TY_POLY &&
+           kslot != TY_UNKNOWN && kval != TY_UNKNOWN;
+  }
+  if (fs != 2 || !ks || !kv || ks == kv) return 0;
+  return 1;
+}
+
 /* The same judgement for a seeded RETURN, which is decidable in two more
    cases than an ivar assignment. A seeded return converts NOTHING: an object
    defining #to_h or #to_str placed in a Hash or String slot is the same C
@@ -9748,12 +9774,7 @@ static void check_seed_contradictions(Compiler *c) {
     if (iv < 0) continue;
     TyKind slot = ci->ivar_types[iv];
     TyKind val = infer_type(c, v);
-    int fs = seed_repr_family(c, slot), fv = seed_repr_family(c, val);
-    if (!fs || !fv) continue;
-    if (fs == fv) {
-      int ks = seed_ptr_kind(slot), kv2 = seed_ptr_kind(val);
-      if (fs != 2 || !ks || !kv2 || ks == kv2) continue;
-    }
+    if (!seed_contradicts(c, slot, val, 0)) continue;
     int ln  = (int)nt_int(nt, id, "node_line", 0);
     int fid = (int)nt_int(nt, id, "node_file", 0);
     const char *file = nt_file_path(nt, fid);
@@ -9793,12 +9814,7 @@ static void check_seed_contradictions(Compiler *c) {
     }
     for (int k = 0; k < nsites; k++) {
       TyKind val = infer_type(c, sites[k]);
-      int fs = seed_ret_family(c, slot), fv = seed_ret_family(c, val);
-      if (!fs || !fv) continue;
-      if (fs == fv) {
-        int ks = seed_ret_kind(slot), kv2 = seed_ret_kind(val);
-        if (fs != 2 || !ks || !kv2 || ks == kv2) continue;
-      }
+      if (!seed_contradicts(c, slot, val, 1)) continue;
       int ln  = (int)nt_int(nt, sites[k], "node_line", 0);
       int fid = (int)nt_int(nt, sites[k], "node_file", 0);
       const char *file = nt_file_path(nt, fid);
@@ -9866,12 +9882,7 @@ static void check_seed_contradictions(Compiler *c) {
       TyKind slot = (lv->rbs_type != TY_UNKNOWN) ? lv->rbs_type : lv->type;
       TyKind val = infer_type(c, argv[i]);
       if (slot == TY_POLY) continue;   /* `untyped` accepts anything */
-      int fs2 = seed_repr_family(c, slot), fv2 = seed_repr_family(c, val);
-      if (!fs2 || !fv2) continue;
-      if (fs2 == fv2) {
-        int ks = seed_ptr_kind(slot), kv2 = seed_ptr_kind(val);
-        if (fs2 != 2 || !ks || !kv2 || ks == kv2) continue;
-      }
+      if (!seed_contradicts(c, slot, val, 0)) continue;
       int ln  = (int)nt_int(nt, argv[i], "node_line", 0);
       int fid = (int)nt_int(nt, argv[i], "node_file", 0);
       const char *file = nt_file_path(nt, fid);
@@ -9883,7 +9894,7 @@ static void check_seed_contradictions(Compiler *c) {
               "  A seed is trusted, so the emitted code would reinterpret the value "
               "rather than convert it.\n"
               "  Fix the signature or the call.\n",
-              file, ln, m->pnames[i], name, ty_name(slot), ty_name(val));
+              file, ln, m->pnames[i], name, seed_ty_name(c, slot), seed_ty_name(c, val));
       exit(1);
     }
   }
