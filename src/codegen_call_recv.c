@@ -8390,8 +8390,19 @@ int emit_object_call(Compiler *c, int id, Buf *b) {
                  ty_object_class(rt), dgv ? dgv : "0");
       return 1;
     }
-    /* a Struct's [] / dig index of a statically-known nil / bool is the
+    /* a Struct's [] / dig / deconstruct_keys validate like CRuby: a missing
+       argument is ArgumentError (dig says "1+"), a nil / bool index is the
        Integer-conversion TypeError. Data keeps its own dispatch above. */
+    if (!sc->is_data && (sp_streq(name, "[]") || sp_streq(name, "dig") ||
+                         sp_streq(name, "deconstruct_keys")) && argc == 0) {
+      TyKind z0 = comp_ntype(c, id);
+      buf_puts(b, "({ (void)("); emit_expr(c, recv, b);
+      buf_printf(b, "); sp_raise_cls(\"ArgumentError\","
+                    " \"wrong number of arguments (given 0, expected %s)\"); %s; })",
+                 sp_streq(name, "dig") ? "1+" : "1",
+                 raise_tail_value(z0));
+      return 1;
+    }
     if (!sc->is_data && (sp_streq(name, "[]") || sp_streq(name, "dig")) && argc >= 1 &&
         (comp_ntype(c, argv[0]) == TY_NIL || comp_ntype(c, argv[0]) == TY_BOOL)) {
       TyKind z1 = comp_ntype(c, id);
@@ -8849,6 +8860,19 @@ int emit_object_call(Compiler *c, int id, Buf *b) {
     if (comp_reader_in_chain(c, cid, name, &rdc)) {
       int reader_wins = comp_resolve_member(c, cid, name, 0, &mdc, NULL) == SP_MEMBER_ATTR;
       if (reader_wins) {
+        /* a reader is zero-arity: excess arguments are CRuby's ArgumentError
+           (a Struct member read with an argument answered the member) */
+        if (argc > 0) {
+          TyKind rrty2 = comp_ntype(c, id);
+          buf_puts(b, "({ (void)("); emit_expr(c, recv, b); buf_puts(b, "); ");
+          for (int ra = 0; ra < argc; ra++) {
+            buf_puts(b, "(void)("); emit_expr(c, argv[ra], b); buf_puts(b, "); ");
+          }
+          buf_printf(b, "sp_raise_cls(\"ArgumentError\","
+                        " \"wrong number of arguments (given %d, expected 0)\"); %s; })",
+                     argc, raise_tail_value(rrty2));
+          return 1;
+        }
         const char *rn2 = comp_resolve_alias(c, cid, name);
         /* a shared-mutable string slot reads out as a GC COPY of the current
            contents (the raw sp_String* handle must not leak into a plain
