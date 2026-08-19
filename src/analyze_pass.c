@@ -56,6 +56,18 @@ static void wrn_build(Compiler *c) {
   }
 }
 static int recv_has_array_write(Compiler *c, int recv);
+
+/* The class owning the slot an `@x` receiver names. Ivar slots are per-class
+   (comp_ivar_index is a flat per-class table, and a subclass interns its own),
+   so a write to `@x` in an unrelated class is evidence about a DIFFERENT slot.
+   The query below indexes writes by NAME; for a local it then filters by scope,
+   but its ivar arm filtered by nothing, so `@threads = 1` in one class answered
+   a question asked about `@threads` in another. -1 is a top-level ivar (main's
+   own slot), which is still a well-defined owner to compare. */
+static int ivar_recv_class_id(Compiler *c, int recv) {
+  Scope *s = comp_scope_of(c, recv);
+  return s ? s->class_id : -1;
+}
 static int recv_has_scalar_numeric_write(Compiler *c, int recv) {
   const NodeTable *nt = c->nt;
   const char *rty = recv >= 0 ? nt_type(nt, recv) : NULL;
@@ -66,6 +78,7 @@ static int recv_has_scalar_numeric_write(Compiler *c, int recv) {
   const char *rnm = nt_str(nt, recv, "name");
   if (!rnm) return 0;
   Scope *rscope = is_local ? comp_scope_of(c, recv) : NULL;
+  int rcls = is_ivar ? ivar_recv_class_id(c, recv) : -1;
   const char *wkind = is_ivar ? "InstanceVariableWriteNode" : "LocalVariableWriteNode";
   if (wrn_nt != nt || wrn_ntc != nt->count) wrn_build(c);
   if (!wrn_buckets) return 0;
@@ -77,6 +90,10 @@ static int recv_has_scalar_numeric_write(Compiler *c, int recv) {
     const char *wnm = nt_str(nt, id, "name");
     if (!wnm || !sp_streq(wnm, rnm)) continue;
     if (is_local && comp_scope_of(c, id) != rscope) continue;
+    if (is_ivar) {
+      Scope *ws = comp_scope_of(c, id);
+      if (!ws || ws->class_id != rcls) continue;
+    }
     int v = nt_ref(nt, id, "value");
     if (v < 0) continue;
     const char *vty = nt_type(nt, v);
