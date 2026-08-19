@@ -1116,6 +1116,20 @@ const char *raise_tail_value(TyKind t) {
   return default_value(t);
 }
 
+/* Compiler-aware form: a by-value object class's C representation is a bare
+   struct, where default_value's NULL would be ill-typed C. */
+const char *raise_tail_value_c(Compiler *c, TyKind t) {
+  if (ty_is_object(t) && comp_ty_value_obj(c, t)) {
+    static char vbuf[128];
+    int cid = ty_object_class(t);
+    if (cid >= 0 && cid < c->nclasses) {
+      snprintf(vbuf, sizeof vbuf, "((sp_%s){0})", c->classes[cid].c_name);
+      return vbuf;
+    }
+  }
+  return raise_tail_value(t);
+}
+
 const char *default_value(TyKind t) {
   switch (t) {
     case TY_INT:    return "0";

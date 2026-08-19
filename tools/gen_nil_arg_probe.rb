@@ -74,7 +74,19 @@ SAMPLES = [1, "a", :a, [1], {1 => 2}, 0.5, (0..1), /a/]
 # A blockless call on an enumerator-returning method validates nothing (the
 # Enumerator is lazy: "ab".gsub(nil) succeeds); when the bare call yields an
 # Enumerator, re-run with a block so the arguments are actually consumed.
+# The shared sample path "a" is both consumed and corrupted by the probes
+# themselves (File.open("a", "a", 1) creates it with mode 0o001; File.delete
+# removes it), which turned every LATER path-taking probe into EACCES/ENOENT
+# and reported 76 File/Dir methods as unprobed. Restore it before every call.
+def reset_fixture
+  File.chmod(0o644, "a") rescue nil
+  File.delete("a") rescue nil
+  File.binwrite("a", "hello")
+rescue SystemCallError
+end
+
 def attempt(recv_thunk, m, args, with_block: false)
+  reset_fixture
   r = recv_thunk.call
   res = Timeout.timeout(2) do
     with_block ? r.__send__(m, *args) { |*| "a" } : r.__send__(m, *args)

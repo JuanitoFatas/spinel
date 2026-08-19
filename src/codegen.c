@@ -337,9 +337,9 @@ static int emit_obj_conv(Compiler *c, int node, const char *conv, TyKind want,
    differently from all others ("from nil to integer"). The nilable entry
    points below skip this arm for the slots CRuby itself accepts nil in
    ("x".split(nil), StringIO#read(nil), File.open(path, nil), ...) -- but
-   only for nil: every one of those slots still rejects true / false
-   ("x".split(false) is CRuby's TypeError), so the nilable forms stay
-   bool-strict. */
+   only for nil: those slots still reject true / false (ENV["k"] = false is
+   CRuby's "no implicit conversion of false into String"), so the nilable
+   forms stay bool-strict. */
 /* The static Ruby class name of a scalar/container kind, for TypeError
    wording -- NULL for kinds a conversion arm already handles (poly, object,
    unknown) or that are legal in the slot. */
@@ -6012,7 +6012,9 @@ void emit_super(Compiler *c, int id, Buf *b) {
            unresolved-call gate (TY_UNKNOWN sp_raise_nomethod) that comp_ntype
            can't see. */
         buf_printf(b, "(%s->msg = ", g_self);
-        emit_str_expr(c, argv2[0], b);
+        /* nilable: Exception#initialize STRINGIFIES its message (super(nil)
+           keeps the class-name default in CRuby), it never type-checks it */
+        emit_str_expr_nilable(c, argv2[0], b);
         buf_puts(b, ")");
       }
       else if (ty && sp_streq(ty, "ForwardingSuperNode") && s->nparams > 0) {

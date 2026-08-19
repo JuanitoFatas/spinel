@@ -203,3 +203,31 @@ p("ab" =~ nil)
 ENV["SPINEL_C3_T"] = "v"
 ENV["SPINEL_C3_T"] = nil
 p ENV["SPINEL_C3_T"].nil?
+
+# review-found edges: named-capture =~ nil subject; fill's nil length is "to
+# the end"; a boolean =~ operand is NoMethodError; File.read's nil length
+def parse_kv(line)
+  if /(?<k>\w+)=(?<v>\w+)/ =~ line
+    [k, v]
+  end
+end
+p parse_kv("a=1")
+p parse_kv(nil)
+p [1, 2, 3].fill(9, 1, nil)
+begin
+  p("ab" =~ true)
+rescue NoMethodError => e
+  p [e.class, e.message]
+end
+File.write("sac-frd.txt", "hello")
+begin
+  p File.read("sac-frd.txt", nil)
+ensure
+  File.delete("sac-frd.txt")
+end
+
+# super(nil) into a builtin exception keeps CRuby's class-name default
+class ConvE < StandardError
+  def initialize; super(nil); end
+end
+p ConvE.new.message

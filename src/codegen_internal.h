@@ -511,6 +511,7 @@ int ty_is_struct_valued(TyKind t);   /* see codegen_util.c: struct passed by val
 const char *native_c_type(const char *spec);
 const char *default_value(TyKind t);
 const char *raise_tail_value(TyKind t);
+const char *raise_tail_value_c(Compiler *c, TyKind t);
 void emit_bigint_operand_ext(Compiler *c, int node, Buf *b);
 const char *nil_value(TyKind t);
 const char *local_init_value(Compiler *c, LocalVar *lv);

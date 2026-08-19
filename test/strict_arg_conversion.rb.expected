@@ -40,3 +40,9 @@ nil
 nil
 nil
 true
+["a", "1"]
+nil
+[1, 9, 9]
+[NoMethodError, "undefined method '=~' for true"]
+"hello"
+"ConvE"

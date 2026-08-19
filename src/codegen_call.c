@@ -9815,6 +9815,8 @@ sp_builtin_arity_spec_tbl[] = {
   {"StringIO","take_while",0,0,NULL,"0",0,0,NULL,"0"},
   {"StringIO","tally",0,1,NULL,"0..1",0,1,NULL,"0..1"},
   {"StringIO","tell",0,0,NULL,"0",0,0,NULL,"0"},
+  {"StringIO","to_a",0,2,NULL,"0..2",0,2,NULL,"0..2"},
+  {"StringIO","to_h",0,2,NULL,"0..2",0,2,NULL,"0..2"},
   {"StringIO","truncate",1,1,"1","1",1,1,"1","1"},
   {"StringIO","tty?",0,0,NULL,"0",0,0,NULL,"0"},
   {"StringIO","ungetbyte",1,1,"1","1",1,1,"1","1"},
@@ -10137,7 +10139,6 @@ sp_builtin_cmeth_arity_spec_tbl[] = {
   {"Dir","home",0,1,NULL,"0..1",0,1,NULL,"0..1"},
   {"Dir","pwd",0,0,NULL,"0",0,0,NULL,"0"},
   {"Dir","getwd",0,0,NULL,"0",0,0,NULL,"0"},
-  {"Dir","chdir",0,1,NULL,"0..1",0,1,NULL,"0..1"},
   {"Time","at",1,3,"1..3","1..3",1,3,"1..3","1..3"},
   {"Time","local",1,-1,"1..8",NULL,1,-1,"1..8",NULL},
   {"Time","mktime",1,-1,"1..8",NULL,1,-1,"1..8",NULL},
@@ -10343,7 +10344,9 @@ int emit_builtin_arity_guard(Compiler *c, int id, Buf *b) {
     if (!bcn && ty_is_object(rt)) {
       int ocid = ty_object_class(rt);
       if (ocid >= 0 && ocid < c->nclasses &&
-          comp_method_in_chain(c, ocid, name, NULL) < 0)
+          comp_method_in_chain(c, ocid, name, NULL) < 0 &&
+          !comp_reader_in_chain(c, ocid, name, NULL) &&
+          !comp_writer_in_chain(c, ocid, name, NULL))
         bcn = c->classes[ocid].is_native_class ? c->classes[ocid].name : "Object";
     }
     if (!bcn) return 0;
@@ -10665,7 +10668,8 @@ int emit_arg_type_guards(Compiler *c, int id, Buf *b) {
         /* a keyword hash is an OPTION (`round(half: :even)`), not an operand */
         if (ak == NK_NilNode || ak == NK_StringNode || ak == NK_SymbolNode ||
             ak == NK_ArrayNode || ak == NK_TrueNode || ak == NK_FalseNode) {
-          if (ak == NK_NilNode && sp_streq(nn, "clamp")) continue;  /* nil is an open side there */
+          /* nil is an OPEN side for clamp and "no limit" for step */
+          if (ak == NK_NilNode && (sp_streq(nn, "clamp") || sp_streq(nn, "step"))) continue;
           off = nv[a]; offk = ak;
         }
       }
@@ -10702,9 +10706,16 @@ int emit_arg_type_guards(Compiler *c, int id, Buf *b) {
         TyKind rty = comp_ntype(c, id);
         const char *dv = default_value(rty);
         buf_puts(b, "({ (void)("); emit_expr(c, nr, b); buf_puts(b, "); ");
-        if (cmpform)
-          buf_printf(b, "sp_raise_cls(\"ArgumentError\", \"comparison of %s with %s failed\"); ",
-                     cn, bad_arg ? "a value" : "nil");
+        if (cmpform) {
+          /* CRuby names the operand: a class for a String/Array, the value
+             itself for nil/true/false, the inspect form for a Symbol */
+          if (offk == NK_SymbolNode && nt_str(nt, off, "value"))
+            buf_printf(b, "sp_raise_cls(\"ArgumentError\", \"comparison of %s with :%s failed\"); ",
+                       cn, nt_str(nt, off, "value"));
+          else
+            buf_printf(b, "sp_raise_cls(\"ArgumentError\", \"comparison of %s with %s failed\"); ",
+                       cn, litcls);
+        }
         else if (sp_streq(nn, "gcdlcm"))
           buf_puts(b, "sp_raise_cls(\"TypeError\", \"not an integer\"); ");
         else if (conv_from || conv_of) {
@@ -14558,7 +14569,7 @@ void emit_call(Compiler *c, int id, Buf *b) {
       return;
     }
     if (sp_streq(name, "urandom") && argc == 1) {     /* #2543 */
-      buf_puts(b, "sp_Random_urandom("); emit_int_expr(c, argv[0], b); buf_puts(b, ")");
+      buf_puts(b, "sp_Random_urandom("); emit_int_expr_conv(c, argv[0], b); buf_puts(b, ")");
       return;
     }
     if (sp_streq(name, "srand")) {                    /* #2525 (returns previous seed) */
@@ -19813,8 +19824,14 @@ else { memcpy(dir, sf, n); dir[n] = 0; } }
     if ((sp_streq(name, "read") || sp_streq(name, "binread")) && argc == 1) {
       buf_puts(b, "sp_file_read("); emit_str_expr(c, argv[0], b); buf_puts(b, ")"); return;
     }
-    /* File.read(path, length) -> the first length bytes (#2776) */
+    /* File.read(path, length) -> the first length bytes (#2776); a nil
+       length is "the whole file", as CRuby */
     if ((sp_streq(name, "read") || sp_streq(name, "binread")) && argc == 2) {
+      if (comp_ntype(c, argv[1]) == TY_NIL) {
+        buf_puts(b, "({ (void)("); emit_expr(c, argv[1], b);
+        buf_puts(b, "); sp_file_read("); emit_str_expr(c, argv[0], b); buf_puts(b, "); })");
+        return;
+      }
       buf_puts(b, "sp_file_read_len("); emit_str_expr(c, argv[0], b); buf_puts(b, ", ");
       emit_int_expr(c, argv[1], b); buf_puts(b, ")"); return;
     }
@@ -19917,6 +19934,19 @@ else { memcpy(dir, sf, n); dir[n] = 0; } }
           emit_str_expr(c, mv, b); buf_puts(b, ")");
           return;
         }
+      }
+      else if (comp_ntype(c, argv[2]) == TY_NIL) {
+        /* a nil OFFSET is "no offset" -- a plain truncating write, not a
+           write at position 0 (which would keep the file's tail) */
+        buf_puts(b, "({ (void)("); emit_expr(c, argv[2], b);
+        buf_puts(b, "); const char *_wp = "); emit_str_expr(c, argv[0], b);
+        buf_puts(b, "; const char *_wd = ");
+        if (comp_ntype(c, argv[1]) == TY_POLY) {
+          buf_puts(b, "sp_poly_to_s("); emit_expr(c, argv[1], b); buf_puts(b, ")");
+        }
+        else emit_expr(c, argv[1], b);
+        buf_puts(b, "; sp_file_write(_wp, _wd); (sp_int)sp_str_byte_len(_wd); })");
+        return;
       }
       else {
         buf_puts(b, "sp_file_write_at("); emit_str_expr(c, argv[0], b); buf_puts(b, ", ");

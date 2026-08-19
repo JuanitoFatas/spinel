@@ -21,3 +21,8 @@
 [ArgumentError, "wrong number of arguments (given 2, expected 0..1)"]
 [ArgumentError, "wrong number of arguments (given 0, expected 1)"]
 [ArgumentError, "wrong number of arguments (given 3, expected 0..2)"]
+"GET"
+7
+[ArgumentError, "comparison of Integer with String failed"]
+[ArgumentError, "comparison of Integer with String failed"]
+:unbounded

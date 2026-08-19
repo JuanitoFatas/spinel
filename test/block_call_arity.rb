@@ -140,3 +140,24 @@ begin
 rescue TypeError, ArgumentError => e
   p [e.class, e.message]
 end
+
+# review-found edges: an attribute named like an Object method is the
+# attribute; empty splats are zero arguments; the iterator path type-checks
+class Request
+  attr_accessor :method, :path
+  def initialize(m, p2) = (@method = m; @path = p2)
+end
+p Request.new("GET", "/").method
+class Pt; attr_reader :x; def initialize = @x = 7; end
+p Pt.new.x(*[])
+begin
+  3.step("a") { |i| i }
+rescue ArgumentError => e
+  p [e.class, e.message]
+end
+begin
+  5.between?("a", "b")
+rescue ArgumentError => e
+  p [e.class, e.message]
+end
+p 1.step(nil) { |i| break :unbounded }

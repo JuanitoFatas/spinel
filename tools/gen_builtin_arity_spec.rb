@@ -36,6 +36,7 @@
 # Each row holds both quartets; an unprovable side is the -1 sentinel quartet.
 
 require "timeout"
+require "fileutils"
 require "set"
 require "socket"
 require "csv"
@@ -51,16 +52,21 @@ Warning[:deprecated] = false  # probing deprecated arg shapes is the point
 ROOT = File.expand_path("..", __dir__)
 SOURCE = File.join(ROOT, "src/codegen_call.c")
 
-# Non-empty receivers (see note above).
+# Non-empty receivers (see note above), built FRESH per probe: a shared
+# receiver is mutated by the probes themselves (StringIO#reopen left every
+# later method probing a dead stream, losing its row).
 INSTANCE_RECEIVERS = {
-  "String" => "ab", "Integer" => 1, "Float" => 1.0, "Symbol" => :a,
-  "Array" => [1, 2], "Hash" => {1 => 2}, "Range" => (1..2), "Time" => Time.at(0),
-  "NilClass" => nil, "TrueClass" => true, "Rational" => 1r, "Complex" => 1i,
-  "Object" => Object.new,
+  "String" => -> { "ab".dup }, "Integer" => -> { 1 }, "Float" => -> { 1.0 },
+  "Symbol" => -> { :a }, "Array" => -> { [1, 2] }, "Hash" => -> { {1 => 2} },
+  "Range" => -> { (1..2) }, "Time" => -> { Time.at(0) },
+  "NilClass" => -> { nil }, "TrueClass" => -> { true },
+  "Rational" => -> { 1r }, "Complex" => -> { 1i }, "Object" => -> { Object.new },
   # native (package-backed) classes: their loose C dispatch dropped excess
   # arguments (StringIO#eof?(1) answered false), so the guard covers them too
-  "StringIO" => StringIO.new("ab".dup), "StringScanner" => StringScanner.new("ab"),
-  "Pathname" => Pathname.new("a"), "Set" => Set.new([1, 2]), "Mutex" => Mutex.new,
+  "StringIO" => -> { StringIO.new("ab".dup) },
+  "StringScanner" => -> { StringScanner.new("ab") },
+  "Pathname" => -> { Pathname.new("a") }, "Set" => -> { Set.new([1, 2]) },
+  "Mutex" => -> { Mutex.new },
 }
 
 # The surface probed per class: every public instance method (the arity dump
@@ -87,10 +93,13 @@ CLASS_TARGETS = {
                   rename exist? size basename dirname extname join split expand_path
                   chmod utime umask truncate symlink link readlink realpath stat lstat
                   ftype mtime atime ctime empty? zero? identical? absolute_path],
+  # IO.select probes slowly (a nil-args call waits for the 2 s timeout) but
+  # the row it yields is real: a missing-argument call is CRuby's
+  # ArgumentError, and the probe never passes an actual IO to wait on.
   "IO"      => %w[for_fd sysopen new open read write binread binwrite readlines pipe
                   select copy_stream],
   "Dir"     => %w[new open mkdir rmdir delete unlink entries children glob foreach
-                  exist? empty? home pwd getwd chdir],
+                  exist? empty? home pwd getwd],
   "Time"    => %w[at local mktime utc gm now],
   "Hash"    => %w[new],
   "Array"   => %w[new],
@@ -128,8 +137,8 @@ CLASS_TARGETS = {
   "Pathname"      => %w[new glob getwd pwd],
 }
 
-def probe(recv, m, n, block: false)
-  r2 = (recv.dup rescue recv)
+def probe(thunk, m, n, block: false)
+  r2 = thunk.call
   Timeout.timeout(2) do
     block ? r2.__send__(m, *Array.new(n)) { |*| "a" } : r2.__send__(m, *Array.new(n))
   end
@@ -146,7 +155,7 @@ end
 # anything that could act on the probing process.
 def spec_for(recv, m, block: false)
   sym = m.to_sym
-  return nil unless recv.respond_to?(sym)
+  return nil unless recv.call.respond_to?(sym)
   low = (0..3).map { |n| probe(recv, sym, n, block: block) }
   min = low.index(:ok)
   return nil if min.nil?  # needs > 3 required args: not on this surface
@@ -207,8 +216,16 @@ end
 src = File.read(SOURCE)
 ver = RUBY_DESCRIPTION.split(" (").first
 
+# Probe inside a throwaway directory: the Pathname receiver is the relative
+# path "a", and its rmtree / delete / mkdir / write probes act on the real
+# filesystem -- run anywhere else they would destroy an unrelated "./a".
+require "tmpdir"
+PROBE_DIR = Dir.mktmpdir("arity_probe")
+Dir.chdir(PROBE_DIR)
+
 inst = []
-INSTANCE_RECEIVERS.each do |cls, recv|
+INSTANCE_RECEIVERS.each do |cls, thunk|
+  recv = thunk.call
   meths = recv.public_methods.map(&:to_s).sort - INSTANCE_METHOD_SKIP
   # Object's universal surface is carried by the "Object" rows; the per-class
   # rows keep only what the class itself (or its non-Object ancestry) defines,
@@ -218,7 +235,7 @@ INSTANCE_RECEIVERS.each do |cls, recv|
     meths -= universal.map(&:to_s) - recv.class.instance_methods(false).map(&:to_s)
   end
   meths.each do |m|
-    s = full_spec_for(recv, m)
+    s = full_spec_for(thunk, m)
     inst << [cls, m, *s] if s
   end
 end
@@ -236,9 +253,10 @@ inst_out = render("sp_builtin_arity_spec_tbl", inst_hdr, inst)
 
 cm = []
 CLASS_TARGETS.each do |cls, meths|
-  recv = Object.const_get(cls)
+  const = Object.const_get(cls)
+  thunk = -> { const }
   meths.each do |m|
-    s = full_spec_for(recv, m)
+    s = full_spec_for(thunk, m)
     cm << [cls, m, *s] if s
   end
 end
@@ -250,6 +268,9 @@ cm_hdr = <<~C
      SIGSEGV). */
 C
 cm_out = render("sp_builtin_cmeth_arity_spec_tbl", cm_hdr, cm)
+
+Dir.chdir("/")   # leave the probe dir so it can be removed
+FileUtils.remove_entry(PROBE_DIR) rescue nil
 
 if ARGV.include?("--write")
   wrote = []

@@ -1604,7 +1604,11 @@ int emit_array_call(Compiler *c, int id, Buf *b) {
           /* nil start / length are legal: "from the start" / "to the end" */
           buf_printf(b, " sp_int _t%d = ", ts); emit_int_expr_nilable(c, argv[1], b);
           buf_printf(b, "; if (_t%d < 0) _t%d += _t%d; if (_t%d < 0) _t%d = 0;", ts, ts, tn, ts, ts);
-          if (argc == 3) {
+          if (argc == 3 && comp_ntype(c, argv[2]) == TY_NIL) {
+            /* a nil LENGTH is "to the end": keep the array-length bound */
+            buf_puts(b, " (void)("); emit_expr(c, argv[2], b); buf_puts(b, ");");
+          }
+          else if (argc == 3) {
             int tl = ++g_tmp;
             buf_printf(b, " sp_int _t%d = ", tl); emit_int_expr_nilable(c, argv[2], b);
             /* end = start+len; negative len = no-op (empty range) */
@@ -6030,17 +6034,25 @@ int emit_scalar_call(Compiler *c, int id, Buf *b) {
                 sp_streq(name, "scan")) && argc >= 1 &&
                (comp_ntype(c, argv[0]) == TY_NIL || comp_ntype(c, argv[0]) == TY_BOOL)) {
         TyKind prty = comp_ntype(c, id);
+        int prb = ++g_tmp;
         buf_printf(b, "({ (void)(%s); ", r);
+        /* every argument evaluates in order before the raise, as a real
+           dispatch would */
         if (comp_ntype(c, argv[0]) == TY_NIL) {
-          buf_puts(b, "(void)("); emit_expr(c, argv[0], b);
-          buf_puts(b, "); sp_raise_cls(\"TypeError\", \"wrong argument type nil (expected Regexp)\");");
+          buf_puts(b, "(void)("); emit_expr(c, argv[0], b); buf_puts(b, "); ");
         } else {
-          buf_puts(b, "sp_raise_cls(\"TypeError\", (");
-          emit_expr(c, argv[0], b);
-          buf_puts(b, ") ? \"wrong argument type true (expected Regexp)\""
-                    " : \"wrong argument type false (expected Regexp)\");");
+          buf_printf(b, "int _t%d = (", prb); emit_expr(c, argv[0], b); buf_puts(b, "); ");
         }
-        buf_printf(b, " %s; })", raise_tail_value(prty));
+        for (int pa = 1; pa < argc; pa++) {
+          buf_puts(b, "(void)("); emit_expr(c, argv[pa], b); buf_puts(b, "); ");
+        }
+        if (comp_ntype(c, argv[0]) == TY_NIL)
+          buf_puts(b, "sp_raise_cls(\"TypeError\", \"wrong argument type nil (expected Regexp)\");");
+        else
+          buf_printf(b, "sp_raise_cls(\"TypeError\", _t%d"
+                        " ? \"wrong argument type true (expected Regexp)\""
+                        " : \"wrong argument type false (expected Regexp)\");", prb);
+        buf_printf(b, " %s; })", raise_tail_value_c(c, prty));
       }
       /* string methods taking a regex-literal argument route to the engine */
       else if ((sp_streq(name, "gsub") || sp_streq(name, "sub")) && argc == 2 && re_lit_index(c, argv[0]) >= 0) {
@@ -6539,17 +6551,21 @@ int emit_scalar_call(Compiler *c, int id, Buf *b) {
       else if ((sp_streq(name, "=~") || sp_streq(name, "!~")) && argc == 1 &&
                comp_ntype(c, argv[0]) == TY_NIL) {
         /* `str =~ nil` is nil in CRuby (and `!~` its negation), not a missing
-           method */
-        if (sp_streq(name, "!~")) buf_printf(b, "((void)(%s), (sp_bool)1)", r);
-        else if (comp_ntype(c, id) == TY_POLY) buf_printf(b, "((void)(%s), sp_box_nil())", r);
-        else buf_printf(b, "((void)(%s), %s)", r, raise_tail_value(comp_ntype(c, id)));
+           method; the operand still evaluates (it can be a nil-typed call) */
+        buf_printf(b, "((void)(%s), (void)(", r);
+        emit_expr(c, argv[0], b);
+        if (sp_streq(name, "!~")) buf_puts(b, "), (sp_bool)1)");
+        else if (comp_ntype(c, id) == TY_POLY) buf_puts(b, "), sp_box_nil())");
+        else buf_printf(b, "), %s)", raise_tail_value(comp_ntype(c, id)));
       }
       else if ((sp_streq(name, "=~") || sp_streq(name, "!~")) && argc == 1 &&
                comp_ntype(c, argv[0]) == TY_BOOL) {
-        buf_printf(b, "((void)(%s), sp_raise_cls(\"TypeError\", (", r);
+        /* CRuby hands the operand back to the operand's own #=~, and
+           booleans have none: NoMethodError, naming the value */
+        buf_printf(b, "((void)(%s), sp_raise_cls(\"NoMethodError\", (", r);
         emit_expr(c, argv[0], b);
-        buf_puts(b, ") ? \"type mismatch: TrueClass given\""
-                  " : \"type mismatch: FalseClass given\"), (sp_bool)0)");
+        buf_puts(b, ") ? \"undefined method '=~' for true\""
+                  " : \"undefined method '=~' for false\"), (sp_bool)0)");
       }
       else if (sp_streq(name, "b") && argc == 0) {
         /* a fresh copy, not the receiver: CRuby's #b is never frozen, and
@@ -8393,30 +8409,47 @@ int emit_object_call(Compiler *c, int id, Buf *b) {
     /* a Struct's [] / dig / deconstruct_keys validate like CRuby: a missing
        argument is ArgumentError (dig says "1+"), a nil / bool index is the
        Integer-conversion TypeError. Data keeps its own dispatch above. */
-    if (!sc->is_data && (sp_streq(name, "[]") || sp_streq(name, "dig") ||
-                         sp_streq(name, "deconstruct_keys")) && argc == 0) {
+    if (((!sc->is_data && (sp_streq(name, "[]") || sp_streq(name, "dig"))) ||
+         sp_streq(name, "deconstruct_keys")) && argc == 0) {
       TyKind z0 = comp_ntype(c, id);
       buf_puts(b, "({ (void)("); emit_expr(c, recv, b);
       buf_printf(b, "); sp_raise_cls(\"ArgumentError\","
                     " \"wrong number of arguments (given 0, expected %s)\"); %s; })",
                  sp_streq(name, "dig") ? "1+" : "1",
-                 raise_tail_value(z0));
+                 raise_tail_value_c(c, z0));
+      return 1;
+    }
+    if (!sc->is_data && sp_streq(name, "[]") && argc >= 2) {
+      TyKind za = comp_ntype(c, id);
+      buf_puts(b, "({ (void)("); emit_expr(c, recv, b); buf_puts(b, "); ");
+      for (int sa = 0; sa < argc; sa++) {
+        buf_puts(b, "(void)("); emit_boxed(c, argv[sa], b); buf_puts(b, "); ");
+      }
+      buf_printf(b, "sp_raise_cls(\"ArgumentError\","
+                    " \"wrong number of arguments (given %d, expected 1)\"); %s; })",
+                 argc, raise_tail_value_c(c, za));
       return 1;
     }
     if (!sc->is_data && (sp_streq(name, "[]") || sp_streq(name, "dig")) && argc >= 1 &&
         (comp_ntype(c, argv[0]) == TY_NIL || comp_ntype(c, argv[0]) == TY_BOOL)) {
       TyKind z1 = comp_ntype(c, id);
+      int zb = ++g_tmp;
       buf_puts(b, "({ (void)("); emit_expr(c, recv, b); buf_puts(b, "); ");
       if (comp_ntype(c, argv[0]) == TY_NIL) {
-        buf_puts(b, "(void)("); emit_expr(c, argv[0], b);
-        buf_puts(b, "); sp_raise_cls(\"TypeError\", \"no implicit conversion from nil to integer\");");
+        buf_puts(b, "(void)("); emit_expr(c, argv[0], b); buf_puts(b, "); ");
       } else {
-        buf_puts(b, "sp_raise_cls(\"TypeError\", (");
-        emit_expr(c, argv[0], b);
-        buf_puts(b, ") ? \"no implicit conversion of true into Integer\""
-                  " : \"no implicit conversion of false into Integer\");");
+        buf_printf(b, "int _t%d = (", zb); emit_expr(c, argv[0], b); buf_puts(b, "); ");
       }
-      buf_printf(b, " %s; })", raise_tail_value(z1));
+      for (int sa = 1; sa < argc; sa++) {   /* dig's trailing keys evaluate too */
+        buf_puts(b, "(void)("); emit_boxed(c, argv[sa], b); buf_puts(b, "); ");
+      }
+      if (comp_ntype(c, argv[0]) == TY_NIL)
+        buf_puts(b, "sp_raise_cls(\"TypeError\", \"no implicit conversion from nil to integer\");");
+      else
+        buf_printf(b, "sp_raise_cls(\"TypeError\", _t%d"
+                      " ? \"no implicit conversion of true into Integer\""
+                      " : \"no implicit conversion of false into Integer\");", zb);
+      buf_printf(b, " %s; })", raise_tail_value_c(c, z1));
       return 1;
     }
     if (sp_streq(name, "dig") && argc >= 1) {
@@ -8861,8 +8894,18 @@ int emit_object_call(Compiler *c, int id, Buf *b) {
       int reader_wins = comp_resolve_member(c, cid, name, 0, &mdc, NULL) == SP_MEMBER_ATTR;
       if (reader_wins) {
         /* a reader is zero-arity: excess arguments are CRuby's ArgumentError
-           (a Struct member read with an argument answered the member) */
-        if (argc > 0) {
+           (a Struct member read with an argument answered the member). A
+           splat / keyword-hash / forwarding argument can be empty at run
+           time -- zero arguments to CRuby -- so those stay unguarded. */
+        int rdr_dynamic = 0;
+        for (int ra = 0; ra < argc; ra++) {
+          const char *rat = nt_type(nt, argv[ra]);
+          if (rat && (sp_streq(rat, "SplatNode") || sp_streq(rat, "KeywordHashNode") ||
+                      sp_streq(rat, "ForwardingArgumentsNode") ||
+                      sp_streq(rat, "BlockArgumentNode")))
+            { rdr_dynamic = 1; break; }
+        }
+        if (argc > 0 && !rdr_dynamic) {
           TyKind rrty2 = comp_ntype(c, id);
           buf_puts(b, "({ (void)("); emit_expr(c, recv, b); buf_puts(b, "); ");
           for (int ra = 0; ra < argc; ra++) {
@@ -8870,7 +8913,7 @@ int emit_object_call(Compiler *c, int id, Buf *b) {
           }
           buf_printf(b, "sp_raise_cls(\"ArgumentError\","
                         " \"wrong number of arguments (given %d, expected 0)\"); %s; })",
-                     argc, raise_tail_value(rrty2));
+                     argc, raise_tail_value_c(c, rrty2));
           return 1;
         }
         const char *rn2 = comp_resolve_alias(c, cid, name);
