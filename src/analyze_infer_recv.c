@@ -1272,6 +1272,24 @@ int infer_object_call(Compiler *c, int id, TyKind rt, TyKind *out) {
   if (recv >= 0 && ty_is_object(rt)) {
     int cid = ty_object_class(rt);
     ClassInfo *cls = &c->classes[cid];
+    /* The class HAS subclasses and cannot answer this name, while some subclass
+       can: a slot typed as that class is only its STATIC type -- an inherited
+       method storing `self` types it as the class that DEFINED the method --
+       so the call dispatches at run time and its value is that union (#4023).
+       The emitter routes the same shape through the poly dispatch. */
+    if (comp_method_in_chain(c, cid, name, NULL) < 0 &&
+        !comp_reader_in_chain(c, cid, name, NULL) && !cls->is_native_class) {
+      int sub_answers = 0;
+      for (int k = 0; k < c->nclasses && !sub_answers; k++) {
+        if (k == cid) continue;
+        int anc = 0;
+        for (int p2 = c->classes[k].parent; p2 >= 0; p2 = c->classes[p2].parent)
+          if (p2 == cid) { anc = 1; break; }
+        if (anc && (comp_method_in_chain(c, k, name, NULL) >= 0 ||
+                    comp_reader_in_chain(c, k, name, NULL))) sub_answers = 1;
+      }
+      if (sub_answers) { *out = TY_POLY; return 1; }
+    }
     if (sp_streq(name, "is_a?") || sp_streq(name, "kind_of?") || sp_streq(name, "instance_of?") ||
         sp_streq(name, "respond_to?") || sp_streq(name, "==") || sp_streq(name, "!=") ||
         sp_streq(name, "nil?") || sp_streq(name, "equal?") || sp_streq(name, "frozen?")) { *out = TY_BOOL; return 1; }

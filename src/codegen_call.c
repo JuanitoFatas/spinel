@@ -546,6 +546,7 @@ int poly_block_call_needs_dispatch(Compiler *c, int id) {
 
 /* Neither class is the other, nor an ancestor of the other. Such a pair has no
    conversion: their structs share no prefix by construction. */
+static int g_subdispatch_id = -1;   /* the call currently re-entered as poly (#4023) */
 static int obj_class_unrelated(Compiler *c, int a, int b) {
   if (a < 0 || b < 0 || a == b) return 0;
   for (int k = c->classes[a].parent; k >= 0; k = c->classes[k].parent) if (k == b) return 0;
@@ -10028,6 +10029,44 @@ int emit_unresolved_call(Compiler *c, int id, Buf *b) {
           buf_printf(b, "%s) : %s; })", raise,
                      (eb2.p && eb2.p[0]) ? eb2.p : raise);
           free(eb2.p);
+          return 1;
+        }
+      }
+      /* The receiver's static class HAS subclasses and cannot answer this
+         name, while some subclass can. A slot typed as that class is only its
+         STATIC type -- an inherited method storing `self` types it as the
+         class that DEFINED the method -- so the object may be any subclass and
+         the call has to dispatch at run time rather than be refused (#4023).
+         Box the receiver and re-enter: the poly path emits the class switch,
+         whose default raises exactly the NoMethodError this site would have. */
+      if (recv >= 0 && nm && ty_is_object(grt) && !comp_ty_value_obj(c, grt) &&
+          g_n_argov < MAX_ARG_OVERRIDE && g_subdispatch_id != id) {
+        int bcid = ty_object_class(grt);
+        int sub_answers = 0;
+        for (int k = 0; k < c->nclasses && bcid >= 0 && !sub_answers; k++) {
+          if (k == bcid) continue;
+          int anc = 0;
+          for (int p2 = c->classes[k].parent; p2 >= 0; p2 = c->classes[p2].parent)
+            if (p2 == bcid) { anc = 1; break; }
+          if (anc && (comp_method_in_chain(c, k, nm, NULL) >= 0 ||
+                      comp_reader_in_chain(c, k, nm, NULL))) sub_answers = 1;
+        }
+        if (sub_answers) {
+          int tsd = ++g_tmp;
+          Buf rb9; memset(&rb9, 0, sizeof rb9); emit_boxed(c, recv, &rb9);
+          emit_indent(g_pre, g_indent);
+          buf_printf(g_pre, "sp_RbVal _t%d = %s; SP_GC_ROOT_RBVAL(_t%d);\n",
+                     tsd, rb9.p ? rb9.p : "sp_box_nil()", tsd);
+          free(rb9.p);
+          g_argov_node[g_n_argov] = recv;
+          snprintf(g_argov_text[g_n_argov], sizeof g_argov_text[0], "_t%d", tsd);
+          g_n_argov++;
+          TyKind svsd = c->ntype[recv]; c->ntype[recv] = TY_POLY;
+          int svid = g_subdispatch_id; g_subdispatch_id = id;
+          emit_call(c, id, b);
+          g_subdispatch_id = svid;
+          c->ntype[recv] = svsd;
+          g_n_argov--;
           return 1;
         }
       }
