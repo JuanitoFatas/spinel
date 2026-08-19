@@ -1925,8 +1925,12 @@ void rename_shadowing_block_params(Compiler *c) {
     const char *locs = nt_str(nt, L, "locals");
     int have_locals = locs && *locs;
     if (rn == 0 && ne == 0 && !have_locals) continue;
+    /* An EMPTY body (`tap do |a| end`) still binds the parameter, so it still
+       collides: skipping it left the two names sharing one C slot, and the
+       slot took the inner block's type while the outer block assigned its own
+       (#4027). There is simply nothing inside to rewrite -- both helpers below
+       take a negative body as the empty subtree it is. */
     int body = nt_ref(nt, L, "body");
-    if (body < 0) continue;
     gen++;
     blkp_stamp_subtree(nt, body, inbody, gen);
     for (int ii = 0; ii < rn + ne; ii++) {
