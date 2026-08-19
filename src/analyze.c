@@ -9679,6 +9679,34 @@ static int seed_ptr_kind(TyKind t) {
   return 0;
 }
 
+/* The same judgement for a seeded RETURN, which is decidable in two more
+   cases than an ivar assignment. A seeded return converts NOTHING: an object
+   defining #to_h or #to_str placed in a Hash or String slot is the same C
+   error as one defining neither (verified), so a user object crossing into a
+   container or String slot is as decidable as an Array is, and a by-value
+   object -- which the shared family function leaves alone because it is
+   neither a scalar nor a pointer -- is decidable too. Two OBJECTS still stay
+   unjudged: a subclass in an ancestor's slot is legitimate. */
+static int seed_ret_family(Compiler *c, TyKind t) {
+  int f = seed_repr_family(c, t);
+  if (f) return f;
+  return ty_is_object(t) ? 3 : 0;
+}
+/* ty_name has no spelling for a user class (it answers "?"), which is exactly
+   the half of the message that has to be readable here. */
+static const char *seed_ty_name(Compiler *c, TyKind t) {
+  if (ty_is_object(t)) {
+    int cid = ty_object_class(t);
+    if (cid >= 0 && cid < c->nclasses && c->classes[cid].name) return c->classes[cid].name;
+  }
+  const char *n = ty_name(t);
+  return n ? n : "?";
+}
+static int seed_ret_kind(TyKind t) {
+  int k = seed_ptr_kind(t);
+  return k ? k : (ty_is_object(t) ? 4 : 0);
+}
+
 /* An --rbs seed the program statically contradicts.
    A seed is trusted, so codegen narrows whatever arrives into the pinned slot
    and a wrong one reinterprets the value rather than converting it. Where both
@@ -9726,6 +9754,59 @@ static void check_seed_contradictions(Compiler *c) {
             file, ln, nm, ty_name(slot), ty_name(val));
     exit(1);
   }
+  /* The same contradiction on a RETURN. A seeded return is trusted, so the
+     emitted function carries the pinned C type and the body's value is placed
+     in it as-is: a String body under a `-> Hash[...]` seed returns a char* from
+     a function typed sp_SymPolyHash*, which only the C compiler used to report
+     -- against generated code, and in its voice rather than spinel's (#4005).
+     Same judgement as the ivar rule above: decidable only where both sides are
+     concretely typed and their representations cannot convert. */
+  for (int s = 0; s < c->nscopes; s++) {
+    Scope *sc = &c->scopes[s];
+    if (!sc->ret_rbs_seeded || sc->body < 0 || !sc->reachable) continue;
+    TyKind slot = sc->ret;
+    /* every value the method can answer with: the body's tail, and each
+       explicit return inside this scope */
+    int sites[64]; int nsites = 0;
+    sites[nsites++] = sc->body;
+    for (int id = 0; id < nt->count && nsites < 64; id++) {
+      if (nt_kind(nt, id) != NK_ReturnNode) continue;
+      if (c->nscope[id] != s) continue;
+      int rv = nt_ref(nt, id, "arguments");
+      if (rv < 0) continue;
+      int an = 0; const int *av = nt_arr(nt, rv, "arguments", &an);
+      if (av && an == 1) sites[nsites++] = av[0];
+    }
+    for (int k = 0; k < nsites; k++) {
+      TyKind val = infer_type(c, sites[k]);
+      int fs = seed_ret_family(c, slot), fv = seed_ret_family(c, val);
+      if (!fs || !fv) continue;
+      if (fs == fv) {
+        int ks = seed_ret_kind(slot), kv2 = seed_ret_kind(val);
+        if (fs != 2 || !ks || !kv2 || ks == kv2) continue;
+      }
+      int ln  = (int)nt_int(nt, sites[k], "node_line", 0);
+      int fid = (int)nt_int(nt, sites[k], "node_file", 0);
+      const char *file = nt_file_path(nt, fid);
+      if (!file || !*file) file = nt->source_file;
+      if (!file || !*file) file = "source.rb";
+      const char *cn = (sc->class_id >= 0 && sc->class_id < c->nclasses)
+                         ? c->classes[sc->class_id].name : NULL;
+      char pos[1200];
+      if (ln > 0) snprintf(pos, sizeof pos, "%s:%d: ", file, ln);
+      else        snprintf(pos, sizeof pos, "%s: ", file);
+      fprintf(stderr,
+              "spinel: %s--rbs seed contradicted: %s%s%s is declared to return "
+              "%s but this returns %s\n"
+              "  A seed is trusted, so the emitted function carries the declared type "
+              "and the value is placed in it rather than converted.\n"
+              "  Fix the signature or the body.\n",
+              pos, cn ? cn : "", cn ? "#" : "", sc->name ? sc->name : "?",
+              seed_ty_name(c, slot), seed_ty_name(c, val));
+      exit(1);
+    }
+  }
+
   /* The same contradiction one step earlier: an argument whose type is
      concretely known, handed to a parameter the seed pinned to a type in the
      other representation family. Codegen trusts the pin, so the emitted C
