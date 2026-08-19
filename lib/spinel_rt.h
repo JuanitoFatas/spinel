@@ -3071,6 +3071,13 @@ static sp_RbVal sp_poly_shl(sp_RbVal a, sp_RbVal b) {
         sp_String_append_bin((sp_String *)a.v.p, _bs.v.s ? _bs.v.s : sp_str_empty);
         return a;
       }
+      /* an Integer operand appends its CODEPOINT, and one outside the range is
+         a RangeError -- the fallthrough read the receiver as a number and
+         answered an integer shift instead (#4015) */
+      if (b.tag == SP_TAG_INT || b.tag == SP_TAG_BIGINT) {
+        sp_String_append_bin((sp_String *)a.v.p, sp_int_codepoint_to_str(sp_poly_to_i(b)));
+        return a;
+      }
       return sp_poly_binop_bad("<<", a, b);
     }
     if (a.cls_id == SP_BUILTIN_IO && a.v.p) {
@@ -3099,6 +3106,13 @@ static sp_RbVal sp_poly_shl(sp_RbVal a, sp_RbVal b) {
   /* String#<< appends (sp_str_concat treats NULL as the empty string) */
   if (a.tag == SP_TAG_STR && b.tag == SP_TAG_STR)
     return sp_box_str(sp_str_concat(a.v.s, b.v.s));
+  if (a.tag == SP_TAG_STR && sp_poly_is_strbuf(b))
+    return sp_box_str(sp_str_concat(a.v.s, sp_String_cstr((sp_String *)b.v.p)));
+  /* A String receiver with an Integer operand appends that CODEPOINT. Reading
+     the receiver as a number instead answered an integer shift, so `s << -1`
+     gave 0 where CRuby raises RangeError (#4015). */
+  if (a.tag == SP_TAG_STR && (b.tag == SP_TAG_INT || b.tag == SP_TAG_BIGINT))
+    return sp_box_str(sp_str_concat(a.v.s, sp_int_codepoint_to_str(sp_poly_to_i(b))));
   /* Integer#<<. A Bignum receiver shifts as a Bignum; an int receiver whose
      result escapes the word promotes under --int-overflow=promote and
      raises/wraps per mode otherwise (sp_int_shl carries those semantics). */
