@@ -1262,6 +1262,20 @@ const char *poly_enum_op_for(const char *name) {
    for the builtin arm, which then raised NoMethodError on a genuine Array or
    Hash (#3459). Names the surface cannot serve are left out: widening them
    would change the type without changing the answer. */
+/* The same idea for the NUMERIC surface, minus the container precondition: a
+   boxed receiver can always be a number, so a class defining `abs` (or `round`,
+   `succ`, ...) owns the name's dispatch and an Integer arriving there answers
+   for itself through the runtime helper. The call's type is that union, not
+   the user method's return -- typing it as the user's made the builtin arm's
+   boxed answer read as that object, and the program segfaulted (#4012). */
+int poly_numeric_read_p(const char *name) {
+  static const char *const N[] = {
+    "abs", "round", "succ", "next", "pred", "ceil", "floor", "truncate", NULL };
+  if (!name) return 0;
+  for (int i = 0; N[i]; i++) if (sp_streq(name, N[i])) return 1;
+  return 0;
+}
+
 int poly_container_read_p(const char *name) {
   static const char *const N[] = {
     "first", "last", "keys", "values", "min", "max", "sum", "sort",
