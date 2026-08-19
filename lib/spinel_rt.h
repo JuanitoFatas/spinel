@@ -3912,15 +3912,62 @@ else {
     if (conv == 'd' || conv == 'i' || conv == 'x' || conv == 'X' || conv == 'o' ||
         conv == 'b' || conv == 'B') {
       long long lv = 0;
+      /* A BIGNUM does not fit the long long the conversions below format, and
+         truncating it printed 0 for every value past 64 bits. Render its own
+         digits in the requested base and pass them through the spec as a
+         string, which keeps the width and left-justify flags (#4010). */
+      if (v.tag == SP_TAG_BIGINT && v.v.p) {
+        sp_int base = (conv == 'x' || conv == 'X') ? 16 : (conv == 'o') ? 8
+                    : (conv == 'b' || conv == 'B') ? 2 : 10;
+        const char *bs = sp_bigint_to_s_base((sp_Bigint *)v.v.p, base);
+        if (!bs) bs = "0";
+        /* The sign and base flags belong to the digits, not to the %s that
+           carries the width: compose them in, then keep only the width and
+           left-justify flags in the spec printf sees. */
+        int neg_b = bs[0] == '-';
+        char pre[8]; int pl = 0;
+        if (!neg_b) for (int fi = 1; fi < sl - 1; fi++) {
+          if (spec[fi] == '+') { pre[pl++] = '+'; break; }
+          if (spec[fi] == ' ') { pre[pl++] = ' '; break; }
+          if (spec[fi] != '-' && spec[fi] != '#' && spec[fi] != '0') break;
+        }
+        for (int fi = 1; fi < sl - 1; fi++) {
+          if (spec[fi] == '#') {
+            if (base == 16) { pre[pl++] = '0'; pre[pl++] = (conv == 'X') ? 'X' : 'x'; }
+            else if (base == 8) pre[pl++] = '0';
+            else if (base == 2) { pre[pl++] = '0'; pre[pl++] = (conv == 'B') ? 'B' : 'b'; }
+            break;
+          }
+          if (spec[fi] < '0' || spec[fi] > '9') continue;
+          break;
+        }
+        pre[pl] = 0;
+        char digits[512];
+        snprintf(digits, sizeof digits, "%s%s%s", neg_b ? "-" : "", pre, bs + (neg_b ? 1 : 0));
+        char bfmt[80]; int bl = 0;
+        bfmt[bl++] = '%';
+        for (int fi = 1; fi < sl - 1; fi++)
+          if (spec[fi] == '-' || (spec[fi] >= '0' && spec[fi] <= '9' && !(bl == 1 && spec[fi] == '0')))
+            bfmt[bl++] = spec[fi];
+        bfmt[bl++] = 's'; bfmt[bl] = 0;
+        wn = snprintf(tmp, sizeof(tmp), bfmt, digits);
+        if (conv == 'X') for (char *q = tmp; *q; q++) if (*q >= 'a' && *q <= 'f') *q -= 32;
+      }
+      else {
       if (v.tag == SP_TAG_INT) lv = (long long)v.v.i;
       else if (v.tag == SP_TAG_FLT) lv = (long long)v.v.f;
       /* a String argument converts the way Integer() does, so unparseable text
          is an ArgumentError rather than a silent zero (#3554) */
       else if (v.tag == SP_TAG_STR && v.v.s) lv = (long long)sp_str_to_i_strict(v.v.s);
+      /* Anything else is not a number at all, and formatting it as 0 was a
+         quiet wrong answer where CRuby refuses (#4010). Same wording and same
+         value spelling as Integer() uses. */
+      else { free(buf); sp_raise_cls("TypeError", sp_sprintf("can't convert %s into Integer", sp_convert_src_name(v))); }
       /* the non-decimal bases go through our own formatter: C's printf drops
          the '+' and ' ' flags on them and has no two's-complement form */
       if (conv == 'd' || conv == 'i') wn = snprintf(tmp, sizeof(tmp), fmt_use, lv);
       else wn = sp_fmt_binary(spec, sl, conv, lv, tmp, sizeof(tmp));
+      }
     }
 else if (conv == 'f' || conv == 'e' || conv == 'E' || conv == 'g' || conv == 'G' ||
          conv == 'a' || conv == 'A') {
@@ -3928,6 +3975,11 @@ else if (conv == 'f' || conv == 'e' || conv == 'E' || conv == 'g' || conv == 'G'
       if (v.tag == SP_TAG_FLT) dv = v.v.f;
       else if (v.tag == SP_TAG_INT) dv = (double)v.v.i;
       else if (sp_poly_is_rational(v)) dv = sp_poly_to_f_with_rational(v);
+      else if (v.tag == SP_TAG_BIGINT) dv = sp_poly_to_f(v);
+      /* a String converts the way Float() does; anything else is not a number
+         and CRuby refuses rather than formatting a zero (#4010) */
+      else if (v.tag == SP_TAG_STR) dv = (double)sp_str_to_f_strict(v.v.s ? v.v.s : sp_str_empty);
+      else { free(buf); sp_raise_cls("TypeError", sp_sprintf("can't convert %s into Float", sp_convert_src_name(v))); }
       /* Ruby prints non-finite floats as Inf/-Inf/NaN (C printf lowercases) */
       if (!isfinite(dv)) wn = snprintf(tmp, sizeof(tmp), "%s", isnan(dv) ? "NaN" : dv > 0 ? "Inf" : "-Inf");
       /* pinned "C" locale so the decimal point is always '.', not the process
