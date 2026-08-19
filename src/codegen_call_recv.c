@@ -2187,9 +2187,8 @@ int emit_array_call(Compiler *c, int id, Buf *b) {
         if (infer_type(c, argv[0]) == TY_POLY) {
           /* sp_poly_to_i, not a raw `.v.i`: the union read assumed the box
              held an Integer, so a boxed user object indexed by its pointer
-             bits and the read answered a wrong element in silence. The
-             conversion keeps the boxed-Integer case inline. */
-          buf_puts(b, "sp_poly_arg_int(");
+             bits and the read answered a wrong element in silence. */
+          buf_puts(b, "sp_poly_to_i(");
           emit_expr(c, argv[0], b);
           buf_puts(b, ")");
         }
@@ -3245,7 +3244,7 @@ else {
           buf_puts(b, "sp_poly_to_f("); emit_expr(c, argv[0], b); buf_puts(b, ")");
         }
         else if (rt == TY_INT_ARRAY && init_t == TY_POLY) {
-          buf_puts(b, "sp_poly_arg_int("); emit_expr(c, argv[0], b); buf_puts(b, ")");
+          buf_puts(b, "sp_poly_to_i("); emit_expr(c, argv[0], b); buf_puts(b, ")");
         }
         else {
           emit_expr(c, argv[0], b);
@@ -10900,7 +10899,10 @@ int emit_poly_call(Compiler *c, int id, Buf *b) {
         for (int k = 0; k < c->nclasses && !has_user_conv; k++)
           if (comp_method_in_chain(c, k, name, NULL) >= 0) has_user_conv = 1;
       if (!has_user_conv) {
-        buf_printf(b, "%s(", sp_streq(name, "to_i") ? "sp_poly_to_i" : "sp_poly_to_f");
+        /* sp_poly_to_i_meth: this is the METHOD, named by the program, so an
+           object without it is NoMethodError rather than the conversion
+           protocol's TypeError. */
+        buf_printf(b, "%s(", sp_streq(name, "to_i") ? "sp_poly_to_i_meth" : "sp_poly_to_f");
         emit_expr(c, recv, b); buf_puts(b, ")"); return 1;
       }
     }

@@ -2045,6 +2045,7 @@ static SP_INLINE sp_int sp_poly_to_i(sp_RbVal v) {
   if (v.tag == SP_TAG_FLT) return (sp_int)v.v.f;
   return sp_poly_to_i_cold(v);
 }
+static SP_NOINLINE sp_int sp_poly_arg_int_obj(sp_RbVal v);   /* the object arm, below */
 static SP_NOINLINE sp_int sp_poly_to_i_cold(sp_RbVal v) {
   if (v.tag == SP_TAG_BIGINT) return (sp_int)sp_bigint_to_int((sp_Bigint *)v.v.p);
   if (v.tag == SP_TAG_STR) return (sp_int)strtoll(v.v.s ? v.v.s : sp_str_empty, NULL, 10);
@@ -2054,13 +2055,25 @@ static SP_NOINLINE sp_int sp_poly_to_i_cold(sp_RbVal v) {
   if (v.tag == SP_TAG_OBJ && v.cls_id == SP_BUILTIN_BIG_RATIONAL) return (sp_int)sp_brat_to_f((sp_BigRational *)v.v.p);
   /* a Time read out of a container: its to_i is the epoch second (#3699) */
   if (v.tag == SP_TAG_OBJ && v.cls_id == SP_BUILTIN_TIME && v.v.p) return (sp_int)((sp_Time *)v.v.p)->tv_sec;
-  /* A user object reads as 0 here, and deliberately: sp_poly_to_i is also the
-     runtime's speculative int-slot filler (a curry collects boxed arguments
-     and fills the scalar slots its target MIGHT read; reduce seeds an int
-     accumulator the same way), so it must answer for a value that is not a
-     number at all. The conversion protocol lives in sp_poly_arg_int, which
-     the emitter uses where the slot really is an Integer. */
+  /* A USER object (builtin-backed ones carry a negative cls_id and are handled
+     above) converts through CRuby's implicit conversion protocol: its class's
+     compiled #to_int, or a TypeError. It reads as a plain 0 nowhere -- that
+     was the silent wrong answer. Living in the COLD half is what makes this
+     free: an object never reaches sp_poly_to_i's inlined arms anyway, so the
+     per-iteration cost of an index narrowing is unchanged. Callers that fill
+     an int slot SPECULATIVELY -- a curry filling the scalar slots its target
+     might read, a reduce seeding an int accumulator -- must not raise for a
+     value that was never meant to be a number, and use sp_poly_slot_i. */
+  if (v.tag == SP_TAG_OBJ && v.cls_id >= 0) return sp_poly_arg_int_obj(v);
   return 0;
+}
+
+/* sp_poly_to_i without the conversion protocol: this slot MIGHT not be read as
+   a number, so an object is not an error here and reads as 0. Only for slots
+   filled speculatively, never for one the program really indexes by. */
+static sp_int sp_poly_slot_i(sp_RbVal v) {
+  if (v.tag == SP_TAG_OBJ && v.cls_id >= 0) return 0;
+  return sp_poly_to_i(v);
 }
 
 /* CRuby's implicit conversion protocol on a BOXED user object: it converts
@@ -2072,22 +2085,6 @@ static SP_NOINLINE sp_int sp_poly_to_i_cold(sp_RbVal v) {
    that, and the ordinary conversions already know them (Time, Rational, ...).
    Both are cold by construction: the object case is the rare one, and keeping
    it off sp_poly_to_i's inlined fast path is worth 5-7% on optcarrot. */
-static SP_NOINLINE sp_int sp_poly_arg_int_obj(sp_RbVal v);
-static SP_NOINLINE sp_int sp_poly_arg_int_cold(sp_RbVal v);
-/* A boxed value entering an Integer slot the emitter knows to BE an Integer
-   slot (a builtin's argument, an index, a narrowing into an int local). Same
-   inline shape as sp_poly_to_i -- the object test sits in the cold half,
-   because one extra branch in this form cost optcarrot 5-7% through the
-   per-pixel sprite loop. */
-static SP_INLINE sp_int sp_poly_arg_int(sp_RbVal v) {
-  if (v.tag == SP_TAG_INT || v.tag == SP_TAG_SYM) return v.v.i;
-  if (v.tag == SP_TAG_FLT) return (sp_int)v.v.f;
-  return sp_poly_arg_int_cold(v);
-}
-static SP_NOINLINE sp_int sp_poly_arg_int_cold(sp_RbVal v) {
-  if (v.tag == SP_TAG_OBJ && v.cls_id >= 0) return sp_poly_arg_int_obj(v);
-  return sp_poly_to_i_cold(v);
-}
 static SP_NOINLINE sp_int sp_poly_arg_int_obj(sp_RbVal v) {
   if (v.v.p && sp_obj_to_int_fn) {
     int ok = 0;
@@ -2317,6 +2314,17 @@ static sp_RbVal sp_poly_succ_m(sp_RbVal v, sp_bool allow_enum) {
   sp_raise_nomethod(sp_nomethod_msg(allow_enum ? "next" : "succ", v));
   return sp_box_nil();
 }
+/* An EXPLICIT `.to_i` on a boxed receiver, as opposed to a slot that WANTS an
+   Integer: the program asked for the method by name, so a user object whose
+   class does not define it is CRuby's NoMethodError -- not the implicit
+   conversion protocol's TypeError, which sp_poly_to_i raises for the slot
+   case. A class that does define #to_i never reaches here (poly dispatch gives
+   it its own arm), and a builtin receiver carries a negative cls_id. */
+static sp_int sp_poly_to_i_meth(sp_RbVal v) {
+  if (v.tag == SP_TAG_OBJ && v.cls_id >= 0) sp_raise_nomethod(sp_nomethod_msg("to_i", v));
+  return sp_poly_to_i(v);
+}
+
 /* Like sp_nomethod_msg, but also stages the failed call's argument list for
    NoMethodError#args (#2837). */
 SP_COLD static const char *sp_nomethod_msg_args(const char *m, sp_RbVal v, sp_int n, sp_RbVal *args) {
@@ -9227,7 +9235,7 @@ static void *sp_proc_compose_v(void *outer, void *inner) {
 /* The int slots feed a target with scalar-int params, which reads them
    directly rather than from the boxed side-channel. */
 static void sp_curry_int_slots(sp_Curry *c, sp_int *slots) {
-  for (sp_int i = 0; i < c->nargs && i < 16; i++) slots[i] = sp_poly_to_i(c->args[i]);
+  for (sp_int i = 0; i < c->nargs && i < 16; i++) slots[i] = sp_poly_slot_i(c->args[i]);
 }
 static sp_int sp_curry_to_int(sp_Curry *c) {
   if (!c || !c->target) return 0;

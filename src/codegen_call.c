@@ -1160,8 +1160,12 @@ int diagnose_eval_call(Compiler *c, int id) {
 void emit_proc_ret_unbox(Compiler *c, TyKind rty, Buf *b) {
   if (rty == TY_POLY || rty == TY_UNKNOWN) { buf_puts(b, "_sp_proc_poly_ret"); return; }
   if (rty == TY_FLOAT)  { buf_puts(b, "sp_poly_to_f(_sp_proc_poly_ret)"); return; }
-  if (rty == TY_SYMBOL) { buf_puts(b, "(sp_sym)sp_poly_to_i(_sp_proc_poly_ret)"); return; }
-  if (proc_slot_is_direct(rty)) { buf_puts(b, "sp_poly_to_i(_sp_proc_poly_ret)"); return; }  /* int/bool/nil */
+  /* sp_poly_slot_i: this coercion is SPECULATIVE (see the comment above -- the
+     proc's inferred return is what the call site wants, not what the body
+     actually hands back, and a statement-position call discards it), so an
+     object here is not the program indexing by an object and must not raise. */
+  if (rty == TY_SYMBOL) { buf_puts(b, "(sp_sym)sp_poly_slot_i(_sp_proc_poly_ret)"); return; }
+  if (proc_slot_is_direct(rty)) { buf_puts(b, "sp_poly_slot_i(_sp_proc_poly_ret)"); return; }  /* int/bool/nil */
   if (rty == TY_STRING) { buf_puts(b, "_sp_proc_poly_ret.v.s"); return; }
   if (rty == TY_RANGE)  { buf_puts(b, "(*(sp_Range *)_sp_proc_poly_ret.v.p)"); return; }
   if (rty == TY_TIME)   { buf_puts(b, "(*(sp_Time *)_sp_proc_poly_ret.v.p)"); return; }
@@ -1231,7 +1235,11 @@ void emit_proc_call_args(Compiler *c, int argc, const int *argv, Buf *b, int for
     for (int k = 0; k < nargs; k++) {
       TyKind at = comp_ntype(c, argv[k]);
       if (k) buf_puts(b, ", ");
-      if (at == TY_POLY) buf_printf(b, "sp_poly_to_i(_t%d)", atmp[k]);
+      /* sp_poly_slot_i: the value is published BOXED just above, and this
+         unboxed copy is read only by a callee whose parameter is concretely
+         typed -- speculative, exactly like the dead float slot below, so an
+         object here must not raise. */
+      if (at == TY_POLY) buf_printf(b, "sp_poly_slot_i(_t%d)", atmp[k]);
       else if (proc_slot_is_ptr(at) || at == TY_PROC) buf_printf(b, "(sp_int)(uintptr_t)_t%d", atmp[k]);
       else if (at == TY_FLOAT || proc_slot_via_poly(c, at)) buf_puts(b, "0");  /* rides the boxed side-channel; the sp_int slot is dead */
       else buf_printf(b, "_t%d", atmp[k]);
@@ -4555,7 +4563,7 @@ static int emit_poly_method_dispatch(Compiler *c, int id, Buf *b) {
       if (!obj_default_done && argc == 0 &&
           (sp_streq(name, "to_i") || sp_streq(name, "to_f"))) {
         char cv[64];
-        snprintf(cv, sizeof cv, "%s(_t%d)", sp_streq(name, "to_i") ? "sp_poly_to_i" : "sp_poly_to_f", tv);
+        snprintf(cv, sizeof cv, "%s(_t%d)", sp_streq(name, "to_i") ? "sp_poly_to_i_meth" : "sp_poly_to_f", tv);
         buf_printf(b, " default: _t%d = ", tr);
         if (ret == TY_POLY) emit_boxed_text(c, sp_streq(name, "to_i") ? TY_INT : TY_FLOAT, cv, b);
         else buf_puts(b, cv);

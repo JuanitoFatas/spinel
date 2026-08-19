@@ -320,9 +320,7 @@ void emit_int_expr(Compiler *c, int node, Buf *b) {
     return;
   }
   if (yield_site_type(c, node) == TY_POLY) {
-    /* sp_poly_arg_int, not sp_poly_to_i: a boxed user object in an Integer
-       slot converts through #to_int or raises, where to_i read it as 0 */
-    buf_puts(b, "sp_poly_arg_int("); emit_expr(c, node, b); buf_puts(b, ")");
+    buf_puts(b, "sp_poly_to_i("); emit_expr(c, node, b); buf_puts(b, ")");
     return;
   }
   /* A value the analysis widened to Bignum (a doubling counter, a masked

@@ -743,15 +743,14 @@ int emit_poly_rhs_coerced(Compiler *c, TyKind slot, int v, Buf *b) {
      the moment a boxed user object enters a typed slot, and reading it as 0 or
      as its #to_s rendering is the silent wrong answer. bool keeps the plain
      form -- an object in a bool slot is truthy, not a number. */
-  /* int and string carry the implicit conversion protocol, but only where the
-     program has a conversion method to reach: this narrowing is the moment a
-     boxed user object enters a typed slot (reading it as 0 / as its #to_s
-     rendering is the silent wrong answer), and it is also the one boundary
-     that can land in a hot loop. bool keeps the plain form -- an object in a
-     bool slot is truthy, not a number. */
-  const char *fn = slot == TY_INT
-                     ? (prog_has_conv_method(c, "to_int", TY_INT) ? "sp_poly_arg_int" : "sp_poly_to_i")
-                 : slot == TY_BOOL   ? "sp_poly_to_i"
+  /* The int slot needs nothing here: sp_poly_to_i carries the conversion
+     protocol in its cold half, so a narrowing is correct for free. The string
+     slot cannot -- sp_poly_to_s renders an object through #to_s, which is
+     right for interpolation -- so it takes the protocol form, and only where
+     the program defines a #to_str to reach: a narrowing lands wherever the
+     analysis put it, including a hot loop, and the test is not free there.
+     bool keeps the plain form: an object in a bool slot is truthy. */
+  const char *fn = (slot == TY_INT || slot == TY_BOOL) ? "sp_poly_to_i"
                  : slot == TY_FLOAT  ? "sp_poly_to_f"
                  : slot == TY_STRING
                      ? (prog_has_conv_method(c, "to_str", TY_STRING) ? "sp_poly_arg_str" : "sp_poly_to_s") : NULL;
