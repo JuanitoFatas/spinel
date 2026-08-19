@@ -7877,10 +7877,38 @@ static int mark_empty_hash_key_ctx(Compiler *c) {
                         idk == NK_IndexOperatorWriteNode);
     if (idk != NK_CallNode && !is_idx_write) continue;
     const char *nm = is_idx_write ? "[]" : nt_str(nt, id, "name");
+    /* `[]=` / `store` name the key in arg 0 exactly as the reads do, and say
+       the same thing about which variant the literal has to be (#4026). */
     if (!nm || (!sp_streq(nm, "fetch") && !sp_streq(nm, "[]") &&
+                !sp_streq(nm, "[]=") && !sp_streq(nm, "store") &&
                 !sp_streq(nm, "key?") && !sp_streq(nm, "has_key?") &&
                 !sp_streq(nm, "include?") && !sp_streq(nm, "dig"))) continue;
     int recv = nt_ref(nt, id, "receiver");
+    if (recv < 0 || recv >= c->node_cap) continue;
+    /* A `tap` / `then` block parameter is another name for the call's own
+       receiver, so a key operation through it says the same thing about the
+       literal that one written directly on it does. Without this the literal
+       kept the String-keyed default and an Array key went into a `const char *`
+       slot (#4026). */
+    for (int hop = 0; hop < 8 && recv >= 0 && nt_kind(nt, recv) == NK_LocalVariableReadNode; hop++) {
+      const char *rn2 = nt_str(nt, recv, "name");
+      if (!rn2) break;
+      int outer = -1;
+      for (int cid2 = 0; cid2 < nt->count; cid2++) {
+        if (nt_kind(nt, cid2) != NK_CallNode) continue;
+        const char *cn2 = nt_str(nt, cid2, "name");
+        if (!cn2 || (!sp_streq(cn2, "tap") && !sp_streq(cn2, "then") &&
+                     !sp_streq(cn2, "yield_self"))) continue;
+        int blk2 = nt_ref(nt, cid2, "block");
+        if (blk2 < 0 || nt_kind(nt, blk2) != NK_BlockNode) continue;
+        const char *p0n = block_param_name(c, blk2, 0);
+        if (!p0n || !sp_streq(p0n, rn2)) continue;
+        outer = nt_ref(nt, cid2, "receiver");
+        break;
+      }
+      if (outer < 0) break;
+      recv = outer;
+    }
     if (recv < 0 || recv >= c->node_cap) continue;
     NodeKind rk = nt_kind(nt, recv);
     int direct = (rk == NK_HashNode || rk == NK_KeywordHashNode);
@@ -7930,7 +7958,17 @@ static int mark_empty_hash_key_ctx(Compiler *c) {
              (nt_kind(nt, av[0]) == NK_ArrayNode || nt_kind(nt, av[0]) == NK_HashNode))
       want = TY_POLY_POLY_HASH;
     if (!ty_is_hash(want)) continue;
-    if (direct) { c->hash_want[recv] = want; changed = 1; continue; }
+    if (direct) {
+      if (c->hash_want[recv] != want) { c->hash_want[recv] = want; changed = 1; }
+      /* A KEY operation is stronger evidence than the bare-receiver default:
+         the literal was marked as one when it reached a block-taking method
+         (`{}.tap { |h| h[k] }`), and that mark answers STR_POLY ahead of the
+         want below, so an Array key still went into a const char * slot
+         (#4026). */
+      if (c->empty_hash_recv && recv < c->node_cap && c->empty_hash_recv[recv] &&
+          want != TY_STR_POLY_HASH) { c->empty_hash_recv[recv] = 0; changed = 1; }
+      continue;
+    }
     /* `@h = {}` in initialize, indexed with a typed key elsewhere in the same
        class: carry the context to the ivar's own empty literal, or the slot
        stays typeless and the index-write has no hash to emit against */
