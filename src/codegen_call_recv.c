@@ -437,11 +437,18 @@ int emit_array_call(Compiler *c, int id, Buf *b) {
           Buf nbB; memset(&nbB, 0, sizeof nbB);
           emit_expr(c, id, &nbB);
           nt_node_set_str((NodeTable *)nt, id, "name", SBANG[sbi].bang);
-          buf_printf(b, "const char *_t%d = %s; sp_String_set_bin(_t%d, _t%d); ",
-                     tnb, nbB.p ? nbB.p : "", tsb, tnb);
+          /* The "did it change?" test has to run BEFORE the write: _tob is
+             sp_String_cstr, a pointer INTO the buffer rather than a snapshot
+             of it, so comparing after set_bin compared the new content with
+             itself and every successful mutation answered nil (#4014). */
+          int tchg = ++g_tmp;
+          buf_printf(b, "const char *_t%d = %s; ", tnb, nbB.p ? nbB.p : "");
+          if (SBANG[sbi].nil_nc)
+            buf_printf(b, "int _t%d = !sp_str_eq(_t%d, _t%d); ", tchg, tob, tnb);
+          buf_printf(b, "sp_String_set_bin(_t%d, _t%d); ", tsb, tnb);
           free(nbB.p);
           if (SBANG[sbi].nil_nc)
-            buf_printf(b, "sp_str_eq(_t%d, _t%d) ? NULL : _t%d; })", tob, tnb, tnb);
+            buf_printf(b, "_t%d ? _t%d : NULL; })", tchg, tnb);
           else
             buf_printf(b, "_t%d; })", tnb);
           return 1;
