@@ -8359,6 +8359,14 @@ static sp_PolyArray *sp_enum_items_from(sp_RbVal v) {
         return r;
       }
     }
+    /* A user object materializes through its own #to_a (or the __enum_to_a
+       synthesized for an Enumerable that defines #each), the way sp_poly_arr_recv
+       already does. Without the arm every such object fell to the empty array
+       below, so an external enumerator over one yielded nothing (#4022). */
+    if (v.cls_id >= 0 && sp_obj_to_a_fn) {
+      sp_RbVal a = sp_obj_to_a_fn(v);
+      if (a.tag == SP_TAG_OBJ && sp_poly_is_array_kind(a.cls_id)) return sp_poly_to_poly_array(a);
+    }
   }
   return sp_PolyArray_new();
 }
