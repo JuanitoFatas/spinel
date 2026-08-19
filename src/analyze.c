@@ -13706,6 +13706,34 @@ void analyze_program(Compiler *c) {
      not something to emit a reinterpretation for. */
   mark_nullable_int_locals(c);
   mark_array_or_nil_slots(c);
+  /* A local's array KIND has to agree with what its writes actually build. A
+     value whose type widens to a poly array LATE -- a map whose block value
+     became boxed because a Proc composition widened the method it calls -- left
+     the slot at the kind it had settled on, and the assignment did not compile
+     (#4009). Widen the slot to match; the reverse never happens, since a poly
+     array is the widest kind. */
+  for (int id = 0; id < c->nt->count; id++) {
+    if (nt_kind(c->nt, id) != NK_LocalVariableWriteNode) continue;
+    const char *wn = nt_str(c->nt, id, "name");
+    int v = nt_ref(c->nt, id, "value");
+    if (!wn || v < 0) continue;
+    Scope *sc = comp_scope_of(c, id);
+    LocalVar *lv = sc ? scope_local(sc, wn) : NULL;
+    if (!lv || lv->is_param || lv->is_block_param || lv->rbs_seeded) continue;
+    if (lv->oa_pin != TY_UNKNOWN) continue;   /* a narrowed slot keeps its kind */
+    if (lv->type != TY_INT_ARRAY && lv->type != TY_FLOAT_ARRAY && lv->type != TY_STR_ARRAY) continue;
+    if (comp_ntype(c, v) != TY_POLY_ARRAY) continue;
+    /* only where the value is a BLOCK-collecting call: those build the array
+       fresh, so nothing else holds it at the old kind */
+    if (nt_kind(c->nt, v) != NK_CallNode || nt_ref(c->nt, v, "block") < 0) continue;
+    lv->type = TY_POLY_ARRAY;
+    NT_FOREACH_KIND(c->nt, NK_LocalVariableReadNode, rid) {
+      const char *n3 = nt_str(c->nt, rid, "name");
+      if (!n3 || !sp_streq(n3, wn) || comp_scope_of(c, rid) != sc) continue;
+      c->ntype[rid] = TY_POLY_ARRAY;
+    }
+  }
+
   check_seed_contradictions(c);
 
   /* A global the program only ever mentions holding nil -- `$log = nil` and
