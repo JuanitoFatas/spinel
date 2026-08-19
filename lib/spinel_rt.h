@@ -2585,6 +2585,19 @@ static sp_bool sp_poly_lt(sp_RbVal a, sp_RbVal b) { SP_POLY_USER_CMP("<"); sp_bo
 static sp_bool sp_poly_le(sp_RbVal a, sp_RbVal b) { SP_POLY_USER_CMP("<="); sp_bool comparable; sp_int cmp = sp_poly_cmp(a, b, &comparable); if (!comparable) sp_poly_cmp_fail(a, b); return cmp <= 0; }
 static sp_bool sp_poly_gt(sp_RbVal a, sp_RbVal b) { SP_POLY_USER_CMP(">"); sp_bool comparable; sp_int cmp = sp_poly_cmp(a, b, &comparable); if (!comparable) sp_poly_cmp_fail(a, b); return cmp > 0; }
 static sp_bool sp_poly_ge(sp_RbVal a, sp_RbVal b) { SP_POLY_USER_CMP(">="); sp_bool comparable; sp_int cmp = sp_poly_cmp(a, b, &comparable); if (!comparable) sp_poly_cmp_fail(a, b); return cmp >= 0; }
+/* ORDERING (min / max / sort and their _by forms), as distinct from the
+   Comparable OPERATORS above. nil defines #<=> and not #<=, so CRuby answers
+   `nil <=> nil` with 0 -- [nil, nil].min is nil, .sort is the identity, and a
+   sort key that is always nil ties everywhere -- while `nil <= nil` is a
+   NoMethodError. Only the ordering entry may accept the pair (#4006). */
+static sp_bool sp_poly_order_lt(sp_RbVal a, sp_RbVal b) {
+  if (a.tag == SP_TAG_NIL && b.tag == SP_TAG_NIL) return FALSE;
+  return sp_poly_lt(a, b);
+}
+static sp_bool sp_poly_order_gt(sp_RbVal a, sp_RbVal b) {
+  if (a.tag == SP_TAG_NIL && b.tag == SP_TAG_NIL) return FALSE;
+  return sp_poly_gt(a, b);
+}
 /* Float ** Float: CRuby promotes a negative base with a fractional exponent
    to a Complex. Spinel's float type cannot carry that, so the case raises
    loudly (Math::DomainError, the same class Math.sqrt(-1) uses) instead of
@@ -4133,12 +4146,22 @@ static sp_PolyArray *sp_PolyArray_shuffle(sp_PolyArray *a) { sp_PolyArray *b = s
 /* When sort hits an incomparable pair the result is discarded and we raise
    ArgumentError, matching CRuby. The comparator cannot raise (it would longjmp
    out of the sort), so it records the offending pair and sort_bang raises after. */
+/* The comparison ORDERING uses: sp_poly_cmp with the int-array fallback, plus
+   the nil pair. nil defines #<=> and not #<=, so CRuby answers `nil <=> nil`
+   with 0 -- [nil, nil].min is nil and .sort is the identity -- while
+   `nil <= nil` stays a NoMethodError on the operator path (#4006). */
+static sp_int sp_poly_order_cmp(sp_RbVal a, sp_RbVal b, sp_bool *ok) {
+  sp_int r = sp_poly_cmp(a, b, ok);
+  if (!*ok) r = sp_poly_cmp_int_arrays(a, b, ok);
+  if (!*ok && a.tag == SP_TAG_NIL && b.tag == SP_TAG_NIL) { *ok = TRUE; r = 0; }
+  return r;
+}
 static int _sp_sort_incomparable;
 static sp_RbVal _sp_sort_inc_a, _sp_sort_inc_b;
 static int _sp_poly_cmp_rec(const void *pa, const void *pb) {
   if (_sp_sort_incomparable) return 0;
   sp_bool ok = FALSE;
-  sp_int r = sp_poly_cmp(*(const sp_RbVal *)pa, *(const sp_RbVal *)pb, &ok);
+  sp_int r = sp_poly_order_cmp(*(const sp_RbVal *)pa, *(const sp_RbVal *)pb, &ok);
   if (!ok) { _sp_sort_incomparable = 1; _sp_sort_inc_a = *(const sp_RbVal *)pa; _sp_sort_inc_b = *(const sp_RbVal *)pb; return 0; }
   return (int)r;
 }
@@ -4179,8 +4202,7 @@ static sp_RbVal sp_PolyArray_max(sp_PolyArray *a) {sp_gc_wb((void*)a);
   sp_RbVal best = a->data[0];
   for (sp_int i = 1; i < a->len; i++) {
     sp_bool ok = FALSE;
-    sp_int r = sp_poly_cmp(a->data[i], best, &ok);
-    if (!ok) r = sp_poly_cmp_int_arrays(a->data[i], best, &ok);
+    sp_int r = sp_poly_order_cmp(a->data[i], best, &ok);
     if (!ok) sp_raise_cls("ArgumentError", sp_sprintf("comparison of %s with %s failed", sp_poly_class_name(a->data[i]), sp_cmperr_desc(best)));
     if (r > 0) best = a->data[i];
   }
@@ -4193,8 +4215,7 @@ static sp_RbVal sp_PolyArray_min(sp_PolyArray *a) {sp_gc_wb((void*)a);
   sp_RbVal best = a->data[0];
   for (sp_int i = 1; i < a->len; i++) {
     sp_bool ok = FALSE;
-    sp_int r = sp_poly_cmp(a->data[i], best, &ok);
-    if (!ok) r = sp_poly_cmp_int_arrays(a->data[i], best, &ok);
+    sp_int r = sp_poly_order_cmp(a->data[i], best, &ok);
     if (!ok) sp_raise_cls("ArgumentError", sp_sprintf("comparison of %s with %s failed", sp_poly_class_name(a->data[i]), sp_cmperr_desc(best)));
     if (r < 0) best = a->data[i];
   }
@@ -4266,7 +4287,7 @@ static void *sp_PtrArray_minmax_obj(sp_PtrArray *a, int cls_id, int want_max) {s
     sp_bool ok = FALSE;
     sp_RbVal bi = sp_box_nullable_obj(a->data[i], cls_id);
     sp_RbVal bb = sp_box_nullable_obj(best, cls_id);
-    sp_int r = sp_poly_cmp(bi, bb, &ok);
+    sp_int r = sp_poly_order_cmp(bi, bb, &ok);
     if (!ok) sp_raise_cls("ArgumentError", sp_sprintf("comparison of %s with %s failed", sp_poly_class_name(bi), sp_cmperr_desc(bb)));
     if (want_max ? (r > 0) : (r < 0)) best = a->data[i];
   }

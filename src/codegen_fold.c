@@ -1431,12 +1431,16 @@ int emit_minmax_by_expr(Compiler *c, int id, Buf *b) {
      already accepts one. Refusing it here dropped the call to the
      unresolved-call raise: NoMethodError for `min_by` on an Array (#3948). */
   int bvt_arr = ty_is_array(bvt) || ty_is_obj_array(bvt);
-  if (bvt != TY_INT && bvt != TY_FLOAT && bvt != TY_POLY &&
+  /* A key whose value IS nil types VOID/NIL, which is not a C type to hold it
+     in. It is still a key: every element ties, so CRuby answers the first one.
+     Carry it boxed, like a String or an Array key (#4006). */
+  int bvt_nil = (bvt == TY_VOID || bvt == TY_NIL);
+  if (!bvt_nil && bvt != TY_INT && bvt != TY_FLOAT && bvt != TY_POLY &&
       bvt != TY_STRING && bvt != TY_SYMBOL && !bvt_arr) return 0;
   /* A String/Symbol key orders lexicographically: box it and compare with the
      poly ordering (sp_poly_lt/gt use String#<=>). Only the plain min_by/max_by
      form is wired for it here; the count and minmax_by forms keep rejecting. */
-  int key_box = (bvt == TY_STRING || bvt == TY_SYMBOL || bvt_arr);
+  int key_box = (bvt == TY_STRING || bvt == TY_SYMBOL || bvt_arr || bvt_nil);
   TyKind bvt_slot = key_box ? TY_POLY : bvt;
   /* 2+-param block over a poly array of sub-arrays: auto-splat each element
      across the params. The winning element is stored from an element temp
@@ -1530,8 +1534,7 @@ int emit_minmax_by_expr(Compiler *c, int id, Buf *b) {
   /* No other argument shape is supported for min_by/max_by/minmax_by; reject
      loudly rather than silently returning a single winner. */
   if (mb_argc != 0) return 0;
-
-  if (is_minmax && !key_box) {
+  if (is_minmax) {
     /* track the min-keyed and max-keyed elements in one pass; yield a fresh
        same-kind [min, max] array. Strict comparisons keep the first occurrence
        of a tied key, matching Ruby. */
@@ -1542,8 +1545,13 @@ int emit_minmax_by_expr(Compiler *c, int id, Buf *b) {
     const char *edflt = et == TY_RANGE ? "(sp_Range){0}" : default_value(et);
     emit_indent(g_pre, g_indent); emit_ctype(c, et, g_pre); buf_printf(g_pre, " _t%d = %s;\n", tmin, edflt);
     emit_indent(g_pre, g_indent); emit_ctype(c, et, g_pre); buf_printf(g_pre, " _t%d = %s;\n", tmax, edflt);
-    emit_indent(g_pre, g_indent); emit_ctype(c, bvt, g_pre); buf_printf(g_pre, " _t%d = %s;\n", tbvmin, default_value(bvt));
-    emit_indent(g_pre, g_indent); emit_ctype(c, bvt, g_pre); buf_printf(g_pre, " _t%d = %s;\n", tbvmax, default_value(bvt));
+    emit_indent(g_pre, g_indent); emit_ctype(c, bvt_slot, g_pre); buf_printf(g_pre, " _t%d = %s;\n", tbvmin, default_value(bvt_slot));
+    emit_indent(g_pre, g_indent); emit_ctype(c, bvt_slot, g_pre); buf_printf(g_pre, " _t%d = %s;\n", tbvmax, default_value(bvt_slot));
+    /* a boxed best-so-far key outlives block bodies that allocate */
+    if (bvt_slot == TY_POLY) {
+      emit_indent(g_pre, g_indent); buf_printf(g_pre, "SP_GC_ROOT_RBVAL(_t%d);\n", tbvmin);
+      emit_indent(g_pre, g_indent); buf_printf(g_pre, "SP_GC_ROOT_RBVAL(_t%d);\n", tbvmax);
+    }
     emit_indent(g_pre, g_indent); buf_printf(g_pre, "int _t%d = 1;\n", tf);
     emit_indent(g_pre, g_indent); buf_printf(g_pre, "for (sp_int _t%d = 0; _t%d < sp_%sArray_length(_t%d); _t%d++) {\n", ti, ti, k, trecv, ti);
     char mmelem[24];
@@ -1554,9 +1562,18 @@ int emit_minmax_by_expr(Compiler *c, int id, Buf *b) {
       emit_autosplat_params(c, block, np_mb, telem, g_indent + 1);
       snprintf(mmelem, sizeof mmelem, "_t%d", telem);
     }
+    else if (p0) {
+      emit_indent(g_pre, g_indent + 1); buf_printf(g_pre, "lv_%s = sp_%sArray_get(_t%d, _t%d);\n", p0, k, trecv, ti);
+      snprintf(mmelem, sizeof mmelem, "lv_%s", p0);
+    }
     else {
-      if (p0) { emit_indent(g_pre, g_indent + 1); buf_printf(g_pre, "lv_%s = sp_%sArray_get(_t%d, _t%d);\n", p0, k, trecv, ti); }
-      snprintf(mmelem, sizeof mmelem, "lv_%s", p0 ? p0 : "");
+      /* `min_by { 5 }` names no parameter, so there is no lv_ to read the
+         winning element back from -- the emitted `lv_` was undeclared C. The
+         element still has to be kept; bind it to a temp. */
+      int telem0 = ++g_tmp;
+      emit_indent(g_pre, g_indent + 1); emit_ctype(c, et, g_pre);
+      buf_printf(g_pre, " _t%d = sp_%sArray_get(_t%d, _t%d);\n", telem0, k, trecv, ti);
+      snprintf(mmelem, sizeof mmelem, "_t%d", telem0);
     }
     for (int j = 0; j < bn - 1; j++) emit_stmt(c, bb[j], g_pre, g_indent + 1);
     Scope *mmsc = (p0 && !autosplat) ? comp_scope_of(c, block) : NULL;
@@ -1566,12 +1583,15 @@ int emit_minmax_by_expr(Compiler *c, int id, Buf *b) {
     int save = g_indent; g_indent++;
     Buf vb; memset(&vb, 0, sizeof vb); emit_expr(c, bb[bn - 1], &vb); g_indent = save;
     if (mmlv) mmlv->type = mmpt;
-    emit_indent(g_pre, g_indent + 1); emit_ctype(c, bvt, g_pre); buf_printf(g_pre, " _t%d = %s;\n", tcur, vb.p ? vb.p : default_value(bvt)); free(vb.p);
+    emit_indent(g_pre, g_indent + 1); emit_ctype(c, bvt_slot, g_pre); buf_printf(g_pre, " _t%d = ", tcur);
+    if (key_box) { Buf kx; memset(&kx, 0, sizeof kx); emit_boxed_text(c, bvt, vb.p ? vb.p : default_value(bvt), &kx); buf_puts(g_pre, kx.p ? kx.p : "sp_box_nil()"); free(kx.p); }
+    else buf_puts(g_pre, vb.p ? vb.p : default_value(bvt));
+    buf_puts(g_pre, ";\n"); free(vb.p);
     emit_indent(g_pre, g_indent + 1); buf_printf(g_pre, "if (_t%d) { _t%d = %s; _t%d = %s; _t%d = _t%d; _t%d = _t%d; _t%d = 0; }\n",
                tf, tmin, mmelem, tmax, mmelem, tbvmin, tcur, tbvmax, tcur, tf);
     emit_indent(g_pre, g_indent + 1);
-    if (bvt == TY_POLY) {
-      buf_printf(g_pre, "else { if (sp_poly_lt(_t%d, _t%d)) { _t%d = %s; _t%d = _t%d; } if (sp_poly_gt(_t%d, _t%d)) { _t%d = %s; _t%d = _t%d; } }\n",
+    if (bvt_slot == TY_POLY) {
+      buf_printf(g_pre, "else { if (sp_poly_order_lt(_t%d, _t%d)) { _t%d = %s; _t%d = _t%d; } if (sp_poly_order_gt(_t%d, _t%d)) { _t%d = %s; _t%d = _t%d; } }\n",
                  tcur, tbvmin, tmin, mmelem, tbvmin, tcur, tcur, tbvmax, tmax, mmelem, tbvmax, tcur);
     }
     else {
@@ -1624,9 +1644,17 @@ int emit_minmax_by_expr(Compiler *c, int id, Buf *b) {
     emit_autosplat_params(c, block, np_mb, telem, g_indent + 1);
     snprintf(mmelem, sizeof mmelem, "_t%d", telem);
   }
+  else if (p0) {
+    emit_indent(g_pre, g_indent + 1); buf_printf(g_pre, "lv_%s = sp_%sArray_get(_t%d, _t%d);\n", p0, k, trecv, ti);
+    snprintf(mmelem, sizeof mmelem, "lv_%s", p0);
+  }
   else {
-    if (p0) { emit_indent(g_pre, g_indent + 1); buf_printf(g_pre, "lv_%s = sp_%sArray_get(_t%d, _t%d);\n", p0, k, trecv, ti); }
-    snprintf(mmelem, sizeof mmelem, "lv_%s", p0 ? p0 : "");
+    /* no block parameter: the winner still has to come from somewhere (see the
+       minmax pass above) */
+    int telem0 = ++g_tmp;
+    emit_indent(g_pre, g_indent + 1); emit_ctype(c, et, g_pre);
+    buf_printf(g_pre, " _t%d = sp_%sArray_get(_t%d, _t%d);\n", telem0, k, trecv, ti);
+    snprintf(mmelem, sizeof mmelem, "_t%d", telem0);
   }
   for (int j = 0; j < bn - 1; j++) emit_stmt(c, bb[j], g_pre, g_indent + 1);
   Scope *mbsc = (p0 && !autosplat) ? comp_scope_of(c, block) : NULL;
@@ -1642,7 +1670,7 @@ int emit_minmax_by_expr(Compiler *c, int id, Buf *b) {
   buf_puts(g_pre, ";\n"); free(vb.p);
   emit_indent(g_pre, g_indent + 1);
   if (bvt_slot == TY_POLY)
-    buf_printf(g_pre, "if (_t%d || sp_poly_%s(_t%d, _t%d)) { _t%d = %s; _t%d = _t%d; _t%d = 0; }\n",
+    buf_printf(g_pre, "if (_t%d || sp_poly_order_%s(_t%d, _t%d)) { _t%d = %s; _t%d = _t%d; _t%d = 0; }\n",
                tf, is_max ? "gt" : "lt", tcur, tbv, tbest, mmelem, tbv, tcur, tf);
   else
     buf_printf(g_pre, "if (_t%d || _t%d %s _t%d) { _t%d = %s; _t%d = _t%d; _t%d = 0; }\n",
@@ -3843,8 +3871,11 @@ int emit_sortby_expr(Compiler *c, int id, Buf *b) {
   if (kt == TY_UNKNOWN && block_tail_is_unresolved(c, bb[bn - 1])) kt = TY_POLY;
   /* scalar, poly, symbol, or ARRAY key (the multi-key sort idiom
      `sort_by { [a, b] }` -- sp_poly_cmp orders boxed arrays element-wise) */
+  /* A key whose value IS nil types VOID/NIL. It still boxes (emit_boxed_text
+     evaluates the expression and yields nil), and nil ties with nil, so the
+     sort is the stable identity -- which is what CRuby answers (#4006). */
   if (kt != TY_INT && kt != TY_FLOAT && kt != TY_STRING && kt != TY_POLY &&
-      kt != TY_SYMBOL && !ty_is_array(kt)) return 0;
+      kt != TY_SYMBOL && kt != TY_VOID && kt != TY_NIL && !ty_is_array(kt)) return 0;
 
   /* Schwartzian transform: compute each element's sort key exactly once (CRuby
      semantics -- the old bubble sort re-ran the block per comparison), stable-sort
