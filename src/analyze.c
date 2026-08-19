@@ -13762,6 +13762,18 @@ void analyze_program(Compiler *c) {
     LocalVar *lv = sc ? scope_local(sc, wn) : NULL;
     if (!lv || lv->is_param || lv->is_block_param || lv->rbs_seeded) continue;
     if (lv->oa_pin != TY_UNKNOWN) continue;   /* a narrowed slot keeps its kind */
+    /* An OBJECT slot whose write is boxed: an attribute that holds a base class
+       and its subclass reads as poly, and a slot that settled on one of the two
+       kept the pointer type while the read handed back an sp_RbVal (#4023). */
+    if (ty_is_object(lv->type) && comp_ntype(c, v) == TY_POLY) {
+      lv->type = TY_POLY;
+      NT_FOREACH_KIND(c->nt, NK_LocalVariableReadNode, rid2) {
+        const char *n4 = nt_str(c->nt, rid2, "name");
+        if (!n4 || !sp_streq(n4, wn) || comp_scope_of(c, rid2) != sc) continue;
+        c->ntype[rid2] = TY_POLY;
+      }
+      continue;
+    }
     if (lv->type != TY_INT_ARRAY && lv->type != TY_FLOAT_ARRAY && lv->type != TY_STR_ARRAY) continue;
     if (comp_ntype(c, v) != TY_POLY_ARRAY) continue;
     /* only where the value is a BLOCK-collecting call: those build the array
