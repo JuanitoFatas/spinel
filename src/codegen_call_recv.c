@@ -7143,6 +7143,26 @@ int emit_scalar_call(Compiler *c, int id, Buf *b) {
           buf_puts(b, "((void)("); emit_expr(c, argv[0], b);
           buf_puts(b, "), (sp_raise_cls(\"RangeError\", \"can't convert Complex into Integer\"), (sp_FloatArray *)0))");
         }
+        /* Only a NUMBER coerces to an Integer pair. Everything else is
+           `[Float(other), Float(self)]`, which is where CRuby's messages come
+           from -- and the argument went into the sp_int slot as itself before,
+           so a String stopped the C build and a nil answered a coerced 0
+           (#4011). */
+        else if (a0 != TY_INT && a0 != TY_POLY && a0 != TY_UNKNOWN) {
+          int o = ++g_tmp;
+          buf_printf(b, "({ sp_float _tc%d = sp_poly_Float(", o); emit_boxed(c, argv[0], b);
+          buf_printf(b, "); sp_FloatArray *_t%d = sp_FloatArray_new();"
+                        " sp_FloatArray_push(_t%d, _tc%d);"
+                        " sp_FloatArray_push(_t%d, (sp_float)(%s)); _t%d; })", o, o, o, o, r, o);
+        }
+        else if (a0 == TY_POLY) {
+          /* the tag decides at run time, through the same helper the boxed
+             receiver path uses */
+          int o = ++g_tmp;
+          buf_printf(b, "({ sp_RbVal _t%d = sp_poly_coerce(sp_box_int(%s), ", o, r);
+          emit_boxed(c, argv[0], b);
+          buf_printf(b, "); sp_poly_to_poly_array(_t%d); })", o);
+        }
         else {
           int ta = ++g_tmp, o = ++g_tmp;
           buf_printf(b, "({ sp_int _t%d = ", ta); emit_int_expr(c, argv[0], b);
@@ -7542,6 +7562,14 @@ int emit_scalar_call(Compiler *c, int id, Buf *b) {
           buf_printf(b, "({ sp_int _t%d = ", ta); emit_int_expr(c, argv[0], b);
           buf_printf(b, "; sp_FloatArray *_t%d = sp_FloatArray_new();"
                         " sp_FloatArray_push(_t%d, (sp_float)_t%d);"
+                        " sp_FloatArray_push(_t%d, (%s)); _t%d; })", o, o, ta, o, r, o);
+        }
+        /* Float#coerce is [Float(other), self], and Float() is where CRuby's
+           errors come from: a nil answered a coerced 0.0 before (#4011). */
+        else if (a0 != TY_FLOAT && a0 != TY_BIGINT && a0 != TY_UNKNOWN) {
+          buf_printf(b, "({ sp_float _t%d = sp_poly_Float(", ta); emit_boxed(c, argv[0], b);
+          buf_printf(b, "); sp_FloatArray *_t%d = sp_FloatArray_new();"
+                        " sp_FloatArray_push(_t%d, _t%d);"
                         " sp_FloatArray_push(_t%d, (%s)); _t%d; })", o, o, ta, o, r, o);
         }
         else {

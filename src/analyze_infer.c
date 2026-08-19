@@ -4031,6 +4031,12 @@ else {
           nt_ref(nt, id, "block") < 0 && poly_expr_flows_container(c, recv)) {
         return TY_POLY;
       }
+      /* the numeric surface needs no container precondition: a boxed receiver
+         can always be a number (#4012) */
+      if (found && !an_builtin_only && argc == 0 && poly_numeric_read_p(name) &&
+          nt_ref(nt, id, "block") < 0) {
+        return TY_POLY;
+      }
       /* A binary operator on a boxed receiver is lowered to sp_poly_<op>,
          whose value is boxed however the runtime dispatches it. Taking the
          user return from this union instead left the type and the emission
@@ -4753,7 +4759,15 @@ else {
     if (sp_streq(name, "coerce") && argc == 1) {
       TyKind a0 = infer_type(c, argv[0]);
       if (a0 == TY_BIGINT) return TY_POLY_ARRAY;   /* [big, big] boxed pair (#2419) */
-      return (a0 == TY_FLOAT || a0 == TY_RATIONAL || a0 == TY_COMPLEX) ? TY_FLOAT_ARRAY : TY_INT_ARRAY;
+      if (a0 == TY_FLOAT || a0 == TY_RATIONAL || a0 == TY_COMPLEX) return TY_FLOAT_ARRAY;
+      /* Only a NUMBER coerces. Typing anything else as the int pair put the
+         argument straight into an sp_int slot, so a String stopped the C build
+         and a nil answered a coerced 0 where CRuby raises (#4011). The boxed
+         pair carries whatever the runtime decides, including the raise. */
+      if (a0 == TY_POLY) return TY_POLY_ARRAY;   /* the tag decides at run time */
+      /* everything else is the Float() pair (and its errors) */
+      if (a0 != TY_INT && a0 != TY_UNKNOWN) return TY_FLOAT_ARRAY;
+      return TY_INT_ARRAY;
     }
   }
   /* float receiver methods */

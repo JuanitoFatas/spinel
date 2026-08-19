@@ -2785,9 +2785,17 @@ static sp_RbVal sp_poly_coerce(sp_RbVal a, sp_RbVal b) {
     sp_PolyArray_push(out, sp_box_float(sp_poly_to_f_with_rational(b)));
     sp_PolyArray_push(out, sp_box_float(sp_poly_to_f_with_rational(a)));
   }
-  else {
+  else if (sp_poly_numeric_p(b)) {
     sp_PolyArray_push(out, b);
     sp_PolyArray_push(out, a);
+  }
+  else {
+    /* A non-numeric OPERAND coerces through Float(), which is where CRuby's
+       messages come from: `can't convert nil into Float`, and a String's
+       `invalid value for Float(): "x"`. Pushing it unchanged answered a pair
+       containing the string itself (#4011). */
+    sp_PolyArray_push(out, sp_box_float(sp_poly_Float(b)));
+    sp_PolyArray_push(out, sp_box_float(sp_poly_to_f_with_rational(a)));
   }
   return sp_box_poly_array(out);
 }

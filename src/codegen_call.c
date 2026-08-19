@@ -4579,6 +4579,30 @@ static int emit_poly_method_dispatch(Compiler *c, int id, Buf *b) {
         buf_puts(b, "; break;");
         obj_default_done = 1;
       }
+      /* The numeric methods a builtin receiver answers for itself. A class
+         defining `abs` (or `round`, `succ`) takes over the name's dispatch,
+         and an Integer arriving at it had no arm: `@units.abs` on a poly ivar
+         raised "undefined method 'abs' for an instance of Integer" (#4012).
+         The runtime helpers are the same ones the no-user-class path uses, and
+         they refuse a receiver that is not a number, as CRuby does. */
+      if (!obj_default_done && argc == 0 &&
+          (sp_streq(name, "abs") || sp_streq(name, "round") ||
+           sp_streq(name, "succ") || sp_streq(name, "next") ||
+           sp_streq(name, "pred") || sp_streq(name, "ceil") ||
+           sp_streq(name, "floor") || sp_streq(name, "truncate"))) {
+        char nv[96];
+        if (sp_streq(name, "succ") || sp_streq(name, "next"))
+          snprintf(nv, sizeof nv, "sp_poly_succ_m(_t%d, %d)", tv, sp_streq(name, "next") ? 1 : 0);
+        else if (sp_streq(name, "pred"))
+          snprintf(nv, sizeof nv, "sp_poly_sub(_t%d, sp_box_int(1))", tv);
+        else
+          snprintf(nv, sizeof nv, "sp_poly_%s(_t%d)", name, tv);
+        buf_printf(b, " default: _t%d = ", tr);
+        if (ret == TY_POLY) buf_puts(b, nv);
+        else emit_unbox_text(c, ret, nv, b);
+        buf_puts(b, "; break;");
+        obj_default_done = 1;
+      }
       /* frozen?/nil? on a builtin-scalar (or un-overridden object) poly value:
          the switch default answers via the runtime predicate. */
       if (!obj_default_done && is_pred) {
@@ -9516,17 +9540,18 @@ int emit_arg_type_guards(Compiler *c, int id, Buf *b) {
                  ak == NK_TrueNode || ak == NK_FalseNode) bad_arg = 1;
       }
       if (sp_streq(nn, "clamp")) nil_arg = 0;   /* nil is an open side there */
+      if (hit && sp_streq(nn, "coerce")) hit = 0;   /* see below: Float() owns these errors */
       if (hit && (nil_arg || bad_arg)) {
         /* #between? / #clamp compare rather than coerce, and CRuby's failed
            comparison is an ArgumentError naming the receiver's class */
         /* the comparing forms: CRuby's failed comparison is an ArgumentError */
+        /* #coerce is not one of these: a non-numeric operand goes through
+           Float(), whose own errors CRuby reports -- "can't convert Array into
+           Float", and a String's "invalid value for Float(): \"x\"" -- rather
+           than this generic comparison message (#4011). */
         int cmpform = sp_streq(nn, "between?") || sp_streq(nn, "upto") ||
                       sp_streq(nn, "downto") || sp_streq(nn, "step") ||
-                      (bad_arg && (sp_streq(nn, "clamp") ||
-                                   /* Numeric#coerce turns an unconvertible
-                                      operand into ArgumentError, not the
-                                      TypeError the arithmetic forms raise */
-                                   sp_streq(nn, "coerce")));
+                      (bad_arg && sp_streq(nn, "clamp"));
         const char *cn = nrt == TY_FLOAT ? "Float" : "Integer";
         TyKind rty = comp_ntype(c, id);
         const char *dv = default_value(rty);
