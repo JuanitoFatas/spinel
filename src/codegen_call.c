@@ -4541,6 +4541,23 @@ static int emit_poly_method_dispatch(Compiler *c, int id, Buf *b) {
         buf_puts(b, "; break;");
         obj_default_done = 1;
       }
+      /* The case conversions are String's AND Symbol's. A String receiver is
+         recognised by a tag pre-arm before the switch, but a Symbol had no arm
+         once a user class owned the name, so `:ab.upcase` through a poly slot
+         raised NoMethodError. sp_poly_case_conv is the same runtime the
+         no-user-class path uses: it converts a Symbol through its name, a
+         string as a string, and refuses anything else the way CRuby does. */
+      if (!obj_default_done && argc == 0 &&
+          (sp_streq(name, "upcase") || sp_streq(name, "downcase") ||
+           sp_streq(name, "capitalize") || sp_streq(name, "swapcase"))) {
+        char cv[96];
+        snprintf(cv, sizeof cv, "sp_poly_case_conv(_t%d, sp_str_%s, \"%s\")", tv, name, name);
+        buf_printf(b, " default: _t%d = ", tr);
+        if (ret == TY_POLY) buf_puts(b, cv);
+        else emit_unbox_text(c, ret, cv, b);
+        buf_puts(b, "; break;");
+        obj_default_done = 1;
+      }
       /* frozen?/nil? on a builtin-scalar (or un-overridden object) poly value:
          the switch default answers via the runtime predicate. */
       if (!obj_default_done && is_pred) {

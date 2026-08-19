@@ -2199,10 +2199,26 @@ static sp_bool sp_poly_hash_subset(sp_RbVal a, sp_RbVal b, int strict) {
   }
   return TRUE;
 }
-static sp_RbVal sp_poly_case_conv(sp_RbVal v, const char *(*fn)(const char *)) {
+/* A poly RECEIVER for a String method. The program named a String method, so a
+   receiver that is not a string is CRuby's NoMethodError -- where the #to_s
+   rendering answered it instead and `obj.upcase` returned "#<BARE:0X...>" in
+   silence. Implicit conversion does NOT apply here: an object defining #to_str
+   is still NoMethodError, because the protocol converts an ARGUMENT into a
+   String slot and never rescues a receiver (CRuby raises for `Pathname#upcase`
+   even though Pathname defines #to_str). A shared-mutable string is a builtin
+   OBJ box, not SP_TAG_STR, and is a string. */
+SP_COLD static const char *sp_nomethod_msg(const char *m, sp_RbVal v);   /* below */
+static const char *sp_poly_recv_s(sp_RbVal v, const char *meth) {
+  if (v.tag == SP_TAG_STR) return v.v.s ? v.v.s : sp_str_empty;
+  if (sp_poly_is_strbuf(v)) return sp_poly_to_s(v);
+  sp_raise_nomethod(sp_nomethod_msg(meth, v));
+  return sp_str_empty;
+}
+
+static sp_RbVal sp_poly_case_conv(sp_RbVal v, const char *(*fn)(const char *), const char *meth) {
   if (v.tag == SP_TAG_SYM && sp_sym_name_fn && sp_json_sym_intern_fn)
     return sp_box_sym(sp_json_sym_intern_fn(fn(sp_sym_name_fn((sp_sym)v.v.i))));
-  return sp_box_str(fn(sp_poly_to_s(v)));
+  return sp_box_str(fn(sp_poly_recv_s(v, meth)));
 }
 static sp_bool sp_poly_numeric_p(sp_RbVal v) { return v.tag == SP_TAG_INT || v.tag == SP_TAG_FLT || v.tag == SP_TAG_BIGINT; }
 /* Display form of a value in a `can't convert %s into ...` TypeError:
@@ -4087,7 +4103,7 @@ static sp_RbVal sp_poly_reverse(sp_RbVal v) {
     sp_PolyArray_reverse_bang(r);
     return sp_box_poly_array(r);
   }
-  return sp_box_str(sp_str_reverse(sp_poly_to_s(v)));
+  return sp_box_str(sp_str_reverse(sp_poly_recv_s(v, "reverse")));
 }
 static void sp_PolyArray_rotate_bang(sp_PolyArray*a,sp_int n){
   if(!a)return;

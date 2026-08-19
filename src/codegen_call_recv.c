@@ -10624,8 +10624,8 @@ int emit_poly_call(Compiler *c, int id, Buf *b) {
       (sp_streq(name, "delete_prefix") || sp_streq(name, "delete_suffix")) &&
       !user_defines_or_reads(c, name)) {
     /* the inference rule answers TY_STRING, so hand back the raw const char * */
-    buf_printf(b, "sp_str_%s(sp_poly_to_s(", name); emit_expr(c, recv, b);
-    buf_puts(b, "), "); emit_str_expr(c, argv[0], b); buf_puts(b, ")");
+    buf_printf(b, "sp_str_%s(sp_poly_recv_s(", name); emit_expr(c, recv, b);
+    buf_printf(b, ", \"%s\"), ", name); emit_str_expr(c, argv[0], b); buf_puts(b, ")");
     return 1;
   }
   /* `dig` on a receiver that stayed poly: the arms above are per container
@@ -10695,10 +10695,10 @@ int emit_poly_call(Compiler *c, int id, Buf *b) {
     buf_printf(b, "%s(", sfn);
     if (sre >= 0) buf_printf(b, "sp_re_pat_%d", sre);
     else if (spt == TY_REGEX) emit_expr(c, argv[0], b);
-    else if (spt == TY_STRING) { buf_puts(b, "sp_poly_to_s("); emit_expr(c, recv, b); buf_puts(b, "), "); }
+    else if (spt == TY_STRING) { buf_puts(b, "sp_poly_recv_s("); emit_expr(c, recv, b); buf_printf(b, ", \"%s\"), ", name); }
     else { buf_puts(b, "(mrb_regexp_pattern *)("); emit_boxed(c, argv[0], b); buf_puts(b, ").v.p"); }
     if (spt == TY_STRING) { emit_expr(c, argv[0], b); buf_puts(b, ")"); }
-    else { buf_puts(b, ", sp_poly_to_s("); emit_expr(c, recv, b); buf_puts(b, "))"); }
+    else { buf_puts(b, ", sp_poly_recv_s("); emit_expr(c, recv, b); buf_printf(b, ", \"%s\"))", name); }
     return 1;
   }
   if (recv >= 0 && rt == TY_POLY)
@@ -10716,8 +10716,8 @@ int emit_poly_call(Compiler *c, int id, Buf *b) {
     int re_i = re_lit_index(c, argv[0]);
     TyKind pat_t = comp_ntype(c, argv[0]);
     int ts = ++g_tmp, tm = ++g_tmp, ti = ++g_tmp;
-    buf_printf(b, "({ const char *_t%d = sp_poly_to_s(", ts); emit_expr(c, recv, b);
-    buf_printf(b, "); SP_GC_ROOT(_t%d);", ts);
+    buf_printf(b, "({ const char *_t%d = sp_poly_recv_s(", ts); emit_expr(c, recv, b);
+    buf_printf(b, ", \"%s\"); SP_GC_ROOT(_t%d);", name, ts);
     buf_printf(b, " sp_StrArray *_t%d = ", tm);
     if (re_i >= 0) buf_printf(b, "sp_re_scan(sp_re_pat_%d, _t%d)", re_i, ts);
     else if (pat_t == TY_REGEX) { buf_puts(b, "sp_re_scan("); emit_expr(c, argv[0], b); buf_printf(b, ", _t%d)", ts); }
@@ -11003,21 +11003,21 @@ int emit_poly_call(Compiler *c, int id, Buf *b) {
       buf_printf(b, ", %d)", sp_streq(name, "next") ? 1 : 0);
       return 1;
     }
-    if (sp_streq(name, "upcase"))     { buf_puts(b, "sp_poly_case_conv("); emit_expr(c, recv, b); buf_puts(b, ", sp_str_upcase)"); return 1; }
-    if (sp_streq(name, "downcase"))     { buf_puts(b, "sp_poly_case_conv("); emit_expr(c, recv, b); buf_puts(b, ", sp_str_downcase)"); return 1; }
-    if (sp_streq(name, "capitalize"))     { buf_puts(b, "sp_poly_case_conv("); emit_expr(c, recv, b); buf_puts(b, ", sp_str_capitalize)"); return 1; }
-    if (sp_streq(name, "swapcase"))     { buf_puts(b, "sp_poly_case_conv("); emit_expr(c, recv, b); buf_puts(b, ", sp_str_swapcase)"); return 1; }
-    if (sp_streq(name, "strip"))      { buf_puts(b, "sp_box_str(sp_str_strip(sp_poly_to_s("); emit_expr(c, recv, b); buf_puts(b, ")))"); return 1; }
+    if (sp_streq(name, "upcase"))     { buf_puts(b, "sp_poly_case_conv("); emit_expr(c, recv, b); buf_puts(b, ", sp_str_upcase, \"upcase\")"); return 1; }
+    if (sp_streq(name, "downcase"))     { buf_puts(b, "sp_poly_case_conv("); emit_expr(c, recv, b); buf_puts(b, ", sp_str_downcase, \"downcase\")"); return 1; }
+    if (sp_streq(name, "capitalize"))     { buf_puts(b, "sp_poly_case_conv("); emit_expr(c, recv, b); buf_puts(b, ", sp_str_capitalize, \"capitalize\")"); return 1; }
+    if (sp_streq(name, "swapcase"))     { buf_puts(b, "sp_poly_case_conv("); emit_expr(c, recv, b); buf_puts(b, ", sp_str_swapcase, \"swapcase\")"); return 1; }
+    if (sp_streq(name, "strip"))      { buf_puts(b, "sp_box_str(sp_str_strip(sp_poly_recv_s("); emit_expr(c, recv, b); buf_printf(b, ", \"strip\")))"); return 1; }
     if (sp_streq(name, "reverse"))    { buf_puts(b, "sp_poly_reverse("); emit_expr(c, recv, b); buf_puts(b, ")"); return 1; }
-    if (sp_streq(name, "chomp"))      { buf_puts(b, "sp_box_str(sp_str_chomp(sp_poly_to_s("); emit_expr(c, recv, b); buf_puts(b, ")))"); return 1; }
-    if (sp_streq(name, "chop"))       { buf_puts(b, "sp_box_str(sp_str_chop(sp_poly_to_s("); emit_expr(c, recv, b); buf_puts(b, ")))"); return 1; }
+    if (sp_streq(name, "chomp"))      { buf_puts(b, "sp_box_str(sp_str_chomp(sp_poly_recv_s("); emit_expr(c, recv, b); buf_printf(b, ", \"chomp\")))"); return 1; }
+    if (sp_streq(name, "chop"))       { buf_puts(b, "sp_box_str(sp_str_chop(sp_poly_recv_s("); emit_expr(c, recv, b); buf_printf(b, ", \"chop\")))"); return 1; }
     /* The one-String-argument transforms, which the table above covers only for
        the zero-argument shapes. A String arriving through a poly slot -- a
        Fiber#resume value, a container read -- had no arm for these and raised
        NoMethodError naming String, which is what it was (#3436). */
     if ((sp_streq(name, "delete_prefix") || sp_streq(name, "delete_suffix")) && argc == 1) {
-      buf_printf(b, "sp_box_str(sp_str_%s(sp_poly_to_s(", name); emit_expr(c, recv, b);
-      buf_puts(b, "), "); emit_str_expr(c, argv[0], b); buf_puts(b, "))");
+      buf_printf(b, "sp_box_str(sp_str_%s(sp_poly_recv_s(", name); emit_expr(c, recv, b);
+      buf_printf(b, ", \"%s\"), ", name); emit_str_expr(c, argv[0], b); buf_puts(b, "))");
       return 1;
     }
     }
@@ -11042,15 +11042,15 @@ int emit_poly_call(Compiler *c, int id, Buf *b) {
          Struct member or attr_reader called `bytes` hit exactly that (#3364);
          the `chars` arm below has carried this guard since #2909. */
       if (!user_defines_or_reads(c, name)) {
-        buf_printf(b, "sp_str_%s(sp_poly_to_s(", sp_streq(name, "bytes") ? "bytes" : "codepoints");
-        emit_expr(c, recv, b); buf_puts(b, "))"); return 1;
+        buf_printf(b, "sp_str_%s(sp_poly_recv_s(", sp_streq(name, "bytes") ? "bytes" : "codepoints");
+        emit_expr(c, recv, b); buf_printf(b, ", \"%s\"))", name); return 1;
       }
     }
     /* poly.chars -> TY_STR_ARRAY: a String read out of a container or
        destructured from a pair (`|a, b|`) reaches here poly-typed (#2909). */
     if (sp_streq(name, "chars") && argc == 0 && nt_ref(nt, id, "block") < 0) {
       if (!user_defines_or_reads(c, "chars")) {
-        buf_puts(b, "sp_str_chars(sp_poly_to_s("); emit_expr(c, recv, b); buf_puts(b, "))"); return 1;
+        buf_puts(b, "sp_str_chars(sp_poly_recv_s("); emit_expr(c, recv, b); buf_puts(b, ", \"chars\"))"); return 1;
       }
     }
     /* poly.each_char { }: walk the same char array #chars answers. A String
@@ -11066,8 +11066,8 @@ int emit_poly_call(Compiler *c, int id, Buf *b) {
       int ebody = nt_ref(nt, eblk, "body");
       int ebn = 0; const int *ebb = ebody >= 0 ? nt_arr(nt, ebody, "body", &ebn) : NULL;
       int ts = ++g_tmp, ta = ++g_tmp, ti = ++g_tmp;
-      buf_printf(b, "({ const char *_t%d = sp_poly_to_s(", ts); emit_expr(c, recv, b);
-      buf_printf(b, "); SP_GC_ROOT(_t%d);", ts);
+      buf_printf(b, "({ const char *_t%d = sp_poly_recv_s(", ts); emit_expr(c, recv, b);
+      buf_printf(b, ", \"%s\"); SP_GC_ROOT(_t%d);", name, ts);
       buf_printf(b, " sp_StrArray *_t%d = sp_str_chars(_t%d); SP_GC_ROOT(_t%d);", ta, ts, ta);
       buf_printf(b, " for (sp_int _t%d = 0; _t%d < sp_StrArray_length(_t%d); _t%d++) {", ti, ti, ta, ti);
       if (ebpn) buf_printf(b, " const char *lv_%s = sp_StrArray_get(_t%d, _t%d);", ebpn, ta, ti);
@@ -11086,8 +11086,8 @@ int emit_poly_call(Compiler *c, int id, Buf *b) {
       int ebn = 0; const int *ebb = ebody >= 0 ? nt_arr(nt, ebody, "body", &ebn) : NULL;
       const char *fn = sp_streq(name, "each_byte") ? "sp_str_bytes" : "sp_str_codepoints";
       int ts = ++g_tmp, ta = ++g_tmp, ti = ++g_tmp;
-      buf_printf(b, "({ const char *_t%d = sp_poly_to_s(", ts); emit_expr(c, recv, b);
-      buf_printf(b, "); SP_GC_ROOT(_t%d);", ts);
+      buf_printf(b, "({ const char *_t%d = sp_poly_recv_s(", ts); emit_expr(c, recv, b);
+      buf_printf(b, ", \"%s\"); SP_GC_ROOT(_t%d);", name, ts);
       buf_printf(b, " sp_IntArray *_t%d = %s(_t%d); SP_GC_ROOT(_t%d);", ta, fn, ts, ta);
       buf_printf(b, " for (sp_int _t%d = 0; _t%d < sp_IntArray_length(_t%d); _t%d++) {", ti, ti, ta, ti);
       if (ebpn) {
@@ -11105,7 +11105,7 @@ int emit_poly_call(Compiler *c, int id, Buf *b) {
     /* poly.lines -> TY_STR_ARRAY, the same shape as #chars above (#3403) */
     if (sp_streq(name, "lines") && argc == 0 && nt_ref(nt, id, "block") < 0) {
       if (!user_defines_or_reads(c, "lines")) {
-        buf_puts(b, "sp_str_lines(sp_poly_to_s("); emit_expr(c, recv, b); buf_puts(b, "))"); return 1;
+        buf_puts(b, "sp_str_lines(sp_poly_recv_s("); emit_expr(c, recv, b); buf_puts(b, ", \"lines\"))"); return 1;
       }
     }
     /* A blockless each_char / each_line / each_byte / each_codepoint is
@@ -11117,7 +11117,7 @@ int emit_poly_call(Compiler *c, int id, Buf *b) {
       const char *fn = sp_streq(name, "each_char") ? "sp_str_chars"
                      : sp_streq(name, "each_line") ? "sp_str_lines"
                      : sp_streq(name, "each_byte") ? "sp_str_bytes" : "sp_str_codepoints";
-      buf_printf(b, "%s(sp_poly_to_s(", fn); emit_expr(c, recv, b); buf_puts(b, "))");
+      buf_printf(b, "%s(sp_poly_recv_s(", fn); emit_expr(c, recv, b); buf_printf(b, ", \"%s\"))", name);
       return 1;
     }
     if (sp_streq(name, "freeze"))     { buf_puts(b, "sp_poly_freeze("); emit_expr(c, recv, b); buf_puts(b, ")"); return 1; }
