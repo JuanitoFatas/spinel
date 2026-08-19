@@ -349,6 +349,15 @@ extern const char *(*sp_obj_inspect_fn)(int cls_id, void *p);
 /* Same shape for user #to_s: sp_poly_to_s's OBJ default consults it so a
    boxed user object with a custom to_s renders through it. */
 extern const char *(*sp_obj_to_s_fn)(int cls_id, void *p);
+/* CRuby's implicit conversion protocol on BOXED user objects: the runtime's
+   Integer/String conversion sites (pack, typed-slot coercions) reach a
+   compiled #to_int / #to_str through these. A class without the method is
+   the default arm (*ok = 0 / NULL) and the caller raises CRuby's TypeError. */
+extern sp_int (*sp_obj_to_int_fn)(int cls_id, void *p, int *ok);
+extern const char *(*sp_obj_to_str_fn)(int cls_id, void *p);
+/* Ruby class name for a user cls_id (the generated id->name table), so a
+   runtime TU can word a TypeError the way CRuby does. */
+extern const char *(*sp_obj_cls_name_fn)(int cls_id);
 
 /* ---- Hot inline mark helpers (inlined into both sides) ----
  * String tag bytes: 0xfe heap-unmarked -> 0xfc marked; others skipped. */

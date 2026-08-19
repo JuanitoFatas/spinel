@@ -2161,7 +2161,7 @@ int emit_iteration_stmt(Compiler *c, int id, Buf *b, int indent) {
       int t = ++g_tmp, tl = ++g_tmp, ts = ++g_tmp;
       emit_indent(b, indent); buf_printf(b, "sp_int _t%d = ", tl); emit_int_expr(c, sargv[0], b); buf_puts(b, ";\n");
       emit_indent(b, indent); buf_printf(b, "sp_int _t%d = ", ts);
-      if (sargc >= 2) emit_expr(c, sargv[1], b); else buf_puts(b, "1");
+      if (sargc >= 2) emit_int_expr(c, sargv[1], b); else buf_puts(b, "1");
       buf_puts(b, ";\n");
       emit_indent(b, indent);
       buf_printf(b, "if (_t%d == 0) sp_raise_cls(\"ArgumentError\", \"step can't be 0\");\n", ts);

@@ -2431,7 +2431,7 @@ else {
         if (rt == TY_INT_ARRAY) {
           buf_printf(b, "({ sp_IntArray *_t%d = ", t); emit_expr(c, recv, b); buf_puts(b, ";");
           for (int a = argc - 1; a >= 0; a--) {
-            buf_printf(b, " sp_IntArray_unshift(_t%d, ", t); emit_expr(c, argv[a], b); buf_puts(b, ");");
+            buf_printf(b, " sp_IntArray_unshift(_t%d, ", t); emit_int_expr(c, argv[a], b); buf_puts(b, ");");
           }
         }
         else if (rt == TY_STR_ARRAY) {
@@ -3966,7 +3966,7 @@ else {
         return 1;
       }
       if (sp_streq(name, "flatten") && argc <= 1) {
-        if (argc == 1) { buf_puts(b, "sp_PolyArray_flatten_n("); emit_expr(c, recv, b); buf_puts(b, ", "); emit_expr(c, argv[0], b); buf_puts(b, ")"); }
+        if (argc == 1) { buf_puts(b, "sp_PolyArray_flatten_n("); emit_expr(c, recv, b); buf_puts(b, ", "); emit_int_expr(c, argv[0], b); buf_puts(b, ")"); }
         else { buf_puts(b, "sp_PolyArray_flatten("); emit_expr(c, recv, b); buf_puts(b, ")"); }
         return 1;
       }
@@ -5965,14 +5965,16 @@ int emit_scalar_call(Compiler *c, int id, Buf *b) {
       else if ((sp_streq(name, "gsub") || sp_streq(name, "sub")) && argc == 2 && re_lit_index(c, argv[0]) >= 0) {
         const char *suf = comp_ntype(c, argv[1]) == TY_STR_STR_HASH ? "_str_str_hash" : "";
         buf_printf(b, "sp_re_%s%s(sp_re_pat_%d, %s, ", name, suf, re_lit_index(c, argv[0]), r);
-        emit_expr(c, argv[1], b); buf_puts(b, ")");
+        if (comp_ntype(c, argv[1]) == TY_STR_STR_HASH) emit_expr(c, argv[1], b);
+        else emit_str_expr(c, argv[1], b);
+        buf_puts(b, ")");
       }
       else if ((sp_streq(name, "gsub") || sp_streq(name, "sub")) && argc == 2 &&
                nt_type(nt, argv[0]) && sp_streq(nt_type(nt, argv[0]), "InterpolatedRegularExpressionNode")) {
         Buf rp; memset(&rp, 0, sizeof rp);
         emit_regex_pat_to_buf(c, argv[0], &rp);
         buf_printf(b, "sp_re_%s(%s, %s, ", name, rp.p ? rp.p : "NULL", r);
-        emit_expr(c, argv[1], b); buf_puts(b, ")");
+        emit_str_expr(c, argv[1], b); buf_puts(b, ")");
         free(rp.p);
       }
       else if ((sp_streq(name, "gsub") || sp_streq(name, "sub")) && argc == 2 &&
@@ -5983,7 +5985,9 @@ int emit_scalar_call(Compiler *c, int id, Buf *b) {
         const char *suf = comp_ntype(c, argv[1]) == TY_STR_STR_HASH ? "_str_str_hash" : "";
         buf_printf(b, "sp_re_%s%s(", name, suf);
         emit_expr(c, argv[0], b); buf_printf(b, ", %s, ", r);
-        emit_expr(c, argv[1], b); buf_puts(b, ")");
+        if (comp_ntype(c, argv[1]) == TY_STR_STR_HASH) emit_expr(c, argv[1], b);
+        else emit_str_expr(c, argv[1], b);
+        buf_puts(b, ")");
       }
       else if (sp_streq(name, "split") && argc == 1 && re_lit_index(c, argv[0]) >= 0) {
         buf_printf(b, "sp_re_split(sp_re_pat_%d, %s)", re_lit_index(c, argv[0]), r);
@@ -6243,7 +6247,7 @@ int emit_scalar_call(Compiler *c, int id, Buf *b) {
       }
       else if (sp_streq(name, "index") && argc == 1) {
         /* nil-on-miss carried as the SP_INT_NIL sentinel (a nullable int) */
-        buf_printf(b, "sp_str_index_opt(%s, ", r); emit_expr(c, argv[0], b); buf_puts(b, ")");
+        buf_printf(b, "sp_str_index_opt(%s, ", r); emit_str_expr(c, argv[0], b); buf_puts(b, ")");
       }
       else if (sp_streq(name, "index") && argc == 2 && re_lit_index(c, argv[0]) >= 0) {
         buf_printf(b, "sp_re_index_from_opt(sp_re_pat_%d, %s, ", re_lit_index(c, argv[0]), r);
@@ -6289,7 +6293,7 @@ int emit_scalar_call(Compiler *c, int id, Buf *b) {
       }
       else if ((sp_streq(name, "partition") || sp_streq(name, "rpartition")) && argc == 1 &&
                re_lit_index(c, argv[0]) < 0) {
-        buf_printf(b, "sp_str_%s(%s, ", name, r); emit_expr(c, argv[0], b); buf_puts(b, ")");
+        buf_printf(b, "sp_str_%s(%s, ", name, r); emit_str_expr(c, argv[0], b); buf_puts(b, ")");
       }
       else if (sp_streq(name, "partition") && argc == 1 && re_lit_index(c, argv[0]) >= 0) {
         /* [before, match, after] from the first regex match, else [s, "", ""] */
@@ -6403,7 +6407,7 @@ int emit_scalar_call(Compiler *c, int id, Buf *b) {
         int ws = nil_arg || (aty && sp_streq(aty, "StringNode") && nt_str(c->nt, argv[0], "content") &&
                  sp_streq(nt_str(c->nt, argv[0], "content"), " "));
         if (ws) buf_printf(b, "sp_str_split_ws(%s)", r);
-        else { buf_printf(b, "sp_str_split_drop_trailing(%s, ", r); emit_expr(c, argv[0], b); buf_puts(b, ")"); }
+        else { buf_printf(b, "sp_str_split_drop_trailing(%s, ", r); emit_str_expr(c, argv[0], b); buf_puts(b, ")"); }
       }
       else if (sp_streq(name, "split") && argc == 2) {
         buf_printf(b, "sp_str_split_limit(%s, ", r); emit_expr(c, argv[0], b); buf_puts(b, ", "); emit_int_expr(c, argv[1], b); buf_puts(b, ")");
@@ -6511,27 +6515,27 @@ int emit_scalar_call(Compiler *c, int id, Buf *b) {
         buf_printf(b, "sp_str_getbyte_opt(%s, ", r); emit_int_expr(c, argv[0], b); buf_puts(b, ")");
       }
       else if (sp_streq(name, "squeeze") && argc == 0) buf_printf(b, "sp_str_squeeze(%s)", r);
-      else if (sp_streq(name, "squeeze") && argc == 1) { buf_printf(b, "sp_str_squeeze_chars(%s, ", r); emit_expr(c, argv[0], b); buf_puts(b, ")"); }
+      else if (sp_streq(name, "squeeze") && argc == 1) { buf_printf(b, "sp_str_squeeze_chars(%s, ", r); emit_str_expr(c, argv[0], b); buf_puts(b, ")"); }
       else if (sp_streq(name, "squeeze") && argc >= 2) {
         buf_printf(b, "sp_str_squeeze_n(%s, (const char *[]){", r);
-        for (int a = 0; a < argc; a++) { if (a) buf_puts(b, ", "); emit_expr(c, argv[a], b); }
+        for (int a = 0; a < argc; a++) { if (a) buf_puts(b, ", "); emit_str_expr(c, argv[a], b); }
         buf_printf(b, "}, %d)", argc);
       }
       else if ((sp_streq(name, "tr") || sp_streq(name, "tr_s")) && argc == 2) {
-        buf_printf(b, "sp_str_%s(%s, ", name, r); emit_expr(c, argv[0], b); buf_puts(b, ", "); emit_expr(c, argv[1], b); buf_puts(b, ")");
+        buf_printf(b, "sp_str_%s(%s, ", name, r); emit_str_expr(c, argv[0], b); buf_puts(b, ", "); emit_str_expr(c, argv[1], b); buf_puts(b, ")");
       }
       else if (sp_streq(name, "delete") && argc == 0) { buf_printf(b, "(%s)", r); return 1; }
-      else if (sp_streq(name, "delete") && argc == 1) { buf_printf(b, "sp_str_delete(%s, ", r); emit_expr(c, argv[0], b); buf_puts(b, ")"); }
+      else if (sp_streq(name, "delete") && argc == 1) { buf_printf(b, "sp_str_delete(%s, ", r); emit_str_expr(c, argv[0], b); buf_puts(b, ")"); }
       else if (sp_streq(name, "delete") && argc >= 2) {
         buf_printf(b, "sp_str_delete_n(%s, (const char *[]){", r);
-        for (int a = 0; a < argc; a++) { if (a) buf_puts(b, ", "); emit_expr(c, argv[a], b); }
+        for (int a = 0; a < argc; a++) { if (a) buf_puts(b, ", "); emit_str_expr(c, argv[a], b); }
         buf_printf(b, "}, %d)", argc);
       }
       else if (sp_streq(name, "count") && argc == 0) { buf_printf(b, "(sp_raise_cls(\"TypeError\", \"no implicit conversion of nil into String\"), 0LL)"); return 1; }
-      else if (sp_streq(name, "count") && argc == 1) { buf_printf(b, "sp_str_count(%s, ", r); emit_expr(c, argv[0], b); buf_puts(b, ")"); }
+      else if (sp_streq(name, "count") && argc == 1) { buf_printf(b, "sp_str_count(%s, ", r); emit_str_expr(c, argv[0], b); buf_puts(b, ")"); }
       else if (sp_streq(name, "count") && argc >= 2) {
         buf_printf(b, "sp_str_count_n(%s, (const char *[]){", r);
-        for (int a = 0; a < argc; a++) { if (a) buf_puts(b, ", "); emit_expr(c, argv[a], b); }
+        for (int a = 0; a < argc; a++) { if (a) buf_puts(b, ", "); emit_str_expr(c, argv[a], b); }
         buf_printf(b, "}, %d)", argc);
       }
       else if (sp_streq(name, "lines") && argc == 0) buf_printf(b, "sp_str_lines(%s)", r);
@@ -6556,7 +6560,7 @@ int emit_scalar_call(Compiler *c, int id, Buf *b) {
       }
       else if (sp_streq(name, "bytes") && argc == 0)   buf_printf(b, "sp_str_bytes(%s)", r);
       else if (sp_streq(name, "codepoints") && argc == 0) buf_printf(b, "sp_str_codepoints(%s)", r);
-      else if (sp_streq(name, "unpack") && argc == 1)  { buf_printf(b, "sp_str_unpack(%s, ", r); emit_expr(c, argv[0], b); buf_puts(b, ")"); }
+      else if (sp_streq(name, "unpack") && argc == 1)  { buf_printf(b, "sp_str_unpack(%s, ", r); emit_str_expr(c, argv[0], b); buf_puts(b, ")"); }
       /* unpack(fmt, offset: n): a trailing KeywordHashNode carries the offset. */
       else if ((sp_streq(name, "unpack") || sp_streq(name, "unpack1")) && argc == 2 &&
                nt_type(nt, argv[1]) && sp_streq(nt_type(nt, argv[1]), "KeywordHashNode") &&
@@ -8501,12 +8505,14 @@ int emit_object_call(Compiler *c, int id, Buf *b) {
         buf_puts(b, m->csym); buf_puts(b, "("); emit_expr(c, recv, b);
         for (int ai = 0; ai < m->nargs && ai < argc; ai++) {
           buf_puts(b, ", ");
+          TyKind aw = ffi_spec_to_ty(m->args[ai]);
           if (sp_streq(m->args[ai], "any")) emit_boxed(c, argv[ai], b);
           else if (sp_streq(m->args[ai], "regexp"))
             buf_printf(b, "sp_re_pat_%d", re_lit_index(c, argv[ai]));
-          else if (sp_streq(m->args[ai], "string") && comp_ntype(c, argv[ai]) == TY_POLY) {
-            buf_puts(b, "sp_poly_to_s("); emit_expr(c, argv[ai], b); buf_puts(b, ")");
-          }
+          /* the typed-slot emitters carry the implicit conversion protocol
+             (poly unboxing, #to_str / #to_int on a user object) */
+          else if (aw == TY_STRING) emit_str_expr(c, argv[ai], b);
+          else if (aw == TY_INT) emit_int_expr(c, argv[ai], b);
           else emit_expr(c, argv[ai], b);
         }
         buf_puts(b, ")");

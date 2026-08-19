@@ -220,15 +220,42 @@ static int64_t pk_flt_to_int(double dv) {
   return (int64_t)(dv < 0 ? 0 - u : u);
 }
 
+/* The wording CRuby uses when a value cannot become an Integer: special
+   constants by their inspect (nil / true / false), everything else by class. */
+static const char *pk_val_name(sp_RbVal v) {
+  switch (v.tag) {
+    case SP_TAG_NIL:  return "nil";
+    case SP_TAG_BOOL: return v.v.b ? "true" : "false";
+    case SP_TAG_STR:  return "String";
+    case SP_TAG_SYM:  return "Symbol";
+    case SP_TAG_OBJ:
+      if (v.cls_id >= 0 && sp_obj_cls_name_fn) return sp_obj_cls_name_fn((int)v.cls_id);
+      return "Object";
+    default:          return "Object";
+  }
+}
+
+int64_t sp_bigint_to_int(sp_Bigint *b);  /* wraps mod 2^64, as pack does */
+
 static int64_t pk_poly_to_int(sp_RbVal v) {
   switch (v.tag) {
-    case SP_TAG_INT:  return v.v.i;
-    case SP_TAG_BOOL: return v.v.b ? 1 : 0;
-    case SP_TAG_FLT:  return pk_flt_to_int(v.v.f);
-    case SP_TAG_STR:  return v.v.s ? strtoll(v.v.s, NULL, 0) : 0;
-    case SP_TAG_NIL:  return 0;
-    default:          return 0;
+    case SP_TAG_INT:    return v.v.i;
+    case SP_TAG_FLT:    return pk_flt_to_int(v.v.f);
+    case SP_TAG_BIGINT: return sp_bigint_to_int((sp_Bigint *)v.v.p);
+    case SP_TAG_OBJ:
+      /* a user object converts through its compiled #to_int (the generated
+         bridge); one without the method falls through to CRuby's TypeError */
+      if (v.cls_id >= 0 && v.v.p && sp_obj_to_int_fn) {
+        int ok = 0;
+        int64_t r = sp_obj_to_int_fn((int)v.cls_id, v.v.p, &ok);
+        if (ok) return r;
+      }
+      break;
+    default: break;
   }
+  sp_raise_cls("TypeError",
+               sp_sprintf("no implicit conversion of %s into Integer", pk_val_name(v)));
+  return 0;
 }
 
 static double pk_poly_to_flt(sp_RbVal v) {
@@ -794,6 +821,11 @@ const char *sp_StrArray_pack(sp_StrArray *arr, const char *fmt) {
     }
     else if (spec == 'H' || spec == 'h' || spec == 'B' || spec == 'b' || spec == 'u') {
       pk_str_bytes_directive(spec, count, s, sl, &buf, &len, &cap);
+    }
+    else if (strchr("cCsSlLqQnNvVjJiIfdeEgGUw", spec)) {
+      /* a numeric directive cannot take a String element: CRuby's TypeError
+         (the directive was silently dropped before) */
+      sp_raise_cls("TypeError", "no implicit conversion of String into Integer");
     }
   }
   char *r = sp_str_alloc(len);

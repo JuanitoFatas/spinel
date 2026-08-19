@@ -5468,6 +5468,11 @@ void native_arg_check(Compiler *c, int id, const char *what, NativeMethod *m,
                       got == TY_SYMBOL || got == TY_BIGINT);
     int bad = (want_scalar && !got_scalar) ||
               (want == TY_STRING && got != TY_STRING && got != TY_STRBUF);
+    /* a user object reaches a string/int slot through the typed-slot
+       emitters, which carry the implicit conversion protocol: #to_str /
+       #to_int converts, anything else raises CRuby's TypeError at run
+       time -- either way the emitted C is well-typed */
+    if (bad && ty_is_object(got) && (want == TY_STRING || want == TY_INT)) bad = 0;
     if (!bad) continue;
     char msg[256];
     snprintf(msg, sizeof msg, "%s `%s` argument %d (declared :%s, given %s)",
@@ -5492,10 +5497,12 @@ int emit_native_ctor(Compiler *c, int id, int ci, int argc, const int *argv, Buf
   buf_printf(b, "%s(%d", m->csym, ci);
   for (int ai = 0; ai < m->nargs && ai < argc; ai++) {
     buf_puts(b, ", ");
+    TyKind aw = ffi_spec_to_ty(m->args[ai]);
     if (sp_streq(m->args[ai], "any")) emit_boxed(c, argv[ai], b);
-    else if (sp_streq(m->args[ai], "string") && comp_ntype(c, argv[ai]) == TY_POLY) {
-      buf_puts(b, "sp_poly_to_s("); emit_expr(c, argv[ai], b); buf_puts(b, ")");
-    }
+    /* the typed-slot emitters carry the implicit conversion protocol
+       (poly unboxing, #to_str / #to_int on a user object) */
+    else if (aw == TY_STRING) emit_str_expr(c, argv[ai], b);
+    else if (aw == TY_INT) emit_int_expr(c, argv[ai], b);
     else emit_expr(c, argv[ai], b);
   }
   buf_puts(b, ")");
@@ -6559,9 +6566,8 @@ static int emit_class_new_call(Compiler *c, int id, Buf *b) {
           }
           else {
             buf_puts(b, "sp_Random_new(");
-            if (is_big) buf_puts(b, "sp_bigint_to_int(");
-            emit_expr(c, argv[0], b);
-            if (is_big) buf_puts(b, ")");
+            if (is_big) { buf_puts(b, "sp_bigint_to_int("); emit_expr(c, argv[0], b); buf_puts(b, ")"); }
+            else emit_int_expr(c, argv[0], b);
             buf_puts(b, ")");
           }
         }
@@ -13795,7 +13801,7 @@ void emit_call(Compiler *c, int id, Buf *b) {
         emit_int_expr(c, argv[0], b);
         buf_printf(b, "); lv_%s = _t%d; _t%d; })", bnm ? rename_local(bnm) : "?", trd, trd);
       }
-      else { buf_puts(b, "sp_File_read_n("); buf_puts(b, r); buf_puts(b, ", "); emit_expr(c, argv[0], b); buf_puts(b, ")"); }
+      else { buf_puts(b, "sp_File_read_n("); buf_puts(b, r); buf_puts(b, ", "); emit_int_expr(c, argv[0], b); buf_puts(b, ")"); }
       free(rb.p); return;
     }
     if (sp_streq(name, "gets") || sp_streq(name, "readline")) {
@@ -18602,12 +18608,12 @@ else { memcpy(dir, sf, n); dir[n] = 0; } }
     }
     if ((sp_streq(name, "fnmatch") || sp_streq(name, "fnmatch?")) && argc >= 2) {
       buf_puts(b, "sp_file_fnmatch("); emit_str_expr(c, argv[0], b); buf_puts(b, ", ");
-      emit_expr(c, argv[1], b); buf_puts(b, ")"); return;
+      emit_str_expr(c, argv[1], b); buf_puts(b, ")"); return;
     }
     if (sp_streq(name, "dirname") && argc == 2) {
       /* File.dirname(path, level): apply dirname `level` times (#2787) */
       int td = ++g_tmp, ti2 = ++g_tmp;
-      buf_printf(b, "({ const char *_t%d = ", td); emit_expr(c, argv[0], b);
+      buf_printf(b, "({ const char *_t%d = ", td); emit_str_expr(c, argv[0], b);
       buf_printf(b, "; sp_int _tl%d = ", td); emit_int_expr(c, argv[1], b);
       buf_printf(b, "; for (sp_int _t%d = 0; _t%d < _tl%d; _t%d++) _t%d = sp_file_dirname(_t%d); _t%d; })",
                  ti2, ti2, td, ti2, td, td, td);
@@ -18616,7 +18622,7 @@ else { memcpy(dir, sf, n); dir[n] = 0; } }
     /* chmod / truncate (#2778) */
     if (sp_streq(name, "chmod") && argc == 2) {
       buf_puts(b, "sp_file_chmod("); emit_int_expr(c, argv[0], b); buf_puts(b, ", ");
-      emit_expr(c, argv[1], b); buf_puts(b, ")"); return;
+      emit_str_expr(c, argv[1], b); buf_puts(b, ")"); return;
     }
     if (sp_streq(name, "truncate") && argc == 2) {
       buf_puts(b, "sp_file_truncate("); emit_str_expr(c, argv[0], b); buf_puts(b, ", ");
@@ -18630,7 +18636,7 @@ else { memcpy(dir, sf, n); dir[n] = 0; } }
         if (mv >= 0) {
           buf_puts(b, "sp_file_write_mode("); emit_str_expr(c, argv[0], b); buf_puts(b, ", ");
           emit_str_expr(c, argv[1], b); buf_puts(b, ", ");
-          emit_expr(c, mv, b); buf_puts(b, ")");
+          emit_str_expr(c, mv, b); buf_puts(b, ")");
           return;
         }
       }
@@ -18643,7 +18649,7 @@ else { memcpy(dir, sf, n); dir[n] = 0; } }
     }
     if ((sp_streq(name, "write") || sp_streq(name, "binwrite")) && argc == 2) {
       /* runtime write is void; Ruby returns the byte count */
-      buf_puts(b, "({ const char *_wp = "); emit_expr(c, argv[0], b);
+      buf_puts(b, "({ const char *_wp = "); emit_str_expr(c, argv[0], b);
       buf_puts(b, "; const char *_wd = ");
       if (comp_ntype(c, argv[1]) == TY_POLY) {
         buf_puts(b, "sp_poly_to_s("); emit_expr(c, argv[1], b); buf_puts(b, ")");
@@ -18666,7 +18672,7 @@ else { memcpy(dir, sf, n); dir[n] = 0; } }
     if ((sp_streq(name, "readable_real?") || sp_streq(name, "writable_real?") ||
          sp_streq(name, "executable_real?")) && argc == 1) {
       buf_printf(b, "sp_file_%.*s_real(", (int)(strlen(name) - 6), name);
-      emit_expr(c, argv[0], b); buf_puts(b, ")"); return;
+      emit_str_expr(c, argv[0], b); buf_puts(b, ")"); return;
     }
     if (sp_streq(name, "directory?") && argc == 1) {
       buf_puts(b, "sp_file_directory("); emit_str_expr(c, argv[0], b); buf_puts(b, ")"); return;
@@ -18729,7 +18735,7 @@ else { memcpy(dir, sf, n); dir[n] = 0; } }
       buf_printf(b, "(sp_int)%d; })", argc - 2); return;
     }
     if (sp_streq(name, "file?") && argc == 1) {
-      buf_puts(b, "(!sp_file_directory("); emit_expr(c, argv[0], b); buf_puts(b, ") && sp_file_exist("); emit_expr(c, argv[0], b); buf_puts(b, "))"); return;
+      buf_puts(b, "(!sp_file_directory("); emit_str_expr(c, argv[0], b); buf_puts(b, ") && sp_file_exist("); emit_str_expr(c, argv[0], b); buf_puts(b, "))"); return;
     }
     if ((sp_streq(name, "delete") || sp_streq(name, "unlink")) && argc >= 1) {
       buf_puts(b, "({ ");
@@ -18739,7 +18745,7 @@ else { memcpy(dir, sf, n); dir[n] = 0; } }
       buf_printf(b, "(sp_int)%d; })", argc); return;
     }
     if (sp_streq(name, "rename") && argc == 2) {
-      buf_puts(b, "({ sp_file_rename("); emit_expr(c, argv[0], b); buf_puts(b, ", ");
+      buf_puts(b, "({ sp_file_rename("); emit_str_expr(c, argv[0], b); buf_puts(b, ", ");
       emit_expr(c, argv[1], b); buf_puts(b, "); (sp_int)0; })"); return;
     }
     if (sp_streq(name, "mtime") && argc == 1) {
@@ -18789,14 +18795,14 @@ else { memcpy(dir, sf, n); dir[n] = 0; } }
       }
       if (csep >= 0) {
         buf_puts(b, "sp_file_readlines_sep(");
-        emit_expr(c, argv[0], b); buf_puts(b, ", ");
-        emit_expr(c, csep, b);
+        emit_str_expr(c, argv[0], b); buf_puts(b, ", ");
+        emit_str_expr(c, csep, b);
         buf_printf(b, ", %d)", chomp);
         return;
       }
       if (chomp) buf_puts(b, "sp_file_readlines_chomp(");
       else buf_puts(b, "sp_file_readlines(");
-      emit_expr(c, argv[0], b); buf_puts(b, ")"); return;
+      emit_str_expr(c, argv[0], b); buf_puts(b, ")"); return;
     }
     /* File.open(path, mode) / File.new(path, mode) without block -> TY_IO
        handle. The mode may be a string, an integer flag word (#2788), or a
@@ -18932,7 +18938,7 @@ else { memcpy(dir, sf, n); dir[n] = 0; } }
       int dscalar = is_scalar_ret(dres) && dres != TY_VOID && dres != TY_NIL && dres != TY_UNKNOWN;
       int td = ++g_tmp, tdv = ++g_tmp;
       buf_puts(b, "({ ");
-      buf_printf(b, "sp_Dir *_t%d = sp_Dir_new(", td); emit_expr(c, argv[0], b); buf_puts(b, "); ");
+      buf_printf(b, "sp_Dir *_t%d = sp_Dir_new(", td); emit_str_expr(c, argv[0], b); buf_puts(b, "); ");
       buf_printf(b, "SP_GC_ROOT(_t%d); ", td);
       if (dpn) buf_printf(b, "sp_Dir *lv_%s = _t%d; ", dpn, td);
       for (int k = 0; k < dbn - 1; k++) emit_stmt(c, dbb[k], b, 0);
@@ -18968,10 +18974,10 @@ else { memcpy(dir, sf, n); dir[n] = 0; } }
       buf_puts(b, "sp_dir_glob("); emit_str_expr(c, argv[0], b); buf_puts(b, ")"); return;
     }
     if ((sp_streq(name, "entries") || sp_streq(name, "children")) && argc == 1) {
-      buf_printf(b, "sp_dir_%s(", name); emit_expr(c, argv[0], b); buf_puts(b, ")"); return;
+      buf_printf(b, "sp_dir_%s(", name); emit_str_expr(c, argv[0], b); buf_puts(b, ")"); return;
     }
     if ((sp_streq(name, "mkdir") || sp_streq(name, "rmdir") || sp_streq(name, "chdir")) && argc >= 1) {
-      buf_printf(b, "sp_dir_%s(", name); emit_expr(c, argv[0], b); buf_puts(b, ")"); return;
+      buf_printf(b, "sp_dir_%s(", name); emit_str_expr(c, argv[0], b); buf_puts(b, ")"); return;
     }
   }
 
@@ -19794,7 +19800,7 @@ else { memcpy(dir, sf, n); dir[n] = 0; } }
     if (rre >= 0 && sp_streq(name, "match?") && argc == 1) {
       /* /re/.match?(str): a match boolean that leaves $~ alone (CRuby) */
       if (a0 == TY_POLY) { buf_printf(b, "sp_re_match_p(sp_re_pat_%d, sp_poly_to_s(", rre); emit_expr(c, argv[0], b); buf_puts(b, "))"); }
-      else { buf_printf(b, "sp_re_match_p(sp_re_pat_%d, ", rre); emit_expr(c, argv[0], b); buf_puts(b, ")"); }
+      else { buf_printf(b, "sp_re_match_p(sp_re_pat_%d, ", rre); emit_str_expr(c, argv[0], b); buf_puts(b, ")"); }
       return;
     }
     if (rre >= 0 && sp_streq(name, "===") && argc == 1) {
@@ -20127,7 +20133,7 @@ else { memcpy(dir, sf, n); dir[n] = 0; } }
         (sp_streq(name, "match?") || sp_streq(name, "match"))) {
       int ts = ++g_tmp;
       const char *fn = sp_streq(name, "match?") ? "sp_re_match_p" : "sp_re_matchdata";
-      buf_printf(b, "({ const char *_t%d = ", ts); emit_expr(c, argv[0], b);
+      buf_printf(b, "({ const char *_t%d = ", ts); emit_str_expr(c, argv[0], b);
       buf_printf(b, "; mrb_regexp_pattern *_t%dp = re_compile(_t%d, (int64_t)strlen(_t%d ? _t%d : \"\"), 0); ",
                  ts, ts, ts, ts);
       buf_printf(b, "%s(_t%dp, ", fn, ts); emit_expr(c, recv, b); buf_puts(b, "); })");
@@ -20304,7 +20310,7 @@ else { memcpy(dir, sf, n); dir[n] = 0; } }
         if (rp_ok && rp.p) {
           if ((sp_streq(name, "match?") || sp_streq(name, "===")) && argc == 1) {
             if (a0 == TY_POLY) { buf_printf(b, "sp_re_match_p(%s, sp_poly_to_s(", rp.p); emit_expr(c, argv[0], b); buf_puts(b, "))"); }
-            else { buf_printf(b, "sp_re_match_p(%s, ", rp.p); emit_expr(c, argv[0], b); buf_puts(b, ")"); }
+            else { buf_printf(b, "sp_re_match_p(%s, ", rp.p); emit_str_expr(c, argv[0], b); buf_puts(b, ")"); }
             free(rp.p); return;
           }
           if (sp_streq(name, "=~") && argc == 1) {
