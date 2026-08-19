@@ -7877,6 +7877,20 @@ static int mark_empty_hash_key_ctx(Compiler *c) {
        representable by the poly-keyed variant; the StrPolyHash default would
        hand the boxed value to a const char * slot and segfault */
     else if (kt == TY_POLY) want = TY_POLY_POLY_HASH;
+    /* Every other KNOWN key kind -- an Array, a Float, a user object -- has no
+       keyed variant of its own either, so the poly-keyed one is the only
+       representation that holds it. Falling through here left the literal at
+       the StrPolyHash default and put the key straight into a const char *
+       slot, which the C compiler reported against generated code (#4000).
+       TY_UNKNOWN still falls through: the key is not settled yet. */
+    else if (kt != TY_UNKNOWN && kt != TY_VOID) want = TY_POLY_POLY_HASH;
+    /* An empty container LITERAL as the key infers no kind at all, but it is
+       still a pointer at emit time (a bare `[]` lowers to an array), so it
+       needs the same widening -- the unresolved kind is what let `{}.fetch []`
+       through to the C compiler. */
+    else if (kt == TY_UNKNOWN &&
+             (nt_kind(nt, av[0]) == NK_ArrayNode || nt_kind(nt, av[0]) == NK_HashNode))
+      want = TY_POLY_POLY_HASH;
     if (!ty_is_hash(want)) continue;
     if (direct) { c->hash_want[recv] = want; changed = 1; continue; }
     /* `@h = {}` in initialize, indexed with a typed key elsewhere in the same
