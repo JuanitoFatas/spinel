@@ -36,6 +36,17 @@ const char *ty_nullable_builtin_id(TyKind t) {
   }
 }
 
+/* 1 iff some class inherits from `ocid`. A class with subclasses is only the
+   STATIC type at a boxing site: an inherited method boxing `self`, or a base
+   -typed slot holding a subclass instance, would stamp the base's id and the
+   value then dispatched as the base (#3773, #4023). The object carries its own
+   id in its first field, so the _dyn box reads that instead. */
+static int class_has_subclass(Compiler *c, int ocid) {
+  for (int k = 0; k < c->nclasses; k++)
+    if (k != ocid && c->classes[k].parent == ocid) return 1;
+  return 0;
+}
+
 void emit_boxed_text(Compiler *c, TyKind t, const char *expr, Buf *b) {
   if (t == TY_POLY) { buf_puts(b, expr); return; }
   /* An untyped or void value is already emitted as a boxed sp_RbVal (a nil
@@ -61,7 +72,10 @@ void emit_boxed_text(Compiler *c, TyKind t, const char *expr, Buf *b) {
        never NULL and `expr` is not a pointer, so the plain box is correct. */
     if (comp_ty_value_obj(c, t))
       buf_printf(b, "sp_box_vobj_%s(%s)", c->classes[ty_object_class(t)].c_name, expr);
-    else buf_printf(b, "sp_box_nullable_obj((void *)(%s), %d)", expr, ty_object_class(t));
+    else
+      buf_printf(b, "sp_box_nullable_obj%s((void *)(%s), %d)",
+                 class_has_subclass(c, ty_object_class(t)) ? "_dyn" : "",
+                 expr, ty_object_class(t));
     return;
   }
   if (ty_is_hash(t) && hash_box_cls(t)) { buf_printf(b, "sp_box_obj(%s, %s)", expr, hash_box_cls(t)); return; }
@@ -631,10 +645,7 @@ void emit_boxed(Compiler *c, int node, Buf *b) {
     /* A class with subclasses is only the STATIC type here: an inherited
        method boxing `self` would stamp the defining class, and the boxed value
        then dispatched as the parent (#3773). Read the id the object carries. */
-    int subclassed = 0;
-    if (!is_val)
-      for (int k = 0; k < c->nclasses && !subclassed; k++)
-        if (k != ocid && c->classes[k].parent == ocid) subclassed = 1;
+    int subclassed = !is_val && class_has_subclass(c, ocid);
     if (is_val) buf_printf(b, "sp_box_vobj_%s(", c->classes[ocid].c_name);
     else if (subclassed) buf_puts(b, "sp_box_nullable_obj_dyn((void *)(");
     else buf_puts(b, "sp_box_nullable_obj((void *)(");

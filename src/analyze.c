@@ -13825,6 +13825,58 @@ void analyze_program(Compiler *c) {
     }
   }
 
+  /* A slot typed as a class that HAS subclasses is only its STATIC type: an
+     inherited method storing `self` types the slot as the class that DEFINED
+     the method, while the object can be any subclass. A read then refused a
+     method the runtime object answers perfectly well:
+
+       class Node;   def attach(o) = o.link = self; end
+       class Column < Node; attr_accessor :size; end
+       Column.new.attach(n); n.link.size   # undefined method 'size' for Node
+
+     Widen the ivar behind such a read to poly, on evidence: the call names a
+     method the declared class cannot answer and some subclass can (#4023). */
+  for (int id = 0; id < c->nt->count; id++) {
+    if (nt_kind(c->nt, id) != NK_CallNode) continue;
+    const char *mn = nt_str(c->nt, id, "name");
+    int rc = nt_ref(c->nt, id, "receiver");
+    if (!mn || rc < 0 || nt_kind(c->nt, rc) != NK_CallNode) continue;
+    TyKind rt2 = comp_ntype(c, rc);
+    if (!ty_is_object(rt2)) continue;
+    int base = ty_object_class(rt2);
+    if (base < 0 || base >= c->nclasses) continue;
+    if (comp_method_in_chain(c, base, mn, NULL) >= 0 ||
+        comp_reader_in_chain(c, base, mn, NULL)) continue;
+    int sub_answers = 0;
+    for (int k = 0; k < c->nclasses && !sub_answers; k++) {
+      if (k == base) continue;
+      int anc = 0;
+      for (int p2 = c->classes[k].parent; p2 >= 0; p2 = c->classes[p2].parent)
+        if (p2 == base) { anc = 1; break; }
+      if (anc && (comp_method_in_chain(c, k, mn, NULL) >= 0 ||
+                  comp_reader_in_chain(c, k, mn, NULL))) sub_answers = 1;
+    }
+    if (!sub_answers) continue;
+    /* the receiver is a reader call: widen the ivar it reads */
+    const char *rn = nt_str(c->nt, rc, "name");
+    int orc = nt_ref(c->nt, rc, "receiver");
+    TyKind ot = orc >= 0 ? comp_ntype(c, orc) : TY_UNKNOWN;
+    if (!rn || !ty_is_object(ot)) continue;
+    int ocid = ty_object_class(ot);
+    if (ocid < 0 || ocid >= c->nclasses) continue;
+    int defc = -1;
+    if (comp_reader_in_chain(c, ocid, rn, &defc)) {
+      if (defc < 0 || defc >= c->nclasses) defc = ocid;
+      char ivn[128];
+      snprintf(ivn, sizeof ivn, "@%s", rn);
+      int ix = comp_ivar_index(&c->classes[defc], ivn);
+      if (ix >= 0 && ty_is_object(c->classes[defc].ivar_types[ix]))
+        c->classes[defc].ivar_types[ix] = TY_POLY;
+      continue;
+    }
+
+  }
+
   check_seed_contradictions(c);
 
   /* A global the program only ever mentions holding nil -- `$log = nil` and
