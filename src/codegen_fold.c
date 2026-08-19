@@ -3744,6 +3744,11 @@ int emit_each_with_index_terminal(Compiler *c, int id, Buf *b) {
        bb[bn - 1] read and treat the absent tail value as nil -- a poly value so
        the temp initializes to sp_box_nil() rather than an integer 0. */
     TyKind bt = bn > 0 ? comp_ntype(c, bb[bn - 1]) : TY_NIL;
+    /* A body whose value IS nil types VOID here, and `void _tN` is not a
+       declaration -- `select { nil }` never compiled, and `select {}` reaches
+       the same place now that an empty body carries the nil it means (#4006).
+       nil is a value in this slot, not the absence of one. */
+    if (bt == TY_VOID) bt = TY_NIL;
     if (bt == TY_UNKNOWN) bt = TY_INT;
     int vpoly = (bt == TY_POLY || bt == TY_NIL);
     int tv = ++g_tmp; char tvb[24]; snprintf(tvb, sizeof tvb, "_t%d", tv);
@@ -4937,6 +4942,11 @@ int emit_collect_expr(Compiler *c, int id, Buf *b) {
        push the element when that value (negated for reject) is truthy -- so a
        `next <cond>` inside the block decides inclusion instead of being lost. */
     TyKind cty = comp_ntype(c, bb[bn - 1]);
+    /* A body whose value IS nil types VOID, and `void _tN` is not a
+       declaration: `select { nil }` never compiled, and `select {}` reaches
+       here now that an empty body carries the nil it means (#4006). Carry it
+       boxed -- nil is a value in this slot, and a falsy one. */
+    if (cty == TY_VOID || cty == TY_NIL) cty = TY_POLY;
     if (cty == TY_UNKNOWN) cty = TY_INT;
     int cond_poly = (cty == TY_POLY);
     int tv = ++g_tmp;

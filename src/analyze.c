@@ -4094,6 +4094,44 @@ static int desugar_kernel_method_block_arg(Compiler *c) {
 
 /* `m(&h)` where h is a Hash: Hash#to_proc -- rewrite the block argument into
    an explicit one-parameter block indexing the hash (`m { |x| h[x] }`). */
+/* An empty block body IS nil: `{ }` and `{ nil }` are the same block, and
+   CRuby answers accordingly (`[1,2].filter_map {}` -> [], `.group_by {}` ->
+   {nil=>[1,2]}). The iterator arms each read the body's tail to type their
+   result, and most of them decline outright when there is none -- so the call
+   fell through to the unresolved-call gate and reported the METHOD as
+   undefined, which is the one thing it is not (#4006). Write the nil the block
+   already means, once, rather than teaching a dozen arms to special-case it.
+   The arms that DO have an empty-body path keep answering the same thing: a
+   body of `nil` maps every element to nil, which is what they hard-coded. */
+static int desugar_empty_block_body(Compiler *c) {
+  NodeTable *nt = (NodeTable *)c->nt;
+  int changed = 0;
+  int n0 = nt->count;
+  for (int id = 0; id < n0; id++) {
+    if (nt_kind(nt, id) != NK_BlockNode) continue;
+    int body = nt_ref(nt, id, "body");
+    if (body >= 0) {
+      /* a `begin`/rescue body is not a StatementsNode and is never empty */
+      if (nt_kind(nt, body) != NK_StatementsNode) continue;
+      int bn = 0; nt_arr(nt, body, "body", &bn);
+      if (bn > 0) continue;
+    }
+    int nilnode = nt_new_node(nt, "NilNode");
+    if (nilnode < 0) continue;
+    if (body < 0) {
+      body = nt_new_node(nt, "StatementsNode");
+      if (body < 0) continue;
+      nt_node_set_ref(nt, id, "body", body);
+    }
+    nt_node_set_arr(nt, body, "body", &nilnode, 1);
+    comp_grow_node_arrays(c);
+    c->nscope[nilnode] = c->nscope[id];
+    c->nscope[body] = c->nscope[id];
+    changed = 1;
+  }
+  return changed;
+}
+
 static int desugar_hash_block_arg(Compiler *c) {
   NodeTable *nt = (NodeTable *)c->nt;
   int changed = 0;
@@ -11680,6 +11718,7 @@ void analyze_program(Compiler *c) {
     ch |= desugar_reduce_method_symbol(c);     /* reduce(:gcd) -> reduce { |a,x| a.gcd(x) } */
     ch |= desugar_symbol_var_block_arg(c);     /* m(&sym_var) -> m { |x| x.send(sym_var) } */
     ch |= desugar_kernel_method_block_arg(c);  /* m(&method(:Integer)) -> m { |x| Integer(x) } */
+    ch |= desugar_empty_block_body(c);         /* m { } -> m { nil } */
     ch |= desugar_hash_block_arg(c);           /* m(&hash) -> m { |x| hash[x] } */
     ch |= desugar_dynamic_send(c);             /* recv.send(var, a) -> static name dispatch */
     ch |= desugar_toplevel_instance_exec(c);   /* top-level instance_exec(&b) -> b.call */

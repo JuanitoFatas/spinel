@@ -854,7 +854,13 @@ int infer_array_call(Compiler *c, int id, TyKind rt, TyKind *out) {
       if (blk >= 0) {
         int body = nt_ref(nt, blk, "body");
         int bn = 0; const int *bb = body >= 0 ? nt_arr(nt, body, "body", &bn) : NULL;
-        { *out = bn > 0 ? infer_type(c, bb[bn - 1]) : ty_array_elem(rt); return 1; }
+        TyKind st = bn > 0 ? infer_type(c, bb[bn - 1]) : ty_array_elem(rt);
+        /* A block whose value is nil accumulates BOXED: the sum is the init
+           (0) for an empty receiver and a TypeError for a non-empty one --
+           never nil. Typing it nil let the call constant-fold away, so
+           `[].sum {}` printed "nil" instead of 0 (#4006). */
+        if (st == TY_NIL || st == TY_VOID) st = TY_POLY;
+        { *out = st; return 1; }
       }
       { *out = ty_array_elem(rt); return 1; }
     }
