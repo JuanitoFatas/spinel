@@ -320,7 +320,13 @@ int emit_hash_collect_expr(Compiler *c, int id, Buf *b) {
     { int bn2 = 0; int bbody = nt_ref(nt, block, "body");
       const int *bb2 = bbody >= 0 ? nt_arr(nt, bbody, "body", &bn2) : NULL;
       TyKind bvt2 = bn2 > 0 ? comp_ntype(c, bb2[bn2 - 1]) : TY_UNKNOWN;
-      if (bvt2 == TY_POLY || bvt2 == TY_UNKNOWN)
+      /* A body whose value IS nil types VOID/NIL, which is neither a boxed
+         value to ask sp_poly_truthy about nor a scalar to test -- `select
+         { nil }` did not compile. It is statically FALSY, so the pair is
+         dropped (kept, for reject); the body still runs, for its effects. */
+      if (bvt2 == TY_VOID || bvt2 == TY_NIL)
+        buf_printf(g_pre, "if (((void)(%s), %d)) { ", vb ? vb : "0", is_rej ? 1 : 0);
+      else if (bvt2 == TY_POLY || bvt2 == TY_UNKNOWN)
         buf_printf(g_pre, "if (%ssp_poly_truthy(%s)) { ", is_rej ? "!" : "", vb ? vb : "sp_box_nil()");
       else
         buf_printf(g_pre, "if (%s(%s)) { ", is_rej ? "!" : "", vb ? vb : "0");
@@ -435,7 +441,11 @@ int emit_hash_reduce_search_expr(Compiler *c, int id, Buf *b) {
   char *vb = emit_hash_block_eval(c, block, rt, hn, trecv, ti, block_param_name(c, block, 1) ? 0 : 2, &bret);
   if (is_find) {
     emit_indent(g_pre, g_indent + 1);
-    if (bret == TY_POLY)
+    /* a nil block value types VOID/NIL: statically falsy, so no entry ever
+       wins -- but the body still runs, for its effects (see select above) */
+    if (bret == TY_VOID || bret == TY_NIL)
+      buf_printf(g_pre, "if (((void)(%s), 0)) {\n", vb ? vb : "0");
+    else if (bret == TY_POLY)
       buf_printf(g_pre, "if (sp_poly_truthy(%s)) {\n", vb ? vb : "sp_box_nil()");
     else
       buf_printf(g_pre, "if (%s) {\n", vb ? vb : "0");
@@ -451,7 +461,9 @@ int emit_hash_reduce_search_expr(Compiler *c, int id, Buf *b) {
            buf_puts(g_pre, bx.p ? bx.p : "sp_box_nil()"); free(bx.p); }
     buf_puts(g_pre, ";\n");
     emit_indent(g_pre, g_indent + 1);
-    buf_printf(g_pre, "if (_t%d == -1 || sp_poly_%s(_kv%d, _bk%d)) {\n",
+    /* the ORDERING entry, not the Comparable operator: a key that is always
+       nil ties everywhere, so every entry keeps the first (#4006) */
+    buf_printf(g_pre, "if (_t%d == -1 || sp_poly_order_%s(_kv%d, _bk%d)) {\n",
                twin, is_min ? "lt" : "gt", ti, tbest);
     emit_indent(g_pre, g_indent + 2); buf_printf(g_pre, "_t%d = _t%d; _bk%d = _kv%d;\n", twin, ti, tbest, ti);
     emit_indent(g_pre, g_indent + 1); buf_puts(g_pre, "}\n");
