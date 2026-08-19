@@ -2185,10 +2185,13 @@ int emit_array_call(Compiler *c, int id, Buf *b) {
         buf_printf(b, "sp_%sArray_get(", k);
         emit_expr(c, recv, b); buf_puts(b, ", ");
         if (infer_type(c, argv[0]) == TY_POLY) {
-          int t = ++g_tmp;
-          buf_printf(b, "({ sp_RbVal _t%d = ", t);
+          /* sp_poly_to_i, not a raw `.v.i`: the union read assumed the box
+             held an Integer, so a boxed user object indexed by its pointer
+             bits and the read answered a wrong element in silence. The
+             conversion keeps the boxed-Integer case inline. */
+          buf_puts(b, "sp_poly_arg_int(");
           emit_expr(c, argv[0], b);
-          buf_printf(b, "; _t%d.v.i; })", t);
+          buf_puts(b, ")");
         }
 else {
           /* emit_int_expr, not raw: an unresolved-constant index lowers to a
@@ -3242,7 +3245,7 @@ else {
           buf_puts(b, "sp_poly_to_f("); emit_expr(c, argv[0], b); buf_puts(b, ")");
         }
         else if (rt == TY_INT_ARRAY && init_t == TY_POLY) {
-          buf_puts(b, "sp_poly_to_i("); emit_expr(c, argv[0], b); buf_puts(b, ")");
+          buf_puts(b, "sp_poly_arg_int("); emit_expr(c, argv[0], b); buf_puts(b, ")");
         }
         else {
           emit_expr(c, argv[0], b);

@@ -485,6 +485,15 @@ int collect_mode(void);            /* 1 in SP_COLLECT_ERRORS mode (cached) */
 extern jmp_buf g_unsup_recover;    /* per-unit recovery point, armed by the driver */
 extern int g_unsup_armed;          /* nonzero while a recovery point is live */
 extern int g_unsup_probe;          /* silent emittability probe (drop a dynamic-send arm) */
+/* The compiled conversion method a statically-typed user object reaches at a
+   typed slot (CRuby's implicit conversion protocol), or -1: `conv` is "to_str"
+   or "to_int" and `want` the slot's type, which the method's declared return
+   must be. *def_out receives the defining class. Shared by the emitter and the
+   native-argument check so both agree on which objects may cross. */
+int obj_conv_method(Compiler *c, TyKind t, const char *conv, TyKind want, int *def_out);
+/* 1 iff any class defines a usable #to_int / #to_str -- see codegen.c. */
+int prog_has_conv_method(Compiler *c, const char *conv, TyKind want);
+
 __attribute__((noreturn)) void unsupported(Compiler *c, int id, const char *what);
 __attribute__((noreturn)) void unsupported_feature(Compiler *c, int id, const char *msg);
 /* Returns a negative cls_id for well-known builtin class/module names,

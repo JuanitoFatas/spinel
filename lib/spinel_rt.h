@@ -2054,7 +2054,74 @@ static SP_NOINLINE sp_int sp_poly_to_i_cold(sp_RbVal v) {
   if (v.tag == SP_TAG_OBJ && v.cls_id == SP_BUILTIN_BIG_RATIONAL) return (sp_int)sp_brat_to_f((sp_BigRational *)v.v.p);
   /* a Time read out of a container: its to_i is the epoch second (#3699) */
   if (v.tag == SP_TAG_OBJ && v.cls_id == SP_BUILTIN_TIME && v.v.p) return (sp_int)((sp_Time *)v.v.p)->tv_sec;
+  /* A user object reads as 0 here, and deliberately: sp_poly_to_i is also the
+     runtime's speculative int-slot filler (a curry collects boxed arguments
+     and fills the scalar slots its target MIGHT read; reduce seeds an int
+     accumulator the same way), so it must answer for a value that is not a
+     number at all. The conversion protocol lives in sp_poly_arg_int, which
+     the emitter uses where the slot really is an Integer. */
   return 0;
+}
+
+/* CRuby's implicit conversion protocol on a BOXED user object: it converts
+   through the class's compiled #to_int / #to_str (the generated bridge), and a
+   class defining neither is CRuby's TypeError -- where the object read as 0 or
+   as its #to_s rendering and the caller answered a wrong result in silence,
+   which is the one outcome these boundaries must not have. Builtin-backed
+   objects carry a NEGATIVE cls_id and never reach here; the callers test for
+   that, and the ordinary conversions already know them (Time, Rational, ...).
+   Both are cold by construction: the object case is the rare one, and keeping
+   it off sp_poly_to_i's inlined fast path is worth 5-7% on optcarrot. */
+static SP_NOINLINE sp_int sp_poly_arg_int_obj(sp_RbVal v);
+static SP_NOINLINE sp_int sp_poly_arg_int_cold(sp_RbVal v);
+/* A boxed value entering an Integer slot the emitter knows to BE an Integer
+   slot (a builtin's argument, an index, a narrowing into an int local). Same
+   inline shape as sp_poly_to_i -- the object test sits in the cold half,
+   because one extra branch in this form cost optcarrot 5-7% through the
+   per-pixel sprite loop. */
+static SP_INLINE sp_int sp_poly_arg_int(sp_RbVal v) {
+  if (v.tag == SP_TAG_INT || v.tag == SP_TAG_SYM) return v.v.i;
+  if (v.tag == SP_TAG_FLT) return (sp_int)v.v.f;
+  return sp_poly_arg_int_cold(v);
+}
+static SP_NOINLINE sp_int sp_poly_arg_int_cold(sp_RbVal v) {
+  if (v.tag == SP_TAG_OBJ && v.cls_id >= 0) return sp_poly_arg_int_obj(v);
+  return sp_poly_to_i_cold(v);
+}
+static SP_NOINLINE sp_int sp_poly_arg_int_obj(sp_RbVal v) {
+  if (v.v.p && sp_obj_to_int_fn) {
+    int ok = 0;
+    sp_int r = sp_obj_to_int_fn((int)v.cls_id, v.v.p, &ok);
+    if (ok) return r;
+  }
+  sp_raise_cls("TypeError",
+               sp_sprintf("no implicit conversion of %s into Integer",
+                          sp_obj_cls_name_fn ? sp_obj_cls_name_fn((int)v.cls_id) : "Object"));
+  return 0;
+}
+static SP_NOINLINE const char *sp_poly_arg_str_obj(sp_RbVal v) {
+  if (v.v.p && sp_obj_to_str_fn) {
+    const char *r = sp_obj_to_str_fn((int)v.cls_id, v.v.p);
+    if (r) return r;
+  }
+  sp_raise_cls("TypeError",
+               sp_sprintf("no implicit conversion of %s into String",
+                          sp_obj_cls_name_fn ? sp_obj_cls_name_fn((int)v.cls_id) : "Object"));
+  return sp_str_empty;
+}
+/* A boxed value entering a `const char *` ARGUMENT slot. sp_poly_to_s cannot
+   carry the protocol the way sp_poly_to_i does: its object arm renders through
+   #to_s, which is right for interpolation and for `puts`, so the argument
+   boundary needs its own form. Every other tag keeps the slot's existing
+   looseness (an Integer argument still stringifies) -- a separate
+   compatibility question from this protocol, deliberately left alone. */
+static SP_NOINLINE const char *sp_poly_arg_str_slow(sp_RbVal v) {
+  if (v.tag == SP_TAG_OBJ && v.cls_id >= 0) return sp_poly_arg_str_obj(v);
+  return sp_poly_to_s(v);
+}
+static SP_INLINE const char *sp_poly_arg_str(sp_RbVal v) {
+  if (v.tag == SP_TAG_STR) return v.v.s;
+  return sp_poly_arg_str_slow(v);
 }
 
 static sp_float sp_poly_to_f(sp_RbVal v) { if (v.tag == SP_TAG_FLT) return v.v.f; if (v.tag == SP_TAG_INT || v.tag == SP_TAG_SYM) return (sp_float)v.v.i; if (v.tag == SP_TAG_BIGINT) return sp_bigint_to_double((sp_Bigint *)v.v.p); if (v.tag == SP_TAG_STR) return (sp_float)atof(v.v.s ? v.v.s : sp_str_empty); if (v.tag == SP_TAG_BOOL) return v.v.b ? 1.0 : 0.0; if (v.tag == SP_TAG_OBJ && v.cls_id == SP_BUILTIN_RATIONAL) return sp_rational_to_f(*(sp_Rational *)v.v.p); if (v.tag == SP_TAG_OBJ && v.cls_id == SP_BUILTIN_BIG_RATIONAL) return sp_brat_to_f((sp_BigRational *)v.v.p); if (v.tag == SP_TAG_OBJ && v.cls_id == SP_BUILTIN_TIME && v.v.p) { sp_Time _tt = *(sp_Time *)v.v.p; return (sp_float)_tt.tv_sec + (sp_float)_tt.tv_nsec / 1e9; } return 0.0; }  /* STR arm mirrors sp_poly_to_i's strtoll and the typed String#to_f (atof) */

@@ -254,16 +254,40 @@ TyKind yield_site_type(Compiler *c, int node) {
    build. Handles only a conversion method taking no parameters whose static
    return type is the slot's type; anything else keeps the prior behavior.
    Returns 1 when it emitted, 0 to fall through. */
+int obj_conv_method(Compiler *c, TyKind t, const char *conv, TyKind want, int *def_out) {
+  if (!ty_is_object(t)) return -1;
+  int cid = ty_object_class(t);
+  if (cid < 0 || cid >= c->nclasses) return -1;
+  int def = -1, mi = comp_method_in_chain(c, cid, conv, &def);
+  if (mi < 0) return -1;
+  Scope *um = &c->scopes[mi];
+  /* only a no-parameter method whose static return IS the slot's type
+     converts; any other shape is not this protocol */
+  if (um->ret != want || um->nparams != 0) return -1;
+  if (def_out) *def_out = def;
+  return mi;
+}
+
+/* 1 iff any class in the program defines a usable #to_int / #to_str. A
+   NARROWING into a typed slot compiles the conversion in only then: unlike an
+   argument slot, a narrowing sits wherever the analysis put it -- including
+   inside a per-pixel loop, where the object test is real work rather than a
+   cold arm, and measured 6.7% more instructions on optcarrot. A program that
+   defines no conversion method can never take that arm, so it pays nothing. */
+int prog_has_conv_method(Compiler *c, const char *conv, TyKind want) {
+  for (int i = 0; i < c->nclasses; i++)
+    if (obj_conv_method(c, ty_object(i), conv, want, NULL) >= 0) return 1;
+  return 0;
+}
+
 static int emit_obj_conv(Compiler *c, int node, const char *conv, TyKind want,
-                         const char *into, const char *zero, Buf *b) {
+                         const char *into, Buf *b) {
   TyKind t = comp_ntype(c, node);
   if (!ty_is_object(t)) return 0;
   int cid = ty_object_class(t);
   if (cid < 0 || cid >= c->nclasses) return 0;
-  int def = -1, mi = comp_method_in_chain(c, cid, conv, &def);
-  if (mi >= 0) {
-    Scope *um = &c->scopes[mi];
-    if (um->ret != want || um->nparams != 0) return 0;
+  int def = -1;
+  if (obj_conv_method(c, t, conv, want, &def) >= 0) {
     buf_printf(b, "sp_%s_%s(", c->classes[def].c_name, mc(conv));
     if (!comp_ty_value_obj(c, t)) buf_printf(b, "(sp_%s *)", c->classes[def].c_name);
     buf_puts(b, "(");
@@ -271,13 +295,17 @@ static int emit_obj_conv(Compiler *c, int node, const char *conv, TyKind want,
     buf_puts(b, "))");
     return 1;
   }
+  /* The class is static and settled here, so a missing #to_str / #to_int is
+     not a run-time question: the call can only ever raise. Say so at compile
+     time, where the author can act on it, rather than emitting a raise -- and
+     where the raw object pointer used to land in the scalar slot and stop the
+     C build with a message about a generated symbol. */
+  if (comp_method_in_chain(c, cid, conv, NULL) >= 0) return 0;  /* wrong shape: old path */
   const char *cn = class_ruby_name(c, cid);
-  buf_puts(b, "({ (void)(");
-  emit_expr(c, node, b);
-  buf_printf(b, "); sp_raise_cls(\"TypeError\","
-                " (&(\"\\xff\" \"no implicit conversion of %s into %s\")[1])); %s; })",
-             cn ? cn : "Object", into, zero);
-  return 1;
+  char msg[256];
+  snprintf(msg, sizeof msg, "no implicit conversion of %s into %s (%s defines no #%s)",
+           cn ? cn : "Object", into, cn ? cn : "the class", conv);
+  unsupported_feature(c, node, msg);
 }
 
 void emit_int_expr(Compiler *c, int node, Buf *b) {
@@ -292,7 +320,9 @@ void emit_int_expr(Compiler *c, int node, Buf *b) {
     return;
   }
   if (yield_site_type(c, node) == TY_POLY) {
-    buf_puts(b, "sp_poly_to_i("); emit_expr(c, node, b); buf_puts(b, ")");
+    /* sp_poly_arg_int, not sp_poly_to_i: a boxed user object in an Integer
+       slot converts through #to_int or raises, where to_i read it as 0 */
+    buf_puts(b, "sp_poly_arg_int("); emit_expr(c, node, b); buf_puts(b, ")");
     return;
   }
   /* A value the analysis widened to Bignum (a doubling counter, a masked
@@ -309,7 +339,7 @@ void emit_int_expr(Compiler *c, int node, Buf *b) {
     buf_puts(b, "(sp_int)("); emit_scalar_operand(c, node, "0", b); buf_puts(b, ")");
     return;
   }
-  if (emit_obj_conv(c, node, "to_int", TY_INT, "Integer", "(sp_int)0", b)) return;
+  if (emit_obj_conv(c, node, "to_int", TY_INT, "Integer", b)) return;
   emit_scalar_operand(c, node, "0", b);
 }
 
@@ -353,10 +383,13 @@ static const char *past_open_parens(const char *s) {
 
 void emit_str_expr(Compiler *c, int node, Buf *b) {
   if (yield_site_type(c, node) == TY_POLY) {
-    buf_puts(b, "sp_poly_to_s("); emit_expr(c, node, b); buf_puts(b, ")");
+    /* sp_poly_arg_str, not sp_poly_to_s: a boxed user object in this slot
+       converts through #to_str or raises, where to_s rendered it as
+       "#<Name ...>" and the builtin searched for that text */
+    buf_puts(b, "sp_poly_arg_str("); emit_expr(c, node, b); buf_puts(b, ")");
     return;
   }
-  if (emit_obj_conv(c, node, "to_str", TY_STRING, "String", "(const char *)0", b)) return;
+  if (emit_obj_conv(c, node, "to_str", TY_STRING, "String", b)) return;
   /* The unresolved-call gate's sp_raise_nomethod(...) is a side-effecting poly
      value (it raises): coerce it to the const char* slot, keeping the call,
      rather than passing the sp_RbVal through raw (doom's

@@ -44,14 +44,19 @@ begin
   p "wow".delete(Mode.new)
   p "hello=world".partition(Mode.new.to_str + "orl")
 
-  # no conversion method: CRuby's TypeError
+  # A class defining neither conversion is CRuby's TypeError. Where the
+  # object's class is STATIC spinel reports it at compile time instead (the
+  # call could only ever raise -- see test/rbs-seed/implicit_conv_no_method.rb);
+  # reached through a poly slot the class is a run-time question, so the
+  # TypeError is a run-time one, worded as CRuby words it.
+  inert = [1, Inert.new][1]
   begin
-    File.read(Inert.new)
+    File.read(inert)
   rescue TypeError => e
     p [e.class, e.message]
   end
   begin
-    [10, 20, 30].take(Inert.new)
+    [10, 20, 30].take(inert)
   rescue TypeError => e
     p [e.class, e.message]
   end
@@ -84,6 +89,21 @@ rescue TypeError => e
   p [e.class, e.message]
 end
 p [2**64 + 65].pack("Q")[0]
+
+# The same protocol reached through a POLY slot, where the class is not known
+# until run time: the container read hands the builtin a boxed object, which
+# converts through the bridge. These answered a wrong result in SILENCE before
+# -- #to_s's "#<Idx>" rendering for a String slot, 0 for an Integer one -- so
+# the point of each line is that it now matches CRuby rather than raising.
+boxed_str = [1, Stringish.new][1]
+boxed_int = [1, Idx.new][1]
+p "a conv-target.txt b".index(boxed_str)
+p "a conv-target.txt b".include?(boxed_str)
+p [10, 20, 30].first(boxed_int)
+p [10, 20, 30][boxed_int]
+p "abc".getbyte(boxed_int)
+p "wow".delete([1, Mode.new][1])
+p [boxed_int].pack("C").bytes
 
 # native package bindings: a declared :string argument converts too
 require "stringio"

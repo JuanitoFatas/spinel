@@ -5468,11 +5468,16 @@ void native_arg_check(Compiler *c, int id, const char *what, NativeMethod *m,
                       got == TY_SYMBOL || got == TY_BIGINT);
     int bad = (want_scalar && !got_scalar) ||
               (want == TY_STRING && got != TY_STRING && got != TY_STRBUF);
-    /* a user object reaches a string/int slot through the typed-slot
-       emitters, which carry the implicit conversion protocol: #to_str /
-       #to_int converts, anything else raises CRuby's TypeError at run
-       time -- either way the emitted C is well-typed */
-    if (bad && ty_is_object(got) && (want == TY_STRING || want == TY_INT)) bad = 0;
+    /* a user object crosses this boundary only through the implicit
+       conversion protocol, and only when its class really defines the
+       conversion: the typed-slot emitters then call #to_str / #to_int
+       directly, so the emitted C is well-typed. A class defining neither
+       keeps the diagnostic below -- the class is settled here, so the call
+       could only ever raise, and naming the position beats a run-time
+       TypeError the author has to reach first. */
+    if (bad && (want == TY_STRING || want == TY_INT) &&
+        obj_conv_method(c, got, want == TY_STRING ? "to_str" : "to_int",
+                        want, NULL) >= 0) bad = 0;
     if (!bad) continue;
     char msg[256];
     snprintf(msg, sizeof msg, "%s `%s` argument %d (declared :%s, given %s)",

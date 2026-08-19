@@ -16,4 +16,11 @@ true
 [TypeError, "no implicit conversion of Inert into Integer"]
 [TypeError, "no implicit conversion of nil into Integer"]
 "A"
+2
+true
+[10]
+20
+98
+"o"
+[1]
 "conv-target.txt"
