@@ -3558,13 +3558,13 @@ void emit_case_match(Compiler *c, int id, Buf *b, int indent, int tail, int valu
       emit_cond(c, guard, b);  /* Ruby truthiness for every guard type (0/"" are truthy) */
       buf_puts(b, arm_guard_negate ? ")) {\n" : ") {\n");
       if (value_cr >= 0) { emit_pm_body_value(c, stmts, rt, value_cr, b, body_indent + 1); emit_indent(b, body_indent + 1); buf_printf(b, "goto _pm_%d;\n", lbl); }
-      else if (tail) emit_stmts_tail(c, stmts, b, body_indent + 1);
+      else if (tail) { emit_stmts_tail(c, stmts, b, body_indent + 1); emit_indent(b, body_indent + 1); buf_printf(b, "goto _pm_%d;\n", lbl); }
       else { emit_stmts(c, stmts, b, body_indent + 1); emit_indent(b, body_indent + 1); buf_printf(b, "goto _pm_%d;\n", lbl); }
       emit_indent(b, body_indent); buf_puts(b, "}\n");
     }
     else {
       if (value_cr >= 0) { emit_pm_body_value(c, stmts, rt, value_cr, b, body_indent); emit_indent(b, body_indent); buf_printf(b, "goto _pm_%d;\n", lbl); }
-      else if (tail) emit_stmts_tail(c, stmts, b, body_indent);
+      else if (tail) { emit_stmts_tail(c, stmts, b, body_indent); emit_indent(b, body_indent); buf_printf(b, "goto _pm_%d;\n", lbl); }
       else { emit_stmts(c, stmts, b, body_indent); emit_indent(b, body_indent); buf_printf(b, "goto _pm_%d;\n", lbl); }
     }
 
@@ -3585,7 +3585,12 @@ void emit_case_match(Compiler *c, int id, Buf *b, int indent, int tail, int valu
     buf_printf(b, "sp_raise_cls(\"NoMatchingPatternError\", \"no pattern matched\");\n");
   }
 
-  if (!tail || value_cr >= 0) { emit_indent(b, indent); buf_printf(b, "_pm_%d:;\n", lbl); }
+  /* The matched arm jumps here, past the no-match raise. In TAIL mode the arm
+     usually ends in a `return`, which made the jump look redundant -- but a
+     tail that ASSIGNS (a `begin` block in value position) falls through
+     instead, and every such case/in raised NoMatchingPatternError however well
+     it had just matched (#4016). The goto after a return is dead, and free. */
+  { emit_indent(b, indent); buf_printf(b, "_pm_%d:;\n", lbl); }
 }
 
 /* case/when -> an if / else-if chain. Statement form. */
