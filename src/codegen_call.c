@@ -6643,7 +6643,7 @@ static int emit_class_new_call(Compiler *c, int id, Buf *b) {
           else {
             buf_puts(b, "sp_Random_new(");
             if (is_big) { buf_puts(b, "sp_bigint_to_int("); emit_expr(c, argv[0], b); buf_puts(b, ")"); }
-            else emit_int_expr(c, argv[0], b);
+            else emit_int_expr_conv(c, argv[0], b);
             buf_puts(b, ")");
           }
         }
@@ -6784,7 +6784,7 @@ static int emit_class_new_call(Compiler *c, int id, Buf *b) {
            which must land as whole statements BEFORE this temp's decl line, not
            inside its initializer. */
         Buf pv; memset(&pv, 0, sizeof pv);
-        emit_expr(c, argv[0], &pv);
+        emit_str_expr(c, argv[0], &pv);   /* Regexp.new(nil) is CRuby's TypeError */
         emit_indent(g_pre, g_indent);
         buf_printf(g_pre, "const char *_t%d = %s;\n", ts, pv.p ? pv.p : "\"\"");
         free(pv.p);
@@ -8207,8 +8207,7 @@ static int emit_array_arith_call(Compiler *c, int id, Buf *b) {
     if (rt == TY_STRING && sp_streq(name, "*")) {
       buf_puts(b, "sp_str_repeat(");
       emit_expr(c, recv, b); buf_puts(b, ", ");
-      if (comp_ntype(c, argv[0]) == TY_POLY) { buf_puts(b, "sp_poly_to_i("); emit_expr(c, argv[0], b); buf_puts(b, ")"); }
-      else emit_expr(c, argv[0], b);
+      emit_int_expr(c, argv[0], b);   /* "ab" * nil is CRuby's TypeError, not "" */
       buf_puts(b, ")");
       return 1;
     }
@@ -9531,16 +9530,21 @@ int emit_arg_type_guards(Compiler *c, int id, Buf *b) {
          zero-coercion case (#3883); a String, Symbol or container is the
          "can't be coerced" one (#3862). clamp takes nil for an OPEN side, so
          only a non-nil literal counts there. */
-      int nil_arg = 0, bad_arg = 0;
-      for (int a = 0; a < nc; a++) {
+      /* the FIRST offending literal decides the message, as a real call
+         validates arguments in order */
+      int off = -1; NodeKind offk = (NodeKind)0;
+      for (int a = 0; a < nc && off < 0; a++) {
         if (nv[a] < 0) continue;
         NodeKind ak = nt_kind(nt, nv[a]);
-        if (ak == NK_NilNode) nil_arg = 1;
         /* a keyword hash is an OPTION (`round(half: :even)`), not an operand */
-        else if (ak == NK_StringNode || ak == NK_SymbolNode || ak == NK_ArrayNode ||
-                 ak == NK_TrueNode || ak == NK_FalseNode) bad_arg = 1;
+        if (ak == NK_NilNode || ak == NK_StringNode || ak == NK_SymbolNode ||
+            ak == NK_ArrayNode || ak == NK_TrueNode || ak == NK_FalseNode) {
+          if (ak == NK_NilNode && sp_streq(nn, "clamp")) continue;  /* nil is an open side there */
+          off = nv[a]; offk = ak;
+        }
       }
-      if (sp_streq(nn, "clamp")) nil_arg = 0;   /* nil is an open side there */
+      int nil_arg = off >= 0 && offk == NK_NilNode;
+      int bad_arg = off >= 0 && offk != NK_NilNode;
       if (hit && sp_streq(nn, "coerce")) hit = 0;   /* see below: Float() owns these errors */
       if (hit && (nil_arg || bad_arg)) {
         /* #between? / #clamp compare rather than coerce, and CRuby's failed
@@ -9553,6 +9557,21 @@ int emit_arg_type_guards(Compiler *c, int id, Buf *b) {
         int cmpform = sp_streq(nn, "between?") || sp_streq(nn, "upto") ||
                       sp_streq(nn, "downto") || sp_streq(nn, "step") ||
                       (bad_arg && sp_streq(nn, "clamp"));
+        /* CRuby's wording splits by how the method consumes the value:
+           round/floor/ceil/truncate/to_s use rb_num2long ("no implicit
+           conversion from nil to integer"), digits and [] use rb_to_int
+           ("of nil into Integer"), the arithmetic family goes through
+           coerce ("nil can't be coerced into Integer"), and gcdlcm has its
+           own "not an integer". A non-nil literal names its class in the
+           conversion forms and its value in the coerce form (:sym, true). */
+        int conv_from = sp_streq(nn, "round") || sp_streq(nn, "floor") ||
+                        sp_streq(nn, "ceil") || sp_streq(nn, "truncate") ||
+                        sp_streq(nn, "to_s");
+        int conv_of = sp_streq(nn, "digits") || sp_streq(nn, "[]");
+        const char *litcls =
+          offk == NK_StringNode ? "String" : offk == NK_SymbolNode ? "Symbol" :
+          offk == NK_ArrayNode ? "Array" : offk == NK_TrueNode ? "true" :
+          offk == NK_FalseNode ? "false" : "nil";
         const char *cn = nrt == TY_FLOAT ? "Float" : "Integer";
         TyKind rty = comp_ntype(c, id);
         const char *dv = default_value(rty);
@@ -9560,9 +9579,24 @@ int emit_arg_type_guards(Compiler *c, int id, Buf *b) {
         if (cmpform)
           buf_printf(b, "sp_raise_cls(\"ArgumentError\", \"comparison of %s with %s failed\"); ",
                      cn, bad_arg ? "a value" : "nil");
-        else
-          buf_printf(b, "sp_raise_cls(\"TypeError\", \"%s can't be coerced into %s\"); ",
-                     bad_arg ? "String" : "nil", cn);
+        else if (sp_streq(nn, "gcdlcm"))
+          buf_puts(b, "sp_raise_cls(\"TypeError\", \"not an integer\"); ");
+        else if (conv_from || conv_of) {
+          if (nil_arg && conv_from)
+            buf_puts(b, "sp_raise_cls(\"TypeError\", \"no implicit conversion from nil to integer\"); ");
+          else
+            buf_printf(b, "sp_raise_cls(\"TypeError\", \"no implicit conversion of %s into Integer\"); ",
+                       litcls);
+        }
+        else {
+          /* the coerce form names a Symbol by its inspect form */
+          if (offk == NK_SymbolNode && nt_str(nt, off, "value"))
+            buf_printf(b, "sp_raise_cls(\"TypeError\", \":%s can't be coerced into %s\"); ",
+                       nt_str(nt, off, "value"), cn);
+          else
+            buf_printf(b, "sp_raise_cls(\"TypeError\", \"%s can't be coerced into %s\"); ",
+                       litcls, cn);
+        }
         buf_printf(b, "%s; })", dv ? dv : "0");
         return 1;
       }
@@ -13390,7 +13424,7 @@ void emit_call(Compiler *c, int id, Buf *b) {
     }
     if (sp_streq(name, "bytes") && argc == 1) {
       buf_puts(b, "sp_Random_bytes(sp_random_default_get(), ");
-      emit_expr(c, argv[0], b); buf_puts(b, ")");
+      emit_int_expr_conv(c, argv[0], b); buf_puts(b, ")");
       return;
     }
     if (sp_streq(name, "new_seed") && argc == 0) {   /* #2523 */
@@ -13403,7 +13437,7 @@ void emit_call(Compiler *c, int id, Buf *b) {
     }
     if (sp_streq(name, "srand")) {                    /* #2525 (returns previous seed) */
       if (argc == 0) { buf_puts(b, "sp_kernel_srand((sp_int)time(NULL))"); return; }
-      buf_puts(b, "sp_kernel_srand("); emit_int_expr(c, argv[0], b); buf_puts(b, ")");
+      buf_puts(b, "sp_kernel_srand("); emit_int_expr_conv(c, argv[0], b); buf_puts(b, ")");
       return;
     }
   }
@@ -13472,7 +13506,7 @@ void emit_call(Compiler *c, int id, Buf *b) {
     }
     if (sp_streq(name, "bytes") && argc == 1) {
       buf_puts(b, "sp_Random_bytes("); emit_expr(c, recv, b); buf_puts(b, ", ");
-      emit_expr(c, argv[0], b); buf_puts(b, ")");
+      emit_int_expr_conv(c, argv[0], b); buf_puts(b, ")");
       return;
     }
     if (sp_streq(name, "seed") && argc == 0) {   /* #2522 */
@@ -14806,7 +14840,8 @@ else { memcpy(dir, sf, n); dir[n] = 0; } }
       TyKind at = comp_ntype(c, av[0]);
       if (at == TY_STRING) {
         buf_puts(b, "sp_str_to_i_strict_base("); emit_expr(c, av[0], b);
-        buf_puts(b, ", "); emit_expr(c, av[1], b); buf_puts(b, ")");
+        /* Integer("5", nil) is CRuby's TypeError, not base 0 */
+        buf_puts(b, ", "); emit_int_expr(c, av[1], b); buf_puts(b, ")");
       }
       else if (at == TY_POLY || at == TY_UNKNOWN) {
         /* a poly value is only known at runtime: a string (plain or shared
@@ -15100,7 +15135,7 @@ else { memcpy(dir, sf, n); dir[n] = 0; } }
     if (sp_streq(name, "srand")) {
       /* srand returns the PREVIOUS seed (#2517). */
       if (ac == 0) { buf_puts(b, "sp_kernel_srand((sp_int)time(NULL))"); return; }
-      buf_puts(b, "sp_kernel_srand("); emit_int_expr(c, av[0], b); buf_puts(b, ")");
+      buf_puts(b, "sp_kernel_srand("); emit_int_expr_conv(c, av[0], b); buf_puts(b, ")");
       return;
     }
   }
@@ -17755,7 +17790,7 @@ else { memcpy(dir, sf, n); dir[n] = 0; } }
               buf_printf(b, "sp_str_concat(%s, ", s); emit_expr(c, av2[0], b); buf_puts(b, ")"); return;
             }
             if (sp_streq(name, "*") && ac2 == 1) {
-              buf_printf(b, "sp_str_repeat(%s, ", s); emit_expr(c, av2[0], b); buf_puts(b, ")"); return;
+              buf_printf(b, "sp_str_repeat(%s, ", s); emit_int_expr(c, av2[0], b); buf_puts(b, ")"); return;
             }
           }
           else if (brt == TY_INT) {
@@ -18703,7 +18738,8 @@ else { memcpy(dir, sf, n); dir[n] = 0; } }
       buf_puts(b, "sp_file_split("); emit_str_expr(c, argv[0], b); buf_puts(b, ")"); return;
     }
     if (sp_streq(name, "path") && argc == 1) {
-      emit_expr(c, argv[0], b); return;
+      /* the identity is only for path-like values: File.path(nil) raises */
+      emit_str_expr(c, argv[0], b); return;
     }
     if (sp_streq(name, "absolute_path") && (argc == 1 || argc == 2)) {
       buf_puts(b, "sp_file_expand_path("); emit_str_expr(c, argv[0], b); buf_puts(b, ", ");
@@ -19093,6 +19129,15 @@ else { memcpy(dir, sf, n); dir[n] = 0; } }
       buf_printf(b, "sp_dir_%s(", name); emit_str_expr(c, argv[0], b); buf_puts(b, ")"); return;
     }
     if ((sp_streq(name, "mkdir") || sp_streq(name, "rmdir") || sp_streq(name, "chdir")) && argc >= 1) {
+      if (sp_streq(name, "mkdir") && argc == 2) {
+        /* the permission mode is unused on this backend but still validated:
+           Dir.mkdir(path, nil) is CRuby's TypeError, not a created directory */
+        int tp = ++g_tmp;
+        buf_printf(b, "({ const char *_t%d = ", tp); emit_str_expr(c, argv[0], b);
+        buf_puts(b, "; (void)("); emit_int_expr_conv(c, argv[1], b);
+        buf_printf(b, "); sp_dir_mkdir(_t%d); })", tp);
+        return;
+      }
       buf_printf(b, "sp_dir_%s(", name); emit_str_expr(c, argv[0], b); buf_puts(b, ")"); return;
     }
   }
@@ -19278,10 +19323,10 @@ else { memcpy(dir, sf, n); dir[n] = 0; } }
             const char *svty = nt_type(nt, symv);
             int lit_true  = svty && sp_streq(svty, "TrueNode");
             int lit_false = svty && (sp_streq(svty, "FalseNode") || sp_streq(svty, "NilNode"));
-            if (lit_true) { buf_printf(b, "sp_json_symbolize(%s(", nf->csym); emit_expr(c, argv[0], b); buf_puts(b, "))"); return; }
+            if (lit_true) { buf_printf(b, "sp_json_symbolize(%s(", nf->csym); emit_str_expr(c, argv[0], b); buf_puts(b, "))"); return; }
             if (!lit_false) {
               int tj = ++g_tmp;
-              buf_printf(b, "({ sp_RbVal _t%d = %s(", tj, nf->csym); emit_expr(c, argv[0], b);
+              buf_printf(b, "({ sp_RbVal _t%d = %s(", tj, nf->csym); emit_str_expr(c, argv[0], b);
               buf_puts(b, "); (");
               emit_cond(c, symv, b);
               buf_printf(b, ") ? sp_json_symbolize(_t%d) : _t%d; })", tj, tj);
@@ -19298,12 +19343,12 @@ else { memcpy(dir, sf, n); dir[n] = 0; } }
         for (int ai = 0; ai < nf->nargs && ai < argc; ai++) {
           if (ai) buf_puts(b, ", ");
           const char *spec = nf->args[ai];
-          TyKind at = comp_ntype(c, argv[ai]);
+          /* the typed-slot emitters carry the implicit conversion protocol
+             (poly unboxing, #to_str / #to_int, nil / bool TypeError):
+             Base64.encode64(nil) answered "" and JSON.parse(nil) parsed "" */
           if (sp_streq(spec, "any")) emit_boxed(c, argv[ai], b);
-          else if (sp_streq(spec, "string")) {
-            if (at == TY_POLY) { buf_puts(b, "sp_poly_to_s("); emit_expr(c, argv[ai], b); buf_puts(b, ")"); }
-            else emit_expr(c, argv[ai], b);
-          }
+          else if (sp_streq(spec, "string")) emit_str_expr(c, argv[ai], b);
+          else if (sp_streq(spec, "int")) emit_int_expr(c, argv[ai], b);
           else emit_expr(c, argv[ai], b);
         }
         buf_puts(b, ")");

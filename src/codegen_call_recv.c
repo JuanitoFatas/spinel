@@ -1181,13 +1181,47 @@ int emit_array_call(Compiler *c, int id, Buf *b) {
     return 1;
   }
   if (recv >= 0 && ty_is_array(rt)) {
+    /* a nil / true / false OPERAND to the Array-expecting family is CRuby's
+       TypeError ("no implicit conversion of nil into Array") -- concat fell
+       to NoMethodError, product answered [] -- with every argument still
+       evaluated in order first, as a real call would */
+    if ((sp_streq(name, "concat") || sp_streq(name, "replace") ||
+         sp_streq(name, "product") || sp_streq(name, "union") ||
+         sp_streq(name, "difference") || sp_streq(name, "intersection")) &&
+        argc >= 1) {
+      int bad = -1;
+      for (int ai = 0; ai < argc; ai++) {
+        TyKind at = comp_ntype(c, argv[ai]);
+        if (at == TY_NIL || at == TY_BOOL) { bad = ai; break; }
+      }
+      if (bad >= 0) {
+        TyKind arty = comp_ntype(c, id);
+        int tb = ++g_tmp;
+        buf_puts(b, "({ (void)("); emit_expr(c, recv, b); buf_puts(b, "); ");
+        for (int ai = 0; ai < argc; ai++) {
+          if (ai == bad && comp_ntype(c, argv[ai]) == TY_BOOL) {
+            buf_printf(b, "int _t%d = (", tb); emit_expr(c, argv[ai], b); buf_puts(b, "); ");
+          } else {
+            buf_puts(b, "(void)("); emit_expr(c, argv[ai], b); buf_puts(b, "); ");
+          }
+        }
+        if (comp_ntype(c, argv[bad]) == TY_NIL)
+          buf_puts(b, "sp_raise_cls(\"TypeError\", \"no implicit conversion of nil into Array\");");
+        else
+          buf_printf(b, "sp_raise_cls(\"TypeError\", _t%d"
+                        " ? \"no implicit conversion of true into Array\""
+                        " : \"no implicit conversion of false into Array\");", tb);
+        buf_printf(b, " %s; })", raise_tail_value(arty));
+        return 1;
+      }
+    }
     if (sp_streq(name, "pack") && argc == 1 &&
         (rt == TY_INT_ARRAY || rt == TY_FLOAT_ARRAY || rt == TY_POLY_ARRAY || rt == TY_STR_ARRAY)) {
       const char *kind = rt == TY_POLY_ARRAY ? "Poly"
                        : rt == TY_STR_ARRAY  ? "Str"
                        : rt == TY_FLOAT_ARRAY ? "Float" : "Int";
       buf_printf(b, "sp_%sArray_pack(", kind);
-      emit_expr(c, recv, b); buf_puts(b, ", "); emit_expr(c, argv[0], b); buf_puts(b, ")");
+      emit_expr(c, recv, b); buf_puts(b, ", "); emit_str_expr(c, argv[0], b); buf_puts(b, ")");
       return 1;
     }
     /* product(b, c, ...) with two or more array arguments: the n-way Cartesian
@@ -5986,6 +6020,28 @@ int emit_scalar_call(Compiler *c, int id, Buf *b) {
       if (sp_streq(name, "upto") && argc == 1 && nt_ref(nt, id, "block") < 0) {
         buf_printf(b, "sp_StrArray_from_string_range(%s, ", r); emit_expr(c, argv[0], b); buf_puts(b, ", 0)");
       }
+      /* a nil / true / false PATTERN in the regexp-expected family is CRuby's
+         TypeError ("wrong argument type nil (expected Regexp)") -- it used to
+         fall past every pattern-typed arm into NoMethodError, or silently
+         skip the substitution */
+      else if ((sp_streq(name, "sub") || sp_streq(name, "sub!") ||
+                sp_streq(name, "gsub") || sp_streq(name, "gsub!") ||
+                sp_streq(name, "match") || sp_streq(name, "match?") ||
+                sp_streq(name, "scan")) && argc >= 1 &&
+               (comp_ntype(c, argv[0]) == TY_NIL || comp_ntype(c, argv[0]) == TY_BOOL)) {
+        TyKind prty = comp_ntype(c, id);
+        buf_printf(b, "({ (void)(%s); ", r);
+        if (comp_ntype(c, argv[0]) == TY_NIL) {
+          buf_puts(b, "(void)("); emit_expr(c, argv[0], b);
+          buf_puts(b, "); sp_raise_cls(\"TypeError\", \"wrong argument type nil (expected Regexp)\");");
+        } else {
+          buf_puts(b, "sp_raise_cls(\"TypeError\", (");
+          emit_expr(c, argv[0], b);
+          buf_puts(b, ") ? \"wrong argument type true (expected Regexp)\""
+                    " : \"wrong argument type false (expected Regexp)\");");
+        }
+        buf_printf(b, " %s; })", raise_tail_value(prty));
+      }
       /* string methods taking a regex-literal argument route to the engine */
       else if ((sp_streq(name, "gsub") || sp_streq(name, "sub")) && argc == 2 && re_lit_index(c, argv[0]) >= 0) {
         const char *suf = comp_ntype(c, argv[1]) == TY_STR_STR_HASH ? "_str_str_hash" : "";
@@ -6174,8 +6230,8 @@ int emit_scalar_call(Compiler *c, int id, Buf *b) {
       else if (sp_streq(name, "capitalize")) buf_printf(b, "sp_str_capitalize%s(%s)", case_map_suffix(c, argc, argv), r);
       else if (sp_streq(name, "swapcase"))   buf_printf(b, "sp_str_swapcase%s(%s)", case_map_suffix(c, argc, argv), r);
       else if (sp_streq(name, "dedup") && argc == 0) buf_printf(b, "sp_str_uminus_val(%s)", r);
-      else if (sp_streq(name, "delete_prefix") && argc == 1) { buf_printf(b, "sp_str_delete_prefix(%s, ", r); emit_expr(c, argv[0], b); buf_puts(b, ")"); }
-      else if (sp_streq(name, "delete_suffix") && argc == 1) { buf_printf(b, "sp_str_delete_suffix(%s, ", r); emit_expr(c, argv[0], b); buf_puts(b, ")"); }
+      else if (sp_streq(name, "delete_prefix") && argc == 1) { buf_printf(b, "sp_str_delete_prefix(%s, ", r); emit_str_expr(c, argv[0], b); buf_puts(b, ")"); }
+      else if (sp_streq(name, "delete_suffix") && argc == 1) { buf_printf(b, "sp_str_delete_suffix(%s, ", r); emit_str_expr(c, argv[0], b); buf_puts(b, ")"); }
       else if (sp_streq(name, "reverse"))    buf_printf(b, "sp_str_reverse(%s)", r);
       else if (sp_streq(name, "strip"))      buf_printf(b, "sp_str_strip(%s)", r);
       else if (sp_streq(name, "lstrip"))     buf_printf(b, "sp_str_lstrip(%s)", r);
@@ -6479,6 +6535,21 @@ int emit_scalar_call(Compiler *c, int id, Buf *b) {
         /* `str =~ str` is a TypeError in CRuby, not a missing method: only a
            Regexp (or an object answering =~) is a valid right operand */
         buf_printf(b, "((void)(%s), sp_raise_cls(\"TypeError\", \"type mismatch: String given\"), (sp_bool)0)", r);
+      }
+      else if ((sp_streq(name, "=~") || sp_streq(name, "!~")) && argc == 1 &&
+               comp_ntype(c, argv[0]) == TY_NIL) {
+        /* `str =~ nil` is nil in CRuby (and `!~` its negation), not a missing
+           method */
+        if (sp_streq(name, "!~")) buf_printf(b, "((void)(%s), (sp_bool)1)", r);
+        else if (comp_ntype(c, id) == TY_POLY) buf_printf(b, "((void)(%s), sp_box_nil())", r);
+        else buf_printf(b, "((void)(%s), %s)", r, raise_tail_value(comp_ntype(c, id)));
+      }
+      else if ((sp_streq(name, "=~") || sp_streq(name, "!~")) && argc == 1 &&
+               comp_ntype(c, argv[0]) == TY_BOOL) {
+        buf_printf(b, "((void)(%s), sp_raise_cls(\"TypeError\", (", r);
+        emit_expr(c, argv[0], b);
+        buf_puts(b, ") ? \"type mismatch: TrueClass given\""
+                  " : \"type mismatch: FalseClass given\"), (sp_bool)0)");
       }
       else if (sp_streq(name, "b") && argc == 0) {
         /* a fresh copy, not the receiver: CRuby's #b is never frozen, and
@@ -8319,6 +8390,24 @@ int emit_object_call(Compiler *c, int id, Buf *b) {
                  ty_object_class(rt), dgv ? dgv : "0");
       return 1;
     }
+    /* a Struct's [] / dig index of a statically-known nil / bool is the
+       Integer-conversion TypeError. Data keeps its own dispatch above. */
+    if (!sc->is_data && (sp_streq(name, "[]") || sp_streq(name, "dig")) && argc >= 1 &&
+        (comp_ntype(c, argv[0]) == TY_NIL || comp_ntype(c, argv[0]) == TY_BOOL)) {
+      TyKind z1 = comp_ntype(c, id);
+      buf_puts(b, "({ (void)("); emit_expr(c, recv, b); buf_puts(b, "); ");
+      if (comp_ntype(c, argv[0]) == TY_NIL) {
+        buf_puts(b, "(void)("); emit_expr(c, argv[0], b);
+        buf_puts(b, "); sp_raise_cls(\"TypeError\", \"no implicit conversion from nil to integer\");");
+      } else {
+        buf_puts(b, "sp_raise_cls(\"TypeError\", (");
+        emit_expr(c, argv[0], b);
+        buf_puts(b, ") ? \"no implicit conversion of true into Integer\""
+                  " : \"no implicit conversion of false into Integer\");");
+      }
+      buf_printf(b, " %s; })", raise_tail_value(z1));
+      return 1;
+    }
     if (sp_streq(name, "dig") && argc >= 1) {
       /* literal key resolves a member at compile time */
       int mi = -1;
@@ -8547,8 +8636,29 @@ int emit_object_call(Compiler *c, int id, Buf *b) {
            compiles to the generated sp_re_pat_<n> pattern); anything else
            falls through to the generic paths. */
         NativeMethod *mre = &c->native_methods[nm];
-        for (int ai = 0; ai < mre->nargs && ai < argc; ai++)
-          if (sp_streq(mre->args[ai], "regexp") && re_lit_index(c, argv[ai]) < 0) { nm = -1; break; }
+        for (int ai = 0; ai < mre->nargs && ai < argc; ai++) {
+          if (!sp_streq(mre->args[ai], "regexp") || re_lit_index(c, argv[ai]) >= 0) continue;
+          /* a nil / true / false where the binding wants a pattern is CRuby's
+             TypeError (StringScanner accepts String patterns, so its wording
+             is the String one), not a missing method */
+          TyKind pat = comp_ntype(c, argv[ai]);
+          if (pat == TY_NIL || pat == TY_BOOL) {
+            TyKind nrty = comp_ntype(c, id);
+            buf_puts(b, "({ (void)("); emit_expr(c, recv, b); buf_puts(b, "); ");
+            if (pat == TY_NIL) {
+              buf_puts(b, "(void)("); emit_expr(c, argv[ai], b);
+              buf_puts(b, "); sp_raise_cls(\"TypeError\", \"no implicit conversion of nil into String\");");
+            } else {
+              buf_puts(b, "sp_raise_cls(\"TypeError\", (");
+              emit_expr(c, argv[ai], b);
+              buf_puts(b, ") ? \"no implicit conversion of true into String\""
+                        " : \"no implicit conversion of false into String\");");
+            }
+            buf_printf(b, " %s; })", raise_tail_value(nrty));
+            return 1;
+          }
+          nm = -1; break;
+        }
       }
       if (nm >= 0) {
         NativeMethod *m = &c->native_methods[nm];
@@ -9127,7 +9237,7 @@ int emit_value_recv_call(Compiler *c, int id, Buf *b) {
                       " sp_MatchData_aref(_t%d, sp_poly_to_i(_t%d)); })",
                    ktmp, mtmp, ktmp, ktmp, mtmp, ktmp, mtmp, ktmp);
       }
-      else { buf_printf(b, "sp_MatchData_aref(%s, ", r); emit_expr(c, argv[0], b); buf_puts(b, ")"); }
+      else { buf_printf(b, "sp_MatchData_aref(%s, ", r); emit_int_expr(c, argv[0], b); buf_puts(b, ")"); }
     }
     /* md[start, length]: an Array of `length` groups from `start` (#2507) */
     else if (sp_streq(name, "[]") && argc == 2) {
@@ -10018,7 +10128,7 @@ int emit_range_call(Compiler *c, int id, Buf *b) {
           /* first(n): the first n elements from `first`, walking by step. */
           int tf = ++g_tmp, tn = ++g_tmp, ti = ++g_tmp, tc = ++g_tmp;
           buf_printf(b, "({ sp_IntArray *_t%d = sp_IntArray_new(); sp_int _t%d = ", tf, tn);
-          emit_expr(c, argv[0], b);
+          emit_int_expr(c, argv[0], b);   /* first(nil) is CRuby's TypeError */
           buf_printf(b, "; if (_t%d < 0) sp_raise_cls(\"ArgumentError\", \"negative array size\");", tn);
           buf_printf(b, " sp_int _t%d = sp_range_count(_t%d); sp_int _t%d = sp_range_step(_t%d);"
                         " for (sp_int _i%d = 0; _i%d < _t%d && _i%d < _t%d; _i%d++)"
