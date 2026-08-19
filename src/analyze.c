@@ -10840,6 +10840,36 @@ void analyze_program(Compiler *c) {
       if (un >= 0 && un != ex) nt_node_set_ref(ntm, id, "expression", un);
     }
   }
+  /* The same for a call's RECEIVER: `(Hash.new(0)).size` is the same call on
+     the same hash, but the parentheses hid the receiver from every shape check
+     that asks what it is -- the scan for a Hash.new used as a receiver, the
+     anonymous-struct receiver scan, the empty-literal receiver marking -- and
+     each left the value untyped, so its methods read as unresolved calls. They
+     carry no meaning here either, so strip them once, as the block argument
+     above does. */
+  {
+    NodeTable *ntm = (NodeTable *)c->nt;
+    static const struct { NodeKind k; const char *field; } paren_fields[] = {
+      { NK_CallNode, "receiver" },
+      /* and the value a name is bound to: `h = (Hash.new(7))` hid the shape
+         from the write-scanning resolvers the same way */
+      { NK_LocalVariableWriteNode, "value" },
+      { NK_InstanceVariableWriteNode, "value" },
+      { NK_ClassVariableWriteNode, "value" },
+      { NK_ConstantWriteNode, "value" },
+    };
+    for (int id = 0; id < ntm->count; id++) {
+      NodeKind k = nt_kind(ntm, id);
+      for (size_t f = 0; f < sizeof paren_fields / sizeof paren_fields[0]; f++) {
+        if (paren_fields[f].k != k) continue;
+        int rc = nt_ref(ntm, id, paren_fields[f].field);
+        if (rc < 0) break;
+        int un = unwrap_parens(c, rc);
+        if (un >= 0 && un != rc) nt_node_set_ref(ntm, id, paren_fields[f].field, un);
+        break;
+      }
+    }
+  }
   /* A block written with its own rescue clause (`do ... rescue ... end`) has a
      BeginNode where every other block has a StatementsNode, so the body read as
      empty and the block's value was nil. Wrap it once here (#3710). */
