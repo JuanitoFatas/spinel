@@ -21112,7 +21112,14 @@ else { memcpy(dir, sf, n); dir[n] = 0; } }
       if (name[0] == '-') { buf_puts(b, "sp_bigint_sub(sp_bigint_new_int(0), "); emit_expr(c, recv, b); buf_puts(b, ")"); }
       else emit_expr(c, recv, b);
     }
-    else { buf_puts(b, name[0] == '-' ? "(-" : "(+"); emit_expr(c, recv, b); buf_puts(b, ")"); }
+    else {
+      /* `-(-7)` puts the two signs side by side, and C reads `--7LL` as a
+         pre-decrement of a literal and rejects it. A space separates them;
+         the common `-x` keeps its tight spelling (#4008). */
+      Buf ub; memset(&ub, 0, sizeof ub); emit_expr(c, recv, &ub);
+      const char *ut = ub.p ? ub.p : "";
+      buf_printf(b, "(%c%s%s)", name[0], ut[0] == name[0] ? " " : "", ut);
+      free(ub.p); }
     return;
   }
   /* h.default_proc = <a Proc value>: install a trampoline that drives the
