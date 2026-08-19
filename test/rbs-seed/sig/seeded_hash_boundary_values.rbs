@@ -1,0 +1,5 @@
+class Req
+  @params: Hash[String, untyped]
+  def params: () -> Hash[String, untyped]
+  def params=: (Hash[String, untyped] v) -> Hash[String, untyped]
+end

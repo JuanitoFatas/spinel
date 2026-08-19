@@ -6050,7 +6050,17 @@ void emit_arg_or_default(Compiler *c, Scope *m, int idx, int provided, Buf *out)
             emit_expr(c, provided, &ab2);
             buf_puts(g_pre, ab2.p ? ab2.p : "sp_box_nil()"); free(ab2.p);
             buf_puts(g_pre, ";\n");
-            buf_printf(out, "(sp_%sHash *)_t%d.v.p", hn, ht);
+            /* A poly-VALUED variant takes the converting entry rather than a
+               pointer cast: the variants are separate C structs, so a boxed
+               hash of another one read through the cast kept its keys and read
+               every value as another type's zero -- silently (#3998). The
+               entry hands back the pointer itself when the variant already
+               matches, so an already-right hash keeps its identity. */
+            const char *conv2 = pt == TY_STR_POLY_HASH  ? "sp_poly_as_str_poly_hash"
+                              : pt == TY_SYM_POLY_HASH  ? "sp_poly_as_sym_poly_hash"
+                              : pt == TY_POLY_POLY_HASH ? "sp_poly_as_poly_poly_hash" : NULL;
+            if (conv2) buf_printf(out, "%s(_t%d)", conv2, ht);
+            else       buf_printf(out, "(sp_%sHash *)_t%d.v.p", hn, ht);
             return;
           }
         }

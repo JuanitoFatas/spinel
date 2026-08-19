@@ -5591,6 +5591,29 @@ static sp_PolyPolyHash *sp_PolyPolyHash_from_poly(sp_RbVal src) {
   }
   return h;
 }
+/* A boxed hash entering a slot of a CONCRETE variant. The variants are
+   separate C structs, so the pointer cast that served here reinterpreted one
+   as another: a Hash[String, String] read as a Hash[String, poly] kept its
+   KEYS -- both are str-keyed, and the key array lines up -- while every VALUE
+   read as the zero of some other type, silently (#3998). The matching variant
+   is still the pointer itself, so a hash that is already right keeps its
+   identity and its mutations; only a mismatch pays for a rebuild. */
+static sp_StrPolyHash *sp_poly_as_str_poly_hash(sp_RbVal v) {
+  if (v.tag == SP_TAG_OBJ && v.cls_id == SP_BUILTIN_STR_POLY_HASH) return (sp_StrPolyHash *)v.v.p;
+  if (v.tag == SP_TAG_NIL || !sp_poly_is_hash_kind(v.cls_id)) return (sp_StrPolyHash *)0;
+  return sp_StrPolyHash_from_poly(v);
+}
+static sp_SymPolyHash *sp_poly_as_sym_poly_hash(sp_RbVal v) {
+  if (v.tag == SP_TAG_OBJ && v.cls_id == SP_BUILTIN_SYM_POLY_HASH) return (sp_SymPolyHash *)v.v.p;
+  if (v.tag == SP_TAG_NIL || !sp_poly_is_hash_kind(v.cls_id)) return (sp_SymPolyHash *)0;
+  return sp_SymPolyHash_from_poly(v);
+}
+static sp_PolyPolyHash *sp_poly_as_poly_poly_hash(sp_RbVal v) {
+  if (v.tag == SP_TAG_OBJ && v.cls_id == SP_BUILTIN_POLY_POLY_HASH) return (sp_PolyPolyHash *)v.v.p;
+  if (v.tag == SP_TAG_NIL || !sp_poly_is_hash_kind(v.cls_id)) return (sp_PolyPolyHash *)0;
+  return sp_PolyPolyHash_from_poly(v);
+}
+
 /* poly_arr_get/set for PolyPolyHash with integer index key. */
 /* multi-assign element read: `a, b = v` destructures only when the boxed
    value is an Array (Ruby's to_ary semantics); any other runtime kind is a

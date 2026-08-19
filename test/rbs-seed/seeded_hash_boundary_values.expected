@@ -1,0 +1,8 @@
+key="id" class=String val=7
+key="page" class=String val=2
+{"id" => "7", "page" => "2"}
+"7"
+2
+{"a" => 1, "b" => "two", "c" => :three}
+true
+{"a" => 1, "b" => "two", "c" => :three}

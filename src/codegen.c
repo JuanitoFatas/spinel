@@ -139,6 +139,13 @@ void emit_unbox_text(Compiler *c, TyKind t, const char *expr, Buf *b) {
   if (t == TY_FLOAT_RANGE) { buf_printf(b, "(*(sp_FloatRange *)(%s).v.p)", expr); return; }
   if (t == TY_STR_RANGE)   { buf_printf(b, "(*(sp_StrRange *)(%s).v.p)", expr); return; }
   if (t == TY_CLASS) { buf_printf(b, "sp_unbox_class(%s)", expr); return; }  /* a by-value struct, not a pointer (#2797) */
+  /* A hash variant is a distinct C struct, so a boxed hash of ANOTHER variant
+     read through a pointer cast keeps its keys and reads its values as another
+     type's zero -- silently (#3998). Go through the converting entry, which
+     hands back the pointer itself when the variant already matches. */
+  if (t == TY_STR_POLY_HASH)  { buf_printf(b, "sp_poly_as_str_poly_hash(%s)", expr); return; }
+  if (t == TY_SYM_POLY_HASH)  { buf_printf(b, "sp_poly_as_sym_poly_hash(%s)", expr); return; }
+  if (t == TY_POLY_POLY_HASH) { buf_printf(b, "sp_poly_as_poly_poly_hash(%s)", expr); return; }
   if (ty_is_object(t)) { buf_printf(b, "(%s *)(%s).v.p", class_ctype(c, ty_object_class(t)), expr); return; }
   const char *cn = c_type_name(t);
   if (cn) buf_printf(b, "(%s)(%s).v.p", cn, expr);
