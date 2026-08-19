@@ -8881,7 +8881,7 @@ enum {
   SP_PENUM_MAX_BY, SP_PENUM_FLAT_MAP, SP_PENUM_COUNT, SP_PENUM_SUM,
   SP_PENUM_ANY, SP_PENUM_ALL, SP_PENUM_NONE, SP_PENUM_PARTITION,
   SP_PENUM_FIND_INDEX, SP_PENUM_TAKE_WHILE, SP_PENUM_DROP_WHILE,
-  SP_PENUM_EACH_WITH_INDEX
+  SP_PENUM_EACH_WITH_INDEX, SP_PENUM_FILTER_MAP
 };
 /* Call `blk` with one element. Both channels are filled, as every other
    proc-driving site does: a poly parameter reads the boxed side-channel, a
@@ -8934,7 +8934,7 @@ static sp_RbVal sp_poly_enum_proc(sp_RbVal recv, int op, sp_Proc *blk) {
     case SP_PENUM_EACH_WITH_INDEX:
       for (sp_int i = 0; i < n; i++) sp_penum_call2(blk, src->data[i], sp_box_int(i));
       return recv;
-    case SP_PENUM_MAP: case SP_PENUM_FLAT_MAP: {
+    case SP_PENUM_MAP: case SP_PENUM_FLAT_MAP: case SP_PENUM_FILTER_MAP: {
       sp_PolyArray *out = sp_PolyArray_new(); SP_GC_ROOT(out);
       for (sp_int i = 0; i < n; i++) {
         sp_RbVal r = sp_penum_call1(blk, src->data[i]);
@@ -8943,6 +8943,8 @@ static sp_RbVal sp_poly_enum_proc(sp_RbVal recv, int op, sp_Proc *blk) {
           sp_int m = sp_poly_arr_len(r);
           for (sp_int j = 0; j < m; j++) sp_PolyArray_push(out, sp_poly_arr_get(r, j));
         }
+        /* filter_map is map then compact: only a truthy value is kept */
+        else if (op == SP_PENUM_FILTER_MAP) { if (sp_poly_truthy(r)) sp_PolyArray_push(out, r); }
         else sp_PolyArray_push(out, r);
       }
       return sp_box_poly_array(out);

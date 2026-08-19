@@ -4731,11 +4731,17 @@ int emit_collect_expr(Compiler *c, int id, Buf *b) {
     /* poly-typed receiver (e.g. `arr = nil` default): iterate via
        sp_poly_arr_len / sp_poly_arr_get and build a typed result array */
     int is_map2 = ty_iter_shape(name) == TY_ITER_MAP;
-    if (!is_map2) return 0;
+    /* filter_map is map then compact, so it walks the same loop and differs
+       only in the push. Without an arm here a poly receiver fell past every
+       collector into the hash-face coercion, which reads an Array receiver as
+       a Hash and raises NoMethodError naming the method (#4007). */
+    int is_fmap2 = sp_streq(name, "filter_map");
+    if (!is_map2 && !is_fmap2) return 0;
     TyKind restype2 = comp_ntype(c, id);
     int res_poly2 = (restype2 == TY_POLY_ARRAY);
     const char *rk2 = res_poly2 ? "Poly" : array_kind(restype2);
     if (!rk2) return 0;
+    if (is_fmap2 && !res_poly2) return 0;   /* the truthiness test needs the box */
     const char *p0p = block_param_name(c, block, 0); if (p0p) p0p = rename_local(p0p);
     int body2 = nt_ref(nt, block, "body");
     int bn2 = 0;
@@ -4817,8 +4823,18 @@ int emit_collect_expr(Compiler *c, int id, Buf *b) {
     else if (res_poly2) emit_boxed(c, bb2[bn2 - 1], &vb2);
     else emit_expr(c, bb2[bn2 - 1], &vb2);
     g_indent = saveIndent2;
-    emit_indent(g_pre, g_indent + 2);
-    buf_printf(g_pre, "sp_%sArray_push(_t%d, %s);\n", rk2, tres2, vb2.p ? vb2.p : "");
+    if (is_fmap2) {
+      /* keep the block value only when truthy: nil and false are dropped */
+      int tfv2 = ++g_tmp;
+      emit_indent(g_pre, g_indent + 2);
+      buf_printf(g_pre, "sp_RbVal _t%d = %s;\n", tfv2, vb2.p && *vb2.p ? vb2.p : "sp_box_nil()");
+      emit_indent(g_pre, g_indent + 2);
+      buf_printf(g_pre, "if (sp_poly_truthy(_t%d)) sp_%sArray_push(_t%d, _t%d);\n", tfv2, rk2, tres2, tfv2);
+    }
+    else {
+      emit_indent(g_pre, g_indent + 2);
+      buf_printf(g_pre, "sp_%sArray_push(_t%d, %s);\n", rk2, tres2, vb2.p ? vb2.p : "");
+    }
     free(vb2.p);
     emit_indent(g_pre, g_indent + 1);
     buf_puts(g_pre, "}\n");
