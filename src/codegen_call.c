@@ -3960,6 +3960,12 @@ static int emit_poly_method_dispatch(Compiler *c, int id, Buf *b) {
        when no user class defines them, or that user method is the real target. */
     int is_class_named = (sp_streq(name, "name") || sp_streq(name, "to_s") ||
                           sp_streq(name, "inspect")) && !diag_user_defines(c, name);
+    /* The Module reflection a class-tagged poly value answers. `ancestors` and
+       friends had an arm only for a receiver typed TY_CLASS -- a constant --
+       so iterating an Array of classes and asking the block parameter left the
+       call with no arm at all and it reported the method as undefined (#4018). */
+    int is_class_reflect = (sp_streq(name, "ancestors") || sp_streq(name, "included_modules") ||
+                            sp_streq(name, "superclass")) && !diag_user_defines(c, name);
     int is_pred = nt_ref(nt, id, "block") < 0 && poly_pred_kind(name, 0);
     /* When ostruct is in the program a bare `obj.reader` on a poly value may be
        an OpenStruct member access (any name) -- read it at runtime (#3197).
@@ -3990,7 +3996,7 @@ static int emit_poly_method_dispatch(Compiler *c, int id, Buf *b) {
       if (is_call || comp_reader_in_chain(c, k, name, NULL)) ncand++;
       if (is_call) ncall_arm++;
     }
-    if (ncand > 0 || is_lengthlike || is_pred || is_class_named || is_ostruct || is_io_rewind || is_poly_to_a) {
+    if (ncand > 0 || is_lengthlike || is_pred || is_class_named || is_class_reflect || is_ostruct || is_io_rewind || is_poly_to_a) {
       TyKind ret = comp_ntype(c, id);
       /* an OpenStruct member is a boxed value; but when analyze typed the
          call concretely (a user method OR reader/alias resolves the name --
@@ -4009,7 +4015,7 @@ static int emit_poly_method_dispatch(Compiler *c, int id, Buf *b) {
          an AST walker reads `node.left` through exactly this dispatch, and
          paying a root push and pop per read made one twice as slow (#282). */
       int root_recv = ncall_arm > 0 || is_lengthlike || is_empty || is_pred ||
-                      is_class_named || is_ostruct || is_io_rewind || is_poly_to_a;
+                      is_class_named || is_class_reflect || is_ostruct || is_io_rewind || is_poly_to_a;
       buf_printf(b, "({ sp_RbVal _t%d = ", tv); emit_expr(c, recv, b); buf_puts(b, "; ");
       if (root_recv) buf_printf(b, "SP_GC_ROOT_RBVAL(_t%d); ", tv);
       emit_ctype(c, is_scalar_ret(ret) ? ret : TY_INT, b);
@@ -4042,6 +4048,21 @@ static int emit_poly_method_dispatch(Compiler *c, int id, Buf *b) {
         const char *sbclose = (ret == TY_POLY) ? ")" : "";
         buf_printf(b, "if (_t%d.tag == SP_TAG_CLASS) _t%d = %ssp_class_val_name(_t%d)%s; else ",
                    tv, tr, sbopen, tv, sbclose);
+      }
+      if (is_class_reflect) {
+        /* sp_class_superclass only knows the user chain; a builtin class needs
+           sp_builtin_superclass, exactly as the typed arm does. */
+        const char *cbo = (ret == TY_POLY) ? (sp_streq(name, "superclass") ? "sp_box_class(" : "sp_box_poly_array(") : "";
+        const char *cbc = (ret == TY_POLY) ? ")" : "";
+        buf_printf(b, "if (_t%d.tag == SP_TAG_CLASS) _t%d = %s", tv, tr, cbo);
+        if (sp_streq(name, "ancestors"))
+          buf_printf(b, "sp_class_ancestors(sp_unbox_class(_t%d))", tv);
+        else if (sp_streq(name, "included_modules"))
+          buf_printf(b, "sp_class_included_modules(sp_unbox_class(_t%d))", tv);
+        else
+          buf_printf(b, "({ sp_Class _cs%d = sp_unbox_class(_t%d); _cs%d.cls_id >= 0 ? sp_class_superclass(_cs%d) : sp_builtin_superclass(_cs%d); })",
+                     tv, tv, tv, tv, tv);
+        buf_printf(b, "%s; else ", cbc);
       }
       /* an OpenStruct answers ANY reader with its member value; checked ahead of
          the cls_id switch since its id is a builtin, not a user class (#3197). */

@@ -1462,6 +1462,12 @@ int infer_poly_call(Compiler *c, int id, TyKind rt, TyKind *out) {
      through their runtime kind dispatch instead. */
   if (recv >= 0 && rt == TY_POLY && nt_ref(nt, id, "block") < 0 &&
       !an_user_defines_or_reads(c, name)) {
+    /* The Module reflection a class-tagged boxed value answers. Without a type
+       here the call was UNKNOWN and everything chained onto it reported the
+       method as undefined for "unknown" (#4018). */
+    if (argc == 0 && (sp_streq(name, "ancestors") || sp_streq(name, "included_modules")))
+      { *out = TY_POLY_ARRAY; return 1; }
+    if (argc == 0 && sp_streq(name, "superclass")) { *out = TY_CLASS; return 1; }
     if (argc == 0 && (sp_streq(name, "hex") || sp_streq(name, "oct"))) { *out = TY_INT; return 1; }
     if (argc == 0 && sp_streq(name, "squeeze")) { *out = TY_STRING; return 1; }
     /* casecmp / casecmp? are nil-or-answer, and which one is decided by the
