@@ -2134,6 +2134,38 @@ static SP_INLINE const char *sp_poly_arg_str(sp_RbVal v) {
   return sp_poly_arg_str_slow(v);
 }
 
+/* The strict argument forms: nil / true / false in a typed String or Integer
+   slot are CRuby's TypeError (File.join("a", nil), [1].take(nil)), where the
+   loose forms above read them as "" / 0. Codegen emits these at the slots
+   CRuby itself rejects nil in; a slot CRuby accepts nil in ("x".split(nil),
+   StringIO#read(nil)) keeps the loose form. CRuby words the nil-to-Integer
+   case differently from every other pairing ("from nil to integer"). */
+static SP_NOINLINE const char *sp_poly_arg_str_chk_slow(sp_RbVal v) {
+  if (v.tag == SP_TAG_NIL)
+    sp_raise_cls("TypeError", "no implicit conversion of nil into String");
+  if (v.tag == SP_TAG_BOOL)
+    sp_raise_cls("TypeError", v.v.b ? "no implicit conversion of true into String"
+                                    : "no implicit conversion of false into String");
+  return sp_poly_arg_str_slow(v);
+}
+static SP_INLINE const char *sp_poly_arg_str_chk(sp_RbVal v) {
+  if (v.tag == SP_TAG_STR) return v.v.s;
+  return sp_poly_arg_str_chk_slow(v);
+}
+static SP_NOINLINE sp_int sp_poly_arg_int_chk_slow(sp_RbVal v) {
+  if (v.tag == SP_TAG_NIL)
+    sp_raise_cls("TypeError", "no implicit conversion from nil to integer");
+  if (v.tag == SP_TAG_BOOL)
+    sp_raise_cls("TypeError", v.v.b ? "no implicit conversion of true into Integer"
+                                    : "no implicit conversion of false into Integer");
+  if (v.tag == SP_TAG_OBJ && v.cls_id >= 0) return sp_poly_arg_int_obj(v);
+  return sp_poly_to_i(v);
+}
+static SP_INLINE sp_int sp_poly_arg_int_chk(sp_RbVal v) {
+  if (v.tag == SP_TAG_INT) return v.v.i;
+  return sp_poly_arg_int_chk_slow(v);
+}
+
 static sp_float sp_poly_to_f(sp_RbVal v) { if (v.tag == SP_TAG_FLT) return v.v.f; if (v.tag == SP_TAG_INT || v.tag == SP_TAG_SYM) return (sp_float)v.v.i; if (v.tag == SP_TAG_BIGINT) return sp_bigint_to_double((sp_Bigint *)v.v.p); if (v.tag == SP_TAG_STR) return (sp_float)atof(v.v.s ? v.v.s : sp_str_empty); if (v.tag == SP_TAG_BOOL) return v.v.b ? 1.0 : 0.0; if (v.tag == SP_TAG_OBJ && v.cls_id == SP_BUILTIN_RATIONAL) return sp_rational_to_f(*(sp_Rational *)v.v.p); if (v.tag == SP_TAG_OBJ && v.cls_id == SP_BUILTIN_BIG_RATIONAL) return sp_brat_to_f((sp_BigRational *)v.v.p); if (v.tag == SP_TAG_OBJ && v.cls_id == SP_BUILTIN_TIME && v.v.p) { sp_Time _tt = *(sp_Time *)v.v.p; return (sp_float)_tt.tv_sec + (sp_float)_tt.tv_nsec / 1e9; } return 0.0; }  /* STR arm mirrors sp_poly_to_i's strtoll and the typed String#to_f (atof) */
 /* The same conversions, but a boxed nil lands on the type's sentinel instead
    of the type's zero. A method whose declared return is `Integer?`/`Float?`

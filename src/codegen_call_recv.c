@@ -1567,11 +1567,12 @@ int emit_array_call(Compiler *c, int id, Buf *b) {
                      ti, ts, ti, te, ti, fk, t, ti, tv, t);
         }
         else if (argc >= 2) {
-          buf_printf(b, " sp_int _t%d = ", ts); emit_int_expr(c, argv[1], b);
+          /* nil start / length are legal: "from the start" / "to the end" */
+          buf_printf(b, " sp_int _t%d = ", ts); emit_int_expr_nilable(c, argv[1], b);
           buf_printf(b, "; if (_t%d < 0) _t%d += _t%d; if (_t%d < 0) _t%d = 0;", ts, ts, tn, ts, ts);
           if (argc == 3) {
             int tl = ++g_tmp;
-            buf_printf(b, " sp_int _t%d = ", tl); emit_int_expr(c, argv[2], b);
+            buf_printf(b, " sp_int _t%d = ", tl); emit_int_expr_nilable(c, argv[2], b);
             /* end = start+len; negative len = no-op (empty range) */
             buf_printf(b, "; if (_t%d < 0) _t%d = 0; _t%d = _t%d + _t%d;",
                        tl, tl, tn, ts, tl);
@@ -3975,7 +3976,13 @@ else {
         return 1;
       }
       if (sp_streq(name, "flatten") && argc <= 1) {
-        if (argc == 1) { buf_puts(b, "sp_PolyArray_flatten_n("); emit_expr(c, recv, b); buf_puts(b, ", "); emit_int_expr(c, argv[0], b); buf_puts(b, ")"); }
+        if (argc == 1) {
+          buf_puts(b, "sp_PolyArray_flatten_n("); emit_expr(c, recv, b); buf_puts(b, ", ");
+          /* a nil depth is legal and means "no limit" (flatten_n: < 0) */
+          if (comp_ntype(c, argv[0]) == TY_NIL) { buf_puts(b, "((void)("); emit_expr(c, argv[0], b); buf_puts(b, "), (sp_int)-1)"); }
+          else emit_int_expr(c, argv[0], b);
+          buf_puts(b, ")");
+        }
         else { buf_puts(b, "sp_PolyArray_flatten("); emit_expr(c, recv, b); buf_puts(b, ")"); }
         return 1;
       }

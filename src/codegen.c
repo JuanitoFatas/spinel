@@ -329,7 +329,79 @@ static int emit_obj_conv(Compiler *c, int node, const char *conv, TyKind want,
   unsupported_feature(c, node, msg);
 }
 
-void emit_int_expr(Compiler *c, int node, Buf *b) {
+/* A value KNOWN at compile time to be nil / true / false entering a String-
+   or Integer-typed builtin argument slot: CRuby raises TypeError where the
+   slot's zero ("" / 0) used to stand in silently ([1].take(nil) answered [],
+   File.join("a", nil) answered "a/"). The raise is a runtime one -- programs
+   legitimately rescue it -- and CRuby words the nil-to-Integer pairing
+   differently from all others ("from nil to integer"). The nilable entry
+   points below skip this arm for the slots CRuby itself accepts nil in
+   ("x".split(nil), StringIO#read(nil), File.open(path, nil), ...) -- but
+   only for nil: every one of those slots still rejects true / false
+   ("x".split(false) is CRuby's TypeError), so the nilable forms stay
+   bool-strict. */
+/* The static Ruby class name of a scalar/container kind, for TypeError
+   wording -- NULL for kinds a conversion arm already handles (poly, object,
+   unknown) or that are legal in the slot. */
+static const char *conv_wrong_cls_name(TyKind t) {
+  if (t == TY_INT || t == TY_BIGINT) return "Integer";
+  if (t == TY_FLOAT) return "Float";
+  if (t == TY_SYMBOL) return "Symbol";
+  if (t == TY_STRING || t == TY_STRBUF) return "String";
+  if (t == TY_RANGE || t == TY_FLOAT_RANGE || t == TY_STR_RANGE) return "Range";
+  if (t == TY_TIME) return "Time";
+  if (t == TY_REGEX) return "Regexp";
+  if (t == TY_PROC) return "Proc";
+  if (ty_is_array(t)) return "Array";
+  if (ty_is_hash(t)) return "Hash";
+  return NULL;
+}
+
+static int emit_nilbool_conv_raise_w(Compiler *c, int node, TyKind want, int nil_ok,
+                                     int of_wording, Buf *b) {
+  TyKind t = comp_ntype(c, node);
+  if (t != TY_NIL && t != TY_BOOL) {
+    /* any other statically-known wrong kind: CRuby's class-naming TypeError
+       ("no implicit conversion of Integer into String"). Every kind raised
+       here previously emitted ill-typed C ([1].pack(1) stopped the build), so
+       nothing working can be lost. A Float in an Integer slot converts (the
+       truncation arm above); stringish kinds belong in a String slot. */
+    if (want == TY_STRING && (t == TY_STRING || t == TY_STRBUF)) return 0;
+    if (want == TY_INT && (t == TY_INT || t == TY_BIGINT || t == TY_FLOAT)) return 0;
+    const char *cn = conv_wrong_cls_name(t);
+    if (!cn) return 0;
+    buf_puts(b, "({ (void)(");
+    emit_expr(c, node, b);
+    buf_printf(b, "); sp_raise_cls(\"TypeError\", \"no implicit conversion of %s into %s\"); %s; })",
+               cn, want == TY_STRING ? "String" : "Integer",
+               want == TY_STRING ? "(const char *)0" : "(sp_int)0");
+    return 1;
+  }
+  if (t == TY_NIL && nil_ok) return 0;
+  const char *dv = want == TY_STRING ? "(const char *)0" : "(sp_int)0";
+  if (t == TY_NIL) {
+    buf_puts(b, "({ (void)(");
+    emit_expr(c, node, b);
+    /* CRuby's rb_num2long-style slots say "from nil to integer"; the
+       rb_convert_type ones (Random.srand, Dir.mkdir's mode) say
+       "of nil into Integer". String slots have only the one form. */
+    buf_printf(b, "); sp_raise_cls(\"TypeError\", \"%s\"); %s; })",
+               want == TY_STRING ? "no implicit conversion of nil into String"
+               : of_wording      ? "no implicit conversion of nil into Integer"
+                                 : "no implicit conversion from nil to integer",
+               dv);
+  } else {
+    const char *into = want == TY_STRING ? "String" : "Integer";
+    buf_puts(b, "({ sp_raise_cls(\"TypeError\", (");
+    emit_expr(c, node, b);
+    buf_printf(b, ") ? \"no implicit conversion of true into %s\""
+                  " : \"no implicit conversion of false into %s\"); %s; })",
+               into, into, dv);
+  }
+  return 1;
+}
+
+static void emit_int_expr_ex(Compiler *c, int node, int strict, Buf *b) {
   const char *nty = nt_type(c->nt, node);
   /* `*a` forwarded into a scalar int slot (a builtin arg): the value is the
      splat's first element, not the array box. */
@@ -341,7 +413,8 @@ void emit_int_expr(Compiler *c, int node, Buf *b) {
     return;
   }
   if (yield_site_type(c, node) == TY_POLY) {
-    buf_puts(b, "sp_poly_to_i("); emit_expr(c, node, b); buf_puts(b, ")");
+    buf_puts(b, strict ? "sp_poly_arg_int_chk(" : "sp_poly_to_i(");
+    emit_expr(c, node, b); buf_puts(b, ")");
     return;
   }
   /* A value the analysis widened to Bignum (a doubling counter, a masked
@@ -358,8 +431,24 @@ void emit_int_expr(Compiler *c, int node, Buf *b) {
     buf_puts(b, "(sp_int)("); emit_scalar_operand(c, node, "0", b); buf_puts(b, ")");
     return;
   }
+  if (emit_nilbool_conv_raise_w(c, node, TY_INT, strict == 0, strict == 2, b)) return;
   if (emit_obj_conv(c, node, "to_int", TY_INT, "Integer", b)) return;
   emit_scalar_operand(c, node, "0", b);
+}
+
+void emit_int_expr(Compiler *c, int node, Buf *b) {
+  emit_int_expr_ex(c, node, 1, b);
+}
+
+/* The slot accepts nil in CRuby: keep the historical looseness. */
+void emit_int_expr_nilable(Compiler *c, int node, Buf *b) {
+  emit_int_expr_ex(c, node, 0, b);
+}
+
+/* Strict, but with CRuby's rb_convert_type wording ("of nil into Integer"):
+   Random.srand's seed, Dir.mkdir's mode, Random#bytes' size. */
+void emit_int_expr_conv(Compiler *c, int node, Buf *b) {
+  emit_int_expr_ex(c, node, 2, b);
 }
 
 /* Emit a node as an sp_float. A poly value is unboxed via sp_poly_to_f; any
@@ -400,14 +489,17 @@ static const char *past_open_parens(const char *s) {
   return s;
 }
 
-void emit_str_expr(Compiler *c, int node, Buf *b) {
+static void emit_str_expr_ex(Compiler *c, int node, int strict, Buf *b) {
   if (yield_site_type(c, node) == TY_POLY) {
     /* sp_poly_arg_str, not sp_poly_to_s: a boxed user object in this slot
        converts through #to_str or raises, where to_s rendered it as
-       "#<Name ...>" and the builtin searched for that text */
-    buf_puts(b, "sp_poly_arg_str("); emit_expr(c, node, b); buf_puts(b, ")");
+       "#<Name ...>" and the builtin searched for that text; the _chk form
+       additionally raises for a boxed nil / true / false as CRuby does */
+    buf_puts(b, strict ? "sp_poly_arg_str_chk(" : "sp_poly_arg_str(");
+    emit_expr(c, node, b); buf_puts(b, ")");
     return;
   }
+  if (emit_nilbool_conv_raise_w(c, node, TY_STRING, !strict, 0, b)) return;
   if (emit_obj_conv(c, node, "to_str", TY_STRING, "String", b)) return;
   /* The unresolved-call gate's sp_raise_nomethod(...) is a side-effecting poly
      value (it raises): coerce it to the const char* slot, keeping the call,
@@ -421,6 +513,15 @@ void emit_str_expr(Compiler *c, int node, Buf *b) {
     buf_printf(b, "sp_poly_to_s(%s)", txt);
   else buf_puts(b, txt);
   free(tmp.p);
+}
+
+void emit_str_expr(Compiler *c, int node, Buf *b) {
+  emit_str_expr_ex(c, node, 1, b);
+}
+
+/* The slot accepts nil in CRuby: keep the historical looseness. */
+void emit_str_expr_nilable(Compiler *c, int node, Buf *b) {
+  emit_str_expr_ex(c, node, 0, b);
 }
 
 /* Coerce an unresolved-call value into a concretely-typed slot. An unresolved

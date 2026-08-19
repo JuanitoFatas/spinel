@@ -1107,6 +1107,15 @@ int local_nil_test(Compiler *c, LocalVar *lv, const char *ref, Buf *out) {
       return 0;
   }
 }
+/* The dead value closing a `({ ...; sp_raise_cls(...); V; })` arm. The raise
+   never returns, so V only has to type-check in the slot: an UNKNOWN result
+   flows as poly (default_value's "0" would not assign to sp_RbVal), and a
+   Range wants its brace form. */
+const char *raise_tail_value(TyKind t) {
+  if (t == TY_UNKNOWN || t == TY_VOID) return "sp_box_nil()";
+  return default_value(t);
+}
+
 const char *default_value(TyKind t) {
   switch (t) {
     case TY_INT:    return "0";

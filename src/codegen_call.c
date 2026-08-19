@@ -11491,7 +11491,8 @@ void emit_call(Compiler *c, int id, Buf *b) {
         if (evt == TY_STRING || lit_nil) {
           int tk = ++g_tmp, tv = ++g_tmp;
           buf_printf(b, "({ const char *_t%d = ", tk); emit_str_expr(c, argv[0], b);
-          buf_printf(b, "; const char *_t%d = ", tv); emit_str_expr(c, argv[1], b);
+          /* a nil VALUE unsets the variable; only the key is strict */
+          buf_printf(b, "; const char *_t%d = ", tv); emit_str_expr_nilable(c, argv[1], b);
           buf_printf(b, "; if (_t%d) setenv(_t%d, _t%d, 1); else unsetenv(_t%d); _t%d; })",
                      tv, tk, tv, tk, tv);
         }
@@ -19915,7 +19916,7 @@ else { memcpy(dir, sf, n); dir[n] = 0; } }
     if (rre >= 0 && sp_streq(name, "match?") && argc == 1) {
       /* /re/.match?(str): a match boolean that leaves $~ alone (CRuby) */
       if (a0 == TY_POLY) { buf_printf(b, "sp_re_match_p(sp_re_pat_%d, sp_poly_to_s(", rre); emit_expr(c, argv[0], b); buf_puts(b, "))"); }
-      else { buf_printf(b, "sp_re_match_p(sp_re_pat_%d, ", rre); emit_str_expr(c, argv[0], b); buf_puts(b, ")"); }
+      else { buf_printf(b, "sp_re_match_p(sp_re_pat_%d, ", rre); emit_str_expr_nilable(c, argv[0], b); buf_puts(b, ")"); }  /* nil subject: no match */
       return;
     }
     if (rre >= 0 && sp_streq(name, "===") && argc == 1) {
@@ -20288,10 +20289,10 @@ else { memcpy(dir, sf, n); dir[n] = 0; } }
          value (e.g. a `string?` attr read) to const char*, which emit_expr would
          leave as an sp_RbVal into sp_re_matchdata's const char* slot (#3219). */
       if (argc == 1) {
-        buf_printf(b, "sp_re_matchdata(sp_re_pat_%d, ", rre); emit_str_expr(c, argv[0], b); buf_puts(b, ")");
+        buf_printf(b, "sp_re_matchdata(sp_re_pat_%d, ", rre); emit_str_expr_nilable(c, argv[0], b); buf_puts(b, ")");
       }
       else {
-        buf_printf(b, "sp_re_matchdata_at(sp_re_pat_%d, ", rre); emit_str_expr(c, argv[0], b);
+        buf_printf(b, "sp_re_matchdata_at(sp_re_pat_%d, ", rre); emit_str_expr_nilable(c, argv[0], b);
         buf_puts(b, ", "); emit_int_expr(c, argv[1], b); buf_puts(b, ")");
       }
       return;
@@ -20425,7 +20426,7 @@ else { memcpy(dir, sf, n); dir[n] = 0; } }
         if (rp_ok && rp.p) {
           if ((sp_streq(name, "match?") || sp_streq(name, "===")) && argc == 1) {
             if (a0 == TY_POLY) { buf_printf(b, "sp_re_match_p(%s, sp_poly_to_s(", rp.p); emit_expr(c, argv[0], b); buf_puts(b, "))"); }
-            else { buf_printf(b, "sp_re_match_p(%s, ", rp.p); emit_str_expr(c, argv[0], b); buf_puts(b, ")"); }
+            else { buf_printf(b, "sp_re_match_p(%s, ", rp.p); emit_str_expr_nilable(c, argv[0], b); buf_puts(b, ")"); }  /* nil subject: no match */
             free(rp.p); return;
           }
           if (sp_streq(name, "=~") && argc == 1) {
@@ -20480,8 +20481,8 @@ else { memcpy(dir, sf, n); dir[n] = 0; } }
             /* the subject can arrive boxed -- one call site passing an
                untyped block param is enough -- so unbox it into the const
                char * slot the way match? and =~ already do */
-            if (argc == 1) { buf_printf(b, "sp_re_matchdata(%s, ", rp.p); emit_str_expr(c, argv[0], b); buf_puts(b, ")"); }
-            else { buf_printf(b, "sp_re_matchdata_at(%s, ", rp.p); emit_str_expr(c, argv[0], b); buf_puts(b, ", "); emit_expr(c, argv[1], b); buf_puts(b, ")"); }
+            if (argc == 1) { buf_printf(b, "sp_re_matchdata(%s, ", rp.p); emit_str_expr_nilable(c, argv[0], b); buf_puts(b, ")"); }
+            else { buf_printf(b, "sp_re_matchdata_at(%s, ", rp.p); emit_str_expr_nilable(c, argv[0], b); buf_puts(b, ", "); emit_expr(c, argv[1], b); buf_puts(b, ")"); }
             free(rp.p); return;
           }
           free(rp.p);

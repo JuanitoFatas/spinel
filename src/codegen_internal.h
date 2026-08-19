@@ -510,6 +510,7 @@ const char *ffi_cb_arg_ctype(const char *spec);
 int ty_is_struct_valued(TyKind t);   /* see codegen_util.c: struct passed by value */
 const char *native_c_type(const char *spec);
 const char *default_value(TyKind t);
+const char *raise_tail_value(TyKind t);
 void emit_bigint_operand_ext(Compiler *c, int node, Buf *b);
 const char *nil_value(TyKind t);
 const char *local_init_value(Compiler *c, LocalVar *lv);
@@ -757,6 +758,12 @@ void emit_unbox_text(Compiler *c, TyKind t, const char *expr, Buf *b);
 TyKind yield_site_type(Compiler *c, int node);
 void emit_int_expr(Compiler *c, int node, Buf *b);
 void emit_str_expr(Compiler *c, int node, Buf *b);
+/* nil-accepting slots ("x".split(nil), StringIO#read(nil)): no strict
+   nil/true/false TypeError arm -- see emit_nilbool_conv_raise in codegen.c */
+void emit_int_expr_nilable(Compiler *c, int node, Buf *b);
+void emit_str_expr_nilable(Compiler *c, int node, Buf *b);
+/* strict with CRuby's rb_convert_type wording ("of nil into Integer") */
+void emit_int_expr_conv(Compiler *c, int node, Buf *b);
 int emit_unresolved_coerced(Compiler *c, int node, TyKind target, Buf *b);
 void emit_int_divisor(Compiler *c, int node, Buf *b);
 void emit_float_expr(Compiler *c, int node, Buf *b);
