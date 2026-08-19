@@ -5228,6 +5228,29 @@ static int fwd_callable_def(Compiler *c, int ref, int *out_body, int *out_pn) {
   }
   int create = -1;
   if (sp_streq(ty, "LambdaNode") || is_proc_create(c, ref)) create = ref;
+  else if (sp_streq(ty, "ConstantReadNode")) {
+    /* A lambda held in a CONSTANT resolves the same way one held in a local
+       does. Without this the chain could not see the base proc's arity, so a
+       curry never knew when it was fully applied and `F.curry[1][2]` answered
+       an unapplied Proc (#4017). */
+    const char *cn2 = nt_str(nt, ref, "name");
+    for (int w = 0; cn2 && w < nt->count; w++) {
+      if (nt_kind(nt, w) != NK_ConstantWriteNode) continue;
+      const char *wn2 = nt_str(nt, w, "name");
+      if (!wn2 || !sp_streq(wn2, cn2)) continue;
+      int val2 = nt_ref(nt, w, "value");
+      if (val2 >= 0 && is_proc_create(c, val2)) { create = val2; break; }
+      if (val2 >= 0) {
+        static int fcd_cdepth = 0;
+        if (fcd_cdepth < 64) {
+          fcd_cdepth++;
+          int okc = fwd_callable_def(c, val2, out_body, out_pn);
+          fcd_cdepth--;
+          if (okc) return 1;
+        }
+      }
+    }
+  }
   else if (sp_streq(ty, "LocalVariableReadNode")) {
     const char *vn = nt_str(nt, ref, "name");
     Scope *sc = vn ? comp_scope_of(c, ref) : NULL;
