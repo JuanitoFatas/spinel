@@ -1,0 +1,11 @@
+class K
+  def zero_p: (untyped a, untyped b) -> untyped
+  def eq_zero: (untyped a, untyped b) -> untyped
+  def ci: (untyped a, untyped b) -> untyped
+  def raw: (untyped a, untyped b) -> untyped
+  def nil_p: (untyped a, untyped b) -> untyped
+  def bidx: (untyped a, untyped b) -> untyped
+  def bidx_from: (untyped a, untyped b) -> untyped
+  def bridx: (untyped a, untyped b) -> untyped
+  def salt: (untyped a, untyped b) -> untyped
+end

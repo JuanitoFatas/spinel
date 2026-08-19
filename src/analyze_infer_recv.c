@@ -1458,9 +1458,21 @@ int infer_poly_call(Compiler *c, int id, TyKind rt, TyKind *out) {
       !an_user_defines_or_reads(c, name)) {
     if (argc == 0 && (sp_streq(name, "hex") || sp_streq(name, "oct"))) { *out = TY_INT; return 1; }
     if (argc == 0 && sp_streq(name, "squeeze")) { *out = TY_STRING; return 1; }
-    if (argc == 1 && sp_streq(name, "casecmp")) { *out = TY_INT; return 1; }
-    if (argc <= 2 && argc >= 1 && sp_streq(name, "byteindex")) { *out = TY_INT; return 1; }
-    if (argc == 1 && sp_streq(name, "casecmp?")) { *out = TY_BOOL; return 1; }
+    /* casecmp / casecmp? are nil-or-answer, and which one is decided by the
+       ARGUMENT: the emitter boxes the result when the argument is poly (a
+       string compares, anything else is nil), so typing the call Integer/bool
+       there handed the consumer an sp_RbVal to read unboxed and the C compiler
+       reported it against generated code (#4004). Mirrors the typed-receiver
+       rule in analyze_infer.c. */
+    if (argc == 1 && (sp_streq(name, "casecmp") || sp_streq(name, "casecmp?"))) {
+      TyKind at0 = argv ? infer_type(c, argv[0]) : TY_UNKNOWN;
+      if (at0 == TY_POLY) { *out = TY_POLY; return 1; }
+      if (at0 != TY_STRING && at0 != TY_UNKNOWN) { *out = TY_NIL; return 1; }
+      *out = sp_streq(name, "casecmp") ? TY_INT : TY_BOOL;
+      return 1;
+    }
+    if (argc <= 2 && argc >= 1 &&
+        (sp_streq(name, "byteindex") || sp_streq(name, "byterindex"))) { *out = TY_INT; return 1; }
     if (argc == 1 && (sp_streq(name, "partition") || sp_streq(name, "rpartition")))
       { *out = TY_STR_ARRAY; return 1; }
     if (argc == 2 && sp_streq(name, "tr_s")) { *out = TY_STRING; return 1; }

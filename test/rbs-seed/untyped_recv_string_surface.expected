@@ -1,0 +1,15 @@
+true
+false
+[NoMethodError, "undefined method 'zero?' for nil"]
+true
+false
+true
+nil
+0
+nil
+false
+true
+1
+1
+3
+String

@@ -5886,6 +5886,15 @@ static int str_recv_reads_only(const char *name) {
   return 0;
 }
 
+/* A byte-offset search takes a String needle. A poly one is a String at run
+   time, or the conversion protocol's TypeError -- either way emit_str_expr
+   makes it a `const char *` -- so it belongs on the same arm as a static
+   String rather than falling through to "no such method" (#4004's family). */
+static int str_needle_p(Compiler *c, int a) {
+  TyKind t = comp_ntype(c, a);
+  return t == TY_STRING || t == TY_STRBUF || t == TY_POLY;
+}
+
 int emit_scalar_call(Compiler *c, int id, Buf *b) {
   /* Shared-mutable shim (#3227): setbyte on a strbuf local -- shadow-copy
      re-entry, same as emit_array_call's. */
@@ -6279,18 +6288,18 @@ int emit_scalar_call(Compiler *c, int id, Buf *b) {
         else buf_printf(b, "(sp_int)sp_str_byte_len(_t%d)", tsr);
         buf_puts(b, "); })");
       }
-      else if (sp_streq(name, "byteindex") && argc == 1 && comp_ntype(c, argv[0]) == TY_STRING) {
-        buf_printf(b, "sp_str_byteindex(%s, ", r); emit_expr(c, argv[0], b); buf_puts(b, ")");
+      else if (sp_streq(name, "byteindex") && argc == 1 && str_needle_p(c, argv[0])) {
+        buf_printf(b, "sp_str_byteindex(%s, ", r); emit_str_expr(c, argv[0], b); buf_puts(b, ")");
       }
-      else if (sp_streq(name, "byteindex") && argc == 2 && comp_ntype(c, argv[0]) == TY_STRING) {
-        buf_printf(b, "sp_str_byteindex_from(%s, ", r); emit_expr(c, argv[0], b);
+      else if (sp_streq(name, "byteindex") && argc == 2 && str_needle_p(c, argv[0])) {
+        buf_printf(b, "sp_str_byteindex_from(%s, ", r); emit_str_expr(c, argv[0], b);
         buf_puts(b, ", "); emit_int_expr(c, argv[1], b); buf_puts(b, ")");
       }
-      else if (sp_streq(name, "byterindex") && argc == 1 && comp_ntype(c, argv[0]) == TY_STRING) {
-        buf_printf(b, "sp_str_byterindex(%s, ", r); emit_expr(c, argv[0], b); buf_puts(b, ")");
+      else if (sp_streq(name, "byterindex") && argc == 1 && str_needle_p(c, argv[0])) {
+        buf_printf(b, "sp_str_byterindex(%s, ", r); emit_str_expr(c, argv[0], b); buf_puts(b, ")");
       }
-      else if (sp_streq(name, "byterindex") && argc == 2 && comp_ntype(c, argv[0]) == TY_STRING) {
-        buf_printf(b, "sp_str_byterindex_from(%s, ", r); emit_expr(c, argv[0], b);
+      else if (sp_streq(name, "byterindex") && argc == 2 && str_needle_p(c, argv[0])) {
+        buf_printf(b, "sp_str_byterindex_from(%s, ", r); emit_str_expr(c, argv[0], b);
         buf_puts(b, ", "); emit_int_expr(c, argv[1], b); buf_puts(b, ")");
       }
       else if ((sp_streq(name, "partition") || sp_streq(name, "rpartition")) && argc == 1 &&
@@ -6320,7 +6329,7 @@ int emit_scalar_call(Compiler *c, int id, Buf *b) {
         emit_int_expr(c, argv[1], b); buf_puts(b, ")");
       }
       else if (sp_streq(name, "rindex") && argc == 2) { buf_printf(b, "sp_str_rindex_from(%s, ", r); emit_expr(c, argv[0], b); buf_puts(b, ", "); emit_int_expr(c, argv[1], b); buf_puts(b, ")"); }
-      else if (sp_streq(name, "crypt") && argc == 1) { buf_printf(b, "sp_str_crypt(%s, ", r); emit_expr(c, argv[0], b); buf_puts(b, ")"); }
+      else if (sp_streq(name, "crypt") && argc == 1) { buf_printf(b, "sp_str_crypt(%s, ", r); emit_str_expr(c, argv[0], b); buf_puts(b, ")"); }
       /* scrub! mutates in place, so a frozen receiver raises -- but only when
          it would actually replace something: CRuby returns a frozen string
          with no invalid bytes unchanged (#3333, #3338). */
@@ -10317,6 +10326,7 @@ int emit_poly_call(Compiler *c, int id, Buf *b) {
       !user_defines_or_reads(c, name) && g_n_argov < MAX_ARG_OVERRIDE) {
     static const struct { const char *name; int argc; } PSR[] = {
       {"squeeze", 0}, {"byteindex", 1}, {"byteindex", 2},
+      {"byterindex", 1}, {"byterindex", 2},
       {"partition", 1}, {"rpartition", 1},
       {"hex", 0}, {"oct", 0}, {"tr_s", 2}, {"crypt", 1},
       {"casecmp", 1}, {"casecmp?", 1},
@@ -10328,8 +10338,8 @@ int emit_poly_call(Compiler *c, int id, Buf *b) {
       int tps = ++g_tmp;
       Buf rbs; memset(&rbs, 0, sizeof rbs); emit_expr(c, recv, &rbs);
       emit_indent(g_pre, g_indent);
-      buf_printf(g_pre, "const char *_t%d = sp_poly_to_s(%s); SP_GC_ROOT(_t%d);\n",
-                 tps, rbs.p ? rbs.p : "sp_box_nil()", tps);
+      buf_printf(g_pre, "const char *_t%d = sp_poly_recv_s(%s, \"%s\"); SP_GC_ROOT(_t%d);\n",
+                 tps, rbs.p ? rbs.p : "sp_box_nil()", name, tps);
       free(rbs.p);
       g_argov_node[g_n_argov] = recv;
       snprintf(g_argov_text[g_n_argov], sizeof g_argov_text[0], "_t%d", tps);
