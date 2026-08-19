@@ -4031,6 +4031,13 @@ else {
           nt_ref(nt, id, "block") < 0 && poly_expr_flows_container(c, recv)) {
         return TY_POLY;
       }
+      /* Nor do the blockless ENUMERATOR producers: a boxed receiver can always
+         be an Array, which answers them with an Enumerator. A Struct gets one
+         of these synthesized, so any program with a Struct in it typed
+         `arr.each_with_index` as that Struct (#4021). */
+      if (found && !an_builtin_only && argc == 0 && nt_ref(nt, id, "block") < 0 &&
+          (sp_streq(name, "each_with_index") || sp_streq(name, "each_index")))
+        return TY_ENUMERATOR;
       /* the numeric surface needs no container precondition: a boxed receiver
          can always be a number (#4012) */
       if (found && !an_builtin_only && argc == 0 && poly_numeric_read_p(name) &&
