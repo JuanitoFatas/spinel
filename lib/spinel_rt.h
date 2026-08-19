@@ -1598,6 +1598,7 @@ static sp_RbVal sp_poly_bitop(sp_RbVal a, sp_RbVal b, int op) {  /* 0:& 1:| 2:^ 
    trips on "used but never defined" otherwise. */
 static const char *sp_class_to_s(sp_Class c);
 static const char *sp_poly_class_name(sp_RbVal v);  /* fwd: user-object to_s default */
+static const char *sp_convert_src_name(sp_RbVal v);  /* fwd: nil/true/false spell themselves */
 static inline int sp_poly_is_hash_kind(int cls_id);
 static inline const char *sp_poly_inspect(sp_RbVal v);
 static const char *sp_PolyArray_inspect(sp_PolyArray *a);  /* fwd: Array#to_s == inspect */
@@ -2010,12 +2011,17 @@ static sp_RbVal sp_poly_binop_bad(const char *op, sp_RbVal recv, sp_RbVal arg) {
     if (_h) return _r;
   }
   const char *rc = sp_poly_class_name(recv);
-  const char *ac = sp_poly_class_name(arg);
   if (!sp_poly_has_binop(recv, op))
     sp_raise_cls("NoMethodError", sp_sprintf("undefined method '%s' for an instance of %s", op, rc));
+  /* CRuby names the offending value by its class, EXCEPT nil/true/false, which
+     it spells as themselves -- and the two messages disagree about Symbol:
+     "no implicit conversion" says Symbol, "can't be coerced" says :sym. */
   if (recv.tag == SP_TAG_STR || (recv.tag == SP_TAG_OBJ && sp_poly_is_array_kind(recv.cls_id)))
-    sp_raise_cls("TypeError", sp_sprintf("no implicit conversion of %s into %s", ac, rc));
-  sp_raise_cls("TypeError", sp_sprintf("%s can't be coerced into %s", ac, rc));
+    sp_raise_cls("TypeError", sp_sprintf("no implicit conversion of %s into %s",
+                                         sp_convert_src_name(arg), rc));
+  sp_raise_cls("TypeError", sp_sprintf("%s can't be coerced into %s",
+                                       arg.tag == SP_TAG_SYM ? sp_poly_inspect(arg)
+                                                             : sp_convert_src_name(arg), rc));
 }
 /* A user object on the left of a binary operator: its own method is the
    answer, and sp_poly_binop_bad is where the dispatch hook lives. Only
