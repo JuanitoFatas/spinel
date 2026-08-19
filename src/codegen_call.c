@@ -17291,6 +17291,13 @@ else { memcpy(dir, sf, n); dir[n] = 0; } }
   /* then / yield_self: pass receiver to block, return block result */
   if (recv >= 0 && (sp_streq(name, "then") || sp_streq(name, "yield_self"))) {
     int blk = nt_ref(nt, id, "block");
+    /* with NO block, an enumerator of one element -- the receiver (#4028) */
+    if (blk < 0 && nt_ref(nt, id, "arguments") < 0) {
+      buf_puts(b, "sp_enum_of_one(");
+      emit_boxed(c, recv, b);
+      buf_printf(b, ", \"%s\")", name);
+      return;
+    }
     if (blk >= 0) {
       TyKind rtype = infer_type(c, recv);
       const char *bp0 = block_param_name(c, blk, 0); if (bp0) bp0 = rename_local(bp0);

@@ -1907,6 +1907,7 @@ void sp_Enumerator_scan(void *p) {
 }
 sp_Enumerator *sp_enum_with_src(sp_Enumerator *e, sp_RbVal src, const char *meth) { sp_gc_wb((void*)e);
   e->source = src;
+  e->has_src = TRUE;
   e->meth = meth;
   return e;
 }
@@ -1931,6 +1932,18 @@ sp_RbVal sp_enum_with_index_result(sp_Enumerator *e, sp_PolyArray *mapped) {SP_G
                sp_sprintf("Enumerator#with_index return value for a stored %s enumerator",
                           e->meth ? e->meth : "generator"));
   return sp_box_nil();
+}
+/* `obj.then` / `obj.yield_self` with no block: an enumerator of exactly one
+   element, the receiver, which is what CRuby answers (#4028). It renders as
+   `#<Enumerator: 5:then>` and reports size 1. */
+sp_Enumerator *sp_enum_of_one(sp_RbVal v, const char *meth) {
+  SP_GC_ROOT_RBVAL(v);
+  sp_PolyArray *a = sp_PolyArray_new();
+  SP_GC_ROOT(a);
+  sp_PolyArray_push(a, v);
+  sp_Enumerator *e = sp_Enumerator_new_from_items(a);
+  e->size = sp_box_int(1);
+  return sp_enum_with_src(e, v, meth);
 }
 sp_Enumerator *sp_Enumerator_new_from_items(sp_PolyArray *items) {
   SP_GC_ROOT(items);

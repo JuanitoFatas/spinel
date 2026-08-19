@@ -1251,6 +1251,8 @@ TyKind infer_call(Compiler *c, int id) {
       return infer_type(c, argv[0]) == TY_NIL ? TY_INT : TY_NIL;
     if (sp_streq(name, "tap")) return TY_POLY;  /* the (boxed) nil receiver */
     if ((sp_streq(name, "then") || sp_streq(name, "yield_self")) &&
+        nt_ref(nt, id, "block") < 0) return TY_ENUMERATOR;
+    if ((sp_streq(name, "then") || sp_streq(name, "yield_self")) &&
         nt_ref(nt, id, "block") >= 0) {
       int blk9 = nt_ref(nt, id, "block");
       int bd9 = nt_ref(nt, blk9, "body");
@@ -5149,6 +5151,8 @@ else {
   /* then / yield_self: run block, return block result */
   if (sp_streq(name, "then") || sp_streq(name, "yield_self")) {
     int blk_id = nt_ref(nt, id, "block");
+    /* with NO block it is an enumerator of one element, the receiver (#4028) */
+    if (blk_id < 0 && nt_ref(nt, id, "arguments") < 0) return TY_ENUMERATOR;
     if (blk_id >= 0) {
       int bdy = nt_ref(nt, blk_id, "body");
       int bbn = 0; const int *bbb = bdy >= 0 ? nt_arr(nt, bdy, "body", &bbn) : NULL;

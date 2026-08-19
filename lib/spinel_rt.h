@@ -8682,6 +8682,7 @@ static sp_Enumerator *sp_Enumerator_new_from_rev(sp_RbVal arr) {
    (no re-snapshot). Lets callers that already hold a fresh array skip the
    sp_enum_items_from copy in sp_Enumerator_new_from. */
 sp_Enumerator *sp_Enumerator_new_from_items(sp_PolyArray *items);
+sp_Enumerator *sp_enum_of_one(sp_RbVal v, const char *meth);
 /* Enumerable#chain(*others) / Enumerator#+ : the sources are materialized and
    concatenated by the caller (the desugar builds `recv.to_a + other.to_a ...`),
    so the chain is a snapshot enumerator that reports as Enumerator::Chain. */
@@ -8847,7 +8848,7 @@ static const char *sp_enum_inspect(sp_Enumerator *e) {
   if (e->gen || e->gen_label)
     return sp_sprintf("#<Enumerator: #<Enumerator::Generator:0x%016llx>:each>",
                       (unsigned long long)(uintptr_t)e);
-  sp_RbVal src = (e->source.tag != SP_TAG_NIL) ? e->source
+  sp_RbVal src = (e->has_src || e->source.tag != SP_TAG_NIL) ? e->source
                : sp_box_poly_array(e->items ? e->items : sp_PolyArray_new());
   return sp_sprintf("#<Enumerator: %s:%s>", sp_poly_inspect(src), e->meth ? e->meth : "each");
 }

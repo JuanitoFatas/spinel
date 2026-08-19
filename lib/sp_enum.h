@@ -22,6 +22,9 @@ typedef struct {
   sp_RbVal feed; sp_bool has_feed;       /* #feed: value returned by the next Fiber.yield */
   sp_RbVal gen_result;                    /* generator body's return -> StopIteration#result */
   sp_RbVal source;                        /* the iterated receiver -> materialized StopIteration#result */
+  sp_bool has_src;                       /* source is set, even to nil: `nil.then`'s receiver IS
+                                             nil, and #inspect must not read that as "no source"
+                                             and fall back to the items (sp_gc_alloc zero-fills) */
   const char *meth;                       /* creating method name, for #inspect ("each", ...) */
   sp_bool gen_label;                     /* #inspect as a Generator wrapper (chunk_while & co.):
                                              the items are an eager snapshot, but CRuby shows
