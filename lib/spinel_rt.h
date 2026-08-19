@@ -1865,7 +1865,14 @@ static sp_Tms sp_process_times(void) {
 /* .class as a first-class value: name-backed for every receiver kind, so it
    compares via sp_class_eq (name identity) and prints via sp_class_to_s. */
 static sp_Class sp_poly_class_val(sp_RbVal v) {
-  sp_Class r; r.cls_id = -1; r.name = sp_poly_class_name(v); return r;
+  sp_Class r;
+  /* Carry the real cls_id for a user object: a dispatch that switches on it --
+     `s.class.new(**h)` -- could never match an arm while this answered -1, so
+     the switch fell through and the call returned nil (#4020). The name still
+     leads for display; sp_class_to_s reads it first. */
+  r.cls_id = (v.tag == SP_TAG_OBJ && v.cls_id >= 0) ? (int)v.cls_id : -1;
+  r.name = sp_poly_class_name(v);
+  return r;
 }
 /* Raise TypeError "no implicit conversion of <class> into String" for a poly
    value, naming its actual runtime class (the statically-typed path bakes the
@@ -5260,6 +5267,17 @@ static void sp_PolyPolyHash_set(sp_PolyPolyHash*h,sp_RbVal k,sp_RbVal v){sp_gc_w
    hot, called dozens of times elsewhere via sp_PolyArray_tally -- to
    become non-static just to save two one-line wrappers. */
 static sp_RbVal sp_marv_hash_new(void) { return sp_box_obj(sp_PolyPolyHash_new(), SP_BUILTIN_POLY_POLY_HASH); }
+/* Hash#update / #merge! on the poly-keyed variant. Every other variant had it;
+   this one did not, so a `merge` the emitter lowered here left a reference to a
+   function the build never emits and the link failed (#4020). */
+static void sp_PolyPolyHash_update(sp_PolyPolyHash *a, sp_PolyPolyHash *b) {
+  if (!a || !b || a == b) return;
+  SP_GC_ROOT(a); SP_GC_ROOT(b);
+  for (sp_int i = 0; i < b->len; i++) {
+    sp_int idx = b->order[i];
+    sp_PolyPolyHash_set(a, b->keys[idx], b->vals[idx]);
+  }
+}
 static void sp_marv_hash_set(sp_RbVal h, sp_RbVal k, sp_RbVal v) { sp_PolyPolyHash_set((sp_PolyPolyHash *)h.v.p, k, v); }
 /* Array#tally over a poly array keys the count hash by the ELEMENT VALUE (any
    type), matching CRuby's `#eql?`/`#hash` bucketing — not by symbol identity.
