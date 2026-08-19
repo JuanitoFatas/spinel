@@ -8406,6 +8406,18 @@ int emit_object_call(Compiler *c, int id, Buf *b) {
                  ty_object_class(rt), dgv ? dgv : "0");
       return 1;
     }
+    /* CRuby's Data defines no #[] either: a member is read by name only,
+       and indexing is a NoMethodError -- not Struct's member access */
+    if (sp_streq(name, "[]") && sc->is_data) {
+      TyKind dar = comp_ntype(c, id);
+      buf_puts(b, "({ (void)("); emit_expr(c, recv, b); buf_puts(b, "); ");
+      for (int da = 0; da < argc; da++) {
+        buf_puts(b, "(void)("); emit_boxed(c, argv[da], b); buf_puts(b, "); ");
+      }
+      buf_printf(b, "sp_raise_nomethod(sp_nomethod_msg(\"[]\", sp_box_obj((void *)0, %d))); %s; })",
+                 ty_object_class(rt), raise_tail_value_c(c, dar));
+      return 1;
+    }
     /* a Struct's [] / dig / deconstruct_keys validate like CRuby: a missing
        argument is ArgumentError (dig says "1+"), a nil / bool index is the
        Integer-conversion TypeError. Data keeps its own dispatch above. */
@@ -8688,17 +8700,23 @@ int emit_object_call(Compiler *c, int id, Buf *b) {
           TyKind pat = comp_ntype(c, argv[ai]);
           if (pat == TY_NIL || pat == TY_BOOL) {
             TyKind nrty = comp_ntype(c, id);
+            int nrb = ++g_tmp;
             buf_puts(b, "({ (void)("); emit_expr(c, recv, b); buf_puts(b, "); ");
-            if (pat == TY_NIL) {
-              buf_puts(b, "(void)("); emit_expr(c, argv[ai], b);
-              buf_puts(b, "); sp_raise_cls(\"TypeError\", \"no implicit conversion of nil into String\");");
-            } else {
-              buf_puts(b, "sp_raise_cls(\"TypeError\", (");
-              emit_expr(c, argv[ai], b);
-              buf_puts(b, ") ? \"no implicit conversion of true into String\""
-                        " : \"no implicit conversion of false into String\");");
+            /* every argument evaluates in order before the raise */
+            for (int na = 0; na < argc; na++) {
+              if (na == ai && pat == TY_BOOL) {
+                buf_printf(b, "int _t%d = (", nrb); emit_expr(c, argv[na], b); buf_puts(b, "); ");
+              } else {
+                buf_puts(b, "(void)("); emit_boxed(c, argv[na], b); buf_puts(b, "); ");
+              }
             }
-            buf_printf(b, " %s; })", raise_tail_value(nrty));
+            if (pat == TY_NIL)
+              buf_puts(b, "sp_raise_cls(\"TypeError\", \"no implicit conversion of nil into String\");");
+            else
+              buf_printf(b, "sp_raise_cls(\"TypeError\", _t%d"
+                            " ? \"no implicit conversion of true into String\""
+                            " : \"no implicit conversion of false into String\");", nrb);
+            buf_printf(b, " %s; })", raise_tail_value_c(c, nrty));
             return 1;
           }
           nm = -1; break;

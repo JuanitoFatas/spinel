@@ -2146,6 +2146,15 @@ static SP_NOINLINE const char *sp_poly_arg_str_chk_slow(sp_RbVal v) {
   if (v.tag == SP_TAG_BOOL)
     sp_raise_cls("TypeError", v.v.b ? "no implicit conversion of true into String"
                                     : "no implicit conversion of false into String");
+  /* the run-time half of the static contract: a wrongly-classed scalar in a
+     strict String slot raises the class-naming TypeError, exactly as the
+     emitter does for a value whose class is known at compile time */
+  if (v.tag == SP_TAG_INT || v.tag == SP_TAG_BIGINT)
+    sp_raise_cls("TypeError", "no implicit conversion of Integer into String");
+  if (v.tag == SP_TAG_FLT)
+    sp_raise_cls("TypeError", "no implicit conversion of Float into String");
+  if (v.tag == SP_TAG_SYM)
+    sp_raise_cls("TypeError", "no implicit conversion of Symbol into String");
   return sp_poly_arg_str_slow(v);
 }
 static SP_INLINE const char *sp_poly_arg_str_chk(sp_RbVal v) {
@@ -2153,16 +2162,24 @@ static SP_INLINE const char *sp_poly_arg_str_chk(sp_RbVal v) {
   return sp_poly_arg_str_chk_slow(v);
 }
 static SP_NOINLINE sp_int sp_poly_arg_int_chk_slow(sp_RbVal v) {
+  /* a boxed int slot's nil sentinel is nil, not a number */
+  if (v.tag == SP_TAG_INT && v.v.i == SP_INT_NIL)
+    sp_raise_cls("TypeError", "no implicit conversion from nil to integer");
   if (v.tag == SP_TAG_NIL)
     sp_raise_cls("TypeError", "no implicit conversion from nil to integer");
   if (v.tag == SP_TAG_BOOL)
     sp_raise_cls("TypeError", v.v.b ? "no implicit conversion of true into Integer"
                                     : "no implicit conversion of false into Integer");
+  /* a Float converts (CRuby's to_int truncation); String and Symbol do not */
+  if (v.tag == SP_TAG_STR)
+    sp_raise_cls("TypeError", "no implicit conversion of String into Integer");
+  if (v.tag == SP_TAG_SYM)
+    sp_raise_cls("TypeError", "no implicit conversion of Symbol into Integer");
   if (v.tag == SP_TAG_OBJ && v.cls_id >= 0) return sp_poly_arg_int_obj(v);
   return sp_poly_to_i(v);
 }
 static SP_INLINE sp_int sp_poly_arg_int_chk(sp_RbVal v) {
-  if (v.tag == SP_TAG_INT) return v.v.i;
+  if (v.tag == SP_TAG_INT && v.v.i != SP_INT_NIL) return v.v.i;
   return sp_poly_arg_int_chk_slow(v);
 }
 
@@ -8216,15 +8233,16 @@ const char *sp_file_basename2(const char *path, const char *suffix);
    flatten recursively (#2786), nil is CRuby's TypeError. */
 static void sp_file_join_flat(sp_RbVal v, const char **parts, int *np) {
   if (*np >= 64) return;
-  if (v.tag == SP_TAG_NIL)
-    sp_raise_cls("TypeError", "no implicit conversion of nil into String");
   if (v.tag == SP_TAG_STR) { parts[(*np)++] = v.v.s ? v.v.s : ""; return; }
   if (v.tag == SP_TAG_OBJ && sp_poly_is_array_kind(v.cls_id)) {
     sp_int n = sp_poly_length(v);
     for (sp_int i = 0; i < n; i++) sp_file_join_flat(sp_poly_arr_get(v, i), parts, np);
     return;
   }
-  parts[(*np)++] = sp_poly_to_s(v);
+  /* everything else takes the strict slot's protocol: nil / bool / a
+     wrongly-classed scalar is CRuby's TypeError, a user object converts
+     through #to_str or raises */
+  parts[(*np)++] = sp_poly_arg_str_chk(v);
 }
 static const char *sp_file_join_vals(sp_RbVal *vals, int n) {
   const char *parts[64]; int np = 0;
