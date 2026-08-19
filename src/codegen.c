@@ -5238,6 +5238,27 @@ static void emit_obj_to_json_dispatch(Compiler *c, Buf *b) {
   buf_puts(b, "    default: return NULL;\n  }\n}\n");
 }
 
+/* A user-defined #deconstruct_keys on a plain class. The hash-pattern path
+   reads its subject through sp_obj_to_h_fn, which knew only Struct and Data --
+   so a subject whose class is a UNION of two user classes matched nothing,
+   while a single class matched because its type is static there and the
+   method is called directly (#4019). */
+static int obj_deconstruct_keys_method(Compiler *c, int ci, int *defc) {
+  int dc = -1;
+  int mi = comp_method_in_chain(c, ci, "deconstruct_keys", &dc);
+  if (mi < 0) return -1;
+  Scope *m = &c->scopes[mi];
+  if (m->is_cmethod || !ty_is_hash(m->ret) || !m->reachable) return -1;
+  if (m->nparams > 1 || (m->nparams == 1 && m->rest_idx == 0)) return -1;
+  if (m->nparams == 1) {
+    LocalVar *plv = scope_local(m, m->pnames[0]);
+    if (!plv || (plv->type != TY_POLY_ARRAY && plv->type != TY_POLY &&
+                 plv->type != TY_UNKNOWN)) return -1;
+  }
+  if (defc) *defc = dc;
+  return mi;
+}
+
 /* Symbol-keyed Struct/Data #to_h, installed as sp_obj_to_h_fn. Mirrors the
    per-struct inline to_h emitter, but keyed by cls_id so a Struct/Data read out
    of a poly container can answer #to_h at run time (#2906). Data members are
@@ -5271,6 +5292,31 @@ static void emit_obj_to_h_dispatch(Compiler *c, Buf *b) {
       buf_puts(b, ");\n");
     }
     buf_puts(b, "      return sp_box_obj(h, SP_BUILTIN_SYM_POLY_HASH);\n    }\n");
+  }
+  /* a plain class with its own #deconstruct_keys answers through it */
+  for (int i = 0; i < c->nclasses; i++) {
+    ClassInfo *ci = &c->classes[i];
+    if (ci->is_struct || ci->is_data || !ci->instantiated || ci->is_native_class) continue;
+    int defc = -1;
+    int mi = obj_deconstruct_keys_method(c, i, &defc);
+    if (mi < 0) continue;
+    Scope *m = &c->scopes[mi];
+    int vobj = comp_ty_value_obj(c, ty_object(defc));
+    char argb[64]; argb[0] = 0;
+    if (m->nparams == 1) {
+      LocalVar *plv = scope_local(m, m->pnames[0]);
+      snprintf(argb, sizeof argb, ", %s",
+               (plv && plv->type == TY_POLY_ARRAY) ? "sp_PolyArray_new()" : "sp_box_nil()");
+    }
+    char callb[256];
+    snprintf(callb, sizeof callb, "sp_%s_%s(%s(sp_%s *)v.v.p%s)",
+             c->classes[defc].c_name, mc(m->name), vobj ? "*" : "",
+             c->classes[defc].c_name, argb);
+    buf_printf(b, "    case %d: return ", i);
+    Buf bx; memset(&bx, 0, sizeof bx);
+    emit_boxed_text(c, m->ret, callb, &bx);
+    buf_puts(b, bx.p ? bx.p : "sp_box_nil()"); free(bx.p);
+    buf_puts(b, ";\n");
   }
   buf_puts(b, "    default: return sp_box_nil();\n  }\n}\n");
 }
@@ -7103,8 +7149,13 @@ static void scan_prologue_features(Compiler *c) {
   /* Any instantiated Struct/Data gets the symbol-keyed to_h dispatch, so a
      Struct/Data read out of a poly container answers #to_h (#2906). */
   g_gen_obj_to_h = 0;
-  for (int i = 0; i < c->nclasses; i++)
-    if ((c->classes[i].is_struct || c->classes[i].is_data) && c->classes[i].instantiated) { g_gen_obj_to_h = 1; break; }
+  for (int i = 0; i < c->nclasses; i++) {
+    if (!c->classes[i].instantiated) continue;
+    if (c->classes[i].is_struct || c->classes[i].is_data) { g_gen_obj_to_h = 1; break; }
+    /* a plain class answering #deconstruct_keys needs the dispatch too */
+    if (!c->classes[i].is_native_class &&
+        obj_deconstruct_keys_method(c, i, NULL) >= 0) { g_gen_obj_to_h = 1; break; }
+  }
   /* A plain (no custom initialize) instantiated Data gets the poly Data#with
      dispatch; a custom-init Data is skipped there, so don't count it (#2890). */
   g_gen_obj_with = 0;
