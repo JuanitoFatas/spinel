@@ -3940,6 +3940,12 @@ static int emit_poly_builtin_method(Compiler *c, int id, Buf *b) {
   return 0;
 }
 
+/* 1 when a collapsed keyword hash funds one positional parameter of `m`, so
+   the arity tests below count it the way Ruby does. */
+static int kwh_fills_slot(Compiler *c, Scope *m, int kwh, int pos_argc) {
+  return (m && kwh_positional_slot(c, m, kwh, pos_argc) >= 0) ? 1 : 0;
+}
+
 static int emit_poly_method_dispatch(Compiler *c, int id, Buf *b) {
   /* Re-entered from this very dispatch's builtin-container arm: decline, so
      the call falls through to the builtin emitters the arm is there to
@@ -4736,8 +4742,13 @@ static int emit_poly_method_dispatch(Compiler *c, int id, Buf *b) {
     int ncand = 0;
     for (int k = 0; k < c->nclasses; k++) {
       int mi = comp_method_in_chain(c, k, name, NULL);
-      /* Include if call supplies all required params (pad defaults / truncate extras) */
-      if (mi >= 0 && pos_argc >= c->scopes[mi].nrequired) ncand++;
+      /* Include if call supplies all required params (pad defaults / truncate
+         extras). A collapsed keyword hash funds one of them: without counting
+         it, `r.where(cond: 1)` reaching `def where(condition)` looked like an
+         arity mismatch, every arm was dropped, and the call lowered to the
+         unresolved-method raise (#4030). */
+      if (mi >= 0 && pos_argc + kwh_fills_slot(c, mi >= 0 ? &c->scopes[mi] : NULL, kwh, pos_argc)
+                     >= c->scopes[mi].nrequired) ncand++;
     }
     /* strftime on a poly value that is really a Time: a nilable Time
        (`created_at : Time?`) is held as a poly sp_RbVal, so `t.strftime(fmt)`
@@ -4923,7 +4934,9 @@ static int emit_poly_method_dispatch(Compiler *c, int id, Buf *b) {
       for (int k = 0; k < c->nclasses; k++) {
         int defcls = -1;
         int mi = comp_method_in_chain(c, k, name, &defcls);
-        if (mi < 0 || pos_argc < c->scopes[mi].nrequired) continue;
+        if (mi < 0 ||
+            pos_argc + kwh_fills_slot(c, &c->scopes[mi], kwh, pos_argc) <
+              c->scopes[mi].nrequired) continue;
         /* A class no value can ever be (never `.new`/`.allocate`/`raise`d, no
            Struct, no Marshal escape) cannot be this poly value's receiver, so
            its arm is dead. Dropping it makes sp_<Class>_<name> an unreferenced
@@ -5077,7 +5090,7 @@ static int emit_poly_method_dispatch(Compiler *c, int id, Buf *b) {
                arguments at all, silently (#3528, the #3503 shape one path
                out). Consumed means some declared keyword param took a key
                from it. */
-            if (rest_kwh_tail(c, &c->scopes[mi], kwh) >= 0) {
+            if (rest_kwh_tail(c, &c->scopes[mi], kwh, pos_argc) >= 0) {
               {
                 int kh3 = ++g_tmp;
                 buf_printf(&cb, " sp_PolyArray_push(_t%d, ({ sp_SymPolyHash *_t%d = sp_SymPolyHash_new();"
@@ -5098,6 +5111,34 @@ static int emit_poly_method_dispatch(Compiler *c, int id, Buf *b) {
               }
             }
             buf_printf(&cb, " _t%d; })", rt2);
+            continue;
+          }
+          /* An unconsumed keyword hash collapses into the first unfilled
+             POSITIONAL parameter, which is how `r.where(cond: 1)` reaches a
+             `def where(condition = nil)`. The arms matched keywords by name
+             only, so that parameter silently kept its default -- no
+             TypeError, no ArgumentError, no diagnostic (#4030). The rest-tail
+             collapse above is the same rule for a callee that has only a
+             rest; a callee with both funds the positional first. */
+          if (kwh_positional_slot(c, &c->scopes[mi], kwh, pos_argc) == a) {
+            LocalVar *cp = pnm ? scope_local(&c->scopes[mi], pnm) : NULL;
+            int kh4 = ++g_tmp;
+            if (cp && cp->type == TY_POLY) buf_puts(&cb, "sp_box_obj(");
+            buf_printf(&cb, "({ sp_SymPolyHash *_t%d = sp_SymPolyHash_new(); SP_GC_ROOT(_t%d);", kh4, kh4);
+            for (int e = 0; e < kwn; e++) {
+              int key = nt_ref(nt, kwels[e], "key");
+              const char *kn = key >= 0 ? nt_str(nt, key, "value") : NULL;
+              if (!kn) continue;
+              char tn[32]; snprintf(tn, sizeof tn, "_t%d", kwtmp[e]);
+              Buf eb; memset(&eb, 0, sizeof eb);
+              if (kwty[e] == TY_POLY) buf_puts(&eb, tn);
+              else emit_boxed_text(c, kwty[e], tn, &eb);
+              buf_printf(&cb, " sp_SymPolyHash_set(_t%d, (sp_sym)%d, %s);", kh4,
+                         comp_sym_intern(c, kn), eb.p ? eb.p : "sp_box_nil()");
+              free(eb.p);
+            }
+            buf_printf(&cb, " _t%d; })", kh4);
+            if (cp && cp->type == TY_POLY) buf_puts(&cb, ", SP_BUILTIN_SYM_POLY_HASH)");
             continue;
           }
           /* box the call-site arg if this candidate's parameter is poly;

@@ -6324,6 +6324,32 @@ static const char *anon_kwrest_name(Compiler *c, int node) {
   return (nm && sp_streq(nm, "__anon_kwrest")) ? nm : NULL;
 }
 
+static int kwh_consumed_by_kwparam(Compiler *c, Scope *m, int kwh);
+
+/* The parameter index a collapsed keyword hash fills, or -1 when none does.
+   Ruby packs a braceless `f(k: 1)` into the first UNFILLED positional
+   parameter when the callee declares no keyword parameter that takes a key --
+   `def f(opts)` and `def f(opts = {})` alike. The slot has to be able to hold
+   a hash, so a concretely-typed one (an int param bound elsewhere) declines
+   and the rest takes it instead.
+
+   The poly dispatch asked none of this: its arms matched keywords by name
+   only, so an optional positional silently kept its default and a required one
+   made the arm look like an arity mismatch, dropping it from the switch
+   entirely (#4030). */
+int kwh_positional_slot(Compiler *c, Scope *m, int kwh, int pos_argc) {
+  if (kwh < 0 || !m || m->kwrest_idx >= 0) return -1;
+  if (kwh_consumed_by_kwparam(c, m, kwh)) return -1;
+  if (pos_argc < 0 || pos_argc >= m->nparams) return -1;
+  if (pos_argc == m->rest_idx) return -1;
+  const char *pn = m->pnames ? m->pnames[pos_argc] : NULL;
+  if (!pn || callee_param_is_declared_kwarg(c, m, pn)) return -1;
+  LocalVar *p = scope_local(m, pn);
+  TyKind pt = p ? p->type : TY_UNKNOWN;
+  if (!ty_is_hash(pt) && pt != TY_POLY) return -1;
+  return pos_argc;
+}
+
 /* Ruby packs a keyword hash no parameter consumed into the *rest as one
    positional hash. Returns the hash node to append, or -1: -1 when there is no
    keyword hash, when a **kwrest will take it, or when some declared keyword
@@ -6334,11 +6360,16 @@ static const char *anon_kwrest_name(Compiler *c, int node) {
    the direct one had it, and #3528 was it missing from the poly-dispatch arm
    after both. A call path that packs a rest asks here rather than
    reimplementing the test. */
-int rest_kwh_tail(Compiler *c, Scope *m, int kwh) {
+int rest_kwh_tail(Compiler *c, Scope *m, int kwh, int pos_argc) {
   if (kwh < 0 || !m || m->kwrest_idx >= 0) return -1;
   for (int i = 0; i < m->nparams; i++)
     if (m->pnames[i] && callee_has_kwarg(c, m, m->pnames[i]) &&
         kwh_lookup(c->nt, kwh, m->pnames[i]) >= 0) return -1;   /* a keyword param takes it */
+  /* Ruby funds POSITIONAL parameters before the rest, so a hash that collapses
+     into an unfilled positional slot never reaches the rest as well. Both took
+     it: `def f(condition = nil, *args); f(k: 1)` gave args `[{k: 1}]` where
+     Ruby leaves it empty (found while fixing #4030). */
+  if (kwh_positional_slot(c, m, kwh, pos_argc) >= 0) return -1;
   return kwh;
 }
 
@@ -7235,7 +7266,7 @@ else {
                                       c, splat_idx + 1, rest_end, argv, out);
       }
 else {
-        emit_rest_pack_kwh(c, i, rest_end, argv, rest_kwh_tail(c, m, kwh), out);
+        emit_rest_pack_kwh(c, i, rest_end, argv, rest_kwh_tail(c, m, kwh, pos_argc), out);
       }
     }
 else if (m->rest_idx >= 0 && m->npost_rest > 0 && i > m->rest_idx) {
@@ -7361,8 +7392,11 @@ else {
            positionally, because then `a` was not poly -- which is why it
            looked environmental and why my own test file, holding both shapes,
            immunised itself. */
-        int use_kwh = (kwh >= 0 && !kwh_consumed_by_kwparam(c, m, kwh) &&
-                       (ty_is_hash(pt) || (pt == TY_POLY && !is_kwparam)));
+        /* ...and only into the FIRST unfilled positional slot. Every later
+           one hit this same fallback, so `def f(a = nil, b = nil); f(k: 1)`
+           handed the hash to both (found while fixing #4030). */
+        int use_kwh = (!is_kwparam && kwh_positional_slot(c, m, kwh, pos_argc) == i &&
+                       (ty_is_hash(pt) || pt == TY_POLY));
         emit_arg_rooted(c, m, i, use_kwh ? kwh : -1, out);
       }
     }
@@ -7557,7 +7591,7 @@ void emit_dispatch(Compiler *c, int cid, const char *name,
          tail -- the same rule the other call path follows. Dropping it here
          made `c.splat_only(id: :desc)` run with no arguments at all, silently,
          while the identical top-level call kept it (#3503). */
-      emit_rest_pack_kwh(c, k, pos_argc_d, argv, rest_kwh_tail(c, m, kwh_d), &ab);
+      emit_rest_pack_kwh(c, k, pos_argc_d, argv, rest_kwh_tail(c, m, kwh_d, pos_argc_d), &ab);
       emit_indent(g_pre, g_indent);
       buf_printf(g_pre, "sp_PolyArray *_t%d = %s;\n", atmp[k], ab.p ? ab.p : "sp_PolyArray_new()");
       atmp_ty[k] = TY_POLY_ARRAY;
