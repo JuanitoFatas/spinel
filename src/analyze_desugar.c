@@ -945,6 +945,10 @@ int desugar_dynamic_send(Compiler *c) {
       int call = nt_new_node(nt, "CallNode"); if (call < 0) break;
       nt_node_set_ref(nt, call, "receiver", recv);
       nt_node_set_str(nt, call, "name", cand[k]);
+      /* The dispatch keys each arm on the NAME it was built for, so a later
+         desugar that rewrites the name (`first` -> `[]`) leaves the arm
+         unreachable and the send raises. Mark them as owned. */
+      nt_node_set_int(nt, call, "dyn_arm", 1);
       nt_node_set_ref(nt, call, "arguments", na);
       /* public_send arms enforce visibility at the dispatch site */
       if (sp_streq(nm, "public_send")) nt_node_set_str(nt, call, "vis_enforce", "1");
@@ -1074,6 +1078,52 @@ int desugar_respond_to_probe(Compiler *c) {
    neither the typed array arms nor the boxed dispatch, so an Array read out
    of a container answered NoMethodError (#3821). Rewritten here, every path
    that knows #[] knows it. */
+/* `arr.first` / `arr.last` on a statically ARRAY receiver are `arr[0]` and
+   `arr[-1]`, exactly -- both answer nil on an empty array. Rewriting them onto
+   the index route is not a shortcut: the shared-mutable-string machinery keys
+   its alias analysis off the element read, and only `[]` carried a local
+   binding through it, so `a = b.first; a << "Z"` bound a COPY and the
+   container never saw the append (#4013). One route, one behaviour.
+   The count forms (`first(2)`) answer a new Array and are left alone, as are
+   Hash / Range / Enumerator / poly receivers, whose #first is a different
+   method. */
+int desugar_array_first_last(Compiler *c) {
+  NodeTable *nt = (NodeTable *)c->nt;
+  int changed = 0;
+  int user_fl = 0;
+  for (int k = 0; k < c->nclasses && !user_fl; k++)
+    if (comp_method_in_chain(c, k, "first", NULL) >= 0 ||
+        comp_reader_in_chain(c, k, "first", NULL) ||
+        comp_method_in_chain(c, k, "last", NULL) >= 0 ||
+        comp_reader_in_chain(c, k, "last", NULL)) user_fl = 1;
+  if (user_fl) return 0;
+  NT_FOREACH_KIND(nt, NK_CallNode, id) {
+    const char *nm = nt_str(nt, id, "name");
+    if (!nm || (!sp_streq(nm, "first") && !sp_streq(nm, "last"))) continue;
+    int recv = nt_ref(nt, id, "receiver");
+    if (recv < 0 || nt_ref(nt, id, "block") >= 0) continue;
+    if (nt_int(nt, id, "dyn_arm", 0)) continue;   /* a dynamic-send arm keeps its name */
+    int args = nt_ref(nt, id, "arguments");
+    int argc = 0; if (args >= 0) nt_arr(nt, args, "arguments", &argc);
+    if (argc != 0) continue;
+    TyKind rt = infer_type(c, recv);
+    if (!ty_is_array(rt) || ty_is_obj_array(rt)) continue;
+    int idx = nt_new_node(nt, "IntegerNode");
+    if (idx < 0) continue;
+    nt_node_set_int(nt, idx, "value", sp_streq(nm, "first") ? 0 : -1);
+    int ia = nt_new_node(nt, "ArgumentsNode");
+    if (ia < 0) continue;
+    nt_node_set_arr(nt, ia, "arguments", &idx, 1);
+    comp_grow_node_arrays(c);
+    c->nscope[idx] = c->nscope[id];
+    c->nscope[ia] = c->nscope[id];
+    nt_node_set_ref(nt, id, "arguments", ia);
+    nt_node_set_str(nt, id, "name", "[]");
+    changed = 1;
+  }
+  return changed;
+}
+
 int desugar_array_at(Compiler *c) {
   NodeTable *nt = (NodeTable *)c->nt;
   int changed = 0;
@@ -1088,6 +1138,7 @@ int desugar_array_at(Compiler *c) {
     if (!nm || !sp_streq(nm, "at")) continue;
     int recv = nt_ref(nt, id, "receiver");
     if (recv < 0 || nt_ref(nt, id, "block") >= 0) continue;
+    if (nt_int(nt, id, "dyn_arm", 0)) continue;   /* same reason as first/last */
     int args = nt_ref(nt, id, "arguments");
     int argc = 0; const int *argv = args >= 0 ? nt_arr(nt, args, "arguments", &argc) : NULL;
     if (argc != 1 || !argv) continue;

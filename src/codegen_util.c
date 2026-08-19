@@ -777,9 +777,7 @@ int emit_strbuf_read_ref(Compiler *c, int recv, Buf *b) {
    hash): the read is an sp_RbVal, so a shared-handle destination has to unbox
    it rather than wrap it (#3941). */
 int strbuf_boxed_elem_read(Compiler *c, int v) {
-  if (v < 0 || nt_kind(c->nt, v) != NK_CallNode) return 0;
-  const char *nm = nt_str(c->nt, v, "name");
-  if (!nm || !sp_streq(nm, "[]")) return 0;
+  if (!container_elem_read_p(c->nt, v)) return 0;
   int r = nt_ref(c->nt, v, "receiver");
   if (r < 0) return 0;
   TyKind rt = comp_ntype(c, r);

@@ -750,6 +750,8 @@ static inline int comp_ty_value_obj(const Compiler *c, TyKind t) {
    One list, two readers: codegen emits the poly dispatch's builtin arm for
    these names, and analyze keeps a block passed to such a call poly-typed
    because that arm can take it (#3409). */
+/* 1 for a call that hands out one ELEMENT of a container (see compiler.c). */
+int container_elem_read_p(const NodeTable *nt, int id);
 const char *poly_enum_op_for(const char *name);
 int poly_container_read_p(const char *name);
 

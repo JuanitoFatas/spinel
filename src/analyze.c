@@ -9140,8 +9140,9 @@ static int promote_shared_stored_strings(Compiler *c) {
     }
     int mrecv = nt_ref(nt, mu, "receiver");
     if (mrecv < 0 || nt_kind(nt, mrecv) != NK_CallNode) continue;
-    const char *idxn = nt_str(nt, mrecv, "name");
-    if (!idxn || !sp_streq(idxn, "[]")) continue;
+    /* every element read, not just `[]`: a mutation through `b.first` has to
+       reach the container the same way (#4013) */
+    if (!container_elem_read_p(nt, mrecv)) continue;
     int cont = nt_ref(nt, mrecv, "receiver");
     if (cont < 0 || nt_kind(nt, cont) != NK_LocalVariableReadNode) continue;
     const char *contn = nt_str(nt, cont, "name");
@@ -9464,8 +9465,12 @@ static int promote_shared_stored_strings(Compiler *c) {
     if (nt_kind(nt, w) != NK_LocalVariableWriteNode) continue;
     int wv = nt_ref(nt, w, "value");
     if (wv < 0 || nt_kind(nt, wv) != NK_CallNode) continue;
-    const char *idxn5 = nt_str(nt, wv, "name");
-    if (!idxn5 || !sp_streq(idxn5, "[]")) continue;
+    /* `[]` only: the ALIAS binding needs the emitter to hand the local the
+       element's handle, and only the index read does that. `first`/`last`
+       reach it anyway -- they are rewritten to `[]` before this runs -- while
+       a local bound from `fetch`/`dig` keeps its copy, as it did before. */
+    { const char *idxn5 = nt_str(nt, wv, "name");
+      if (!idxn5 || !sp_streq(idxn5, "[]")) continue; }
     if (nt_ref(nt, wv, "block") >= 0) continue;
     int cont5 = nt_ref(nt, wv, "receiver");
     if (cont5 < 0 || nt_kind(nt, cont5) != NK_LocalVariableReadNode) continue;
@@ -11728,6 +11733,7 @@ void analyze_program(Compiler *c) {
     ch |= desugar_symbol_to_proc_call(c);      /* :sym.to_proc.call(x) -> x.sym */
     ch |= desugar_call_op_write(c);            /* r.x += 1 with a def writer -> r.x = r.x + 1 */
     ch |= desugar_array_at(c);                 /* a.at(i) -> a[i] */
+    ch |= desugar_array_first_last(c);         /* arr.first -> arr[0], arr.last -> arr[-1] */
     ch |= desugar_to_h_block(c);               /* recv.to_h{|e|[k,v]} -> recv.map{...}.to_h */
     ch |= desugar_to_proc_block_arg(c);        /* &obj (user to_proc) -> &(obj.to_proc) hoisted once */
     ch |= desugar_proc_expr_block_arg(c);      /* &(a >> b) -> hoisted temp */

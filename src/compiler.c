@@ -1210,6 +1210,27 @@ const char *comp_prep_user_name(const char *name) {
    These are the names a poly dispatch can serve from a builtin Array/Hash
    receiver by driving the materialized block proc over the elements; only the
    one-value-per-element family, since the runtime helper passes one. */
+/* A call that hands out ONE element of a container: the same object `[]`
+   yields, so a mutation through the result has to reach the container (the
+   shared-mutable-string machinery keys off this). `first`/`last` qualify only
+   in their zero-argument form -- with a count they answer a new Array, not an
+   element (#4013). One predicate, because the analysis probes and the emitter
+   have to agree on the set: they did not, and `b.first[1] = "*"` raised
+   NoMethodError while `b[0][1] = "*"` worked. */
+int container_elem_read_p(const NodeTable *nt, int id) {
+  if (id < 0 || nt_kind(nt, id) != NK_CallNode) return 0;
+  const char *nm = nt_str(nt, id, "name");
+  if (!nm) return 0;
+  if (sp_streq(nm, "[]") || sp_streq(nm, "fetch") || sp_streq(nm, "dig")) return 1;
+  if (sp_streq(nm, "first") || sp_streq(nm, "last")) {
+    int a = nt_ref(nt, id, "arguments");
+    int n = 0;
+    if (a >= 0) nt_arr(nt, a, "arguments", &n);
+    return n == 0;
+  }
+  return 0;
+}
+
 const char *poly_enum_op_for(const char *name) {
   static const struct { const char *nm, *op; } PEN[] = {
     {"each","SP_PENUM_EACH"}, {"each_with_index","SP_PENUM_EACH_WITH_INDEX"},
