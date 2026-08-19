@@ -2155,6 +2155,12 @@ static SP_NOINLINE const char *sp_poly_arg_str_chk_slow(sp_RbVal v) {
     sp_raise_cls("TypeError", "no implicit conversion of Float into String");
   if (v.tag == SP_TAG_SYM)
     sp_raise_cls("TypeError", "no implicit conversion of Symbol into String");
+  /* a boxed BUILTIN value (negative cls_id) has no #to_str either -- name
+     its class, as CRuby does. A boxed shared-string handle IS a String and
+     passes through (the slow path dereferences it). */
+  if (v.tag == SP_TAG_OBJ && v.cls_id < 0 && !sp_poly_is_strbuf(v))
+    sp_raise_cls("TypeError", sp_sprintf("no implicit conversion of %s into String",
+                                         sp_poly_class_name(v)));
   return sp_poly_arg_str_slow(v);
 }
 static SP_INLINE const char *sp_poly_arg_str_chk(sp_RbVal v) {
@@ -2175,6 +2181,17 @@ static SP_NOINLINE sp_int sp_poly_arg_int_chk_slow(sp_RbVal v) {
     sp_raise_cls("TypeError", "no implicit conversion of String into Integer");
   if (v.tag == SP_TAG_SYM)
     sp_raise_cls("TypeError", "no implicit conversion of Symbol into Integer");
+  /* boxed builtins: Rational, BigRational, and Complex own #to_int in CRuby
+     and keep converting below; a shared-string handle is a String; every
+     other builtin kind (Array, Hash, Time, Regexp, ...) has no #to_int */
+  if (v.tag == SP_TAG_OBJ && v.cls_id < 0 &&
+      !sp_poly_is_rational(v) && !sp_poly_is_brat(v) &&
+      v.cls_id != SP_BUILTIN_COMPLEX) {
+    if (sp_poly_is_strbuf(v))
+      sp_raise_cls("TypeError", "no implicit conversion of String into Integer");
+    sp_raise_cls("TypeError", sp_sprintf("no implicit conversion of %s into Integer",
+                                         sp_poly_class_name(v)));
+  }
   if (v.tag == SP_TAG_OBJ && v.cls_id >= 0) return sp_poly_arg_int_obj(v);
   return sp_poly_to_i(v);
 }
