@@ -2597,6 +2597,23 @@ else {
             at[j] = TY_INT_ARRAY;
             continue;
           }
+          /* A scalar argument responds to no :each at all, which is CRuby's
+             TypeError naming its class. Read as a container regardless, a nil
+             became a column of nils, silently, and an Integer or a String
+             stopped the C build. */
+          if (at[j] == TY_NIL || at[j] == TY_BOOL || at[j] == TY_INT ||
+              at[j] == TY_FLOAT || at[j] == TY_STRING || at[j] == TY_STRBUF ||
+              at[j] == TY_SYMBOL || at[j] == TY_VOID ||
+              /* a Hash or an Enumerator DOES respond to :each; the same helper
+                 materializes it, where the typed line below spelled the slot
+                 sp_PolyArray* and assigned an sp_SymPolyHash* to it */
+              ty_is_hash(at[j]) || at[j] == TY_ENUMERATOR) {
+            buf_printf(b, " sp_PolyArray *_t%d = sp_zip_arg(", tb[j]);
+            emit_boxed(c, argv[j], b);
+            buf_puts(b, ");");
+            at[j] = TY_POLY_ARRAY;
+            continue;
+          }
           /* a boxed (poly) argument -- e.g. an outer block param that holds an
              array at runtime -- must be unboxed to a poly array, not assigned
              raw into an sp_PolyArray* slot (#3190). */
@@ -3935,6 +3952,23 @@ else {
             emit_expr(c, argv[j], b);
             buf_printf(b, "; sp_range_to_ia(_t%d); });", trj);
             at[j] = TY_INT_ARRAY;
+            continue;
+          }
+          /* A scalar argument responds to no :each at all, which is CRuby's
+             TypeError naming its class. Read as a container regardless, a nil
+             became a column of nils, silently, and an Integer or a String
+             stopped the C build. */
+          if (at[j] == TY_NIL || at[j] == TY_BOOL || at[j] == TY_INT ||
+              at[j] == TY_FLOAT || at[j] == TY_STRING || at[j] == TY_STRBUF ||
+              at[j] == TY_SYMBOL || at[j] == TY_VOID ||
+              /* a Hash or an Enumerator DOES respond to :each; the same helper
+                 materializes it, where the typed line below spelled the slot
+                 sp_PolyArray* and assigned an sp_SymPolyHash* to it */
+              ty_is_hash(at[j]) || at[j] == TY_ENUMERATOR) {
+            buf_printf(b, " sp_PolyArray *_t%d = sp_zip_arg(", tb[j]);
+            emit_boxed(c, argv[j], b);
+            buf_puts(b, ");");
+            at[j] = TY_POLY_ARRAY;
             continue;
           }
           /* a boxed (poly) argument -- e.g. an outer block param that holds an

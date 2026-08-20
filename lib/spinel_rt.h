@@ -1551,6 +1551,11 @@ static sp_Bigint *sp_poly_as_bigint(sp_RbVal v);
 static sp_RbVal sp_poly_binop_bad(const char *op, sp_RbVal recv, sp_RbVal arg);  /* fwd */
 static inline int sp_poly_is_array_kind(int cls_id);            /* fwd: array set ops */
 static sp_PolyArray *sp_poly_to_poly_array(sp_RbVal v);
+/* `zip`'s arguments must respond to :each -- an Array, a Range, any Enumerable
+   -- and CRuby names the class of one that does not. The emitters read the
+   argument as a container regardless, so a nil quietly became a column of nils
+   and an Integer stopped the C build. */
+static sp_PolyArray *sp_zip_arg(sp_RbVal v);
 static sp_PolyArray *sp_PolyArray_intersect(sp_PolyArray *a, sp_PolyArray *b);
 static sp_PolyArray *sp_PolyArray_union(sp_PolyArray *a, sp_PolyArray *b);
 static sp_RbVal sp_poly_bitop(sp_RbVal a, sp_RbVal b, int op) {  /* 0:& 1:| 2:^ */
@@ -3366,6 +3371,7 @@ static sp_PolyArray *sp_poly_to_poly_array(sp_RbVal v) {
   for (sp_int i = 0; i < n; i++) sp_PolyArray_push(r, sp_poly_arr_get(v, i));
   return r;
 }
+
 /* The ARGUMENT of an Array set operation (`&` `|` `-`), arriving through a poly
    slot: an Array at run time becomes the poly array the set-op primitives take,
    anything else raises CRuby's TypeError. A statically poly argument had no
@@ -8973,6 +8979,19 @@ sp_PolyArray *sp_Enumerator_take(sp_Enumerator *e, sp_int n);
 /* Enumerator#to_a / #entries: drain the whole source into an array (a fresh run
    of the generator, independent of the #next cursor), matching CRuby. */
 sp_PolyArray *sp_Enumerator_to_a(sp_Enumerator *e);
+static sp_PolyArray *sp_zip_arg(sp_RbVal v) {
+  /* every OBJ tag that carries an each: the array kinds, a Range, the hashes
+     (which enumerate as their [key, value] pairs), an Enumerator, and a user
+     object with #to_a -- exactly what sp_poly_arr_recv already walks. */
+  if (v.tag == SP_TAG_OBJ && v.cls_id == SP_BUILTIN_ENUMERATOR)
+    return sp_Enumerator_to_a((sp_Enumerator *)v.v.p);
+  if (v.tag == SP_TAG_OBJ && v.cls_id == SP_BUILTIN_RANGE)
+    return sp_poly_to_poly_array(v);
+  if (v.tag == SP_TAG_OBJ) return sp_poly_arr_recv(v, "each");
+  sp_raise_cls("TypeError", sp_sprintf("wrong argument type %s (must respond to :each)",
+                                       sp_poly_class_name(v)));
+  return sp_PolyArray_new();
+}
 /* The boxed-receiver entry points the poly surface above forwards to: an
    Enumerator read out of a container answers #to_a / #next like the typed
    receiver does. Separate thunks because sp_Enumerator is only a type from
