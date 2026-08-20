@@ -390,7 +390,8 @@ static int emit_nilbool_conv_raise_w(Compiler *c, int node, TyKind want, int nil
                : of_wording      ? "no implicit conversion of nil into Integer"
                                  : "no implicit conversion from nil to integer",
                dv);
-  } else {
+  }
+  else {
     const char *into = want == TY_STRING ? "String" : "Integer";
     buf_puts(b, "({ sp_raise_cls(\"TypeError\", (");
     emit_expr(c, node, b);

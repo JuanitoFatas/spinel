@@ -1120,11 +1120,15 @@ const char *raise_tail_value(TyKind t) {
    struct, where default_value's NULL would be ill-typed C. */
 const char *raise_tail_value_c(Compiler *c, TyKind t) {
   if (ty_is_object(t) && comp_ty_value_obj(c, t)) {
-    static char vbuf[128];
+    /* rotate: one static buffer would make two of these in a single
+       buf_printf read the same text, and nothing in the signature says so */
+    static char vbuf[4][128];
+    static int vslot = 0;
     int cid = ty_object_class(t);
     if (cid >= 0 && cid < c->nclasses) {
-      snprintf(vbuf, sizeof vbuf, "((sp_%s){0})", c->classes[cid].c_name);
-      return vbuf;
+      char *out = vbuf[vslot++ & 3];
+      snprintf(out, sizeof vbuf[0], "((sp_%s){0})", c->classes[cid].c_name);
+      return out;
     }
   }
   return raise_tail_value(t);

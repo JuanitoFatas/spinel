@@ -1201,7 +1201,8 @@ int emit_array_call(Compiler *c, int id, Buf *b) {
         for (int ai = 0; ai < argc; ai++) {
           if (ai == bad && comp_ntype(c, argv[ai]) == TY_BOOL) {
             buf_printf(b, "int _t%d = (", tb); emit_expr(c, argv[ai], b); buf_puts(b, "); ");
-          } else {
+          }
+          else {
             buf_puts(b, "(void)("); emit_expr(c, argv[ai], b); buf_puts(b, "); ");
           }
         }
@@ -6040,7 +6041,8 @@ int emit_scalar_call(Compiler *c, int id, Buf *b) {
            dispatch would */
         if (comp_ntype(c, argv[0]) == TY_NIL) {
           buf_puts(b, "(void)("); emit_expr(c, argv[0], b); buf_puts(b, "); ");
-        } else {
+        }
+        else {
           buf_printf(b, "int _t%d = (", prb); emit_expr(c, argv[0], b); buf_puts(b, "); ");
         }
         for (int pa = 1; pa < argc; pa++) {
@@ -8449,7 +8451,8 @@ int emit_object_call(Compiler *c, int id, Buf *b) {
       buf_puts(b, "({ (void)("); emit_expr(c, recv, b); buf_puts(b, "); ");
       if (comp_ntype(c, argv[0]) == TY_NIL) {
         buf_puts(b, "(void)("); emit_expr(c, argv[0], b); buf_puts(b, "); ");
-      } else {
+      }
+      else {
         buf_printf(b, "int _t%d = (", zb); emit_expr(c, argv[0], b); buf_puts(b, "); ");
       }
       for (int sa = 1; sa < argc; sa++) {   /* dig's trailing keys evaluate too */
@@ -8706,7 +8709,8 @@ int emit_object_call(Compiler *c, int id, Buf *b) {
             for (int na = 0; na < argc; na++) {
               if (na == ai && pat == TY_BOOL) {
                 buf_printf(b, "int _t%d = (", nrb); emit_expr(c, argv[na], b); buf_puts(b, "); ");
-              } else {
+              }
+              else {
                 buf_puts(b, "(void)("); emit_boxed(c, argv[na], b); buf_puts(b, "); ");
               }
             }
