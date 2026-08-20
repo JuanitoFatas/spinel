@@ -2005,6 +2005,27 @@ static const char *exc_when_cls_name(Compiler *c, const char *cn) {
 
 static int g_pm_hash_sink_indent = 0;
 
+/* The `keys` argument a hash pattern hands #deconstruct_keys: an Array of the
+   keys it names, or nil when the pattern can take everything (`**rest`). Every
+   match passed nil, so an implementation that builds only what was asked for
+   could not tell the two cases apart (#4046). */
+static void emit_pm_deconstruct_keys_arg(Compiler *c, int pat, Buf *b) {
+  const NodeTable *nt = c->nt;
+  int en = 0; const int *elms = pat >= 0 ? nt_arr(nt, pat, "elements", &en) : NULL;
+  int rest = pat >= 0 ? nt_ref(nt, pat, "rest") : -1;
+  if (rest >= 0 || !elms) { buf_puts(b, "sp_box_nil()"); return; }
+  int tk = ++g_tmp;
+  buf_printf(b, "({ sp_PolyArray *_t%d = sp_PolyArray_new(); SP_GC_ROOT(_t%d);", tk, tk);
+  for (int i = 0; i < en; i++) {
+    if (!nt_type(nt, elms[i]) || !sp_streq(nt_type(nt, elms[i]), "AssocNode")) continue;
+    int key = nt_ref(nt, elms[i], "key");
+    const char *kn = key >= 0 ? nt_str(nt, key, "value") : NULL;
+    if (!kn) continue;
+    buf_printf(b, " sp_PolyArray_push(_t%d, sp_box_sym((sp_sym)%d));", tk, comp_sym_intern(c, kn));
+  }
+  buf_printf(b, " sp_box_poly_array(_t%d); })", tk);
+}
+
 int emit_pm_cond(Compiler *c, int pat, int t, TyKind pt, Buf *b) {
   const NodeTable *nt = c->nt;
   const char *pty = nt_type(nt, pat);
@@ -2323,8 +2344,11 @@ int emit_pm_cond(Compiler *c, int pat, int t, TyKind pt, Buf *b) {
         int di = g_pm_hash_sink ? g_pm_hash_sink_indent : g_indent;
         emit_indent(ds, di);
         emit_ctype(c, drt, ds);
-        if (isv) buf_printf(ds, " _t%d = sp_%s_deconstruct_keys(_t%d, sp_box_nil());\n", dt, dcn, t);
-        else     buf_printf(ds, " _t%d = sp_%s_deconstruct_keys((sp_%s *)_t%d, sp_box_nil());\n", dt, dcn, dcn, t);
+        Buf kab; memset(&kab, 0, sizeof kab);
+        emit_pm_deconstruct_keys_arg(c, pat, &kab);
+        if (isv) buf_printf(ds, " _t%d = sp_%s_deconstruct_keys(_t%d, %s);\n", dt, dcn, t, kab.p ? kab.p : "sp_box_nil()");
+        else     buf_printf(ds, " _t%d = sp_%s_deconstruct_keys((sp_%s *)_t%d, %s);\n", dt, dcn, dcn, t, kab.p ? kab.p : "sp_box_nil()");
+        free(kab.p);
         if (needs_root(drt)) { emit_indent(ds, di); emit_gc_root_tmp(c, drt, dt, ds); buf_puts(ds, "\n"); }
         return emit_pm_cond(c, pat, dt, drt, b);
       }
@@ -2929,8 +2953,11 @@ void emit_case_match(Compiler *c, int id, Buf *b, int indent, int tail, int valu
         const char *dcn = c->classes[ddef].name;
         arm_t = ++g_tmp;
         emit_indent(b, indent + 1); emit_ctype(c, drt, b);
-        if (isv) buf_printf(b, " _t%d = sp_%s_deconstruct_keys(_t%d, sp_box_nil());\n", arm_t, dcn, t);
-        else     buf_printf(b, " _t%d = sp_%s_deconstruct_keys((sp_%s *)_t%d, sp_box_nil());\n", arm_t, dcn, dcn, t);
+        Buf kab2; memset(&kab2, 0, sizeof kab2);
+        emit_pm_deconstruct_keys_arg(c, pat, &kab2);
+        if (isv) buf_printf(b, " _t%d = sp_%s_deconstruct_keys(_t%d, %s);\n", arm_t, dcn, t, kab2.p ? kab2.p : "sp_box_nil()");
+        else     buf_printf(b, " _t%d = sp_%s_deconstruct_keys((sp_%s *)_t%d, %s);\n", arm_t, dcn, dcn, t, kab2.p ? kab2.p : "sp_box_nil()");
+        free(kab2.p);
         if (needs_root(drt)) { emit_indent(b, indent + 1); emit_gc_root_tmp(c, drt, arm_t, b); buf_puts(b, "\n"); }
         arm_pt = drt;
       }
@@ -7609,8 +7636,11 @@ else {
         /* Root the receiver: #deconstruct_keys allocates its hash. */
         if (!isv) { emit_indent(b, indent); buf_printf(b, "SP_GC_ROOT(_t%d);\n", tobj); }
         emit_indent(b, indent); emit_ctype(c, drt, b);
-        if (isv) buf_printf(b, " _t%d = sp_%s_deconstruct_keys(_t%d, sp_box_nil());\n", thash, dcn, tobj);
-        else     buf_printf(b, " _t%d = sp_%s_deconstruct_keys((sp_%s *)_t%d, sp_box_nil());\n", thash, dcn, dcn, tobj);
+        Buf kab3; memset(&kab3, 0, sizeof kab3);
+        emit_pm_deconstruct_keys_arg(c, pattern, &kab3);
+        if (isv) buf_printf(b, " _t%d = sp_%s_deconstruct_keys(_t%d, %s);\n", thash, dcn, tobj, kab3.p ? kab3.p : "sp_box_nil()");
+        else     buf_printf(b, " _t%d = sp_%s_deconstruct_keys((sp_%s *)_t%d, %s);\n", thash, dcn, dcn, tobj, kab3.p ? kab3.p : "sp_box_nil()");
+        free(kab3.p);
         if (needs_root(drt)) { emit_indent(b, indent); emit_gc_root_tmp(c, drt, thash, b); buf_puts(b, "\n"); }
         hn = ty_hash_cname(drt);
         vt = drt;
