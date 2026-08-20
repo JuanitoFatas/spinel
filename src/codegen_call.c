@@ -13131,9 +13131,12 @@ void emit_call(Compiler *c, int id, Buf *b) {
          readings do not use */
       comp_ntype(c, id) == TY_POLY &&
       (!sp_streq(name, "name") || !sp_feature_required("ostruct"))) {
-    int has_user = 0;
-    for (int _k = 0; _k < c->nclasses && !has_user; _k++)
-      if (comp_method_in_class(c, _k, name) >= 0) has_user = 1;
+    /* A user READER owns the name just as a user method does: `attr_accessor
+       :name` on a class this receiver could be makes the builtin arm the wrong
+       answer, and the general cls_id dispatch does emit a reader arm. Counting
+       methods alone let Method#name / Class#name claim the call and raise for
+       an object whose class answers it perfectly well (#4036). */
+    int has_user = user_defines_or_reads(c, name);
     if (!has_user) {
       int t = ++g_tmp;
       buf_printf(b, "({ sp_RbVal _t%d = ", t); emit_expr(c, recv, b);
