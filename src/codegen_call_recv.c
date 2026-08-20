@@ -10510,6 +10510,15 @@ int emit_poly_call(Compiler *c, int id, Buf *b) {
       g_n_argov--;
       buf_printf(b, "({ const char *_t%d = %s; ", tnb, nbb.p ? nbb.p : "\"\"");
       free(nbb.p);
+      /* Decide "did it change?" BEFORE the mutation. The receiver's old text
+         is the LIVE payload of a shared handle, so once become() has written
+         the new contents into it the two compare equal and the bang method
+         answered nil after a substitution that plainly happened (#4042). */
+      int tchg = 0;
+      if (PBANG[pbi].nil_nc) {
+        tchg = ++g_tmp;
+        buf_printf(b, "int _t%d = !sp_str_eq(_t%d, _t%d); ", tchg, tob, tnb);
+      }
       /* A shared handle absorbs the new contents; a plain string box cannot,
          so an lvalue receiver takes the value back the way the typed path
          does for the same case. */
@@ -10521,7 +10530,7 @@ int emit_poly_call(Compiler *c, int id, Buf *b) {
         }
         else buf_printf(b, "sp_poly_str_become(_t%d, _t%d); ", tvb, tnb);
       }
-      if (PBANG[pbi].nil_nc) buf_printf(b, "sp_str_eq(_t%d, _t%d) ? NULL : _t%d; })", tob, tnb, tnb);
+      if (PBANG[pbi].nil_nc) buf_printf(b, "_t%d ? _t%d : NULL; })", tchg, tnb);
       else buf_printf(b, "_t%d; })", tnb);
       return 1;
     }
