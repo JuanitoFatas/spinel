@@ -9605,6 +9605,19 @@ sp_Bigint *sp_bigint_not(sp_Bigint *a);
 typedef struct sp_Bigint sp_Bigint;
 sp_Bigint *sp_bigint_new_int(int64_t v);
 sp_Bigint *sp_bigint_new_str(const char *s, int base);
+/* Bignum == Float, exactly. A double carrying an integral value is turned
+   into the bignum it names -- "%.0f" prints every finite double's integral
+   value exactly -- so `1.0e100 == 10 ** 100` answers false the way CRuby's
+   own exact comparison does, rather than true from a lossy double round-trip.
+   Ordering does compare as doubles (sp_poly_cmp does the same); only equality
+   can be decided by a single ulp. */
+static int sp_bigint_eq_f(sp_Bigint *a, double d) {
+  if (!isfinite(d) || d != floor(d)) return 0;   /* inf/nan/fraction is no integer */
+  char buf[400];
+  snprintf(buf, sizeof buf, "%.0f", d);
+  sp_Bigint *bd = sp_bigint_new_str(buf, 10);
+  return bd && a && sp_bigint_cmp(a, bd) == 0;
+}
 sp_Bigint *sp_bigint_add(sp_Bigint *a, sp_Bigint *b);
 sp_Bigint *sp_bigint_sub(sp_Bigint *a, sp_Bigint *b);
 sp_Bigint *sp_bigint_mul(sp_Bigint *a, sp_Bigint *b);
