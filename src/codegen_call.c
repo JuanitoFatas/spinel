@@ -295,6 +295,33 @@ static int bigint_cmp_operand_ok(TyKind t) {
   return t == TY_INT || t == TY_BIGINT || t == TY_FLOAT || t == TY_RATIONAL ||
          t == TY_POLY || t == TY_UNKNOWN;
 }
+/* A FLOAT against a BIGINT compares as doubles -- which is what the runtime's
+   own sp_poly_cmp does for the same pair, so the two paths agree. Coercing the
+   float into a bigint truncated it to int64 and saturated there, so
+   `1.0 / 0 > 10 ** 100` answered false (and the conversion warned). */
+static int emit_float_bigint_cmp(Compiler *c, int recv, int arg, const char *op, Buf *b) {
+  TyKind lt = comp_ntype(c, recv), rt2 = comp_ntype(c, arg);
+  if (!((lt == TY_FLOAT && rt2 == TY_BIGINT) || (lt == TY_BIGINT && rt2 == TY_FLOAT)))
+    return 0;
+  /* equality is decided exactly: 1.0e100 and 10 ** 100 differ by an ulp, and
+     as doubles they would compare equal */
+  if (sp_streq(op, "==") || sp_streq(op, "!=")) {
+    buf_printf(b, "(%ssp_bigint_eq_f(", sp_streq(op, "!=") ? "!" : "");
+    emit_expr(c, lt == TY_BIGINT ? recv : arg, b);
+    buf_puts(b, ", ");
+    emit_expr(c, lt == TY_BIGINT ? arg : recv, b);
+    buf_puts(b, "))");
+    return 1;
+  }
+  buf_puts(b, "(");
+  if (lt == TY_BIGINT) { buf_puts(b, "sp_bigint_to_double("); emit_expr(c, recv, b); buf_puts(b, ")"); }
+  else emit_expr(c, recv, b);
+  buf_printf(b, " %s ", op);
+  if (rt2 == TY_BIGINT) { buf_puts(b, "sp_bigint_to_double("); emit_expr(c, arg, b); buf_puts(b, ")"); }
+  else emit_expr(c, arg, b);
+  buf_puts(b, ")");
+  return 1;
+}
 static void emit_bigint_operand(Compiler *c, int node, Buf *b) {
   TyKind t = comp_ntype(c, node);
   if (t == TY_BIGINT) { emit_expr(c, node, b); return; }
@@ -7458,6 +7485,8 @@ static int emit_case_eq_call(Compiler *c, int id, Buf *b) {
     }
     /* bigint == / != */
     if ((rt == TY_BIGINT || a0 == TY_BIGINT) &&
+        emit_float_bigint_cmp(c, recv, argv[0], eq ? "==" : "!=", b)) return 1;
+    if ((rt == TY_BIGINT || a0 == TY_BIGINT) &&
         bigint_cmp_operand_ok(rt) && bigint_cmp_operand_ok(a0)) {
       buf_printf(b, "(sp_bigint_cmp(");
       emit_bigint_operand(c, recv, b);
@@ -8318,10 +8347,20 @@ static int emit_array_arith_call(Compiler *c, int id, Buf *b) {
       return 1;
     }
     if (eff_res == TY_FLOAT && rt != TY_TIME && !sp_streq(name, "%") && !sp_streq(name, "**")) {
+      /* An INTEGER operand is spelled as a double. The result is a float
+         division either way -- C promotes it -- but with the divisor left an
+         integer constant, `1.0 / 0` folds to gcc's -Wdiv-by-zero and the build
+         stopped, where Ruby (and the same expression written `1.0 / 0.0`, or
+         with a variable divisor) answers Infinity. */
+      TyKind lft9 = comp_ntype(c, recv), rgt9 = comp_ntype(c, argv[0]);
       buf_puts(b, "(");
+      if (lft9 == TY_INT) buf_puts(b, "(double)(");
       emit_scalar_operand(c, recv, "0.0", b);
+      if (lft9 == TY_INT) buf_puts(b, ")");
       buf_printf(b, " %s ", name);
+      if (rgt9 == TY_INT) buf_puts(b, "(double)(");
       emit_scalar_operand(c, argv[0], "0.0", b);
+      if (rgt9 == TY_INT) buf_puts(b, ")");
       buf_puts(b, ")");
       return 1;
     }
@@ -23093,6 +23132,8 @@ else { memcpy(dir, sf, n); dir[n] = 0; } }
   if (recv >= 0 && argc == 1 &&
       (sp_streq(name, "<") || sp_streq(name, ">") ||
        sp_streq(name, "<=") || sp_streq(name, ">="))) {
+    if ((rt == TY_BIGINT || comp_ntype(c, argv[0]) == TY_BIGINT) &&
+        emit_float_bigint_cmp(c, recv, argv[0], name, b)) return;
     if ((rt == TY_BIGINT || comp_ntype(c, argv[0]) == TY_BIGINT) &&
         bigint_cmp_operand_ok(rt) && bigint_cmp_operand_ok(comp_ntype(c, argv[0]))) {
       buf_printf(b, "(sp_bigint_cmp(");
