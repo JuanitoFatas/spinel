@@ -3967,6 +3967,33 @@ static int emit_poly_builtin_method(Compiler *c, int id, Buf *b) {
   return 0;
 }
 
+/* Build the sym-keyed hash a braceless keyword list collapses to, from the
+   per-key temps the dispatch already evaluated. `skip_kw` (an arm, or NULL)
+   drops the keys that arm's declared keyword parameters took. Written once:
+   the kwrest collection, the *rest tail, the positional collapse and the
+   builtin Hash arm all want the same object. */
+static void emit_kwh_sym_hash(Compiler *c, int kwn, const int *kwels,
+                              const int *kwtmp, const TyKind *kwty,
+                              Scope *skip_kw, Buf *out) {
+  const NodeTable *nt = c->nt;
+  int th = ++g_tmp;
+  buf_printf(out, "({ sp_SymPolyHash *_t%d = sp_SymPolyHash_new(); SP_GC_ROOT(_t%d);", th, th);
+  for (int e = 0; e < kwn; e++) {
+    int key = nt_ref(nt, kwels[e], "key");
+    const char *kn = key >= 0 ? nt_str(nt, key, "value") : NULL;
+    if (!kn) continue;
+    if (skip_kw && callee_param_is_declared_kwarg(c, skip_kw, kn)) continue;
+    char tn[32]; snprintf(tn, sizeof tn, "_t%d", kwtmp[e]);
+    Buf eb; memset(&eb, 0, sizeof eb);
+    if (kwty[e] == TY_POLY) buf_puts(&eb, tn);
+    else emit_boxed_text(c, kwty[e], tn, &eb);
+    buf_printf(out, " sp_SymPolyHash_set(_t%d, (sp_sym)%d, %s);", th,
+               comp_sym_intern(c, kn), eb.p ? eb.p : "sp_box_nil()");
+    free(eb.p);
+  }
+  buf_printf(out, " _t%d; })", th);
+}
+
 /* 1 when a collapsed keyword hash funds one positional parameter of `m`, so
    the arity tests below count it the way Ruby does. */
 static int kwh_fills_slot(Compiler *c, Scope *m, int kwh, int pos_argc) {
@@ -4788,9 +4815,17 @@ static int emit_poly_method_dispatch(Compiler *c, int id, Buf *b) {
                       infer_type(c, argv[0]) == TY_STRING;
     /* cover? on a container-read Range; gcdlcm on a container-read int
        receiver (#3234): builtin pre-arms, no user candidates required */
+    /* `merge` on a poly value that is really a builtin Hash. A user class
+       owning the name replaces the whole dispatch with its arms, and a Hash
+       arriving at the same call matched nothing and raised NoMethodError
+       naming its own class (#4033). The braceless-keyword form is the one
+       that gets here, so the argument may be the collapsed hash rather than a
+       positional. */
+    int is_pmerge = sp_streq(name, "merge") && nt_ref(nt, id, "block") < 0 &&
+                    !has_splat_arg && (pos_argc >= 1 || kwh >= 0);
     int is_cover = sp_streq(name, "cover?") && argc == 1 && !diag_user_defines(c, name);
     int is_gcdlcm = sp_streq(name, "gcdlcm") && argc == 1 && !diag_user_defines(c, name);
-    if (ncand > 0 || is_index || is_pdelete || is_pdig || is_pvalues_at || is_pfirstn || is_include || is_fetch || is_push || is_pred || is_strftime || is_intersect || is_arr_index || is_cover || is_gcdlcm) {
+    if (ncand > 0 || is_index || is_pdelete || is_pdig || is_pvalues_at || is_pfirstn || is_include || is_fetch || is_push || is_pred || is_strftime || is_intersect || is_arr_index || is_cover || is_gcdlcm || is_pmerge) {
       TyKind ret = comp_ntype(c, id);
       int tv = ++g_tmp, tr = ++g_tmp;
       int *atmp = malloc(sizeof(int) * argc);
@@ -5029,6 +5064,17 @@ static int emit_poly_method_dispatch(Compiler *c, int id, Buf *b) {
             arm_key_incompat = 1; break;
           }
         }
+        /* The same test for the slot the COLLAPSED keyword hash funds. The
+           hash is built sym-keyed, so an arm whose parameter is a concretely
+           different hash kind cannot be this call's target -- passing the
+           pointer raw is a hard C error, not a coercion that works, and the
+           un-seeded build drops the arm for the same reason (#4033). */
+        { int kslot = kwh_positional_slot(c, &c->scopes[mi], kwh, pos_argc);
+          if (kslot >= 0 && c->scopes[mi].pnames && c->scopes[mi].pnames[kslot]) {
+            LocalVar *kpv9 = scope_local(&c->scopes[mi], c->scopes[mi].pnames[kslot]);
+            TyKind kpt9 = kpv9 ? kpv9->type : TY_UNKNOWN;
+            if (ty_is_hash(kpt9) && kpt9 != TY_SYM_POLY_HASH) arm_key_incompat = 1;
+          } }
         if (arm_key_incompat) continue;
         TyKind mret = c->scopes[mi].ret;
         int mnp = c->scopes[mi].nparams;
@@ -5149,22 +5195,8 @@ static int emit_poly_method_dispatch(Compiler *c, int id, Buf *b) {
              rest; a callee with both funds the positional first. */
           if (kwh_positional_slot(c, &c->scopes[mi], kwh, pos_argc) == a) {
             LocalVar *cp = pnm ? scope_local(&c->scopes[mi], pnm) : NULL;
-            int kh4 = ++g_tmp;
             if (cp && cp->type == TY_POLY) buf_puts(&cb, "sp_box_obj(");
-            buf_printf(&cb, "({ sp_SymPolyHash *_t%d = sp_SymPolyHash_new(); SP_GC_ROOT(_t%d);", kh4, kh4);
-            for (int e = 0; e < kwn; e++) {
-              int key = nt_ref(nt, kwels[e], "key");
-              const char *kn = key >= 0 ? nt_str(nt, key, "value") : NULL;
-              if (!kn) continue;
-              char tn[32]; snprintf(tn, sizeof tn, "_t%d", kwtmp[e]);
-              Buf eb; memset(&eb, 0, sizeof eb);
-              if (kwty[e] == TY_POLY) buf_puts(&eb, tn);
-              else emit_boxed_text(c, kwty[e], tn, &eb);
-              buf_printf(&cb, " sp_SymPolyHash_set(_t%d, (sp_sym)%d, %s);", kh4,
-                         comp_sym_intern(c, kn), eb.p ? eb.p : "sp_box_nil()");
-              free(eb.p);
-            }
-            buf_printf(&cb, " _t%d; })", kh4);
+            emit_kwh_sym_hash(c, kwn, kwels, kwtmp, kwty, NULL, &cb);
             if (cp && cp->type == TY_POLY) buf_puts(&cb, ", SP_BUILTIN_SYM_POLY_HASH)");
             continue;
           }
@@ -5490,7 +5522,7 @@ else {
          mislabelled raise (#3394). */
       if (!is_pred && !is_strftime && !is_aref && !is_fetch && !is_include &&
           !is_push && !is_cover && !is_gcdlcm && !is_strdel && !is_strsplit &&
-          !is_pdelete && !is_pdig && !is_pvalues_at && !is_pfirstn) {
+          !is_pdelete && !is_pdig && !is_pvalues_at && !is_pfirstn && !is_pmerge) {
         buf_puts(b, " default:");
         /* index/rindex also belong to String, whose box carries no cls_id, so
            no case above can claim it. Answer it here, ahead of the raise, or a
@@ -5548,6 +5580,29 @@ else {
            Array into a `const char *` slot is worse than the raise. */
         if (ret == TY_POLY) buf_printf(b, " default: _t%d = %s; break;", tr, gen);
         free(ab.p);
+      }
+      else if (is_pmerge) {
+        /* the operand is either a positional hash or the collapsed keywords */
+        Buf mb; memset(&mb, 0, sizeof mb);
+        if (pos_argc >= 1) {
+          char tn[32]; snprintf(tn, sizeof tn, "_t%d", atmp[0]);
+          if (atmp_ty[0] == TY_POLY) buf_puts(&mb, tn);
+          else emit_boxed_text(c, atmp_ty[0], tn, &mb);
+        }
+        else {
+          buf_puts(&mb, "sp_box_obj(");
+          emit_kwh_sym_hash(c, kwn, kwels, kwtmp, kwty, NULL, &mb);
+          buf_puts(&mb, ", SP_BUILTIN_SYM_POLY_HASH)");
+        }
+        char gen[600];
+        snprintf(gen, sizeof gen, "sp_box_obj(sp_poly_hash_merge(_t%d, %s), SP_BUILTIN_POLY_POLY_HASH)",
+                 tv, mb.p ? mb.p : "sp_box_nil()");
+        if (ret == TY_POLY) buf_printf(b, " default: _t%d = %s; break;", tr, gen);
+        /* Never leave the switch without a default: with every user arm
+           dropped as incompatible, an armless switch fell through and the
+           call answered the result temp's zero initializer, silently. */
+        else buf_printf(b, " default: sp_raise_nomethod(sp_nomethod_msg(\"%s\", _t%d)); break;", name, tv);
+        free(mb.p);
       }
       else if (is_aref || is_fetch) {
         Buf kb; memset(&kb, 0, sizeof kb);

@@ -4078,6 +4078,15 @@ else {
       if (found && !an_builtin_only && argc == 0 && nt_ref(nt, id, "block") < 0 &&
           (sp_streq(name, "each_with_index") || sp_streq(name, "each_index")))
         return TY_ENUMERATOR;
+      /* `merge` needs no container precondition either: a boxed receiver can
+         always be a Hash, and the dispatch ends in the runtime merge that lets
+         it answer for itself. Typed from the user arm alone the switch and the
+         slot disagreed -- and where that arm was ALSO dropped as
+         type-incompatible, the switch came out empty and the call quietly
+         answered its zero initializer (#4033). */
+      if (found && !an_builtin_only && sp_streq(name, "merge") &&
+          nt_ref(nt, id, "block") < 0 && argc >= 1)
+        return TY_POLY;
       /* the numeric surface needs no container precondition: a boxed receiver
          can always be a number (#4012) */
       if (found && !an_builtin_only && argc == 0 && poly_numeric_read_p(name) &&
