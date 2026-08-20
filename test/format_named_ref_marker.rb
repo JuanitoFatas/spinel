@@ -15,12 +15,25 @@ p(format("%<v>d", v: 42))
 p(format("%{one}-%{two}", one: "a", two: "b"))
 p(format("%<a>s%<b>s%<c>s", a: 1, b: 2, c: 3))
 
-# a name that is not there is CRuby's KeyError, before and after
+# a name that is not there is CRuby's KeyError, worded for the spelling used
+# -- and raising out of the lookup must not leak the caller's format buffer
 begin
   format("%<missing>d", other: 1)
 rescue KeyError => e
-  p e.class
+  p [e.class, e.message]
 end
+begin
+  format("%{missing}", other: 1)
+rescue KeyError => e
+  p e.message
+end
+50.times do
+  begin
+    format("%{gone}", other: 1)
+  rescue KeyError
+  end
+end
+puts "no leak"
 
 # repeated in a loop, where the stack under the buffer keeps changing
 20.times { |i| print format("%<i>02d,", i: i) }

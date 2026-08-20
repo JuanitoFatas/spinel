@@ -3856,7 +3856,7 @@ static sp_PolyArray *sp_PolyArray_flatten_bang(sp_PolyArray *a) {sp_gc_wb((void*
 int sp_fmt_binary(const char *spec, size_t sl, char conv, long long val,
                   char *out, size_t osz);
 
-static sp_RbVal sp_fmt_named_ref(sp_PolyArray *a, const char *nm);  /* defined after the hash structs */
+static sp_RbVal sp_fmt_named_ref(sp_PolyArray *a, const char *nm, char nclose, char *own);  /* defined after the hash structs */
 /* Splat arguments into the print builtins: puts(*a) / print(*a) / p(*a)
    expand each element of the (any-kind) array as its own argument. puts
    recurses into array elements, as CRuby does. */
@@ -3952,7 +3952,7 @@ static const char *sp_str_format_polyarr(const char *fmt, sp_PolyArray *a) {
       nm[nl] = 0;
       if (*q == nclose) {
         p = q + 1;
-        named_v = sp_fmt_named_ref(a, nm);
+        named_v = sp_fmt_named_ref(a, nm, nclose, buf);
         have_named = TRUE;
         if (used_numbered || used_sequential) { free(buf); sp_raise_cls("ArgumentError", "named after unnumbered(1)"); }
         used_named = TRUE;
@@ -5362,7 +5362,11 @@ static sp_bool sp_PolyPolyHash_has_key(sp_PolyPolyHash*h,sp_RbVal k){sp_int idx=
 /* format's %<name> / %{name}: find the key in the trailing hash argument by
    its name (a keyword hash boxes as SymPolyHash; string-keyed and fully-poly
    hashes are accepted too). A missing name is CRuby's KeyError. */
-static sp_RbVal sp_fmt_named_ref(sp_PolyArray *a, const char *nm) {
+/* `own` is the caller's format buffer: a missing name raises out of here, and
+   the raise would otherwise leak it (a plain malloc, not a GC string).
+   `nclose` spells the message the way the directive was written -- CRuby says
+   `key<a>` for %<a> and `key{a}` for %{a}. */
+static sp_RbVal sp_fmt_named_ref(sp_PolyArray *a, const char *nm, char nclose, char *own) {
   sp_RbVal h = (a && a->len > 0) ? a->data[a->len - 1] : sp_box_nil();
   if (h.tag == SP_TAG_OBJ && h.v.p) {
     if (h.cls_id == SP_BUILTIN_SYM_POLY_HASH) {
@@ -5386,7 +5390,9 @@ static sp_RbVal sp_fmt_named_ref(sp_PolyArray *a, const char *nm) {
       }
     }
   }
-  sp_raise_cls("KeyError", sp_sprintf("key<%s> not found", nm));
+  { const char *m = sp_sprintf(nclose == '}' ? "key{%s} not found" : "key<%s> not found", nm);
+    free(own);
+    sp_raise_cls("KeyError", m); }
 }
 static sp_int sp_PolyPolyHash_length(sp_PolyPolyHash*h){return h->len;}
 static void sp_PolyPolyHash_clear(sp_PolyPolyHash*h){if(!h)return;for(sp_int i=0;i<h->cap;i++)h->occ[i]=0;h->len=0;}
