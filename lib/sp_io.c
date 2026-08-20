@@ -272,14 +272,14 @@ static const char *sp_io_super_of(const char *k) {
   if (strcmp(k, "Object") == 0)      return SPL("BasicObject");
   return NULL;
 }
-sp_bool sp_io_is_a(sp_File *f, const char *cls) {SP_GC_ROOT(f);SP_GC_ROOT_STR(cls);
+sp_bool sp_io_is_a(sp_File *f, const char *cls) {SP_GC_ROOT(f);
   if (!cls) return 0;
   if (strcmp(cls, "Kernel") == 0) return 1;   /* Object includes Kernel */
   for (const char *k = sp_io_kind_name(f); k; k = sp_io_super_of(k))
     if (strcmp(k, cls) == 0) return 1;
   return 0;
 }
-sp_bool sp_io_instance_of(sp_File *f, const char *cls) {SP_GC_ROOT(f);SP_GC_ROOT_STR(cls);
+sp_bool sp_io_instance_of(sp_File *f, const char *cls) {SP_GC_ROOT(f);
   return cls && strcmp(sp_io_kind_name(f), cls) == 0;
 }
 

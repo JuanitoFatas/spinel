@@ -297,7 +297,7 @@ static int sp_fiber_inject_lock(sp_Fiber*f){
 }
 static void sp_fiber_inject_unlock(sp_Fiber*f,int kind){__atomic_store_n(&f->inject,kind,__ATOMIC_RELEASE);}
 /* Publish kind+payload atomically with respect to a concurrent consume. */
-static void sp_fiber_inject_publish(sp_Fiber*f,int kind,const char*cls,const char*msg,void*obj){SP_GC_ROOT(f);SP_GC_ROOT_STR(cls);SP_GC_ROOT_STR(msg);
+static void sp_fiber_inject_publish(sp_Fiber*f,int kind,const char*cls,const char*msg,void*obj){SP_GC_ROOT(f);SP_GC_ROOT_STR(msg);
   sp_fiber_inject_lock(f);
   f->inj_cls=cls;f->inj_msg=msg;f->inj_obj=obj;
   sp_fiber_inject_unlock(f,kind);
@@ -321,7 +321,7 @@ static void sp_fiber_consume_inject(sp_Fiber*f){SP_GC_ROOT(f);int kind=sp_fiber_
    own begin/rescue and escape as an unhandled thread exception; deferring it to
    the thread's next suspension point (sp_sched_block / sleep / Thread.pass /
    yield) delivers it inside the body, where its rescue/ensure can see it. */
-void sp_fiber_set_raise_inject(sp_Fiber*f,const char*cls,const char*msg,void*obj){SP_GC_ROOT(f);SP_GC_ROOT_STR(cls);SP_GC_ROOT_STR(msg);sp_fiber_inject_publish(f,3,cls,msg,obj);}
+void sp_fiber_set_raise_inject(sp_Fiber*f,const char*cls,const char*msg,void*obj){SP_GC_ROOT(f);SP_GC_ROOT_STR(msg);sp_fiber_inject_publish(f,3,cls,msg,obj);}
 void sp_fiber_set_kill_inject(sp_Fiber*f){SP_GC_ROOT(f);sp_fiber_inject_publish(f,2,NULL,NULL,NULL);}
 void sp_fiber_fire_inject_if_pending(void){sp_Fiber*f=sp_fiber_current;if(f&&SP_INJECT_PEEK(f))sp_fiber_consume_inject(f);}
 /* Lock-free peek for the scheduler's pre-park checks (sp_sched_block etc.). */
@@ -342,7 +342,7 @@ sp_bool sp_Fiber_alive(sp_Fiber*f){return f->state!=3;}
 /* Fiber#raise: queue an exception, then resume the fiber so its suspension point
    (or body entry) raises it. An unhandled raise propagates to this caller via
    sp_Fiber_resume's re-raise, exactly like an exception raised by the body. */
-sp_RbVal sp_Fiber_raise(sp_Fiber*f,const char*cls,const char*msg,void*obj){SP_GC_ROOT(f);SP_GC_ROOT_STR(cls);SP_GC_ROOT_STR(msg);
+sp_RbVal sp_Fiber_raise(sp_Fiber*f,const char*cls,const char*msg,void*obj){SP_GC_ROOT(f);SP_GC_ROOT_STR(msg);
   if(f->state==3){sp_raise_cls("FiberError","dead fiber called");}
   /* Never resumed: there is no fiber context to deliver into, so CRuby refuses
      rather than raising the exception somewhere. Delivering it in the CALLER

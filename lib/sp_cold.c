@@ -3054,7 +3054,7 @@ sp_RbVal sp_marv_arr_new(void) { return sp_box_poly_array(sp_PolyArray_new()); }
 void sp_marv_arr_push(sp_RbVal a, sp_RbVal v) {SP_GC_ROOT_RBVAL(a);SP_GC_ROOT_RBVAL(v); sp_PolyArray_push((sp_PolyArray *)a.v.p, v); }
 sp_RbVal sp_marv_box_complex(sp_float re, sp_float im) { sp_Complex c; c.re = re; c.im = im; return sp_box_complex(c); }
 sp_RbVal sp_marv_box_rational(sp_int n, sp_int d) { return sp_box_rational(sp_rational_new(n, d)); }
-void sp_marv_raise(const char *cls, const char *msg) {SP_GC_ROOT_STR(cls);SP_GC_ROOT_STR(msg); sp_raise_cls(cls, msg); }
+void sp_marv_raise(const char *cls, const char *msg) {SP_GC_ROOT_STR(msg); sp_raise_cls(cls, msg); }
 
 /* ---- Regexp gsub/sub-with-Hash + Signal/Interrupt exception ctors --
    relocated from spinel_rt.h. 0 optcarrot uses. ---- */
@@ -3250,7 +3250,7 @@ SP_NORETURN void sp_raise_nil_int_op(sp_int a, sp_int b, const char *op) {SP_GC_
 /* `Queue#freeze` raises rather than freezing: a frozen queue could never be
    pushed to again, so Ruby refuses it outright. Names the receiver the way
    CRuby's message does, so a SizedQueue reports as one. */
-SP_NORETURN void sp_raise_cannot_freeze(const char *cls, void *p) {SP_GC_ROOT_STR(cls);
+SP_NORETURN void sp_raise_cannot_freeze(const char *cls, void *p) {
   sp_raise_cls("TypeError",
                sp_sprintf("cannot freeze #<%s:0x%016llx>", cls ? cls : "Object",
                           (unsigned long long)(uintptr_t)p));

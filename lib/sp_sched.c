@@ -1385,7 +1385,7 @@ sp_thread *sp_Thread_kill(sp_thread *t) {
   sp_thread_deliver(t, 1, NULL, NULL, NULL);
   return t;
 }
-sp_thread *sp_Thread_raise(sp_thread *t, const char *cls, const char *msg, void *obj) {SP_GC_ROOT_STR(cls);SP_GC_ROOT_STR(msg);
+sp_thread *sp_Thread_raise(sp_thread *t, const char *cls, const char *msg, void *obj) {SP_GC_ROOT_STR(msg);
   sp_thread_deliver(t, 0, cls, msg, obj);
   return t;
 }

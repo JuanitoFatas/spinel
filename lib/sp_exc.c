@@ -30,7 +30,7 @@ const char *const *sp_exc_modules_of_name(const char *cls) {
 }
 
 /* Does `cls` itself, through any module it includes, answer to `target`? */
-static int sp_exc_level_matches(const char *cls, const char *target) {SP_GC_ROOT_STR(cls);SP_GC_ROOT_STR(target);
+static int sp_exc_level_matches(const char *cls, const char *target) {
   if (!strcmp(cls, target)) return 1;
   const char *const *mods = sp_exc_modules_of_name(cls);
   if (!mods && sp_user_exc_modules_fn) mods = sp_user_exc_modules_fn(cls);
@@ -39,7 +39,13 @@ static int sp_exc_level_matches(const char *cls, const char *target) {SP_GC_ROOT
   return 0;
 }
 
-int sp_exc_cls_matches(const char *raised, const char *target) {SP_GC_ROOT_STR(raised);SP_GC_ROOT_STR(target);
+/* Class names are rodata by contract -- every caller passes a bare literal and
+   sp_exc_gc_scan never marks them -- so they take no string root here or in
+   the raise path. Rooting one had the collector read its marker byte, which
+   for a bare literal is the byte BEFORE the object: an out-of-bounds read on
+   every raise, and a WRITE of 0xfc over whatever precedes it whenever that
+   byte happened to read as an unmarked heap string. */
+int sp_exc_cls_matches(const char *raised, const char *target) {
   if (!raised || !target) return 0;
   raised = sp_exc_canonical_name(raised);
   target = sp_exc_canonical_name(target);
@@ -65,7 +71,7 @@ int sp_exc_cls_matches(const char *raised, const char *target) {SP_GC_ROOT_STR(r
 /* Class-gated introspection accessors (#2753-#2756, #2770): each answers only
    on its CRuby-defining class (walking the name-carried hierarchy) and raises
    NoMethodError elsewhere, matching per-class method definitions. */
-SP_COLD void sp_exc_acc_gate(sp_Exception *e, const char *cls, const char *acc) {SP_GC_ROOT_STR(cls);SP_GC_ROOT(e);SP_GC_ROOT_STR(acc);
+SP_COLD void sp_exc_acc_gate(sp_Exception *e, const char *cls, const char *acc) {SP_GC_ROOT(e);
   if (e && sp_exc_cls_matches(e->cls_name, cls)) return;
   sp_raise_cls("NoMethodError",
                sp_sprintf("undefined method '%s' for %s", acc,
@@ -105,7 +111,7 @@ const char *const sp_exc_no_msg = sp_exc_no_msg_storage + 1;
 
 /* Create an exception for a `rescue => e` binding: like sp_exc_new but
    also looks up the parent class via the user hierarchy callback. */
-sp_Exception *sp_exc_new_for_catch(const char *cls, const char *msg) {SP_GC_ROOT_STR(cls);SP_GC_ROOT_STR(msg);
+sp_Exception *sp_exc_new_for_catch(const char *cls, const char *msg) {SP_GC_ROOT_STR(msg);
   sp_Exception *e = sp_exc_new(cls, msg);
   if (sp_user_exc_parent_fn) {
     const char *par = sp_user_exc_parent_fn(cls);
@@ -118,7 +124,7 @@ sp_Exception *sp_exc_new_for_catch(const char *cls, const char *msg) {SP_GC_ROOT
    where a user subclass with ivars was raised without a carried object
    (#1415). Its ivar fields stay zero (nil/0). msg is the only heap field, so
    the base scan suffices. */
-void *sp_exc_new_sub_sized(size_t sz, const char *cls_name, const char *msg) {SP_GC_ROOT_STR(cls_name);SP_GC_ROOT_STR(msg);
+void *sp_exc_new_sub_sized(size_t sz, const char *cls_name, const char *msg) {SP_GC_ROOT_STR(msg);
   sp_Exception *e = (sp_Exception *)sp_gc_alloc(sz, NULL, sp_exc_gc_scan);
   memset(e, 0, sz);
   e->cls_name = cls_name ? cls_name : "RuntimeError";
@@ -145,7 +151,13 @@ void sp_exc_gc_scan(void *p) {
   sp_mark_rbval(e->xrecv);
   /* cls_name/parent_cls_name point into rodata -- not GC-managed strings */
 }
-sp_Exception *sp_exc_new(const char *cls_name, const char *msg) {SP_GC_ROOT_STR(cls_name);SP_GC_ROOT_STR(msg);
+/* cls_name is rodata -- every caller passes a bare literal, and the scan below
+   says so and never marks it. Rooting it as a STRING had the collector read
+   its marker byte, which for a bare literal is the byte BEFORE the object: a
+   global-buffer-overflow on every raise, and a WRITE of 0xfc over whatever
+   precedes it whenever that byte happens to read as an unmarked heap string.
+   ASAN reports it on the first collection inside any raise. */
+sp_Exception *sp_exc_new(const char *cls_name, const char *msg) {SP_GC_ROOT_STR(msg);
   sp_Exception *e = (sp_Exception *)sp_gc_alloc(sizeof(sp_Exception), NULL, sp_exc_gc_scan);
   e->cls_name = cls_name ? cls_name : "RuntimeError";
   e->parent_cls_name = NULL;
@@ -183,7 +195,7 @@ sp_bool sp_exc_eq(sp_Exception *a, sp_Exception *b) {
   if (a->cls_name && strcmp(a->cls_name, "UncaughtThrowError") == 0) return 1;
   return strcmp(a->msg ? a->msg : "", b->msg ? b->msg : "") == 0;
 }
-sp_Exception *sp_exc_new_sub(const char *cls_name, const char *parent_cls, const char *msg) {SP_GC_ROOT_STR(cls_name);SP_GC_ROOT_STR(parent_cls);SP_GC_ROOT_STR(msg);
+sp_Exception *sp_exc_new_sub(const char *cls_name, const char *parent_cls, const char *msg) {SP_GC_ROOT_STR(msg);
   sp_Exception *e = sp_exc_new(cls_name, msg);   /* empty msg already fell back to cls_name */
   e->parent_cls_name = parent_cls;
   return e;
@@ -202,7 +214,7 @@ sp_Exception *sp_exc_dup(sp_Exception *e) {
 }
 /* Write the staged introspection values (receiver/key/value) into the carried
    exception, creating one when the raise had none (see sp_raise_cls). */
-void *sp_exc_apply_staged(const char *cls, const char *msg, void *obj) {SP_GC_ROOT_STR(cls);SP_GC_ROOT_STR(msg);
+void *sp_exc_apply_staged(const char *cls, const char *msg, void *obj) {SP_GC_ROOT_STR(msg);
   sp_Exception *e = (sp_Exception *)obj;
   if (!e) e = sp_exc_new(cls, msg);
   /* `obj` is a caller-supplied exception that may have been promoted long ago
