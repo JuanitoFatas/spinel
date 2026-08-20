@@ -487,4 +487,45 @@ OUT=$(SPIN_ALLOW_NATIVE_BUILD=1 "$SPIN" run 2>&1) && fail "unproduced [native] l
 echo "$OUT" | grep -q 'not produced by any' || fail "unproduced-libs diagnostic missing: $OUT"
 mv ../spinel-crossx/spin.toml.bak ../spinel-crossx/spin.toml
 
+# a threaded program takes the package's `_mt` variant: one [[build]] entry
+# produces both, `[native] libs` names the plain one, and the compiler prefers
+# `<stem>_mt.<ext>` beside every link input (#4032).
+cd "$WORK"
+mkdir -p spinel-tvar/vendor/tv spinel-tvar/bin
+cat > spinel-tvar/spin.toml <<'EOF'
+[package]
+name = "tvar"
+version = "0.1.0"
+
+[[build]]
+workdir   = "vendor/tv"
+command   = "${CC:-cc} -O2 -c tv.c -o tv.o && ${CC:-cc} -O2 -DSP_THREADS -ftls-model=initial-exec -c tv.c -o tv_mt.o"
+artifacts = ["tv.o", "tv_mt.o"]
+
+[native]
+libs = ["${build.out}/tv.o"]
+EOF
+cat > spinel-tvar/vendor/tv/tv.c <<'EOF'
+#ifdef SP_THREADS
+int tv_variant(void) { return 2; }
+#else
+int tv_variant(void) { return 1; }
+#endif
+EOF
+printf 'module Tvar
+  ffi_func :tv_variant, [], :int
+end
+' > spinel-tvar/tvar.rb
+printf 'require "tvar"
+puts Tvar.tv_variant
+' > spinel-tvar/bin/plain.rb
+printf 'require "tvar"
+t = Thread.new { Tvar.tv_variant }
+puts t.value
+' > spinel-tvar/bin/threaded.rb
+cd spinel-tvar
+OUT=$("$SPIN" run plain --allow-native-build 2>&1)
+expect "native variant: single-threaded takes the plain object" "1" "$(echo "$OUT" | tail -1)"
+OUT=$("$SPIN" run threaded --allow-native-build 2>&1)
+expect "native variant: threaded takes the _mt object" "2" "$(echo "$OUT" | tail -1)"
 echo "spin-e2e: ALL GREEN"

@@ -57,6 +57,16 @@ static void s_add(Str *s, const char *t) {
   s->p[s->len] = '\0';
 }
 /* Append a shell-quoted token followed by a space (paths may contain spaces). */
+/* Copy `in` with a `_mt` variant marker removed from before its extension, so
+   sp_x.o and sp_x_mt.o compare as the same package object. */
+static void s_strip_mt(const char *in, char *out, size_t cap) {
+  snprintf(out, cap, "%s", in ? in : "");
+  char *dot = strrchr(out, '.');
+  if (!dot || (size_t)(dot - out) < 3) return;
+  if (strncmp(dot - 3, "_mt", 3) != 0) return;
+  memmove(dot - 3, dot, strlen(dot) + 1);
+}
+
 static void s_add_arg(Str *s, const char *t) {
   s_add(s, "\"");
   s_add(s, t);
@@ -531,8 +541,30 @@ int main(int argc, char **argv) {
   /* --link objects/archives sit between the generated TU and the runtime
      archive: they reference sp_ runtime symbols, and ld resolves left to
      right. --link -l flags go after -lm below, where DSOs belong. */
-  for (int li = 0; li < n_link_extra; li++)
-    if (strncmp(link_extra[li], "-l", 2) != 0) s_add_arg(&cmd, link_extra[li]);
+  for (int li = 0; li < n_link_extra; li++) {
+    if (strncmp(link_extra[li], "-l", 2) == 0) continue;
+    /* A threaded program needs the package's threaded object for the same
+       reason the runtime archive has one: an object built without
+       -DSP_THREADS reads the runtime's per-worker globals as non-TLS and the
+       link fails. A package that carries both variants names the threaded one
+       `<stem>_mt.<ext>`; take it when it is there, and the plain one when it
+       is not. Without this only the bundled packages -- whose objects arrive
+       through native_obj, where the same rule already applied -- could be
+       linked into a threaded program (#4032). */
+    const char *in = link_extra[li];
+    char mtv[4096]; mtv[0] = 0;
+    if (uses_threads) {
+      const char *dot = strrchr(in, '.');
+      const char *slash = strrchr(in, '/');
+      if (dot && (!slash || dot > slash) &&
+          (strcmp(dot, ".o") == 0 || strcmp(dot, ".a") == 0)) {
+        size_t stem = (size_t)(dot - in);
+        if (stem < 6 || strncmp(dot - 3, "_mt", 3) != 0)
+          snprintf(mtv, sizeof mtv, "%.*s_mt%s", (int)stem, in, dot);
+      }
+    }
+    s_add_arg(&cmd, (mtv[0] && access(mtv, F_OK) == 0) ? mtv : in);
+  }
   /* native_obj carried-C objects: resolve each root-relative path against the
      base dir (lib_dir minus its trailing "/lib", where packages/ also lives)
      and add as a link input, before the runtime archive. Try the dev-tree
@@ -552,7 +584,13 @@ int main(int argc, char **argv) {
       for (int li = 0; li < n_link_extra && !dup; li++) {
         const char *lb = strrchr(link_extra[li], '/');
         lb = lb ? lb + 1 : link_extra[li];
-        if (strcmp(lb, tb) == 0) dup = 1;
+        /* compare with the `_mt` variant marker removed on both sides: the
+           same package object can arrive as sp_x.o here and sp_x_mt.o there,
+           and both on the link line is a multiple definition */
+        char ab[256], bb[256];
+        s_strip_mt(lb, ab, sizeof ab);
+        s_strip_mt(tb, bb, sizeof bb);
+        if (strcmp(ab, bb) == 0) dup = 1;
       }
       if (dup) continue;
       char op[4096];

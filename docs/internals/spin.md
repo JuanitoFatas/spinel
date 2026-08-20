@@ -352,6 +352,41 @@ libs = ["${build.out}/libggml.a"]   # artifacts reach the R6 --link surface
   feature-skipped drops out of the link line; a libs path that NO entry
   declares dies loud at build time (a stale path otherwise surfaces as
   undefined symbols at link).
+- **Threaded programs**: a program that uses `Thread` links a runtime
+  archive built with `-DSP_THREADS`, which makes the runtime's per-worker
+  globals thread-local. A package object built without that flag reads
+  them as non-TLS and the link fails, so a package whose C touches the
+  runtime needs a second variant. The convention is a `_mt` suffix before
+  the extension — `sp_json.o` / `sp_json_mt.o`, `libfoo.a` /
+  `libfoo_mt.a` — and the compiler picks it up: for a threaded program it
+  prefers `<stem>_mt.<ext>` beside every link input, and falls back to
+  the plain one when there is none. Nothing has to be declared for the
+  selection itself.
+
+  One `[[build]]` entry produces both, since `command` is a shell command
+  and `artifacts` is a list:
+
+  ```toml
+  [[build]]
+  workdir   = "src"
+  command   = """
+    cc -c sp_json.c -o sp_json.o &&
+    cc -DSP_THREADS -ftls-model=initial-exec -c sp_json.c -o sp_json_mt.o
+  """
+  artifacts = ["sp_json.o", "sp_json_mt.o"]
+
+  [native]
+  libs = ["${build.out}/sp_json.o"]   # name the PLAIN one; _mt is found beside it
+  ```
+
+  `[native] libs` names the plain variant only. Listing both would put
+  both on the link line and the duplicate definitions would fail the
+  link. `-ftls-model=initial-exec` matters for the same reason it does in
+  the compiler's own flags: it keeps a thread-local read a single segment
+  load. This is not a `[features]` gate — threadedness is a property of
+  the program being compiled, discovered from its use of `Thread`, not
+  something a consumer selects in its manifest.
+
 - **Features**: a `[[build]]` entry gated with `features = ["cuda"]` runs
   when the feature is in the package's own `[features] default` set or
   enabled by the consuming application's manifest: `dep = { path = "..",
