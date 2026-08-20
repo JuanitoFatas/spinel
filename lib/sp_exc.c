@@ -111,7 +111,7 @@ const char *const sp_exc_no_msg = sp_exc_no_msg_storage + 1;
 
 /* Create an exception for a `rescue => e` binding: like sp_exc_new but
    also looks up the parent class via the user hierarchy callback. */
-sp_Exception *sp_exc_new_for_catch(const char *cls, const char *msg) {SP_GC_ROOT_STR(msg);
+sp_Exception *sp_exc_new_for_catch(const char *cls, const char *msg) {if (msg != sp_exc_no_msg) msg = sp_msg_heapify(msg); SP_GC_ROOT_STR(msg);
   sp_Exception *e = sp_exc_new(cls, msg);
   if (sp_user_exc_parent_fn) {
     const char *par = sp_user_exc_parent_fn(cls);
@@ -124,7 +124,7 @@ sp_Exception *sp_exc_new_for_catch(const char *cls, const char *msg) {SP_GC_ROOT
    where a user subclass with ivars was raised without a carried object
    (#1415). Its ivar fields stay zero (nil/0). msg is the only heap field, so
    the base scan suffices. */
-void *sp_exc_new_sub_sized(size_t sz, const char *cls_name, const char *msg) {SP_GC_ROOT_STR(msg);
+void *sp_exc_new_sub_sized(size_t sz, const char *cls_name, const char *msg) {if (msg != sp_exc_no_msg) msg = sp_msg_heapify(msg); SP_GC_ROOT_STR(msg);
   sp_Exception *e = (sp_Exception *)sp_gc_alloc(sz, NULL, sp_exc_gc_scan);
   memset(e, 0, sz);
   e->cls_name = cls_name ? cls_name : "RuntimeError";
@@ -157,7 +157,15 @@ void sp_exc_gc_scan(void *p) {
    global-buffer-overflow on every raise, and a WRITE of 0xfc over whatever
    precedes it whenever that byte happens to read as an unmarked heap string.
    ASAN reports it on the first collection inside any raise. */
-sp_Exception *sp_exc_new(const char *cls_name, const char *msg) {SP_GC_ROOT_STR(msg);
+/* The message is copied onto the string heap first, then rooted. The caller's
+   pointer cannot be rooted as it stands: a bare C literal -- which every raise
+   the runtime and the generated code issue passes -- has no marker byte, so
+   sp_mark_string reads the byte BEFORE the object, and WRITES 0xfc over it
+   whenever that byte reads as an unmarked heap string. The copy runs with no
+   collection in between (sp_msg_heapify), so an unrooted heap message cannot
+   be swept out from under it either. The no-message sentinel keeps its
+   identity: it is what tells an empty message apart from none at all. */
+sp_Exception *sp_exc_new(const char *cls_name, const char *msg) {if (msg != sp_exc_no_msg) msg = sp_msg_heapify(msg); SP_GC_ROOT_STR(msg);
   sp_Exception *e = (sp_Exception *)sp_gc_alloc(sizeof(sp_Exception), NULL, sp_exc_gc_scan);
   e->cls_name = cls_name ? cls_name : "RuntimeError";
   e->parent_cls_name = NULL;
@@ -195,7 +203,7 @@ sp_bool sp_exc_eq(sp_Exception *a, sp_Exception *b) {
   if (a->cls_name && strcmp(a->cls_name, "UncaughtThrowError") == 0) return 1;
   return strcmp(a->msg ? a->msg : "", b->msg ? b->msg : "") == 0;
 }
-sp_Exception *sp_exc_new_sub(const char *cls_name, const char *parent_cls, const char *msg) {SP_GC_ROOT_STR(msg);
+sp_Exception *sp_exc_new_sub(const char *cls_name, const char *parent_cls, const char *msg) {if (msg != sp_exc_no_msg) msg = sp_msg_heapify(msg); SP_GC_ROOT_STR(msg);
   sp_Exception *e = sp_exc_new(cls_name, msg);   /* empty msg already fell back to cls_name */
   e->parent_cls_name = parent_cls;
   return e;
@@ -214,7 +222,7 @@ sp_Exception *sp_exc_dup(sp_Exception *e) {
 }
 /* Write the staged introspection values (receiver/key/value) into the carried
    exception, creating one when the raise had none (see sp_raise_cls). */
-void *sp_exc_apply_staged(const char *cls, const char *msg, void *obj) {SP_GC_ROOT_STR(msg);
+void *sp_exc_apply_staged(const char *cls, const char *msg, void *obj) {if (msg != sp_exc_no_msg) msg = sp_msg_heapify(msg); SP_GC_ROOT_STR(msg);
   sp_Exception *e = (sp_Exception *)obj;
   if (!e) e = sp_exc_new(cls, msg);
   /* `obj` is a caller-supplied exception that may have been promoted long ago
@@ -232,7 +240,7 @@ int sp_exc_exit_status(void *obj) {
   return (e && e->result.tag == SP_TAG_INT) ? (int)e->result.v.i : 0;
 }
 /* Exception#exception(msg): a copy of the receiver carrying the new message. */
-sp_Exception *sp_exc_exception(sp_Exception *e, const char *msg) {SP_GC_ROOT(e);SP_GC_ROOT_STR(msg);
+sp_Exception *sp_exc_exception(sp_Exception *e, const char *msg) {SP_GC_ROOT(e);if (msg != sp_exc_no_msg) msg = sp_msg_heapify(msg); SP_GC_ROOT_STR(msg);
   sp_Exception *n = sp_exc_dup(e);
   SP_GC_ROOT(n);
   n->msg = sp_sprintf("%s", (msg && msg[0]) ? msg : (n->cls_name ? n->cls_name : "RuntimeError"));

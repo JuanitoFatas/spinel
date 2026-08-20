@@ -243,6 +243,52 @@ static inline char *sp_str_alloc(size_t len) {
   return body + 1;
 }
 
+/* Allocate a string WITHOUT giving the collector a chance to run first.
+   sp_str_alloc collects before allocating, which is right for every ordinary
+   build-a-string operation: its operands are rooted. It is wrong for copying a
+   pointer that CANNOT be rooted -- a bare C literal has no marker byte for
+   sp_mark_string to read, and an unrooted heap string would be swept out from
+   under the copy. The raise path takes one or the other on every call, so it
+   copies through here. The heap simply runs a little past the threshold; the
+   next ordinary allocation collects. */
+static inline char *sp_str_alloc_nogc(size_t len) {
+  size_t total = sizeof(sp_str_hdr) + 1 + len + 1;
+  sp_str_hdr *h = (sp_str_hdr *)malloc(total);
+  if (!h) sp_oom_die();
+  h->size = (uint32_t)total;
+  h->len = (uint32_t)len;
+  h->hash = 0;
+#ifdef SP_THREADS
+  { int wid = sp_worker_id;
+    h->next = sp_str_wslot[wid].young;
+    sp_str_wslot[wid].young = h;
+    SP_GC_CTR_ADD(sp_str_wslot[wid].young_bytes, total); }
+#else
+  SP_HEAP_LOCK();
+  h->next = sp_str_heap;
+  sp_str_heap = h;
+  SP_GC_CTR_ADD(sp_str_heap_bytes, total);
+  SP_HEAP_UNLOCK();
+#endif
+  { char *body = (char *)(h + 1);
+    body[0] = (char)0xfe;
+    body[1 + len] = 0;
+    if (sp_alloc_report_on) sp_alloc_report_str(len);
+    return body + 1; }
+}
+
+/* Copy a message onto the string heap so it can be held by a string root.
+   The source is a bare literal (every raise the runtime and the generated
+   code issue passes one) or an unrooted heap string; neither can be rooted
+   across an allocation, so the copy runs with no collection in between. */
+static inline const char *sp_msg_heapify(const char *m) {
+  if (!m) return NULL;
+  size_t n = strlen(m);
+  char *r = sp_str_alloc_nogc(n);
+  memcpy(r, m, n);
+  return r;
+}
+
 /* Raw variant: the caller writes a NUL-terminated payload whose final
    length it doesn't know yet (worst-case sized transforms: dump, gsub,
    tr, ...). Leave the header length unset so sp_str_byte_len answers
