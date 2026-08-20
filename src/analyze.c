@@ -1849,6 +1849,46 @@ static void rename_shadowing_block_locals(Compiler *c, int L, int pn, int body,
   free(locs);
 }
 
+/* A native class's own methods, called on an implicit self from a method the
+   program adds by reopening the class. The native surface is dispatched
+   through the receiver, and an implicit self has no receiver node at all, so
+   every one of them was a NameError:
+
+     class StringIO
+       def rest = gets        # undefined local variable or method 'gets'
+     end
+
+   Give it the receiver it means. Same shape as the Enumerable-on-self
+   redirect, and for the same reason. Only names the class's native surface
+   actually declares, so a genuine typo still reports as one, and only when no
+   Ruby method of the class already answers -- that one binds first. */
+static int give_native_self_calls_a_receiver(Compiler *c) {
+  NodeTable *nt = (NodeTable *)c->nt;
+  int n0 = nt->count, changed = 0;
+  for (int id = 0; id < n0; id++) {
+    if (nt_kind(nt, id) != NK_CallNode) continue;
+    if (nt_ref(nt, id, "receiver") >= 0) continue;
+    const char *nm = nt_str(nt, id, "name");
+    if (!nm) continue;
+    Scope *osc = comp_scope_of(c, id);
+    int ocid = osc ? osc->class_id : -1;
+    if (ocid < 0 || osc->is_cmethod) continue;
+    if (ocid >= c->nclasses || !c->classes[ocid].is_native_class) continue;
+    if (comp_method_in_chain(c, ocid, nm, NULL) >= 0) continue;   /* the class's own Ruby method */
+    int argc = 0;
+    { int an = nt_ref(nt, id, "arguments");
+      if (an >= 0) nt_arr(nt, an, "arguments", &argc); }
+    if (comp_native_method_find(c, ocid, nm, argc, 0) < 0) continue;
+    int selfn = nt_new_node(nt, "SelfNode");
+    if (selfn < 0) continue;
+    nt_node_set_ref(nt, id, "receiver", selfn);
+    comp_grow_node_arrays(c);
+    c->nscope[selfn] = c->nscope[id];
+    changed = 1;
+  }
+  return changed;
+}
+
 void rename_shadowing_block_params(Compiler *c) {
   const NodeTable *nt = c->nt;
   int n = nt->count;
@@ -11767,6 +11807,7 @@ void analyze_program(Compiler *c) {
     ch |= desugar_class_literal_ctors(c);      /* Array[a,b] -> [a,b]; Range.new -> (a..b) */
     ch |= desugar_multi_yield_map_param(c);    /* multi-yield each: map's |x| takes the 1st */
     ch |= desugar_enum_method_recv(c);         /* obj.map{} -> obj.__enum_to_a.map{} */
+    ch |= give_native_self_calls_a_receiver(c);  /* native class: implicit self -> self.m */
     ch |= desugar_for_enumerable(c);           /* for x in obj -> for x in obj.__enum_to_a */
     ch |= desugar_lazy_terminal(c);            /* lz.sum -> lz.to_a.sum */
     ch |= desugar_string_upto(c);              /* "a".upto("c") -> ("a".."c").each */
