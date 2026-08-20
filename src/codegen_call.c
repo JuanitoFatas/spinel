@@ -966,6 +966,24 @@ static int collect_class_constants(Compiler *c, int ci, int inherit,
    method, not the builtin, so a documented-limit diagnostic must not claim it.
    Singleton (class) methods count too: `def self.prepend(...)` on a module
    makes `Mod.prepend(...)` that method, not Module#prepend (#2712). */
+/* A clock argument may be a SYMBOL naming the clock, as well as a constant or
+   a raw id -- CRuby accepts `Process.clock_gettime(:CLOCK_MONOTONIC)`. Emit
+   the platform's own macro for it, exactly as the constant spelling does;
+   without this the symbol went into an Integer slot and raised (#4044).
+   Answers 1 when it emitted the id. */
+static int emit_clock_id(Compiler *c, int node, Buf *b) {
+  const NodeTable *nt = c->nt;
+  const char *ty = nt_type(nt, node);
+  if (!ty || !sp_streq(ty, "SymbolNode")) return 0;
+  const char *nm = nt_str(nt, node, "value");
+  static const char *const CLK[] = {
+    "CLOCK_MONOTONIC", "CLOCK_REALTIME",
+    "CLOCK_PROCESS_CPUTIME_ID", "CLOCK_THREAD_CPUTIME_ID", NULL };
+  for (int i = 0; nm && CLK[i]; i++)
+    if (sp_streq(nm, CLK[i])) { buf_printf(b, "((sp_int)%s)", CLK[i]); return 1; }
+  return 0;
+}
+
 int diag_user_defines(Compiler *c, const char *name) {
   for (int uk = 0; uk < c->nclasses; uk++) {
     if (comp_method_in_chain(c, uk, name, NULL) >= 0) return 1;
@@ -18470,6 +18488,12 @@ else { memcpy(dir, sf, n); dir[n] = 0; } }
                    to, cn, td, cn,
                    class_needs_scan(dci) ? "sp_" : "", class_needs_scan(dci) ? cn : "NULL",
                    class_needs_scan(dci) ? "_scan" : "", td, to, td);
+        /* The struct copy carries the ORIGINAL's cls_id, which for a singleton
+           receiver is the synthesized subclass: the copy then answered that
+           class's methods at run time, while `respond_to?` -- reading the
+           static type -- said it did not (#4043). #dup drops them, so the copy
+           is an instance of the class Ruby sees. */
+        if (dup_desingleton) buf_printf(b, "_t%d->cls_id = %d; ", td, cid);
         /* Invoke the hook when its param was typed by the seeding pass to any
            object class -- it unifies to a common ancestor when both a parent and
            a subclass are dup'd, so accept ty_is_object, casting the original to
@@ -19772,7 +19796,9 @@ else { memcpy(dir, sf, n); dir[n] = 0; } }
         buf_printf(b, "({ sp_raise_cls(\"ArgumentError\", (&(\"\\xff\" \"unexpected unit: %s\")[1])); 0.0; })", unit);
         return;
       }
-      buf_puts(b, "(sp_process_clock_ns("); emit_int_expr(c, argv[0], b); buf_puts(b, ")");
+      buf_puts(b, "(sp_process_clock_ns(");
+      if (!emit_clock_id(c, argv[0], b)) emit_int_expr(c, argv[0], b);
+      buf_puts(b, ")");
       if (unit && sp_streq(unit, "nanosecond")) buf_puts(b, ")");
       else if (unit && sp_streq(unit, "microsecond")) buf_puts(b, " / 1000)");
       else if (unit && sp_streq(unit, "millisecond")) buf_puts(b, " / 1000000)");
@@ -19793,7 +19819,9 @@ else { memcpy(dir, sf, n); dir[n] = 0; } }
         buf_printf(b, "({ sp_raise_cls(\"ArgumentError\", (&(\"\\xff\" \"unexpected unit: %s\")[1])); 0.0; })", unit);
         return;
       }
-      buf_puts(b, "(sp_process_clock_res_ns("); emit_int_expr(c, argv[0], b); buf_puts(b, ")");
+      buf_puts(b, "(sp_process_clock_res_ns(");
+      if (!emit_clock_id(c, argv[0], b)) emit_int_expr(c, argv[0], b);
+      buf_puts(b, ")");
       if (unit && sp_streq(unit, "nanosecond")) buf_puts(b, ")");
       else if (unit && sp_streq(unit, "microsecond")) buf_puts(b, " / 1000)");
       else if (unit && sp_streq(unit, "millisecond")) buf_puts(b, " / 1000000)");
