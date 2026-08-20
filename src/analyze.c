@@ -2002,6 +2002,12 @@ void rename_shadowing_block_params(Compiler *c) {
       char oldn[160], newn[176];
       snprintf(oldn, sizeof oldn, "%s", p);   /* copy: nt_set_str frees p's storage */
       snprintf(newn, sizeof newn, "%s__bp%d", oldn, L);
+      /* `Proc#parameters` reports the name the program wrote, and the emitter
+         recovers it by stripping this suffix -- but a stripped name that
+         appears nowhere else is not in the generated symbol table, so interning
+         it at emit time came too late and it rendered as the empty symbol
+         (#4045). Put it in the table here, while the table is still open. */
+      comp_sym_intern(c, oldn);
       nt_set_str((NodeTable *)nt, pnode, "name", newn);
       blkp_rewrite_refs(c, body, oldn, newn);
       /* an optional's default expression can reference a renamed sibling

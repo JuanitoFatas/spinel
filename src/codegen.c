@@ -3663,6 +3663,10 @@ static TyKind lambda_nonlocal_return_ty(Compiler *c, int id) {
 /* The name a parameter shows in #parameters: a block parameter renamed to
    avoid a scope collision carries a `__bp<N>` suffix that is ours, not the
    program's (#3679). */
+/* Strip the shadow rename's `__bp<N>` suffix: `Proc#parameters` reports the
+   name the program wrote, not the slot the rename invented. EVERY parameter
+   kind has to go through this -- rest, keyword, keyword-rest and block leaked
+   the suffix while the positional ones were stripped (#4045). */
 static const char *param_public_name(const char *n) {
   if (!n) return n;
   const char *p = strstr(n, "__bp");
@@ -4034,6 +4038,10 @@ else if (orecv >= 0 && onm) {
       (void)is_lambda;
       ids = nt_arr(nt, pn, "requireds", &n);
       for (int i = 0; i < n && meta_count < PMETA_MAX; i++) {
+        /* the implicit rest a trailing comma synthesizes (`|a,|`) is not a
+           parameter Ruby reports at all (#4045) */
+        { const char *inm = nt_str(nt, ids[i], "name");
+          if (inm && strncmp(inm, "__implicit_rest", 15) == 0) continue; }
         pkind[meta_count] = pos_kind;
         /* a destructuring group has no name of its own; the synthesized one
            must not leak, and neither must a renamed local's suffix (#3679) */
@@ -4043,6 +4051,8 @@ else if (orecv >= 0 && onm) {
       }
       ids = nt_arr(nt, pn, "optionals", &n);
       for (int i = 0; i < n && meta_count < PMETA_MAX; i++) {
+        { const char *inm = nt_str(nt, ids[i], "name");
+          if (inm && strncmp(inm, "__implicit_rest", 15) == 0) continue; }
         pkind[meta_count] = "opt";
         { const char *onm = nt_str(nt, ids[i], "name");
           pname[meta_count++] = (onm && strncmp(onm, "__destr_", 8) == 0)
@@ -4051,32 +4061,32 @@ else if (orecv >= 0 && onm) {
       int rest = nt_ref(nt, pn, "rest");
       const char *rty = rest >= 0 ? nt_type(nt, rest) : NULL;
       if (rty && sp_streq(rty, "RestParameterNode") && meta_count < PMETA_MAX) {
-        const char *nm = nt_str(nt, rest, "name");
+        const char *nm = param_public_name(nt_str(nt, rest, "name"));
         pkind[meta_count] = "rest";
         pname[meta_count++] = comp_sym_intern(c, nm ? nm : "*");
       }
       ids = nt_arr(nt, pn, "posts", &n);
       for (int i = 0; i < n && meta_count < PMETA_MAX; i++) {
         pkind[meta_count] = pos_kind;
-        pname[meta_count++] = comp_sym_intern(c, nt_str(nt, ids[i], "name"));
+        pname[meta_count++] = comp_sym_intern(c, param_public_name(nt_str(nt, ids[i], "name")));
       }
       ids = nt_arr(nt, pn, "keywords", &n);
       for (int i = 0; i < n && meta_count < PMETA_MAX; i++) {
         const char *kt = nt_type(nt, ids[i]);
         pkind[meta_count] = (kt && sp_streq(kt, "OptionalKeywordParameterNode")) ? "key" : "keyreq";
-        pname[meta_count++] = comp_sym_intern(c, nt_str(nt, ids[i], "name"));
+        pname[meta_count++] = comp_sym_intern(c, param_public_name(nt_str(nt, ids[i], "name")));
       }
       int kwrest = nt_ref(nt, pn, "keyword_rest");
       const char *kwty = kwrest >= 0 ? nt_type(nt, kwrest) : NULL;
       if (kwty && sp_streq(kwty, "KeywordRestParameterNode") && meta_count < PMETA_MAX) {
-        const char *nm = nt_str(nt, kwrest, "name");
+        const char *nm = param_public_name(nt_str(nt, kwrest, "name"));
         pkind[meta_count] = "keyrest";
         pname[meta_count++] = comp_sym_intern(c, nm ? nm : "**");
       }
       int bpar = nt_ref(nt, pn, "block");
       const char *bty = bpar >= 0 ? nt_type(nt, bpar) : NULL;
       if (bty && sp_streq(bty, "BlockParameterNode") && meta_count < PMETA_MAX) {
-        const char *nm = nt_str(nt, bpar, "name");
+        const char *nm = param_public_name(nt_str(nt, bpar, "name"));
         pkind[meta_count] = "block";
         pname[meta_count++] = comp_sym_intern(c, nm ? nm : "&");
       }
