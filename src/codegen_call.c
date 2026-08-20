@@ -881,8 +881,19 @@ static int class_own_constants(Compiler *c, int ci, const char **out, int max, i
     int bn = 0; const int *stmts = body >= 0 ? nt_arr(nt, body, "body", &bn) : NULL;
     for (int k = 0; k < bn && n < max; k++) {
       const char *sty = nt_type(nt, stmts[k]);
-      if (!sty || !sp_streq(sty, "ConstantWriteNode")) continue;
-      const char *nm = nt_str(nt, stmts[k], "name");
+      const char *nm = NULL;
+      if (sty && sp_streq(sty, "ConstantWriteNode")) nm = nt_str(nt, stmts[k], "name");
+      /* A nested class or module IS a constant of the enclosing one, and the
+         only kind this collected was the value-assigning form -- so a module
+         holding both reported the value and not the nested module (#4040). */
+      else if (sty && (sp_streq(sty, "ClassNode") || sp_streq(sty, "ModuleNode"))) {
+        int ncp = nt_ref(nt, stmts[k], "constant_path");
+        const char *full = ncp >= 0 ? nt_str(nt, ncp, "name") : NULL;
+        if (full) {
+          const char *last = strrchr(full, ':');
+          nm = last ? last + 1 : full;   /* the leaf name, not the path */
+        }
+      }
       if (!nm) continue;
       int dup = 0;
       for (int q = 0; q < n; q++) if (sp_streq(out[q], nm)) { dup = 1; break; }
