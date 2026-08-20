@@ -787,7 +787,7 @@ void emit_expr(Compiler *c, int id, Buf *b) {
     int tcount = 0; const int *tv = nt_arr(nt, id, "targets", &tcount);
     int t = ++g_tmp;
     buf_printf(b, "({ sp_RbVal _t%d = sp_re_match_poly(sp_re_pat_%d, ", t, reidx);
-    emit_str_expr(c, av[0], b);
+    emit_str_expr_nilable(c, av[0], b);   /* nil subject: no match, as =~ */
     buf_puts(b, "); ");
     for (int ti = 0; ti < tcount; ti++) {
       const char *tnm = nt_str(nt, tv[ti], "name");
@@ -851,9 +851,9 @@ void emit_expr(Compiler *c, int id, Buf *b) {
     /* ("a".."e"): the distinct string range, endpoints kept as strings (#3064) */
     if (comp_ntype(c, id) == TY_STR_RANGE) {
       buf_puts(b, "sp_srange_new(");
-      if (left >= 0) emit_str_expr(c, left, b); else buf_puts(b, "sp_str_empty");
+      if (left >= 0) emit_str_expr_nilable(c, left, b); else buf_puts(b, "sp_str_empty");
       buf_puts(b, ", ");
-      if (right >= 0) emit_str_expr(c, right, b); else buf_puts(b, "sp_str_empty");
+      if (right >= 0) emit_str_expr_nilable(c, right, b); else buf_puts(b, "sp_str_empty");
       buf_printf(b, ", %d)", excl);
       return;
     }
@@ -909,9 +909,9 @@ void emit_expr(Compiler *c, int id, Buf *b) {
         (nt_type(nt, right) && sp_streq(nt_type(nt, right), "NilNode")) ||
         lazy_endpoint_is_infinite(c, right);
     buf_puts(b, "sp_range_new(");
-    if (!left_unbounded) emit_int_expr(c, left, b); else buf_puts(b, "INTPTR_MIN");  /* beginless */
+    if (!left_unbounded) emit_int_expr_nilable(c, left, b); else buf_puts(b, "INTPTR_MIN");  /* beginless; a non-literal nil bound keeps the old looseness */
     buf_puts(b, ", ");
-    if (!right_unbounded) emit_int_expr(c, right, b); else buf_puts(b, "INTPTR_MAX");  /* endless */
+    if (!right_unbounded) emit_int_expr_nilable(c, right, b); else buf_puts(b, "INTPTR_MAX");  /* endless; same */
     buf_printf(b, ", %d)", excl);
     return;
   }

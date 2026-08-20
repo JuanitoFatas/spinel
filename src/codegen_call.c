@@ -6684,7 +6684,7 @@ static int emit_class_new_call(Compiler *c, int id, Buf *b) {
           else {
             buf_puts(b, "sp_Random_new(");
             if (is_big) { buf_puts(b, "sp_bigint_to_int("); emit_expr(c, argv[0], b); buf_puts(b, ")"); }
-            else emit_int_expr(c, argv[0], b);
+            else emit_int_expr_conv(c, argv[0], b);
             buf_puts(b, ")");
           }
         }
@@ -6825,7 +6825,7 @@ static int emit_class_new_call(Compiler *c, int id, Buf *b) {
            which must land as whole statements BEFORE this temp's decl line, not
            inside its initializer. */
         Buf pv; memset(&pv, 0, sizeof pv);
-        emit_expr(c, argv[0], &pv);
+        emit_str_expr(c, argv[0], &pv);   /* Regexp.new(nil) is CRuby's TypeError */
         emit_indent(g_pre, g_indent);
         buf_printf(g_pre, "const char *_t%d = %s;\n", ts, pv.p ? pv.p : "\"\"");
         free(pv.p);
@@ -8248,8 +8248,7 @@ static int emit_array_arith_call(Compiler *c, int id, Buf *b) {
     if (rt == TY_STRING && sp_streq(name, "*")) {
       buf_puts(b, "sp_str_repeat(");
       emit_expr(c, recv, b); buf_puts(b, ", ");
-      if (comp_ntype(c, argv[0]) == TY_POLY) { buf_puts(b, "sp_poly_to_i("); emit_expr(c, argv[0], b); buf_puts(b, ")"); }
-      else emit_expr(c, argv[0], b);
+      emit_int_expr(c, argv[0], b);   /* "ab" * nil is CRuby's TypeError, not "" */
       buf_puts(b, ")");
       return 1;
     }
@@ -8883,260 +8882,1231 @@ static int emit_range_step_bad_stride(Compiler *c, int id, int recv, int arg,
 /* Positional-arity spec for the builtin instance surface, probed from
    ruby 4.0.6 by tools/gen_builtin_arity_spec.rb (see there for the
    technique; rerun it with --write to regenerate both tables). max -1 =
-   no upper bound; a NULL exp = that side is never violated. Bare calls
-   only -- a block changes several counts, and block-carrying calls skip
-   the guard. */
+   no upper bound; a NULL exp = that side is never violated. The first
+   quartet describes the bare call, the blk_ quartet the block-carrying
+   call (several counts change under a block: Array#fill 1..3 vs 0..2,
+   Integer#step); a quartet the probe could not prove is -1,-1,NULL,NULL
+   and never fires. */
 static const struct { const char *cls; const char *m; int min; int max;
-                      const char *lo_exp; const char *hi_exp; }
+                      const char *lo_exp; const char *hi_exp;
+                      int blk_min; int blk_max;
+                      const char *blk_lo_exp; const char *blk_hi_exp; }
 sp_builtin_arity_spec_tbl[] = {
-  {"String","%",1,1,"1","1"},{"String","*",1,1,"1","1"},
-  {"String","+",1,1,"1","1"},{"String","+@",0,0,NULL,"0"},
-  {"String","-@",0,0,NULL,"0"},{"String","<<",1,1,"1","1"},
-  {"String","<=>",1,1,"1","1"},{"String","==",1,1,"1","1"},
-  {"String","===",1,1,"1","1"},{"String","=~",1,1,"1","1"},
-  {"String","[]",1,2,"1..2","1..2"},{"String","[]=",2,3,"2..3","2..3"},
-  {"String","ascii_only?",0,0,NULL,"0"},{"String","b",0,0,NULL,"0"},
-  {"String","byteindex",1,2,"1..2","1..2"},{"String","byterindex",1,2,"1..2","1..2"},
-  {"String","bytes",0,0,NULL,"0"},{"String","bytesize",0,0,NULL,"0"},
-  {"String","byteslice",1,2,"1..2","1..2"},{"String","casecmp",1,1,"1","1"},
-  {"String","casecmp?",1,1,"1","1"},{"String","center",1,2,"1..2","1..2"},
-  {"String","chars",0,0,NULL,"0"},{"String","chomp",0,1,NULL,"0..1"},
-  {"String","chomp!",0,1,NULL,"0..1"},{"String","chop",0,0,NULL,"0"},
-  {"String","chop!",0,0,NULL,"0"},{"String","chr",0,0,NULL,"0"},
-  {"String","clear",0,0,NULL,"0"},{"String","codepoints",0,0,NULL,"0"},
-  {"String","count",1,-1,"1+",NULL},{"String","crypt",1,1,"1","1"},
-  {"String","dedup",0,0,NULL,"0"},{"String","delete",1,-1,"1+",NULL},
-  {"String","delete!",1,-1,"1+",NULL},{"String","delete_prefix",1,1,"1","1"},
-  {"String","delete_prefix!",1,1,"1","1"},{"String","delete_suffix",1,1,"1","1"},
-  {"String","delete_suffix!",1,1,"1","1"},{"String","dump",0,0,NULL,"0"},
-  {"String","dup",0,0,NULL,"0"},{"String","each_byte",0,0,NULL,"0"},
-  {"String","each_char",0,0,NULL,"0"},{"String","each_codepoint",0,0,NULL,"0"},
-  {"String","each_grapheme_cluster",0,0,NULL,"0"},{"String","empty?",0,0,NULL,"0"},
-  {"String","encode",0,2,NULL,"0..2"},{"String","encode!",0,2,NULL,"0..2"},
-  {"String","encoding",0,0,NULL,"0"},{"String","eql?",1,1,"1","1"},
-  {"String","force_encoding",1,1,"1","1"},{"String","freeze",0,0,NULL,"0"},
-  {"String","getbyte",1,1,"1","1"},{"String","grapheme_clusters",0,0,NULL,"0"},
-  {"String","gsub",1,2,"1..2","1..2"},{"String","gsub!",1,2,"1..2","1..2"},
-  {"String","hash",0,0,NULL,"0"},{"String","hex",0,0,NULL,"0"},
-  {"String","include?",1,1,"1","1"},{"String","index",1,2,"1..2","1..2"},
-  {"String","insert",2,2,"2","2"},{"String","inspect",0,0,NULL,"0"},
-  {"String","intern",0,0,NULL,"0"},{"String","length",0,0,NULL,"0"},
-  {"String","lines",0,1,NULL,"0..1"},{"String","ljust",1,2,"1..2","1..2"},
-  {"String","match",1,-1,"1..2",NULL},{"String","match?",1,2,"1..2","1..2"},
-  {"String","next",0,0,NULL,"0"},{"String","next!",0,0,NULL,"0"},
-  {"String","oct",0,0,NULL,"0"},{"String","ord",0,0,NULL,"0"},
-  {"String","partition",1,1,"1","1"},{"String","replace",1,1,"1","1"},
-  {"String","reverse",0,0,NULL,"0"},{"String","reverse!",0,0,NULL,"0"},
-  {"String","rindex",1,2,"1..2","1..2"},{"String","rjust",1,2,"1..2","1..2"},
-  {"String","rpartition",1,1,"1","1"},{"String","scan",1,1,"1","1"},
-  {"String","scrub",0,1,NULL,"0..1"},{"String","scrub!",0,1,NULL,"0..1"},
-  {"String","setbyte",2,2,"2","2"},{"String","size",0,0,NULL,"0"},
-  {"String","slice",1,2,"1..2","1..2"},{"String","slice!",1,2,"1..2","1..2"},
-  {"String","split",0,2,NULL,"0..2"},{"String","sub",2,2,"2","2"},
-  {"String","sub!",2,2,"2","2"},{"String","succ",0,0,NULL,"0"},
-  {"String","succ!",0,0,NULL,"0"},{"String","sum",0,1,NULL,"0..1"},
-  {"String","to_c",0,0,NULL,"0"},{"String","to_f",0,0,NULL,"0"},
-  {"String","to_i",0,1,NULL,"0..1"},{"String","to_r",0,0,NULL,"0"},
-  {"String","to_s",0,0,NULL,"0"},{"String","to_str",0,0,NULL,"0"},
-  {"String","to_sym",0,0,NULL,"0"},{"String","tr",2,2,"2","2"},
-  {"String","tr!",2,2,"2","2"},{"String","tr_s",2,2,"2","2"},
-  {"String","tr_s!",2,2,"2","2"},{"String","undump",0,0,NULL,"0"},
-  {"String","unicode_normalize",0,1,NULL,"0..1"},{"String","unicode_normalize!",0,1,NULL,"0..1"},
-  {"String","unicode_normalized?",0,1,NULL,"0..1"},{"String","unpack",1,1,"1","1"},
-  {"String","unpack1",1,1,"1","1"},{"String","upto",1,2,"1..2","1..2"},
-  {"String","valid_encoding?",0,0,NULL,"0"},{"Integer","%",1,1,"1","1"},
-  {"Integer","&",1,1,"1","1"},{"Integer","*",1,1,"1","1"},
-  {"Integer","**",1,1,"1","1"},{"Integer","+",1,1,"1","1"},
-  {"Integer","-",1,1,"1","1"},{"Integer","-@",0,0,NULL,"0"},
-  {"Integer","/",1,1,"1","1"},{"Integer","<",1,1,"1","1"},
-  {"Integer","<<",1,1,"1","1"},{"Integer","<=",1,1,"1","1"},
-  {"Integer","<=>",1,1,"1","1"},{"Integer","==",1,1,"1","1"},
-  {"Integer","===",1,1,"1","1"},{"Integer",">",1,1,"1","1"},
-  {"Integer",">=",1,1,"1","1"},{"Integer",">>",1,1,"1","1"},
-  {"Integer","[]",1,2,"1..2","1..2"},{"Integer","^",1,1,"1","1"},
-  {"Integer","abs",0,0,NULL,"0"},{"Integer","allbits?",1,1,"1","1"},
-  {"Integer","anybits?",1,1,"1","1"},{"Integer","bit_length",0,0,NULL,"0"},
-  {"Integer","ceil",0,1,NULL,"0..1"},{"Integer","ceildiv",1,1,"1","1"},
-  {"Integer","chr",0,1,NULL,"0..1"},{"Integer","coerce",1,1,"1","1"},
-  {"Integer","denominator",0,0,NULL,"0"},{"Integer","digits",0,1,NULL,"0..1"},
-  {"Integer","div",1,1,"1","1"},{"Integer","divmod",1,1,"1","1"},
-  {"Integer","downto",1,1,"1","1"},{"Integer","even?",0,0,NULL,"0"},
-  {"Integer","fdiv",1,1,"1","1"},{"Integer","floor",0,1,NULL,"0..1"},
-  {"Integer","gcd",1,1,"1","1"},{"Integer","gcdlcm",1,1,"1","1"},
-  {"Integer","inspect",0,1,NULL,"0..1"},{"Integer","integer?",0,0,NULL,"0"},
-  {"Integer","lcm",1,1,"1","1"},{"Integer","magnitude",0,0,NULL,"0"},
-  {"Integer","modulo",1,1,"1","1"},{"Integer","next",0,0,NULL,"0"},
-  {"Integer","nobits?",1,1,"1","1"},{"Integer","numerator",0,0,NULL,"0"},
-  {"Integer","odd?",0,0,NULL,"0"},{"Integer","ord",0,0,NULL,"0"},
-  {"Integer","pow",1,2,"1..2","1..2"},{"Integer","pred",0,0,NULL,"0"},
-  {"Integer","rationalize",0,1,NULL,"0..1"},{"Integer","remainder",1,1,"1","1"},
-  {"Integer","round",0,1,NULL,"0..1"},{"Integer","size",0,0,NULL,"0"},
-  {"Integer","succ",0,0,NULL,"0"},{"Integer","times",0,0,NULL,"0"},
-  {"Integer","to_f",0,0,NULL,"0"},{"Integer","to_i",0,0,NULL,"0"},
-  {"Integer","to_int",0,0,NULL,"0"},{"Integer","to_r",0,0,NULL,"0"},
-  {"Integer","to_s",0,1,NULL,"0..1"},{"Integer","truncate",0,1,NULL,"0..1"},
-  {"Integer","upto",1,1,"1","1"},{"Integer","zero?",0,0,NULL,"0"},
-  {"Integer","|",1,1,"1","1"},{"Integer","~",0,0,NULL,"0"},
-  {"Float","%",1,1,"1","1"},{"Float","*",1,1,"1","1"},
-  {"Float","**",1,1,"1","1"},{"Float","+",1,1,"1","1"},
-  {"Float","-",1,1,"1","1"},{"Float","-@",0,0,NULL,"0"},
-  {"Float","/",1,1,"1","1"},{"Float","<",1,1,"1","1"},
-  {"Float","<=",1,1,"1","1"},{"Float","<=>",1,1,"1","1"},
-  {"Float","==",1,1,"1","1"},{"Float","===",1,1,"1","1"},
-  {"Float",">",1,1,"1","1"},{"Float",">=",1,1,"1","1"},
-  {"Float","abs",0,0,NULL,"0"},{"Float","angle",0,0,NULL,"0"},
-  {"Float","arg",0,0,NULL,"0"},{"Float","ceil",0,1,NULL,"0..1"},
-  {"Float","coerce",1,1,"1","1"},{"Float","denominator",0,0,NULL,"0"},
-  {"Float","divmod",1,1,"1","1"},{"Float","eql?",1,1,"1","1"},
-  {"Float","fdiv",1,1,"1","1"},{"Float","finite?",0,0,NULL,"0"},
-  {"Float","floor",0,1,NULL,"0..1"},{"Float","hash",0,0,NULL,"0"},
-  {"Float","infinite?",0,0,NULL,"0"},{"Float","inspect",0,0,NULL,"0"},
-  {"Float","magnitude",0,0,NULL,"0"},{"Float","modulo",1,1,"1","1"},
-  {"Float","nan?",0,0,NULL,"0"},{"Float","negative?",0,0,NULL,"0"},
-  {"Float","next_float",0,0,NULL,"0"},{"Float","numerator",0,0,NULL,"0"},
-  {"Float","phase",0,0,NULL,"0"},{"Float","positive?",0,0,NULL,"0"},
-  {"Float","prev_float",0,0,NULL,"0"},{"Float","quo",1,1,"1","1"},
-  {"Float","rationalize",0,1,NULL,"0..1"},{"Float","round",0,1,NULL,"0..1"},
-  {"Float","to_f",0,0,NULL,"0"},{"Float","to_i",0,0,NULL,"0"},
-  {"Float","to_int",0,0,NULL,"0"},{"Float","to_r",0,0,NULL,"0"},
-  {"Float","to_s",0,0,NULL,"0"},{"Float","truncate",0,1,NULL,"0..1"},
-  {"Float","zero?",0,0,NULL,"0"},{"Array","&",1,1,"1","1"},
-  {"Array","*",1,1,"1","1"},{"Array","+",1,1,"1","1"},
-  {"Array","-",1,1,"1","1"},{"Array","<<",1,1,"1","1"},
-  {"Array","<=>",1,1,"1","1"},{"Array","==",1,1,"1","1"},
-  {"Array","[]",1,2,"1..2","1..2"},{"Array","[]=",2,3,"2..3","2..3"},
-  {"Array","all?",0,1,NULL,"0..1"},{"Array","any?",0,1,NULL,"0..1"},
-  {"Array","assoc",1,1,"1","1"},{"Array","at",1,1,"1","1"},
-  {"Array","bsearch",0,0,NULL,"0"},{"Array","bsearch_index",0,0,NULL,"0"},
-  {"Array","clear",0,0,NULL,"0"},{"Array","collect",0,0,NULL,"0"},
-  {"Array","collect!",0,0,NULL,"0"},{"Array","combination",1,1,"1","1"},
-  {"Array","compact",0,0,NULL,"0"},{"Array","compact!",0,0,NULL,"0"},
-  {"Array","count",0,1,NULL,"0..1"},{"Array","cycle",0,1,NULL,"0..1"},
-  {"Array","deconstruct",0,0,NULL,"0"},{"Array","delete",1,1,"1","1"},
-  {"Array","delete_at",1,1,"1","1"},{"Array","delete_if",0,0,NULL,"0"},
-  {"Array","dig",1,-1,"1+",NULL},{"Array","drop",1,1,"1","1"},
-  {"Array","drop_while",0,0,NULL,"0"},{"Array","each",0,0,NULL,"0"},
-  {"Array","each_index",0,0,NULL,"0"},{"Array","empty?",0,0,NULL,"0"},
-  {"Array","eql?",1,1,"1","1"},{"Array","fetch",1,2,"1..2","1..2"},
-  {"Array","fill",1,3,"1..3","1..3"},{"Array","filter",0,0,NULL,"0"},
-  {"Array","filter!",0,0,NULL,"0"},{"Array","find_index",0,1,NULL,"0..1"},
-  {"Array","first",0,1,NULL,"0..1"},{"Array","flatten",0,1,NULL,"0..1"},
-  {"Array","flatten!",0,1,NULL,"0..1"},{"Array","freeze",0,0,NULL,"0"},
-  {"Array","hash",0,0,NULL,"0"},{"Array","include?",1,1,"1","1"},
-  {"Array","index",0,1,NULL,"0..1"},{"Array","insert",1,-1,"1+",NULL},
-  {"Array","inspect",0,0,NULL,"0"},{"Array","intersect?",1,1,"1","1"},
-  {"Array","join",0,1,NULL,"0..1"},{"Array","keep_if",0,0,NULL,"0"},
-  {"Array","last",0,1,NULL,"0..1"},{"Array","length",0,0,NULL,"0"},
-  {"Array","map",0,0,NULL,"0"},{"Array","map!",0,0,NULL,"0"},
-  {"Array","max",0,1,NULL,"0..1"},{"Array","min",0,1,NULL,"0..1"},
-  {"Array","minmax",0,0,NULL,"0"},{"Array","none?",0,1,NULL,"0..1"},
-  {"Array","one?",0,1,NULL,"0..1"},{"Array","pack",1,1,"1","1"},
-  {"Array","pop",0,1,NULL,"0..1"},{"Array","rassoc",1,1,"1","1"},
-  {"Array","reject",0,0,NULL,"0"},{"Array","reject!",0,0,NULL,"0"},
-  {"Array","repeated_combination",1,1,"1","1"},{"Array","repeated_permutation",1,1,"1","1"},
-  {"Array","replace",1,1,"1","1"},{"Array","reverse",0,0,NULL,"0"},
-  {"Array","reverse!",0,0,NULL,"0"},{"Array","reverse_each",0,0,NULL,"0"},
-  {"Array","rindex",0,1,NULL,"0..1"},{"Array","rotate",0,1,NULL,"0..1"},
-  {"Array","rotate!",0,1,NULL,"0..1"},{"Array","sample",0,1,NULL,"0..1"},
-  {"Array","select",0,0,NULL,"0"},{"Array","select!",0,0,NULL,"0"},
-  {"Array","shift",0,1,NULL,"0..1"},{"Array","shuffle",0,0,NULL,"0"},
-  {"Array","shuffle!",0,0,NULL,"0"},{"Array","size",0,0,NULL,"0"},
-  {"Array","slice",1,2,"1..2","1..2"},{"Array","slice!",1,2,"1..2","1..2"},
-  {"Array","sort",0,0,NULL,"0"},{"Array","sort!",0,0,NULL,"0"},
-  {"Array","sort_by!",0,0,NULL,"0"},{"Array","sum",0,1,NULL,"0..1"},
-  {"Array","take",1,1,"1","1"},{"Array","take_while",0,0,NULL,"0"},
-  {"Array","to_a",0,0,NULL,"0"},{"Array","to_ary",0,0,NULL,"0"},
-  {"Array","to_h",0,0,NULL,"0"},{"Array","to_s",0,0,NULL,"0"},
-  {"Array","transpose",0,0,NULL,"0"},{"Array","uniq",0,0,NULL,"0"},
-  {"Array","uniq!",0,0,NULL,"0"},{"Array","|",1,1,"1","1"},
-  {"Hash","<",1,1,"1","1"},{"Hash","<=",1,1,"1","1"},
-  {"Hash","==",1,1,"1","1"},{"Hash",">",1,1,"1","1"},
-  {"Hash",">=",1,1,"1","1"},{"Hash","[]",1,1,"1","1"},
-  {"Hash","[]=",2,2,"2","2"},{"Hash","any?",0,1,NULL,"0..1"},
-  {"Hash","assoc",1,1,"1","1"},{"Hash","clear",0,0,NULL,"0"},
-  {"Hash","compact",0,0,NULL,"0"},{"Hash","compact!",0,0,NULL,"0"},
-  {"Hash","compare_by_identity",0,0,NULL,"0"},{"Hash","compare_by_identity?",0,0,NULL,"0"},
-  {"Hash","deconstruct_keys",1,1,"1","1"},{"Hash","default",0,1,NULL,"0..1"},
-  {"Hash","default=",1,1,"1","1"},{"Hash","default_proc",0,0,NULL,"0"},
-  {"Hash","default_proc=",1,1,"1","1"},{"Hash","delete",1,1,"1","1"},
-  {"Hash","delete_if",0,0,NULL,"0"},{"Hash","dig",1,-1,"1+",NULL},
-  {"Hash","each",0,0,NULL,"0"},{"Hash","each_key",0,0,NULL,"0"},
-  {"Hash","each_pair",0,0,NULL,"0"},{"Hash","each_value",0,0,NULL,"0"},
-  {"Hash","empty?",0,0,NULL,"0"},{"Hash","eql?",1,1,"1","1"},
-  {"Hash","fetch",1,2,"1..2","1..2"},{"Hash","filter",0,0,NULL,"0"},
-  {"Hash","filter!",0,0,NULL,"0"},{"Hash","flatten",0,1,NULL,"0..1"},
-  {"Hash","freeze",0,0,NULL,"0"},{"Hash","has_key?",1,1,"1","1"},
-  {"Hash","has_value?",1,1,"1","1"},{"Hash","hash",0,0,NULL,"0"},
-  {"Hash","include?",1,1,"1","1"},{"Hash","inspect",0,0,NULL,"0"},
-  {"Hash","invert",0,0,NULL,"0"},{"Hash","keep_if",0,0,NULL,"0"},
-  {"Hash","key",1,1,"1","1"},{"Hash","key?",1,1,"1","1"},
-  {"Hash","keys",0,0,NULL,"0"},{"Hash","length",0,0,NULL,"0"},
-  {"Hash","member?",1,1,"1","1"},{"Hash","rassoc",1,1,"1","1"},
-  {"Hash","rehash",0,0,NULL,"0"},{"Hash","reject",0,0,NULL,"0"},
-  {"Hash","reject!",0,0,NULL,"0"},{"Hash","replace",1,1,"1","1"},
-  {"Hash","select",0,0,NULL,"0"},{"Hash","select!",0,0,NULL,"0"},
-  {"Hash","shift",0,0,NULL,"0"},{"Hash","size",0,0,NULL,"0"},
-  {"Hash","store",2,2,"2","2"},{"Hash","to_a",0,0,NULL,"0"},
-  {"Hash","to_h",0,0,NULL,"0"},{"Hash","to_hash",0,0,NULL,"0"},
-  {"Hash","to_proc",0,0,NULL,"0"},{"Hash","to_s",0,0,NULL,"0"},
-  {"Hash","transform_keys",0,1,NULL,"0..1"},{"Hash","transform_keys!",0,1,NULL,"0..1"},
-  {"Hash","transform_values",0,0,NULL,"0"},{"Hash","transform_values!",0,0,NULL,"0"},
-  {"Hash","value?",1,1,"1","1"},{"Hash","values",0,0,NULL,"0"},
-  {"Symbol","<=>",1,1,"1","1"},{"Symbol","==",1,1,"1","1"},
-  {"Symbol","===",1,1,"1","1"},{"Symbol","=~",1,1,"1","1"},
-  {"Symbol","[]",1,2,"1..2","1..2"},{"Symbol","casecmp",1,1,"1","1"},
-  {"Symbol","casecmp?",1,1,"1","1"},{"Symbol","empty?",0,0,NULL,"0"},
-  {"Symbol","encoding",0,0,NULL,"0"},{"Symbol","id2name",0,0,NULL,"0"},
-  {"Symbol","inspect",0,0,NULL,"0"},{"Symbol","intern",0,0,NULL,"0"},
-  {"Symbol","length",0,0,NULL,"0"},{"Symbol","match",1,-1,"1..2",NULL},
-  {"Symbol","match?",1,2,"1..2","1..2"},{"Symbol","name",0,0,NULL,"0"},
-  {"Symbol","next",0,0,NULL,"0"},{"Symbol","size",0,0,NULL,"0"},
-  {"Symbol","slice",1,2,"1..2","1..2"},{"Symbol","succ",0,0,NULL,"0"},
-  {"Symbol","to_proc",0,0,NULL,"0"},{"Symbol","to_s",0,0,NULL,"0"},
-  {"Symbol","to_sym",0,0,NULL,"0"},{"Range","%",1,1,"1","1"},
-  {"Range","==",1,1,"1","1"},{"Range","===",1,1,"1","1"},
-  {"Range","begin",0,0,NULL,"0"},{"Range","bsearch",0,0,NULL,"0"},
-  {"Range","count",0,1,NULL,"1"},{"Range","cover?",1,1,"1","1"},
-  {"Range","each",0,0,NULL,"0"},{"Range","end",0,0,NULL,"0"},
-  {"Range","entries",0,0,NULL,"0"},{"Range","eql?",1,1,"1","1"},
-  {"Range","exclude_end?",0,0,NULL,"0"},{"Range","first",0,1,NULL,"1"},
-  {"Range","hash",0,0,NULL,"0"},{"Range","include?",1,1,"1","1"},
-  {"Range","inspect",0,0,NULL,"0"},{"Range","last",0,1,NULL,"1"},
-  {"Range","max",0,1,NULL,"1"},{"Range","member?",1,1,"1","1"},
-  {"Range","min",0,1,NULL,"1"},{"Range","minmax",0,0,NULL,"0"},
-  {"Range","overlap?",1,1,"1","1"},{"Range","reverse_each",0,0,NULL,"0"},
-  {"Range","size",0,0,NULL,"0"},{"Range","step",0,1,NULL,"0..1"},
-  {"Range","to_a",0,0,NULL,"0"},{"Range","to_s",0,0,NULL,"0"},
-  {"Time","+",1,1,"1","1"},{"Time","-",1,1,"1","1"},
-  {"Time","<=>",1,1,"1","1"},{"Time","asctime",0,0,NULL,"0"},
-  {"Time","ceil",0,1,NULL,"0..1"},{"Time","ctime",0,0,NULL,"0"},
-  {"Time","day",0,0,NULL,"0"},{"Time","deconstruct_keys",1,1,"1","1"},
-  {"Time","dst?",0,0,NULL,"0"},{"Time","eql?",1,1,"1","1"},
-  {"Time","floor",0,1,NULL,"0..1"},{"Time","friday?",0,0,NULL,"0"},
-  {"Time","getgm",0,0,NULL,"0"},{"Time","getlocal",0,1,NULL,"0..1"},
-  {"Time","getutc",0,0,NULL,"0"},{"Time","gmt?",0,0,NULL,"0"},
-  {"Time","gmt_offset",0,0,NULL,"0"},{"Time","gmtime",0,0,NULL,"0"},
-  {"Time","gmtoff",0,0,NULL,"0"},{"Time","hash",0,0,NULL,"0"},
-  {"Time","hour",0,0,NULL,"0"},{"Time","inspect",0,0,NULL,"0"},
-  {"Time","isdst",0,0,NULL,"0"},{"Time","iso8601",0,1,NULL,"0..1"},
-  {"Time","localtime",0,1,NULL,"0..1"},{"Time","mday",0,0,NULL,"0"},
-  {"Time","min",0,0,NULL,"0"},{"Time","mon",0,0,NULL,"0"},
-  {"Time","monday?",0,0,NULL,"0"},{"Time","month",0,0,NULL,"0"},
-  {"Time","nsec",0,0,NULL,"0"},{"Time","round",0,1,NULL,"0..1"},
-  {"Time","saturday?",0,0,NULL,"0"},{"Time","sec",0,0,NULL,"0"},
-  {"Time","strftime",1,1,"1","1"},{"Time","subsec",0,0,NULL,"0"},
-  {"Time","sunday?",0,0,NULL,"0"},{"Time","thursday?",0,0,NULL,"0"},
-  {"Time","to_a",0,0,NULL,"0"},{"Time","to_f",0,0,NULL,"0"},
-  {"Time","to_i",0,0,NULL,"0"},{"Time","to_r",0,0,NULL,"0"},
-  {"Time","to_s",0,0,NULL,"0"},{"Time","tuesday?",0,0,NULL,"0"},
-  {"Time","tv_nsec",0,0,NULL,"0"},{"Time","tv_sec",0,0,NULL,"0"},
-  {"Time","tv_usec",0,0,NULL,"0"},{"Time","usec",0,0,NULL,"0"},
-  {"Time","utc",0,0,NULL,"0"},{"Time","utc?",0,0,NULL,"0"},
-  {"Time","utc_offset",0,0,NULL,"0"},{"Time","wday",0,0,NULL,"0"},
-  {"Time","wednesday?",0,0,NULL,"0"},{"Time","xmlschema",0,1,NULL,"0..1"},
-  {"Time","yday",0,0,NULL,"0"},{"Time","year",0,0,NULL,"0"},
-  {"Time","zone",0,0,NULL,"0"},
-  {NULL, NULL, 0, 0, NULL, NULL}
+  {"String","%",1,1,"1","1",1,1,"1","1"},
+  {"String","*",1,1,"1","1",1,1,"1","1"},
+  {"String","+",1,1,"1","1",1,1,"1","1"},
+  {"String","+@",0,0,NULL,"0",0,0,NULL,"0"},
+  {"String","-@",0,0,NULL,"0",0,0,NULL,"0"},
+  {"String","<",1,1,"1","1",1,1,"1","1"},
+  {"String","<<",1,1,"1","1",1,1,"1","1"},
+  {"String","<=",1,1,"1","1",1,1,"1","1"},
+  {"String","<=>",1,1,"1","1",1,1,"1","1"},
+  {"String","==",1,1,"1","1",1,1,"1","1"},
+  {"String","===",1,1,"1","1",1,1,"1","1"},
+  {"String","=~",1,1,"1","1",1,1,"1","1"},
+  {"String",">",1,1,"1","1",1,1,"1","1"},
+  {"String",">=",1,1,"1","1",1,1,"1","1"},
+  {"String","[]",1,2,"1..2","1..2",1,2,"1..2","1..2"},
+  {"String","[]=",2,3,"2..3","2..3",2,3,"2..3","2..3"},
+  {"String","ascii_only?",0,0,NULL,"0",0,0,NULL,"0"},
+  {"String","b",0,0,NULL,"0",0,0,NULL,"0"},
+  {"String","between?",2,2,"2","2",2,2,"2","2"},
+  {"String","byteindex",1,2,"1..2","1..2",1,2,"1..2","1..2"},
+  {"String","byterindex",1,2,"1..2","1..2",1,2,"1..2","1..2"},
+  {"String","bytes",0,0,NULL,"0",0,0,NULL,"0"},
+  {"String","bytesize",0,0,NULL,"0",0,0,NULL,"0"},
+  {"String","byteslice",1,2,"1..2","1..2",1,2,"1..2","1..2"},
+  {"String","bytesplice",2,-1,"2..5",NULL,2,-1,"2..5",NULL},
+  {"String","casecmp",1,1,"1","1",1,1,"1","1"},
+  {"String","casecmp?",1,1,"1","1",1,1,"1","1"},
+  {"String","center",1,2,"1..2","1..2",1,2,"1..2","1..2"},
+  {"String","chars",0,0,NULL,"0",0,0,NULL,"0"},
+  {"String","chomp",0,1,NULL,"0..1",0,1,NULL,"0..1"},
+  {"String","chomp!",0,1,NULL,"0..1",0,1,NULL,"0..1"},
+  {"String","chop",0,0,NULL,"0",0,0,NULL,"0"},
+  {"String","chop!",0,0,NULL,"0",0,0,NULL,"0"},
+  {"String","chr",0,0,NULL,"0",0,0,NULL,"0"},
+  {"String","clamp",1,2,"1..2","1..2",1,2,"1..2","1..2"},
+  {"String","clear",0,0,NULL,"0",0,0,NULL,"0"},
+  {"String","codepoints",0,0,NULL,"0",0,0,NULL,"0"},
+  {"String","count",1,-1,"1+",NULL,1,-1,"1+",NULL},
+  {"String","crypt",1,1,"1","1",1,1,"1","1"},
+  {"String","dedup",0,0,NULL,"0",0,0,NULL,"0"},
+  {"String","delete",1,-1,"1+",NULL,1,-1,"1+",NULL},
+  {"String","delete!",1,-1,"1+",NULL,1,-1,"1+",NULL},
+  {"String","delete_prefix",1,1,"1","1",1,1,"1","1"},
+  {"String","delete_prefix!",1,1,"1","1",1,1,"1","1"},
+  {"String","delete_suffix",1,1,"1","1",1,1,"1","1"},
+  {"String","delete_suffix!",1,1,"1","1",1,1,"1","1"},
+  {"String","dump",0,0,NULL,"0",0,0,NULL,"0"},
+  {"String","dup",0,0,NULL,"0",0,0,NULL,"0"},
+  {"String","each_byte",0,0,NULL,"0",0,0,NULL,"0"},
+  {"String","each_char",0,0,NULL,"0",0,0,NULL,"0"},
+  {"String","each_codepoint",0,0,NULL,"0",0,0,NULL,"0"},
+  {"String","each_grapheme_cluster",0,0,NULL,"0",0,0,NULL,"0"},
+  {"String","each_line",-1,-1,NULL,NULL,0,1,NULL,"0..1"},
+  {"String","empty?",0,0,NULL,"0",0,0,NULL,"0"},
+  {"String","encode",0,2,NULL,"0..2",0,2,NULL,"0..2"},
+  {"String","encode!",0,2,NULL,"0..2",0,2,NULL,"0..2"},
+  {"String","encoding",0,0,NULL,"0",0,0,NULL,"0"},
+  {"String","eql?",1,1,"1","1",1,1,"1","1"},
+  {"String","force_encoding",1,1,"1","1",1,1,"1","1"},
+  {"String","getbyte",1,1,"1","1",1,1,"1","1"},
+  {"String","grapheme_clusters",0,0,NULL,"0",0,0,NULL,"0"},
+  {"String","gsub",1,2,"1..2","1..2",1,2,"1..2","1..2"},
+  {"String","gsub!",1,2,"1..2","1..2",1,2,"1..2","1..2"},
+  {"String","hash",0,0,NULL,"0",0,0,NULL,"0"},
+  {"String","hex",0,0,NULL,"0",0,0,NULL,"0"},
+  {"String","include?",1,1,"1","1",1,1,"1","1"},
+  {"String","index",1,2,"1..2","1..2",1,2,"1..2","1..2"},
+  {"String","insert",2,2,"2","2",2,2,"2","2"},
+  {"String","inspect",0,0,NULL,"0",0,0,NULL,"0"},
+  {"String","intern",0,0,NULL,"0",0,0,NULL,"0"},
+  {"String","length",0,0,NULL,"0",0,0,NULL,"0"},
+  {"String","lines",0,1,NULL,"0..1",0,1,NULL,"0..1"},
+  {"String","ljust",1,2,"1..2","1..2",1,2,"1..2","1..2"},
+  {"String","match",1,-1,"1..2",NULL,1,-1,"1..2",NULL},
+  {"String","match?",1,2,"1..2","1..2",1,2,"1..2","1..2"},
+  {"String","next",0,0,NULL,"0",0,0,NULL,"0"},
+  {"String","next!",0,0,NULL,"0",0,0,NULL,"0"},
+  {"String","oct",0,0,NULL,"0",0,0,NULL,"0"},
+  {"String","ord",0,0,NULL,"0",0,0,NULL,"0"},
+  {"String","parse_csv",0,0,NULL,"0",0,0,NULL,"0"},
+  {"String","partition",1,1,"1","1",1,1,"1","1"},
+  {"String","replace",1,1,"1","1",1,1,"1","1"},
+  {"String","reverse",0,0,NULL,"0",0,0,NULL,"0"},
+  {"String","reverse!",0,0,NULL,"0",0,0,NULL,"0"},
+  {"String","rindex",1,2,"1..2","1..2",1,2,"1..2","1..2"},
+  {"String","rjust",1,2,"1..2","1..2",1,2,"1..2","1..2"},
+  {"String","rpartition",1,1,"1","1",1,1,"1","1"},
+  {"String","scan",1,1,"1","1",1,1,"1","1"},
+  {"String","scrub",0,1,NULL,"0..1",0,1,NULL,"0..1"},
+  {"String","scrub!",0,1,NULL,"0..1",0,1,NULL,"0..1"},
+  {"String","setbyte",2,2,"2","2",2,2,"2","2"},
+  {"String","size",0,0,NULL,"0",0,0,NULL,"0"},
+  {"String","slice",1,2,"1..2","1..2",1,2,"1..2","1..2"},
+  {"String","slice!",1,2,"1..2","1..2",1,2,"1..2","1..2"},
+  {"String","split",0,2,NULL,"0..2",0,2,NULL,"0..2"},
+  {"String","sub",2,2,"2","2",1,2,"1..2","1..2"},
+  {"String","sub!",2,2,"2","2",1,2,"1..2","1..2"},
+  {"String","succ",0,0,NULL,"0",0,0,NULL,"0"},
+  {"String","succ!",0,0,NULL,"0",0,0,NULL,"0"},
+  {"String","sum",0,1,NULL,"0..1",0,1,NULL,"0..1"},
+  {"String","to_c",0,0,NULL,"0",0,0,NULL,"0"},
+  {"String","to_f",0,0,NULL,"0",0,0,NULL,"0"},
+  {"String","to_i",0,1,NULL,"0..1",0,1,NULL,"0..1"},
+  {"String","to_r",0,0,NULL,"0",0,0,NULL,"0"},
+  {"String","to_s",0,0,NULL,"0",0,0,NULL,"0"},
+  {"String","to_str",0,0,NULL,"0",0,0,NULL,"0"},
+  {"String","to_sym",0,0,NULL,"0",0,0,NULL,"0"},
+  {"String","tr",2,2,"2","2",2,2,"2","2"},
+  {"String","tr!",2,2,"2","2",2,2,"2","2"},
+  {"String","tr_s",2,2,"2","2",2,2,"2","2"},
+  {"String","tr_s!",2,2,"2","2",2,2,"2","2"},
+  {"String","undump",0,0,NULL,"0",0,0,NULL,"0"},
+  {"String","unicode_normalize",0,1,NULL,"0..1",0,1,NULL,"0..1"},
+  {"String","unicode_normalize!",0,1,NULL,"0..1",0,1,NULL,"0..1"},
+  {"String","unicode_normalized?",0,1,NULL,"0..1",0,1,NULL,"0..1"},
+  {"String","unpack",1,1,"1","1",1,1,"1","1"},
+  {"String","unpack1",1,1,"1","1",1,1,"1","1"},
+  {"String","upto",1,2,"1..2","1..2",1,2,"1..2","1..2"},
+  {"String","valid_encoding?",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Integer","%",1,1,"1","1",1,1,"1","1"},
+  {"Integer","&",1,1,"1","1",1,1,"1","1"},
+  {"Integer","*",1,1,"1","1",1,1,"1","1"},
+  {"Integer","**",1,1,"1","1",1,1,"1","1"},
+  {"Integer","+",1,1,"1","1",1,1,"1","1"},
+  {"Integer","+@",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Integer","-",1,1,"1","1",1,1,"1","1"},
+  {"Integer","-@",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Integer","/",1,1,"1","1",1,1,"1","1"},
+  {"Integer","<",1,1,"1","1",1,1,"1","1"},
+  {"Integer","<<",1,1,"1","1",1,1,"1","1"},
+  {"Integer","<=",1,1,"1","1",1,1,"1","1"},
+  {"Integer","<=>",1,1,"1","1",1,1,"1","1"},
+  {"Integer","==",1,1,"1","1",1,1,"1","1"},
+  {"Integer","===",1,1,"1","1",1,1,"1","1"},
+  {"Integer",">",1,1,"1","1",1,1,"1","1"},
+  {"Integer",">=",1,1,"1","1",1,1,"1","1"},
+  {"Integer",">>",1,1,"1","1",1,1,"1","1"},
+  {"Integer","[]",1,2,"1..2","1..2",1,2,"1..2","1..2"},
+  {"Integer","^",1,1,"1","1",1,1,"1","1"},
+  {"Integer","abs",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Integer","abs2",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Integer","allbits?",1,1,"1","1",1,1,"1","1"},
+  {"Integer","angle",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Integer","anybits?",1,1,"1","1",1,1,"1","1"},
+  {"Integer","arg",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Integer","between?",2,2,"2","2",2,2,"2","2"},
+  {"Integer","bit_length",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Integer","ceil",0,1,NULL,"0..1",0,1,NULL,"0..1"},
+  {"Integer","ceildiv",1,1,"1","1",1,1,"1","1"},
+  {"Integer","chr",0,1,NULL,"0..1",0,1,NULL,"0..1"},
+  {"Integer","clamp",1,2,"1..2","1..2",1,2,"1..2","1..2"},
+  {"Integer","coerce",1,1,"1","1",1,1,"1","1"},
+  {"Integer","conj",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Integer","conjugate",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Integer","denominator",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Integer","digits",0,1,NULL,"0..1",0,1,NULL,"0..1"},
+  {"Integer","div",1,1,"1","1",1,1,"1","1"},
+  {"Integer","divmod",1,1,"1","1",1,1,"1","1"},
+  {"Integer","downto",1,1,"1","1",1,1,"1","1"},
+  {"Integer","even?",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Integer","fdiv",1,1,"1","1",1,1,"1","1"},
+  {"Integer","finite?",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Integer","floor",0,1,NULL,"0..1",0,1,NULL,"0..1"},
+  {"Integer","gcd",1,1,"1","1",1,1,"1","1"},
+  {"Integer","gcdlcm",1,1,"1","1",1,1,"1","1"},
+  {"Integer","i",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Integer","imag",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Integer","imaginary",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Integer","infinite?",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Integer","inspect",0,1,NULL,"0..1",0,1,NULL,"0..1"},
+  {"Integer","integer?",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Integer","lcm",1,1,"1","1",1,1,"1","1"},
+  {"Integer","magnitude",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Integer","modulo",1,1,"1","1",1,1,"1","1"},
+  {"Integer","negative?",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Integer","next",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Integer","nobits?",1,1,"1","1",1,1,"1","1"},
+  {"Integer","nonzero?",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Integer","numerator",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Integer","odd?",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Integer","ord",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Integer","phase",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Integer","polar",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Integer","positive?",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Integer","pow",1,2,"1..2","1..2",1,2,"1..2","1..2"},
+  {"Integer","pred",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Integer","quo",1,1,"1","1",1,1,"1","1"},
+  {"Integer","rationalize",0,1,NULL,"0..1",0,1,NULL,"0..1"},
+  {"Integer","real",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Integer","real?",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Integer","rect",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Integer","rectangular",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Integer","remainder",1,1,"1","1",1,1,"1","1"},
+  {"Integer","round",0,1,NULL,"0..1",0,1,NULL,"0..1"},
+  {"Integer","singleton_method_added",1,1,"1","1",1,1,"1","1"},
+  {"Integer","size",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Integer","step",0,2,NULL,"0..2",0,2,NULL,"0..2"},
+  {"Integer","succ",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Integer","times",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Integer","to_c",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Integer","to_f",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Integer","to_i",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Integer","to_int",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Integer","to_r",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Integer","to_s",0,1,NULL,"0..1",0,1,NULL,"0..1"},
+  {"Integer","truncate",0,1,NULL,"0..1",0,1,NULL,"0..1"},
+  {"Integer","upto",1,1,"1","1",1,1,"1","1"},
+  {"Integer","zero?",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Integer","|",1,1,"1","1",1,1,"1","1"},
+  {"Integer","~",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Float","%",1,1,"1","1",1,1,"1","1"},
+  {"Float","*",1,1,"1","1",1,1,"1","1"},
+  {"Float","**",1,1,"1","1",1,1,"1","1"},
+  {"Float","+",1,1,"1","1",1,1,"1","1"},
+  {"Float","+@",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Float","-",1,1,"1","1",1,1,"1","1"},
+  {"Float","-@",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Float","/",1,1,"1","1",1,1,"1","1"},
+  {"Float","<",1,1,"1","1",1,1,"1","1"},
+  {"Float","<=",1,1,"1","1",1,1,"1","1"},
+  {"Float","<=>",1,1,"1","1",1,1,"1","1"},
+  {"Float","==",1,1,"1","1",1,1,"1","1"},
+  {"Float","===",1,1,"1","1",1,1,"1","1"},
+  {"Float",">",1,1,"1","1",1,1,"1","1"},
+  {"Float",">=",1,1,"1","1",1,1,"1","1"},
+  {"Float","abs",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Float","abs2",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Float","angle",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Float","arg",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Float","between?",2,2,"2","2",2,2,"2","2"},
+  {"Float","ceil",0,1,NULL,"0..1",0,1,NULL,"0..1"},
+  {"Float","clamp",1,2,"1..2","1..2",1,2,"1..2","1..2"},
+  {"Float","coerce",1,1,"1","1",1,1,"1","1"},
+  {"Float","conj",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Float","conjugate",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Float","denominator",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Float","div",1,1,"1","1",1,1,"1","1"},
+  {"Float","divmod",1,1,"1","1",1,1,"1","1"},
+  {"Float","eql?",1,1,"1","1",1,1,"1","1"},
+  {"Float","fdiv",1,1,"1","1",1,1,"1","1"},
+  {"Float","finite?",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Float","floor",0,1,NULL,"0..1",0,1,NULL,"0..1"},
+  {"Float","hash",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Float","i",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Float","imag",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Float","imaginary",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Float","infinite?",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Float","inspect",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Float","integer?",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Float","magnitude",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Float","modulo",1,1,"1","1",1,1,"1","1"},
+  {"Float","nan?",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Float","negative?",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Float","next_float",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Float","nonzero?",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Float","numerator",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Float","phase",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Float","polar",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Float","positive?",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Float","prev_float",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Float","quo",1,1,"1","1",1,1,"1","1"},
+  {"Float","rationalize",0,1,NULL,"0..1",0,1,NULL,"0..1"},
+  {"Float","real",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Float","real?",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Float","rect",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Float","rectangular",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Float","remainder",1,1,"1","1",1,1,"1","1"},
+  {"Float","round",0,1,NULL,"0..1",0,1,NULL,"0..1"},
+  {"Float","singleton_method_added",1,1,"1","1",1,1,"1","1"},
+  {"Float","step",0,2,NULL,"0..2",0,2,NULL,"0..2"},
+  {"Float","to_c",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Float","to_f",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Float","to_i",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Float","to_int",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Float","to_r",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Float","to_s",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Float","truncate",0,1,NULL,"0..1",0,1,NULL,"0..1"},
+  {"Float","zero?",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Symbol","<",1,1,"1","1",1,1,"1","1"},
+  {"Symbol","<=",1,1,"1","1",1,1,"1","1"},
+  {"Symbol","<=>",1,1,"1","1",1,1,"1","1"},
+  {"Symbol","==",1,1,"1","1",1,1,"1","1"},
+  {"Symbol","===",1,1,"1","1",1,1,"1","1"},
+  {"Symbol","=~",1,1,"1","1",1,1,"1","1"},
+  {"Symbol",">",1,1,"1","1",1,1,"1","1"},
+  {"Symbol",">=",1,1,"1","1",1,1,"1","1"},
+  {"Symbol","[]",1,2,"1..2","1..2",1,2,"1..2","1..2"},
+  {"Symbol","between?",2,2,"2","2",2,2,"2","2"},
+  {"Symbol","casecmp",1,1,"1","1",1,1,"1","1"},
+  {"Symbol","casecmp?",1,1,"1","1",1,1,"1","1"},
+  {"Symbol","clamp",1,2,"1..2","1..2",1,2,"1..2","1..2"},
+  {"Symbol","empty?",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Symbol","encoding",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Symbol","id2name",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Symbol","inspect",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Symbol","intern",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Symbol","length",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Symbol","match",1,-1,"1..2",NULL,1,-1,"1..2",NULL},
+  {"Symbol","match?",1,2,"1..2","1..2",1,2,"1..2","1..2"},
+  {"Symbol","name",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Symbol","next",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Symbol","size",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Symbol","slice",1,2,"1..2","1..2",1,2,"1..2","1..2"},
+  {"Symbol","succ",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Symbol","to_proc",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Symbol","to_s",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Symbol","to_sym",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Array","&",1,1,"1","1",1,1,"1","1"},
+  {"Array","*",1,1,"1","1",1,1,"1","1"},
+  {"Array","+",1,1,"1","1",1,1,"1","1"},
+  {"Array","-",1,1,"1","1",1,1,"1","1"},
+  {"Array","<<",1,1,"1","1",1,1,"1","1"},
+  {"Array","<=>",1,1,"1","1",1,1,"1","1"},
+  {"Array","==",1,1,"1","1",1,1,"1","1"},
+  {"Array","[]",1,2,"1..2","1..2",1,2,"1..2","1..2"},
+  {"Array","[]=",2,3,"2..3","2..3",2,3,"2..3","2..3"},
+  {"Array","all?",0,1,NULL,"0..1",0,1,NULL,"0..1"},
+  {"Array","any?",0,1,NULL,"0..1",0,1,NULL,"0..1"},
+  {"Array","assoc",1,1,"1","1",1,1,"1","1"},
+  {"Array","at",1,1,"1","1",1,1,"1","1"},
+  {"Array","bsearch",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Array","bsearch_index",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Array","chunk",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Array","chunk_while",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Array","clear",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Array","collect",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Array","collect!",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Array","collect_concat",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Array","combination",1,1,"1","1",1,1,"1","1"},
+  {"Array","compact",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Array","compact!",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Array","count",0,1,NULL,"0..1",0,1,NULL,"0..1"},
+  {"Array","cycle",0,1,NULL,"0..1",0,1,NULL,"0..1"},
+  {"Array","deconstruct",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Array","delete",1,1,"1","1",1,1,"1","1"},
+  {"Array","delete_at",1,1,"1","1",1,1,"1","1"},
+  {"Array","delete_if",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Array","detect",-1,-1,NULL,NULL,0,1,NULL,"0..1"},
+  {"Array","dig",1,-1,"1+",NULL,1,-1,"1+",NULL},
+  {"Array","drop",1,1,"1","1",1,1,"1","1"},
+  {"Array","drop_while",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Array","each",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Array","each_cons",1,1,"1","1",1,1,"1","1"},
+  {"Array","each_entry",-1,-1,NULL,NULL,0,0,NULL,"0"},
+  {"Array","each_index",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Array","each_slice",1,1,"1","1",1,1,"1","1"},
+  {"Array","each_with_index",-1,-1,NULL,NULL,0,0,NULL,"0"},
+  {"Array","each_with_object",1,1,"1","1",1,1,"1","1"},
+  {"Array","empty?",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Array","entries",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Array","eql?",1,1,"1","1",1,1,"1","1"},
+  {"Array","fetch",1,2,"1..2","1..2",1,2,"1..2","1..2"},
+  {"Array","fill",1,3,"1..3","1..3",0,2,NULL,"0..2"},
+  {"Array","filter",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Array","filter!",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Array","filter_map",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Array","find",-1,-1,NULL,NULL,0,1,NULL,"0..1"},
+  {"Array","find_all",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Array","find_index",0,1,NULL,"0..1",0,1,NULL,"0..1"},
+  {"Array","first",0,1,NULL,"0..1",0,1,NULL,"0..1"},
+  {"Array","flat_map",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Array","flatten",0,1,NULL,"0..1",0,1,NULL,"0..1"},
+  {"Array","flatten!",0,1,NULL,"0..1",0,1,NULL,"0..1"},
+  {"Array","grep",1,1,"1","1",1,1,"1","1"},
+  {"Array","grep_v",1,1,"1","1",1,1,"1","1"},
+  {"Array","group_by",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Array","hash",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Array","include?",1,1,"1","1",1,1,"1","1"},
+  {"Array","index",0,1,NULL,"0..1",0,1,NULL,"0..1"},
+  {"Array","inject",1,2,"1..2","1..2",0,2,NULL,"0..2"},
+  {"Array","insert",1,-1,"1+",NULL,1,-1,"1+",NULL},
+  {"Array","inspect",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Array","intersect?",1,1,"1","1",1,1,"1","1"},
+  {"Array","join",0,1,NULL,"0..1",0,1,NULL,"0..1"},
+  {"Array","keep_if",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Array","last",0,1,NULL,"0..1",0,1,NULL,"0..1"},
+  {"Array","lazy",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Array","length",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Array","map",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Array","map!",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Array","max",0,1,NULL,"0..1",0,1,NULL,"0..1"},
+  {"Array","max_by",0,1,NULL,"0..1",0,1,NULL,"0..1"},
+  {"Array","member?",1,1,"1","1",1,1,"1","1"},
+  {"Array","min",0,1,NULL,"0..1",0,1,NULL,"0..1"},
+  {"Array","min_by",0,1,NULL,"0..1",0,1,NULL,"0..1"},
+  {"Array","minmax",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Array","minmax_by",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Array","none?",0,1,NULL,"0..1",0,1,NULL,"0..1"},
+  {"Array","one?",0,1,NULL,"0..1",0,1,NULL,"0..1"},
+  {"Array","pack",1,1,"1","1",1,1,"1","1"},
+  {"Array","partition",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Array","permutation",-1,-1,NULL,NULL,0,1,NULL,"0..1"},
+  {"Array","pop",0,1,NULL,"0..1",0,1,NULL,"0..1"},
+  {"Array","rassoc",1,1,"1","1",1,1,"1","1"},
+  {"Array","reduce",1,2,"1..2","1..2",0,2,NULL,"0..2"},
+  {"Array","reject",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Array","reject!",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Array","repeated_combination",1,1,"1","1",1,1,"1","1"},
+  {"Array","repeated_permutation",1,1,"1","1",1,1,"1","1"},
+  {"Array","replace",1,1,"1","1",1,1,"1","1"},
+  {"Array","reverse",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Array","reverse!",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Array","reverse_each",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Array","rfind",-1,-1,NULL,NULL,0,1,NULL,"0..1"},
+  {"Array","rindex",0,1,NULL,"0..1",0,1,NULL,"0..1"},
+  {"Array","rotate",0,1,NULL,"0..1",0,1,NULL,"0..1"},
+  {"Array","rotate!",0,1,NULL,"0..1",0,1,NULL,"0..1"},
+  {"Array","sample",0,1,NULL,"0..1",0,1,NULL,"0..1"},
+  {"Array","select",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Array","select!",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Array","shift",0,1,NULL,"0..1",0,1,NULL,"0..1"},
+  {"Array","shuffle",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Array","shuffle!",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Array","size",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Array","slice",1,2,"1..2","1..2",1,2,"1..2","1..2"},
+  {"Array","slice!",1,2,"1..2","1..2",1,2,"1..2","1..2"},
+  {"Array","slice_after",1,1,"1","1",-1,-1,NULL,NULL},
+  {"Array","slice_before",1,1,"1","1",0,0,NULL,"0"},
+  {"Array","slice_when",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Array","sort",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Array","sort!",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Array","sort_by",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Array","sort_by!",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Array","sum",0,1,NULL,"0..1",0,1,NULL,"0..1"},
+  {"Array","take",1,1,"1","1",1,1,"1","1"},
+  {"Array","take_while",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Array","tally",0,1,NULL,"0..1",0,1,NULL,"0..1"},
+  {"Array","to_a",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Array","to_ary",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Array","to_csv",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Array","to_h",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Array","to_s",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Array","transpose",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Array","uniq",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Array","uniq!",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Array","|",1,1,"1","1",1,1,"1","1"},
+  {"Hash","<",1,1,"1","1",1,1,"1","1"},
+  {"Hash","<=",1,1,"1","1",1,1,"1","1"},
+  {"Hash","==",1,1,"1","1",1,1,"1","1"},
+  {"Hash",">",1,1,"1","1",1,1,"1","1"},
+  {"Hash",">=",1,1,"1","1",1,1,"1","1"},
+  {"Hash","[]",1,1,"1","1",1,1,"1","1"},
+  {"Hash","[]=",2,2,"2","2",2,2,"2","2"},
+  {"Hash","all?",0,1,NULL,"0..1",0,1,NULL,"0..1"},
+  {"Hash","any?",0,1,NULL,"0..1",0,1,NULL,"0..1"},
+  {"Hash","assoc",1,1,"1","1",1,1,"1","1"},
+  {"Hash","chunk",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Hash","chunk_while",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Hash","clear",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Hash","collect",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Hash","collect_concat",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Hash","compact",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Hash","compact!",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Hash","compare_by_identity",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Hash","compare_by_identity?",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Hash","count",0,1,NULL,"1",0,1,NULL,"1"},
+  {"Hash","cycle",0,1,NULL,"0..1",0,1,NULL,"0..1"},
+  {"Hash","deconstruct_keys",1,1,"1","1",1,1,"1","1"},
+  {"Hash","default",0,1,NULL,"0..1",0,1,NULL,"0..1"},
+  {"Hash","default=",1,1,"1","1",1,1,"1","1"},
+  {"Hash","default_proc",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Hash","default_proc=",1,1,"1","1",1,1,"1","1"},
+  {"Hash","delete",1,1,"1","1",1,1,"1","1"},
+  {"Hash","delete_if",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Hash","detect",0,1,NULL,"0..1",0,1,NULL,"0..1"},
+  {"Hash","dig",1,-1,"1+",NULL,1,-1,"1+",NULL},
+  {"Hash","drop",1,1,"1","1",1,1,"1","1"},
+  {"Hash","drop_while",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Hash","each",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Hash","each_cons",1,1,"1","1",1,1,"1","1"},
+  {"Hash","each_entry",-1,-1,NULL,NULL,0,0,NULL,"0"},
+  {"Hash","each_key",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Hash","each_pair",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Hash","each_slice",1,1,"1","1",1,1,"1","1"},
+  {"Hash","each_value",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Hash","each_with_index",-1,-1,NULL,NULL,0,0,NULL,"0"},
+  {"Hash","each_with_object",1,1,"1","1",1,1,"1","1"},
+  {"Hash","empty?",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Hash","entries",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Hash","eql?",1,1,"1","1",1,1,"1","1"},
+  {"Hash","fetch",1,2,"1..2","1..2",1,2,"1..2","1..2"},
+  {"Hash","filter",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Hash","filter!",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Hash","filter_map",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Hash","find",0,1,NULL,"0..1",0,1,NULL,"0..1"},
+  {"Hash","find_all",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Hash","find_index",0,1,NULL,"1",0,1,NULL,"1"},
+  {"Hash","first",0,1,NULL,"0..1",0,1,NULL,"0..1"},
+  {"Hash","flat_map",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Hash","flatten",0,1,NULL,"0..1",0,1,NULL,"0..1"},
+  {"Hash","grep",1,1,"1","1",1,1,"1","1"},
+  {"Hash","grep_v",1,1,"1","1",1,1,"1","1"},
+  {"Hash","group_by",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Hash","has_key?",1,1,"1","1",1,1,"1","1"},
+  {"Hash","has_value?",1,1,"1","1",1,1,"1","1"},
+  {"Hash","hash",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Hash","include?",1,1,"1","1",1,1,"1","1"},
+  {"Hash","inject",1,2,"1..2","1..2",0,2,NULL,"0..2"},
+  {"Hash","inspect",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Hash","invert",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Hash","keep_if",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Hash","key",1,1,"1","1",1,1,"1","1"},
+  {"Hash","key?",1,1,"1","1",1,1,"1","1"},
+  {"Hash","keys",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Hash","lazy",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Hash","length",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Hash","map",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Hash","max",0,1,NULL,"0..1",0,1,NULL,"0..1"},
+  {"Hash","max_by",0,1,NULL,"0..1",0,1,NULL,"0..1"},
+  {"Hash","member?",1,1,"1","1",1,1,"1","1"},
+  {"Hash","min",0,1,NULL,"0..1",0,1,NULL,"0..1"},
+  {"Hash","min_by",0,1,NULL,"0..1",0,1,NULL,"0..1"},
+  {"Hash","minmax",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Hash","minmax_by",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Hash","none?",0,1,NULL,"0..1",0,1,NULL,"0..1"},
+  {"Hash","one?",0,1,NULL,"0..1",0,1,NULL,"0..1"},
+  {"Hash","partition",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Hash","rassoc",1,1,"1","1",1,1,"1","1"},
+  {"Hash","reduce",1,2,"1..2","1..2",0,2,NULL,"0..2"},
+  {"Hash","rehash",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Hash","reject",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Hash","reject!",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Hash","replace",1,1,"1","1",1,1,"1","1"},
+  {"Hash","reverse_each",-1,-1,NULL,NULL,0,0,NULL,"0"},
+  {"Hash","select",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Hash","select!",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Hash","shift",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Hash","size",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Hash","slice_after",1,1,"1","1",-1,-1,NULL,NULL},
+  {"Hash","slice_before",1,1,"1","1",0,0,NULL,"0"},
+  {"Hash","slice_when",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Hash","sort",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Hash","sort_by",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Hash","store",2,2,"2","2",2,2,"2","2"},
+  {"Hash","sum",0,1,NULL,"0..1",0,1,NULL,"0..1"},
+  {"Hash","take",1,1,"1","1",1,1,"1","1"},
+  {"Hash","take_while",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Hash","tally",0,1,NULL,"0..1",0,1,NULL,"0..1"},
+  {"Hash","to_a",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Hash","to_h",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Hash","to_hash",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Hash","to_proc",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Hash","to_s",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Hash","transform_keys",0,1,NULL,"0..1",0,1,NULL,"0..1"},
+  {"Hash","transform_keys!",0,1,NULL,"0..1",0,1,NULL,"0..1"},
+  {"Hash","transform_values",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Hash","transform_values!",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Hash","uniq",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Hash","value?",1,1,"1","1",1,1,"1","1"},
+  {"Hash","values",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Range","%",1,1,"1","1",1,1,"1","1"},
+  {"Range","==",1,1,"1","1",1,1,"1","1"},
+  {"Range","===",1,1,"1","1",1,1,"1","1"},
+  {"Range","all?",0,1,NULL,"0..1",0,1,NULL,"0..1"},
+  {"Range","any?",0,1,NULL,"0..1",0,1,NULL,"0..1"},
+  {"Range","begin",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Range","bsearch",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Range","chunk",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Range","chunk_while",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Range","collect",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Range","collect_concat",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Range","compact",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Range","count",0,1,NULL,"1",0,1,NULL,"1"},
+  {"Range","cover?",1,1,"1","1",1,1,"1","1"},
+  {"Range","cycle",0,1,NULL,"0..1",0,1,NULL,"0..1"},
+  {"Range","detect",0,1,NULL,"0..1",0,1,NULL,"0..1"},
+  {"Range","drop",1,1,"1","1",1,1,"1","1"},
+  {"Range","drop_while",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Range","each",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Range","each_cons",1,1,"1","1",1,1,"1","1"},
+  {"Range","each_entry",-1,-1,NULL,NULL,0,0,NULL,"0"},
+  {"Range","each_slice",1,1,"1","1",1,1,"1","1"},
+  {"Range","each_with_index",-1,-1,NULL,NULL,0,0,NULL,"0"},
+  {"Range","each_with_object",1,1,"1","1",1,1,"1","1"},
+  {"Range","end",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Range","entries",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Range","eql?",1,1,"1","1",1,1,"1","1"},
+  {"Range","exclude_end?",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Range","filter",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Range","filter_map",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Range","find",0,1,NULL,"0..1",0,1,NULL,"0..1"},
+  {"Range","find_all",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Range","find_index",0,1,NULL,"1",0,1,NULL,"1"},
+  {"Range","first",0,1,NULL,"1",0,1,NULL,"1"},
+  {"Range","flat_map",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Range","grep",1,1,"1","1",1,1,"1","1"},
+  {"Range","grep_v",1,1,"1","1",1,1,"1","1"},
+  {"Range","group_by",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Range","hash",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Range","include?",1,1,"1","1",1,1,"1","1"},
+  {"Range","inject",1,2,"1..2","1..2",0,2,NULL,"0..2"},
+  {"Range","inspect",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Range","last",0,1,NULL,"1",0,1,NULL,"1"},
+  {"Range","lazy",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Range","map",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Range","max",0,1,NULL,"1",0,1,NULL,"0..1"},
+  {"Range","max_by",0,1,NULL,"0..1",0,1,NULL,"0..1"},
+  {"Range","member?",1,1,"1","1",1,1,"1","1"},
+  {"Range","min",0,1,NULL,"1",0,1,NULL,"0..1"},
+  {"Range","min_by",0,1,NULL,"0..1",0,1,NULL,"0..1"},
+  {"Range","minmax",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Range","minmax_by",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Range","none?",0,1,NULL,"0..1",0,1,NULL,"0..1"},
+  {"Range","one?",0,1,NULL,"0..1",0,1,NULL,"0..1"},
+  {"Range","overlap?",1,1,"1","1",1,1,"1","1"},
+  {"Range","partition",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Range","reduce",1,2,"1..2","1..2",0,2,NULL,"0..2"},
+  {"Range","reject",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Range","reverse_each",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Range","select",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Range","size",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Range","slice_after",1,1,"1","1",-1,-1,NULL,NULL},
+  {"Range","slice_before",1,1,"1","1",0,0,NULL,"0"},
+  {"Range","slice_when",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Range","sort",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Range","sort_by",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Range","step",0,1,NULL,"0..1",0,1,NULL,"0..1"},
+  {"Range","sum",0,1,NULL,"0..1",0,1,NULL,"0..1"},
+  {"Range","take",1,1,"1","1",1,1,"1","1"},
+  {"Range","take_while",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Range","tally",0,1,NULL,"0..1",0,1,NULL,"0..1"},
+  {"Range","to_a",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Range","to_h",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Range","to_s",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Range","uniq",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Time","+",1,1,"1","1",1,1,"1","1"},
+  {"Time","-",1,1,"1","1",1,1,"1","1"},
+  {"Time","<",1,1,"1","1",1,1,"1","1"},
+  {"Time","<=",1,1,"1","1",1,1,"1","1"},
+  {"Time","<=>",1,1,"1","1",1,1,"1","1"},
+  {"Time",">",1,1,"1","1",1,1,"1","1"},
+  {"Time",">=",1,1,"1","1",1,1,"1","1"},
+  {"Time","asctime",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Time","between?",2,2,"2","2",2,2,"2","2"},
+  {"Time","ceil",0,1,NULL,"0..1",0,1,NULL,"0..1"},
+  {"Time","clamp",1,2,"1..2","1..2",1,2,"1..2","1..2"},
+  {"Time","ctime",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Time","day",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Time","deconstruct_keys",1,1,"1","1",1,1,"1","1"},
+  {"Time","dst?",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Time","eql?",1,1,"1","1",1,1,"1","1"},
+  {"Time","floor",0,1,NULL,"0..1",0,1,NULL,"0..1"},
+  {"Time","friday?",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Time","getgm",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Time","getlocal",0,1,NULL,"0..1",0,1,NULL,"0..1"},
+  {"Time","getutc",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Time","gmt?",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Time","gmt_offset",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Time","gmtime",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Time","gmtoff",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Time","hash",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Time","hour",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Time","httpdate",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Time","inspect",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Time","isdst",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Time","iso8601",0,1,NULL,"0..1",0,1,NULL,"0..1"},
+  {"Time","localtime",0,1,NULL,"0..1",0,1,NULL,"0..1"},
+  {"Time","mday",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Time","min",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Time","mon",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Time","monday?",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Time","month",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Time","nsec",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Time","rfc2822",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Time","rfc822",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Time","round",0,1,NULL,"0..1",0,1,NULL,"0..1"},
+  {"Time","saturday?",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Time","sec",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Time","strftime",1,1,"1","1",1,1,"1","1"},
+  {"Time","subsec",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Time","sunday?",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Time","thursday?",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Time","to_a",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Time","to_date",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Time","to_datetime",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Time","to_f",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Time","to_i",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Time","to_r",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Time","to_s",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Time","to_time",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Time","tuesday?",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Time","tv_nsec",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Time","tv_sec",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Time","tv_usec",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Time","usec",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Time","utc",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Time","utc?",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Time","utc_offset",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Time","wday",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Time","wednesday?",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Time","xmlschema",0,1,NULL,"0..1",0,1,NULL,"0..1"},
+  {"Time","yday",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Time","year",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Time","zone",0,0,NULL,"0",0,0,NULL,"0"},
+  {"NilClass","&",1,1,"1","1",1,1,"1","1"},
+  {"NilClass","===",1,1,"1","1",1,1,"1","1"},
+  {"NilClass","=~",1,1,"1","1",1,1,"1","1"},
+  {"NilClass","^",1,1,"1","1",1,1,"1","1"},
+  {"NilClass","inspect",0,0,NULL,"0",0,0,NULL,"0"},
+  {"NilClass","nil?",0,0,NULL,"0",0,0,NULL,"0"},
+  {"NilClass","rationalize",0,1,NULL,"0..1",0,1,NULL,"0..1"},
+  {"NilClass","to_a",0,0,NULL,"0",0,0,NULL,"0"},
+  {"NilClass","to_c",0,0,NULL,"0",0,0,NULL,"0"},
+  {"NilClass","to_f",0,0,NULL,"0",0,0,NULL,"0"},
+  {"NilClass","to_h",0,0,NULL,"0",0,0,NULL,"0"},
+  {"NilClass","to_i",0,0,NULL,"0",0,0,NULL,"0"},
+  {"NilClass","to_r",0,0,NULL,"0",0,0,NULL,"0"},
+  {"NilClass","to_s",0,0,NULL,"0",0,0,NULL,"0"},
+  {"NilClass","|",1,1,"1","1",1,1,"1","1"},
+  {"TrueClass","&",1,1,"1","1",1,1,"1","1"},
+  {"TrueClass","===",1,1,"1","1",1,1,"1","1"},
+  {"TrueClass","^",1,1,"1","1",1,1,"1","1"},
+  {"TrueClass","inspect",0,0,NULL,"0",0,0,NULL,"0"},
+  {"TrueClass","to_s",0,0,NULL,"0",0,0,NULL,"0"},
+  {"TrueClass","|",1,1,"1","1",1,1,"1","1"},
+  {"Rational","%",1,1,"1","1",1,1,"1","1"},
+  {"Rational","*",1,1,"1","1",1,1,"1","1"},
+  {"Rational","**",1,1,"1","1",1,1,"1","1"},
+  {"Rational","+",1,1,"1","1",1,1,"1","1"},
+  {"Rational","+@",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Rational","-",1,1,"1","1",1,1,"1","1"},
+  {"Rational","-@",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Rational","/",1,1,"1","1",1,1,"1","1"},
+  {"Rational","<",1,1,"1","1",1,1,"1","1"},
+  {"Rational","<=",1,1,"1","1",1,1,"1","1"},
+  {"Rational","<=>",1,1,"1","1",1,1,"1","1"},
+  {"Rational","==",1,1,"1","1",1,1,"1","1"},
+  {"Rational",">",1,1,"1","1",1,1,"1","1"},
+  {"Rational",">=",1,1,"1","1",1,1,"1","1"},
+  {"Rational","abs",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Rational","abs2",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Rational","angle",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Rational","arg",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Rational","between?",2,2,"2","2",2,2,"2","2"},
+  {"Rational","ceil",0,1,NULL,"0..1",0,1,NULL,"0..1"},
+  {"Rational","clamp",1,2,"1..2","1..2",1,2,"1..2","1..2"},
+  {"Rational","coerce",1,1,"1","1",1,1,"1","1"},
+  {"Rational","conj",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Rational","conjugate",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Rational","denominator",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Rational","div",1,1,"1","1",1,1,"1","1"},
+  {"Rational","divmod",1,1,"1","1",1,1,"1","1"},
+  {"Rational","fdiv",1,1,"1","1",1,1,"1","1"},
+  {"Rational","finite?",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Rational","floor",0,1,NULL,"0..1",0,1,NULL,"0..1"},
+  {"Rational","hash",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Rational","i",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Rational","imag",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Rational","imaginary",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Rational","infinite?",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Rational","inspect",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Rational","integer?",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Rational","magnitude",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Rational","modulo",1,1,"1","1",1,1,"1","1"},
+  {"Rational","negative?",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Rational","nonzero?",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Rational","numerator",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Rational","phase",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Rational","polar",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Rational","positive?",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Rational","quo",1,1,"1","1",1,1,"1","1"},
+  {"Rational","rationalize",0,1,NULL,"0..1",0,1,NULL,"0..1"},
+  {"Rational","real",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Rational","real?",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Rational","rect",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Rational","rectangular",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Rational","remainder",1,1,"1","1",1,1,"1","1"},
+  {"Rational","round",0,1,NULL,"0..1",0,1,NULL,"0..1"},
+  {"Rational","singleton_method_added",1,1,"1","1",1,1,"1","1"},
+  {"Rational","step",0,2,NULL,"0..2",0,2,NULL,"0..2"},
+  {"Rational","to_c",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Rational","to_f",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Rational","to_i",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Rational","to_int",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Rational","to_r",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Rational","to_s",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Rational","truncate",0,1,NULL,"0..1",0,1,NULL,"0..1"},
+  {"Rational","zero?",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Complex","*",1,1,"1","1",1,1,"1","1"},
+  {"Complex","**",1,1,"1","1",1,1,"1","1"},
+  {"Complex","+",1,1,"1","1",1,1,"1","1"},
+  {"Complex","+@",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Complex","-",1,1,"1","1",1,1,"1","1"},
+  {"Complex","-@",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Complex","/",1,1,"1","1",1,1,"1","1"},
+  {"Complex","<=>",1,1,"1","1",1,1,"1","1"},
+  {"Complex","==",1,1,"1","1",1,1,"1","1"},
+  {"Complex","abs",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Complex","abs2",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Complex","angle",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Complex","arg",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Complex","coerce",1,1,"1","1",1,1,"1","1"},
+  {"Complex","conj",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Complex","conjugate",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Complex","denominator",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Complex","eql?",1,1,"1","1",1,1,"1","1"},
+  {"Complex","fdiv",1,1,"1","1",1,1,"1","1"},
+  {"Complex","finite?",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Complex","hash",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Complex","imag",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Complex","imaginary",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Complex","infinite?",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Complex","inspect",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Complex","integer?",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Complex","magnitude",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Complex","nonzero?",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Complex","numerator",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Complex","phase",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Complex","polar",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Complex","quo",1,1,"1","1",1,1,"1","1"},
+  {"Complex","rationalize",0,1,NULL,"0..1",0,1,NULL,"0..1"},
+  {"Complex","real",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Complex","real?",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Complex","rect",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Complex","rectangular",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Complex","singleton_method_added",1,1,"1","1",1,1,"1","1"},
+  {"Complex","to_c",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Complex","to_f",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Complex","to_i",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Complex","to_int",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Complex","to_r",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Complex","to_s",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Complex","zero?",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Object","!",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Object","!=",1,1,"1","1",1,1,"1","1"},
+  {"Object","!~",1,1,"1","1",1,1,"1","1"},
+  {"Object","<=>",1,1,"1","1",1,1,"1","1"},
+  {"Object","==",1,1,"1","1",1,1,"1","1"},
+  {"Object","===",1,1,"1","1",1,1,"1","1"},
+  {"Object","__id__",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Object","class",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Object","clone",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Object","define_singleton_method",1,2,"1..2","1..2",1,2,"1..2","1..2"},
+  {"Object","dup",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Object","eql?",1,1,"1","1",1,1,"1","1"},
+  {"Object","equal?",1,1,"1","1",1,1,"1","1"},
+  {"Object","extend",1,-1,"1+",NULL,1,-1,"1+",NULL},
+  {"Object","frozen?",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Object","hash",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Object","inspect",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Object","instance_of?",1,1,"1","1",1,1,"1","1"},
+  {"Object","instance_variable_defined?",1,1,"1","1",1,1,"1","1"},
+  {"Object","instance_variable_get",1,1,"1","1",1,1,"1","1"},
+  {"Object","instance_variable_set",2,2,"2","2",2,2,"2","2"},
+  {"Object","instance_variables",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Object","is_a?",1,1,"1","1",1,1,"1","1"},
+  {"Object","itself",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Object","kind_of?",1,1,"1","1",1,1,"1","1"},
+  {"Object","method",1,1,"1","1",1,1,"1","1"},
+  {"Object","methods",0,1,NULL,"0..1",0,1,NULL,"0..1"},
+  {"Object","nil?",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Object","object_id",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Object","private_methods",0,1,NULL,"0..1",0,1,NULL,"0..1"},
+  {"Object","protected_methods",0,1,NULL,"0..1",0,1,NULL,"0..1"},
+  {"Object","public_method",1,1,"1","1",1,1,"1","1"},
+  {"Object","public_methods",0,1,NULL,"0..1",0,1,NULL,"0..1"},
+  {"Object","remove_instance_variable",1,1,"1","1",1,1,"1","1"},
+  {"Object","respond_to?",1,2,"1..2","1..2",1,2,"1..2","1..2"},
+  {"Object","singleton_class",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Object","singleton_method",1,1,"1","1",1,1,"1","1"},
+  {"Object","singleton_methods",0,1,NULL,"0..1",0,1,NULL,"0..1"},
+  {"Object","tap",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Object","then",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Object","to_s",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Object","yield_self",0,0,NULL,"0",0,0,NULL,"0"},
+  {"StringIO","<<",1,1,"1","1",1,1,"1","1"},
+  {"StringIO","all?",0,1,NULL,"0..1",0,1,NULL,"0..1"},
+  {"StringIO","any?",0,1,NULL,"0..1",0,1,NULL,"0..1"},
+  {"StringIO","binmode",0,0,NULL,"0",0,0,NULL,"0"},
+  {"StringIO","chunk",0,0,NULL,"0",0,0,NULL,"0"},
+  {"StringIO","chunk_while",0,0,NULL,"0",0,0,NULL,"0"},
+  {"StringIO","close",0,0,NULL,"0",0,0,NULL,"0"},
+  {"StringIO","close_read",0,0,NULL,"0",0,0,NULL,"0"},
+  {"StringIO","close_write",0,0,NULL,"0",0,0,NULL,"0"},
+  {"StringIO","closed?",0,0,NULL,"0",0,0,NULL,"0"},
+  {"StringIO","closed_read?",0,0,NULL,"0",0,0,NULL,"0"},
+  {"StringIO","closed_write?",0,0,NULL,"0",0,0,NULL,"0"},
+  {"StringIO","collect",0,0,NULL,"0",0,0,NULL,"0"},
+  {"StringIO","collect_concat",0,0,NULL,"0",0,0,NULL,"0"},
+  {"StringIO","compact",0,0,NULL,"0",0,0,NULL,"0"},
+  {"StringIO","count",0,1,NULL,"1",0,1,NULL,"1"},
+  {"StringIO","cycle",0,1,NULL,"0..1",0,1,NULL,"0..1"},
+  {"StringIO","detect",0,1,NULL,"0..1",0,1,NULL,"0..1"},
+  {"StringIO","drop",1,1,"1","1",1,1,"1","1"},
+  {"StringIO","drop_while",0,0,NULL,"0",0,0,NULL,"0"},
+  {"StringIO","each",-1,-1,NULL,NULL,0,2,NULL,"0..2"},
+  {"StringIO","each_byte",0,0,NULL,"0",0,0,NULL,"0"},
+  {"StringIO","each_char",0,0,NULL,"0",0,0,NULL,"0"},
+  {"StringIO","each_codepoint",0,0,NULL,"0",0,0,NULL,"0"},
+  {"StringIO","each_cons",1,1,"1","1",1,1,"1","1"},
+  {"StringIO","each_entry",-1,-1,NULL,NULL,0,2,NULL,"0..2"},
+  {"StringIO","each_line",-1,-1,NULL,NULL,0,2,NULL,"0..2"},
+  {"StringIO","each_slice",1,1,"1","1",1,1,"1","1"},
+  {"StringIO","each_with_index",-1,-1,NULL,NULL,0,2,NULL,"0..2"},
+  {"StringIO","each_with_object",1,1,"1","1",1,1,"1","1"},
+  {"StringIO","entries",0,2,NULL,"0..2",0,2,NULL,"0..2"},
+  {"StringIO","eof",0,0,NULL,"0",0,0,NULL,"0"},
+  {"StringIO","eof?",0,0,NULL,"0",0,0,NULL,"0"},
+  {"StringIO","external_encoding",0,0,NULL,"0",0,0,NULL,"0"},
+  {"StringIO","fileno",0,0,NULL,"0",0,0,NULL,"0"},
+  {"StringIO","filter",0,0,NULL,"0",0,0,NULL,"0"},
+  {"StringIO","filter_map",0,0,NULL,"0",0,0,NULL,"0"},
+  {"StringIO","find",0,1,NULL,"0..1",0,1,NULL,"0..1"},
+  {"StringIO","find_all",0,0,NULL,"0",0,0,NULL,"0"},
+  {"StringIO","find_index",0,1,NULL,"1",0,1,NULL,"1"},
+  {"StringIO","first",0,1,NULL,"0..1",0,1,NULL,"0..1"},
+  {"StringIO","flat_map",0,0,NULL,"0",0,0,NULL,"0"},
+  {"StringIO","flush",0,0,NULL,"0",0,0,NULL,"0"},
+  {"StringIO","fsync",0,0,NULL,"0",0,0,NULL,"0"},
+  {"StringIO","getbyte",0,0,NULL,"0",0,0,NULL,"0"},
+  {"StringIO","getc",0,0,NULL,"0",0,0,NULL,"0"},
+  {"StringIO","grep",1,1,"1","1",1,1,"1","1"},
+  {"StringIO","grep_v",1,1,"1","1",1,1,"1","1"},
+  {"StringIO","group_by",0,0,NULL,"0",0,0,NULL,"0"},
+  {"StringIO","include?",1,1,"1","1",1,1,"1","1"},
+  {"StringIO","inject",1,2,"1..2","1..2",0,2,NULL,"0..2"},
+  {"StringIO","internal_encoding",0,0,NULL,"0",0,0,NULL,"0"},
+  {"StringIO","isatty",0,0,NULL,"0",0,0,NULL,"0"},
+  {"StringIO","lazy",0,0,NULL,"0",0,0,NULL,"0"},
+  {"StringIO","length",0,0,NULL,"0",0,0,NULL,"0"},
+  {"StringIO","lineno",0,0,NULL,"0",0,0,NULL,"0"},
+  {"StringIO","lineno=",1,1,"1","1",1,1,"1","1"},
+  {"StringIO","map",0,0,NULL,"0",0,0,NULL,"0"},
+  {"StringIO","max",0,1,NULL,"0..1",0,1,NULL,"0..1"},
+  {"StringIO","max_by",0,1,NULL,"0..1",0,1,NULL,"0..1"},
+  {"StringIO","member?",1,1,"1","1",1,1,"1","1"},
+  {"StringIO","min",0,1,NULL,"0..1",0,1,NULL,"0..1"},
+  {"StringIO","min_by",0,1,NULL,"0..1",0,1,NULL,"0..1"},
+  {"StringIO","minmax",0,0,NULL,"0",0,0,NULL,"0"},
+  {"StringIO","minmax_by",0,0,NULL,"0",0,0,NULL,"0"},
+  {"StringIO","none?",0,1,NULL,"0..1",0,1,NULL,"0..1"},
+  {"StringIO","one?",0,1,NULL,"0..1",0,1,NULL,"0..1"},
+  {"StringIO","partition",0,0,NULL,"0",0,0,NULL,"0"},
+  {"StringIO","pid",0,0,NULL,"0",0,0,NULL,"0"},
+  {"StringIO","pos",0,0,NULL,"0",0,0,NULL,"0"},
+  {"StringIO","pos=",1,1,"1","1",1,1,"1","1"},
+  {"StringIO","putc",1,1,"1","1",1,1,"1","1"},
+  {"StringIO","read",0,2,NULL,"0..2",0,2,NULL,"0..2"},
+  {"StringIO","readbyte",0,0,NULL,"0",0,0,NULL,"0"},
+  {"StringIO","readchar",0,0,NULL,"0",0,0,NULL,"0"},
+  {"StringIO","readlines",0,2,NULL,"0..2",0,2,NULL,"0..2"},
+  {"StringIO","reduce",1,2,"1..2","1..2",0,2,NULL,"0..2"},
+  {"StringIO","reject",0,0,NULL,"0",0,0,NULL,"0"},
+  {"StringIO","reopen",0,2,NULL,"0..2",0,2,NULL,"0..2"},
+  {"StringIO","reverse_each",-1,-1,NULL,NULL,0,2,NULL,"0..2"},
+  {"StringIO","rewind",0,0,NULL,"0",0,0,NULL,"0"},
+  {"StringIO","seek",1,2,"1..2","1..2",1,2,"1..2","1..2"},
+  {"StringIO","select",0,0,NULL,"0",0,0,NULL,"0"},
+  {"StringIO","set_encoding",1,2,"1..2","1..2",1,2,"1..2","1..2"},
+  {"StringIO","size",0,0,NULL,"0",0,0,NULL,"0"},
+  {"StringIO","slice_after",1,1,"1","1",-1,-1,NULL,NULL},
+  {"StringIO","slice_before",1,1,"1","1",0,0,NULL,"0"},
+  {"StringIO","slice_when",0,0,NULL,"0",0,0,NULL,"0"},
+  {"StringIO","sort",0,0,NULL,"0",0,0,NULL,"0"},
+  {"StringIO","sort_by",0,0,NULL,"0",0,0,NULL,"0"},
+  {"StringIO","string",0,0,NULL,"0",0,0,NULL,"0"},
+  {"StringIO","string=",1,1,"1","1",1,1,"1","1"},
+  {"StringIO","sum",0,1,NULL,"0..1",0,1,NULL,"0..1"},
+  {"StringIO","sync",0,0,NULL,"0",0,0,NULL,"0"},
+  {"StringIO","sync=",1,1,"1","1",1,1,"1","1"},
+  {"StringIO","take",1,1,"1","1",1,1,"1","1"},
+  {"StringIO","take_while",0,0,NULL,"0",0,0,NULL,"0"},
+  {"StringIO","tally",0,1,NULL,"0..1",0,1,NULL,"0..1"},
+  {"StringIO","tell",0,0,NULL,"0",0,0,NULL,"0"},
+  {"StringIO","to_a",0,2,NULL,"0..2",0,2,NULL,"0..2"},
+  {"StringIO","to_h",0,2,NULL,"0..2",0,2,NULL,"0..2"},
+  {"StringIO","truncate",1,1,"1","1",1,1,"1","1"},
+  {"StringIO","tty?",0,0,NULL,"0",0,0,NULL,"0"},
+  {"StringIO","ungetbyte",1,1,"1","1",1,1,"1","1"},
+  {"StringIO","ungetc",1,1,"1","1",1,1,"1","1"},
+  {"StringIO","uniq",0,0,NULL,"0",0,0,NULL,"0"},
+  {"StringScanner","<<",1,1,"1","1",1,1,"1","1"},
+  {"StringScanner","[]",1,1,"1","1",1,1,"1","1"},
+  {"StringScanner","beginning_of_line?",0,0,NULL,"0",0,0,NULL,"0"},
+  {"StringScanner","bol?",0,0,NULL,"0",0,0,NULL,"0"},
+  {"StringScanner","captures",0,0,NULL,"0",0,0,NULL,"0"},
+  {"StringScanner","charpos",0,0,NULL,"0",0,0,NULL,"0"},
+  {"StringScanner","check",1,1,"1","1",1,1,"1","1"},
+  {"StringScanner","check_until",1,1,"1","1",1,1,"1","1"},
+  {"StringScanner","concat",1,1,"1","1",1,1,"1","1"},
+  {"StringScanner","eos?",0,0,NULL,"0",0,0,NULL,"0"},
+  {"StringScanner","exist?",1,1,"1","1",1,1,"1","1"},
+  {"StringScanner","fixed_anchor?",0,0,NULL,"0",0,0,NULL,"0"},
+  {"StringScanner","get_byte",0,0,NULL,"0",0,0,NULL,"0"},
+  {"StringScanner","getch",0,0,NULL,"0",0,0,NULL,"0"},
+  {"StringScanner","inspect",0,0,NULL,"0",0,0,NULL,"0"},
+  {"StringScanner","match?",1,1,"1","1",1,1,"1","1"},
+  {"StringScanner","matched",0,0,NULL,"0",0,0,NULL,"0"},
+  {"StringScanner","matched?",0,0,NULL,"0",0,0,NULL,"0"},
+  {"StringScanner","matched_size",0,0,NULL,"0",0,0,NULL,"0"},
+  {"StringScanner","named_captures",0,0,NULL,"0",0,0,NULL,"0"},
+  {"StringScanner","peek",1,1,"1","1",1,1,"1","1"},
+  {"StringScanner","peek_byte",0,0,NULL,"0",0,0,NULL,"0"},
+  {"StringScanner","pointer",0,0,NULL,"0",0,0,NULL,"0"},
+  {"StringScanner","pointer=",1,1,"1","1",1,1,"1","1"},
+  {"StringScanner","pos",0,0,NULL,"0",0,0,NULL,"0"},
+  {"StringScanner","pos=",1,1,"1","1",1,1,"1","1"},
+  {"StringScanner","post_match",0,0,NULL,"0",0,0,NULL,"0"},
+  {"StringScanner","pre_match",0,0,NULL,"0",0,0,NULL,"0"},
+  {"StringScanner","reset",0,0,NULL,"0",0,0,NULL,"0"},
+  {"StringScanner","rest",0,0,NULL,"0",0,0,NULL,"0"},
+  {"StringScanner","rest?",0,0,NULL,"0",0,0,NULL,"0"},
+  {"StringScanner","rest_size",0,0,NULL,"0",0,0,NULL,"0"},
+  {"StringScanner","scan",1,1,"1","1",1,1,"1","1"},
+  {"StringScanner","scan_byte",0,0,NULL,"0",0,0,NULL,"0"},
+  {"StringScanner","scan_full",3,3,"3","3",3,3,"3","3"},
+  {"StringScanner","scan_integer",0,0,NULL,"0",0,0,NULL,"0"},
+  {"StringScanner","scan_until",1,1,"1","1",1,1,"1","1"},
+  {"StringScanner","search_full",3,3,"3","3",3,3,"3","3"},
+  {"StringScanner","size",0,0,NULL,"0",0,0,NULL,"0"},
+  {"StringScanner","skip",1,1,"1","1",1,1,"1","1"},
+  {"StringScanner","skip_until",1,1,"1","1",1,1,"1","1"},
+  {"StringScanner","string",0,0,NULL,"0",0,0,NULL,"0"},
+  {"StringScanner","string=",1,1,"1","1",1,1,"1","1"},
+  {"StringScanner","terminate",0,0,NULL,"0",0,0,NULL,"0"},
+  {"StringScanner","unscan",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Pathname","+",1,1,"1","1",1,1,"1","1"},
+  {"Pathname","/",1,1,"1","1",1,1,"1","1"},
+  {"Pathname","<=>",1,1,"1","1",1,1,"1","1"},
+  {"Pathname","==",1,1,"1","1",1,1,"1","1"},
+  {"Pathname","===",1,1,"1","1",1,1,"1","1"},
+  {"Pathname","absolute?",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Pathname","ascend",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Pathname","atime",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Pathname","birthtime",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Pathname","blockdev?",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Pathname","chardev?",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Pathname","children",0,1,NULL,"0..1",0,1,NULL,"0..1"},
+  {"Pathname","chmod",1,1,"1","1",1,1,"1","1"},
+  {"Pathname","chown",2,2,"2","2",2,2,"2","2"},
+  {"Pathname","cleanpath",0,1,NULL,"0..1",0,1,NULL,"0..1"},
+  {"Pathname","ctime",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Pathname","delete",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Pathname","descend",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Pathname","directory?",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Pathname","dirname",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Pathname","each_child",0,1,NULL,"0..1",0,1,NULL,"0..1"},
+  {"Pathname","each_entry",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Pathname","each_filename",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Pathname","empty?",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Pathname","entries",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Pathname","eql?",1,1,"1","1",1,1,"1","1"},
+  {"Pathname","executable?",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Pathname","executable_real?",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Pathname","exist?",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Pathname","extname",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Pathname","file?",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Pathname","find",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Pathname","fnmatch",1,-1,"1+",NULL,1,-1,"1+",NULL},
+  {"Pathname","fnmatch?",1,-1,"1+",NULL,1,-1,"1+",NULL},
+  {"Pathname","ftype",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Pathname","glob",1,2,"1..2","1..2",1,2,"1..2","1..2"},
+  {"Pathname","grpowned?",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Pathname","hash",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Pathname","inspect",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Pathname","lchmod",1,1,"1","1",1,1,"1","1"},
+  {"Pathname","lchown",2,2,"2","2",2,2,"2","2"},
+  {"Pathname","lstat",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Pathname","lutime",2,2,"2","2",2,2,"2","2"},
+  {"Pathname","make_link",1,1,"1","1",1,1,"1","1"},
+  {"Pathname","make_symlink",1,1,"1","1",1,1,"1","1"},
+  {"Pathname","mkpath",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Pathname","mountpoint?",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Pathname","mtime",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Pathname","opendir",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Pathname","owned?",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Pathname","parent",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Pathname","pipe?",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Pathname","readable?",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Pathname","readable_real?",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Pathname","readlink",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Pathname","relative?",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Pathname","relative_path_from",1,1,"1","1",1,1,"1","1"},
+  {"Pathname","rename",1,1,"1","1",1,1,"1","1"},
+  {"Pathname","rmdir",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Pathname","rmtree",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Pathname","root?",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Pathname","setgid?",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Pathname","setuid?",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Pathname","size",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Pathname","size?",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Pathname","socket?",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Pathname","split",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Pathname","stat",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Pathname","sticky?",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Pathname","sub",2,2,"2","2",1,2,"1..2","1..2"},
+  {"Pathname","sub_ext",1,1,"1","1",1,1,"1","1"},
+  {"Pathname","symlink?",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Pathname","to_path",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Pathname","to_s",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Pathname","truncate",1,1,"1","1",1,1,"1","1"},
+  {"Pathname","unlink",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Pathname","utime",2,2,"2","2",2,2,"2","2"},
+  {"Pathname","world_readable?",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Pathname","world_writable?",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Pathname","writable?",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Pathname","writable_real?",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Pathname","zero?",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Set","&",1,1,"1","1",1,1,"1","1"},
+  {"Set","+",1,1,"1","1",1,1,"1","1"},
+  {"Set","-",1,1,"1","1",1,1,"1","1"},
+  {"Set","<",1,1,"1","1",1,1,"1","1"},
+  {"Set","<<",1,1,"1","1",1,1,"1","1"},
+  {"Set","<=",1,1,"1","1",1,1,"1","1"},
+  {"Set","<=>",1,1,"1","1",1,1,"1","1"},
+  {"Set","==",1,1,"1","1",1,1,"1","1"},
+  {"Set","===",1,1,"1","1",1,1,"1","1"},
+  {"Set",">",1,1,"1","1",1,1,"1","1"},
+  {"Set",">=",1,1,"1","1",1,1,"1","1"},
+  {"Set","^",1,1,"1","1",1,1,"1","1"},
+  {"Set","add",1,1,"1","1",1,1,"1","1"},
+  {"Set","add?",1,1,"1","1",1,1,"1","1"},
+  {"Set","all?",0,1,NULL,"0..1",0,1,NULL,"0..1"},
+  {"Set","any?",0,1,NULL,"0..1",0,1,NULL,"0..1"},
+  {"Set","chunk",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Set","chunk_while",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Set","classify",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Set","clear",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Set","collect",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Set","collect!",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Set","collect_concat",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Set","compact",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Set","compare_by_identity",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Set","compare_by_identity?",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Set","count",0,1,NULL,"1",0,1,NULL,"1"},
+  {"Set","cycle",0,1,NULL,"0..1",0,1,NULL,"0..1"},
+  {"Set","delete",1,1,"1","1",1,1,"1","1"},
+  {"Set","delete?",1,1,"1","1",1,1,"1","1"},
+  {"Set","delete_if",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Set","detect",0,1,NULL,"0..1",0,1,NULL,"0..1"},
+  {"Set","difference",1,1,"1","1",1,1,"1","1"},
+  {"Set","disjoint?",1,1,"1","1",1,1,"1","1"},
+  {"Set","divide",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Set","drop",1,1,"1","1",1,1,"1","1"},
+  {"Set","drop_while",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Set","each",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Set","each_cons",1,1,"1","1",1,1,"1","1"},
+  {"Set","each_entry",-1,-1,NULL,NULL,0,0,NULL,"0"},
+  {"Set","each_slice",1,1,"1","1",1,1,"1","1"},
+  {"Set","each_with_index",-1,-1,NULL,NULL,0,0,NULL,"0"},
+  {"Set","each_with_object",1,1,"1","1",1,1,"1","1"},
+  {"Set","empty?",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Set","entries",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Set","eql?",1,1,"1","1",1,1,"1","1"},
+  {"Set","filter",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Set","filter!",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Set","filter_map",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Set","find",0,1,NULL,"0..1",0,1,NULL,"0..1"},
+  {"Set","find_all",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Set","find_index",0,1,NULL,"1",0,1,NULL,"1"},
+  {"Set","first",0,1,NULL,"0..1",0,1,NULL,"0..1"},
+  {"Set","flat_map",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Set","flatten",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Set","flatten!",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Set","grep",1,1,"1","1",1,1,"1","1"},
+  {"Set","grep_v",1,1,"1","1",1,1,"1","1"},
+  {"Set","group_by",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Set","hash",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Set","include?",1,1,"1","1",1,1,"1","1"},
+  {"Set","inject",1,2,"1..2","1..2",0,2,NULL,"0..2"},
+  {"Set","inspect",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Set","intersect?",1,1,"1","1",1,1,"1","1"},
+  {"Set","intersection",1,1,"1","1",1,1,"1","1"},
+  {"Set","join",0,1,NULL,"0..1",0,1,NULL,"0..1"},
+  {"Set","keep_if",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Set","lazy",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Set","length",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Set","map",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Set","map!",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Set","max",0,1,NULL,"0..1",0,1,NULL,"0..1"},
+  {"Set","max_by",0,1,NULL,"0..1",0,1,NULL,"0..1"},
+  {"Set","member?",1,1,"1","1",1,1,"1","1"},
+  {"Set","min",0,1,NULL,"0..1",0,1,NULL,"0..1"},
+  {"Set","min_by",0,1,NULL,"0..1",0,1,NULL,"0..1"},
+  {"Set","minmax",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Set","minmax_by",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Set","none?",0,1,NULL,"0..1",0,1,NULL,"0..1"},
+  {"Set","one?",0,1,NULL,"0..1",0,1,NULL,"0..1"},
+  {"Set","partition",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Set","proper_subset?",1,1,"1","1",1,1,"1","1"},
+  {"Set","proper_superset?",1,1,"1","1",1,1,"1","1"},
+  {"Set","reduce",1,2,"1..2","1..2",0,2,NULL,"0..2"},
+  {"Set","reject",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Set","reject!",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Set","replace",1,1,"1","1",1,1,"1","1"},
+  {"Set","reset",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Set","reverse_each",-1,-1,NULL,NULL,0,0,NULL,"0"},
+  {"Set","select",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Set","select!",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Set","size",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Set","slice_after",1,1,"1","1",-1,-1,NULL,NULL},
+  {"Set","slice_before",1,1,"1","1",0,0,NULL,"0"},
+  {"Set","slice_when",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Set","sort",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Set","sort_by",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Set","subset?",1,1,"1","1",1,1,"1","1"},
+  {"Set","subtract",1,1,"1","1",1,1,"1","1"},
+  {"Set","sum",0,1,NULL,"0..1",0,1,NULL,"0..1"},
+  {"Set","superset?",1,1,"1","1",1,1,"1","1"},
+  {"Set","take",1,1,"1","1",1,1,"1","1"},
+  {"Set","take_while",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Set","tally",0,1,NULL,"0..1",0,1,NULL,"0..1"},
+  {"Set","to_a",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Set","to_h",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Set","to_s",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Set","union",1,1,"1","1",1,1,"1","1"},
+  {"Set","uniq",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Set","|",1,1,"1","1",1,1,"1","1"},
+  {"Mutex","lock",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Mutex","locked?",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Mutex","owned?",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Mutex","synchronize",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Mutex","try_lock",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Mutex","unlock",0,0,NULL,"0",0,0,NULL,"0"},
+  {NULL, NULL, 0, 0, NULL, NULL, 0, 0, NULL, NULL}
 };
 
 /* Class/module-method positional arity, probed from ruby 4.0.6 the same
@@ -9145,74 +10115,199 @@ sp_builtin_arity_spec_tbl[] = {
    argv[] unconditionally (File.open with no arguments was a compile-time
    SIGSEGV). */
 static const struct { const char *cls; const char *m; int min; int max;
-                      const char *lo_exp; const char *hi_exp; }
+                      const char *lo_exp; const char *hi_exp;
+                      int blk_min; int blk_max;
+                      const char *blk_lo_exp; const char *blk_hi_exp; }
 sp_builtin_cmeth_arity_spec_tbl[] = {
-  {"File","open",1,3,"1..3","1..3"},{"File","new",1,3,"1..3","1..3"},
-  {"File","read",1,4,"1..4","1..4"},{"File","write",2,3,"2..3","2..3"},
-  {"File","binread",1,3,"1..3","1..3"},{"File","binwrite",2,3,"2..3","2..3"},
-  {"File","readlines",1,3,"1..3","1..3"},{"File","foreach",1,3,"1..3","1..3"},
-  {"File","rename",2,2,"2","2"},{"File","exist?",1,1,"1","1"},
-  {"File","size",1,1,"1","1"},{"File","basename",1,2,"1..2","1..2"},
-  {"File","dirname",1,2,"1..2","1..2"},{"File","extname",1,1,"1","1"},
-  {"File","split",1,1,"1","1"},{"File","expand_path",1,2,"1..2","1..2"},
-  {"File","chmod",1,-1,"1+",NULL},{"File","utime",2,-1,"2+",NULL},
-  {"File","umask",0,1,NULL,"0..1"},{"File","truncate",2,2,"2","2"},
-  {"File","symlink",2,2,"2","2"},{"File","link",2,2,"2","2"},
-  {"File","readlink",1,1,"1","1"},{"File","realpath",1,2,"1..2","1..2"},
-  {"File","stat",1,1,"1","1"},{"File","lstat",1,1,"1","1"},
-  {"File","ftype",1,1,"1","1"},{"File","mtime",1,1,"1","1"},
-  {"File","atime",1,1,"1","1"},{"File","ctime",1,1,"1","1"},
-  {"File","empty?",1,1,"1","1"},{"File","zero?",1,1,"1","1"},
-  {"File","identical?",2,2,"2","2"},{"File","absolute_path",1,2,"1..2","1..2"},
-  {"IO","for_fd",1,2,"1..2","1..2"},{"IO","sysopen",1,3,"1..3","1..3"},
-  {"IO","new",1,2,"1..2","1..2"},{"IO","open",1,2,"1..2","1..2"},
-  {"IO","read",1,4,"1..4","1..4"},{"IO","write",2,3,"2..3","2..3"},
-  {"IO","binread",1,3,"1..3","1..3"},{"IO","binwrite",2,3,"2..3","2..3"},
-  {"IO","readlines",1,3,"1..3","1..3"},{"IO","pipe",0,2,NULL,"0..2"},
-  {"Dir","new",1,1,"1","1"},{"Dir","open",1,1,"1","1"},
-  {"Dir","mkdir",1,2,"1..2","1..2"},{"Dir","rmdir",1,1,"1","1"},
-  {"Dir","delete",1,1,"1","1"},{"Dir","unlink",1,1,"1","1"},
-  {"Dir","entries",1,1,"1","1"},{"Dir","children",1,1,"1","1"},
-  {"Dir","glob",1,2,"1..2","1..2"},{"Dir","exist?",1,1,"1","1"},
-  {"Dir","empty?",1,1,"1","1"},{"Dir","home",0,1,NULL,"0..1"},
-  {"Dir","pwd",0,0,NULL,"0"},{"Dir","getwd",0,0,NULL,"0"},
-  {"Dir","chdir",0,1,NULL,"0..1"},{"Time","at",1,3,"1..3","1..3"},
-  {"Time","now",0,0,NULL,"0"},{"Hash","new",0,1,NULL,"0..1"},
-  {"Array","new",0,2,NULL,"0..2"},{"String","new",0,1,NULL,"0..1"},
-  {"Integer","sqrt",1,1,"1","1"},{"Math","sqrt",1,1,"1","1"},
-  {"Math","cbrt",1,1,"1","1"},{"Math","sin",1,1,"1","1"},
-  {"Math","cos",1,1,"1","1"},{"Math","tan",1,1,"1","1"},
-  {"Math","asin",1,1,"1","1"},{"Math","acos",1,1,"1","1"},
-  {"Math","atan",1,1,"1","1"},{"Math","atan2",2,2,"2","2"},
-  {"Math","sinh",1,1,"1","1"},{"Math","cosh",1,1,"1","1"},
-  {"Math","tanh",1,1,"1","1"},{"Math","asinh",1,1,"1","1"},
-  {"Math","acosh",1,1,"1","1"},{"Math","atanh",1,1,"1","1"},
-  {"Math","log",1,2,"1..2","1..2"},{"Math","log2",1,1,"1","1"},
-  {"Math","log10",1,1,"1","1"},{"Math","exp",1,1,"1","1"},
-  {"Math","hypot",2,2,"2","2"},{"Math","ldexp",2,2,"2","2"},
-  {"Math","frexp",1,1,"1","1"},{"Math","erf",1,1,"1","1"},
-  {"Math","erfc",1,1,"1","1"},{"Math","gamma",1,1,"1","1"},
-  {"Math","lgamma",1,1,"1","1"},{"Process","getpriority",2,2,"2","2"},
-  {"Process","setpriority",3,3,"3","3"},{"Process","getsid",0,1,NULL,"0..1"},
-  {"Process","kill",2,-1,"2+",NULL},{"Process","clock_gettime",1,2,"1..2","1..2"},
-  {"Process","clock_getres",1,2,"1..2","1..2"},{"Process","pid",0,0,NULL,"0"},
-  {"Process","ppid",0,0,NULL,"0"},{"Process","uid",0,0,NULL,"0"},
-  {"Process","gid",0,0,NULL,"0"},{"Process","euid",0,0,NULL,"0"},
-  {"Process","egid",0,0,NULL,"0"},{"Process","setproctitle",1,1,"1","1"},
-  {"Regexp","new",1,2,"1..2","1..2"},{"Regexp","escape",1,1,"1","1"},
-  {"Regexp","quote",1,1,"1","1"},{"Random","new",0,1,NULL,"0..1"},
-  {"Random","rand",0,1,NULL,"0..1"},{"Random","srand",0,1,NULL,"0..1"},
-  {"ENV","fetch",1,2,"1..2","1..2"},{"ENV","key?",1,1,"1","1"},
-  {"ENV","has_key?",1,1,"1","1"},{"ENV","include?",1,1,"1","1"},
-  {"ENV","member?",1,1,"1","1"},{"ENV","assoc",1,1,"1","1"},
-  {"ENV","rassoc",1,1,"1","1"},{"Kernel","Integer",1,2,"1..2","1..2"},
-  {"Kernel","Float",1,1,"1","1"},{"Kernel","String",1,1,"1","1"},
-  {"Kernel","Array",1,1,"1","1"},{"Kernel","Hash",1,1,"1","1"},
-  {"Kernel","Rational",1,2,"1..2","1..2"},{"Kernel","Complex",1,2,"1..2","1..2"},
-  {"Marshal","dump",1,3,"1..3","1..3"},{"Marshal","load",1,2,"1..2","1..2"},
-  {NULL, NULL, 0, 0, NULL, NULL}
+  {"File","open",1,3,"1..3","1..3",1,3,"1..3","1..3"},
+  {"File","new",1,3,"1..3","1..3",1,3,"1..3","1..3"},
+  {"File","read",1,4,"1..4","1..4",1,4,"1..4","1..4"},
+  {"File","write",2,3,"2..3","2..3",2,3,"2..3","2..3"},
+  {"File","binread",1,3,"1..3","1..3",1,3,"1..3","1..3"},
+  {"File","binwrite",2,3,"2..3","2..3",2,3,"2..3","2..3"},
+  {"File","readlines",1,3,"1..3","1..3",1,3,"1..3","1..3"},
+  {"File","foreach",1,3,"1..3","1..3",1,3,"1..3","1..3"},
+  {"File","rename",2,2,"2","2",2,2,"2","2"},
+  {"File","exist?",1,1,"1","1",1,1,"1","1"},
+  {"File","size",1,1,"1","1",1,1,"1","1"},
+  {"File","basename",1,2,"1..2","1..2",1,2,"1..2","1..2"},
+  {"File","dirname",1,2,"1..2","1..2",1,2,"1..2","1..2"},
+  {"File","extname",1,1,"1","1",1,1,"1","1"},
+  {"File","split",1,1,"1","1",1,1,"1","1"},
+  {"File","expand_path",1,2,"1..2","1..2",1,2,"1..2","1..2"},
+  {"File","chmod",1,-1,"1+",NULL,1,-1,"1+",NULL},
+  {"File","utime",2,-1,"2+",NULL,2,-1,"2+",NULL},
+  {"File","umask",0,1,NULL,"0..1",0,1,NULL,"0..1"},
+  {"File","truncate",2,2,"2","2",2,2,"2","2"},
+  {"File","symlink",2,2,"2","2",2,2,"2","2"},
+  {"File","link",2,2,"2","2",2,2,"2","2"},
+  {"File","readlink",1,1,"1","1",1,1,"1","1"},
+  {"File","realpath",1,2,"1..2","1..2",1,2,"1..2","1..2"},
+  {"File","stat",1,1,"1","1",1,1,"1","1"},
+  {"File","lstat",1,1,"1","1",1,1,"1","1"},
+  {"File","ftype",1,1,"1","1",1,1,"1","1"},
+  {"File","mtime",1,1,"1","1",1,1,"1","1"},
+  {"File","atime",1,1,"1","1",1,1,"1","1"},
+  {"File","ctime",1,1,"1","1",1,1,"1","1"},
+  {"File","empty?",1,1,"1","1",1,1,"1","1"},
+  {"File","zero?",1,1,"1","1",1,1,"1","1"},
+  {"File","identical?",2,2,"2","2",2,2,"2","2"},
+  {"File","absolute_path",1,2,"1..2","1..2",1,2,"1..2","1..2"},
+  {"IO","for_fd",1,2,"1..2","1..2",1,2,"1..2","1..2"},
+  {"IO","sysopen",1,3,"1..3","1..3",1,3,"1..3","1..3"},
+  {"IO","new",1,2,"1..2","1..2",1,2,"1..2","1..2"},
+  {"IO","open",1,2,"1..2","1..2",1,2,"1..2","1..2"},
+  {"IO","read",1,4,"1..4","1..4",1,4,"1..4","1..4"},
+  {"IO","write",2,3,"2..3","2..3",2,3,"2..3","2..3"},
+  {"IO","binread",1,3,"1..3","1..3",1,3,"1..3","1..3"},
+  {"IO","binwrite",2,3,"2..3","2..3",2,3,"2..3","2..3"},
+  {"IO","readlines",1,3,"1..3","1..3",1,3,"1..3","1..3"},
+  {"IO","pipe",0,2,NULL,"0..2",0,2,NULL,"0..2"},
+  {"IO","select",1,4,"1..4","1..4",1,4,"1..4","1..4"},
+  {"IO","copy_stream",2,4,"2..4","2..4",2,4,"2..4","2..4"},
+  {"Dir","new",1,1,"1","1",1,1,"1","1"},
+  {"Dir","open",1,1,"1","1",1,1,"1","1"},
+  {"Dir","mkdir",1,2,"1..2","1..2",1,2,"1..2","1..2"},
+  {"Dir","rmdir",1,1,"1","1",1,1,"1","1"},
+  {"Dir","delete",1,1,"1","1",1,1,"1","1"},
+  {"Dir","unlink",1,1,"1","1",1,1,"1","1"},
+  {"Dir","entries",1,1,"1","1",1,1,"1","1"},
+  {"Dir","children",1,1,"1","1",1,1,"1","1"},
+  {"Dir","glob",1,2,"1..2","1..2",1,2,"1..2","1..2"},
+  {"Dir","foreach",-1,-1,NULL,NULL,1,1,"1","1"},
+  {"Dir","exist?",1,1,"1","1",1,1,"1","1"},
+  {"Dir","empty?",1,1,"1","1",1,1,"1","1"},
+  {"Dir","home",0,1,NULL,"0..1",0,1,NULL,"0..1"},
+  {"Dir","pwd",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Dir","getwd",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Time","at",1,3,"1..3","1..3",1,3,"1..3","1..3"},
+  {"Time","local",1,-1,"1..8",NULL,1,-1,"1..8",NULL},
+  {"Time","mktime",1,-1,"1..8",NULL,1,-1,"1..8",NULL},
+  {"Time","utc",1,-1,"1..8",NULL,1,-1,"1..8",NULL},
+  {"Time","gm",1,-1,"1..8",NULL,1,-1,"1..8",NULL},
+  {"Time","now",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Hash","new",0,1,NULL,"0..1",-1,-1,NULL,NULL},
+  {"Array","new",0,2,NULL,"0..2",0,2,NULL,"0..2"},
+  {"String","new",0,1,NULL,"0..1",0,1,NULL,"0..1"},
+  {"Integer","sqrt",1,1,"1","1",1,1,"1","1"},
+  {"Math","sqrt",1,1,"1","1",1,1,"1","1"},
+  {"Math","cbrt",1,1,"1","1",1,1,"1","1"},
+  {"Math","sin",1,1,"1","1",1,1,"1","1"},
+  {"Math","cos",1,1,"1","1",1,1,"1","1"},
+  {"Math","tan",1,1,"1","1",1,1,"1","1"},
+  {"Math","asin",1,1,"1","1",1,1,"1","1"},
+  {"Math","acos",1,1,"1","1",1,1,"1","1"},
+  {"Math","atan",1,1,"1","1",1,1,"1","1"},
+  {"Math","atan2",2,2,"2","2",2,2,"2","2"},
+  {"Math","sinh",1,1,"1","1",1,1,"1","1"},
+  {"Math","cosh",1,1,"1","1",1,1,"1","1"},
+  {"Math","tanh",1,1,"1","1",1,1,"1","1"},
+  {"Math","asinh",1,1,"1","1",1,1,"1","1"},
+  {"Math","acosh",1,1,"1","1",1,1,"1","1"},
+  {"Math","atanh",1,1,"1","1",1,1,"1","1"},
+  {"Math","log",1,2,"1..2","1..2",1,2,"1..2","1..2"},
+  {"Math","log2",1,1,"1","1",1,1,"1","1"},
+  {"Math","log10",1,1,"1","1",1,1,"1","1"},
+  {"Math","exp",1,1,"1","1",1,1,"1","1"},
+  {"Math","hypot",2,2,"2","2",2,2,"2","2"},
+  {"Math","ldexp",2,2,"2","2",2,2,"2","2"},
+  {"Math","frexp",1,1,"1","1",1,1,"1","1"},
+  {"Math","erf",1,1,"1","1",1,1,"1","1"},
+  {"Math","erfc",1,1,"1","1",1,1,"1","1"},
+  {"Math","gamma",1,1,"1","1",1,1,"1","1"},
+  {"Math","lgamma",1,1,"1","1",1,1,"1","1"},
+  {"Process","getpriority",2,2,"2","2",2,2,"2","2"},
+  {"Process","setpriority",3,3,"3","3",3,3,"3","3"},
+  {"Process","getsid",0,1,NULL,"0..1",0,1,NULL,"0..1"},
+  {"Process","kill",2,-1,"2+",NULL,2,-1,"2+",NULL},
+  {"Process","clock_gettime",1,2,"1..2","1..2",1,2,"1..2","1..2"},
+  {"Process","clock_getres",1,2,"1..2","1..2",1,2,"1..2","1..2"},
+  {"Process","pid",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Process","ppid",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Process","uid",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Process","gid",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Process","euid",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Process","egid",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Process","setproctitle",1,1,"1","1",1,1,"1","1"},
+  {"Regexp","new",1,2,"1..2","1..2",1,2,"1..2","1..2"},
+  {"Regexp","escape",1,1,"1","1",1,1,"1","1"},
+  {"Regexp","quote",1,1,"1","1",1,1,"1","1"},
+  {"Random","new",0,1,NULL,"0..1",0,1,NULL,"0..1"},
+  {"Random","rand",0,1,NULL,"0..1",0,1,NULL,"0..1"},
+  {"Random","srand",0,1,NULL,"0..1",0,1,NULL,"0..1"},
+  {"ENV","fetch",1,2,"1..2","1..2",1,2,"1..2","1..2"},
+  {"ENV","key?",1,1,"1","1",1,1,"1","1"},
+  {"ENV","has_key?",1,1,"1","1",1,1,"1","1"},
+  {"ENV","include?",1,1,"1","1",1,1,"1","1"},
+  {"ENV","member?",1,1,"1","1",1,1,"1","1"},
+  {"ENV","assoc",1,1,"1","1",1,1,"1","1"},
+  {"ENV","rassoc",1,1,"1","1",1,1,"1","1"},
+  {"Kernel","Integer",1,2,"1..2","1..2",1,2,"1..2","1..2"},
+  {"Kernel","Float",1,1,"1","1",1,1,"1","1"},
+  {"Kernel","String",1,1,"1","1",1,1,"1","1"},
+  {"Kernel","Array",1,1,"1","1",1,1,"1","1"},
+  {"Kernel","Hash",1,1,"1","1",1,1,"1","1"},
+  {"Kernel","Rational",1,2,"1..2","1..2",1,2,"1..2","1..2"},
+  {"Kernel","Complex",1,2,"1..2","1..2",1,2,"1..2","1..2"},
+  {"Marshal","dump",1,3,"1..3","1..3",1,3,"1..3","1..3"},
+  {"Marshal","load",1,2,"1..2","1..2",1,2,"1..2","1..2"},
+  {"Signal","signame",1,1,"1","1",1,1,"1","1"},
+  {"Signal","list",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Signal","trap",1,2,"1..2","1..2",1,2,"1..2","1..2"},
+  {"Socket","new",2,3,"2..3","2..3",2,3,"2..3","2..3"},
+  {"Socket","getaddrinfo",2,7,"2..7","2..7",2,7,"2..7","2..7"},
+  {"Socket","getnameinfo",1,2,"1..2","1..2",1,2,"1..2","1..2"},
+  {"Socket","pair",2,3,"2..3","2..3",2,3,"2..3","2..3"},
+  {"Socket","socketpair",2,3,"2..3","2..3",2,3,"2..3","2..3"},
+  {"Socket","gethostname",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Socket","sockaddr_in",2,2,"2","2",2,2,"2","2"},
+  {"Socket","unpack_sockaddr_in",1,1,"1","1",1,1,"1","1"},
+  {"TCPSocket","new",2,4,"2..4","2..4",2,4,"2..4","2..4"},
+  {"TCPSocket","open",2,4,"2..4","2..4",2,4,"2..4","2..4"},
+  {"TCPServer","new",1,2,"1..2","1..2",1,2,"1..2","1..2"},
+  {"TCPServer","open",1,2,"1..2","1..2",1,2,"1..2","1..2"},
+  {"UNIXSocket","new",1,1,"1","1",1,1,"1","1"},
+  {"UNIXSocket","open",1,1,"1","1",1,1,"1","1"},
+  {"UNIXServer","new",1,1,"1","1",1,1,"1","1"},
+  {"UNIXServer","open",1,1,"1","1",1,1,"1","1"},
+  {"SizedQueue","new",1,1,"1","1",1,1,"1","1"},
+  {"Queue","new",0,1,NULL,"0..1",0,1,NULL,"0..1"},
+  {"Base64","encode64",1,1,"1","1",1,1,"1","1"},
+  {"Base64","decode64",1,1,"1","1",1,1,"1","1"},
+  {"Base64","strict_encode64",1,1,"1","1",1,1,"1","1"},
+  {"Base64","strict_decode64",1,1,"1","1",1,1,"1","1"},
+  {"Base64","urlsafe_encode64",1,1,"1","1",1,1,"1","1"},
+  {"Base64","urlsafe_decode64",1,1,"1","1",1,1,"1","1"},
+  {"CSV","new",1,1,"1","1",1,1,"1","1"},
+  {"CSV","parse",1,1,"1","1",1,1,"1","1"},
+  {"CSV","parse_line",1,1,"1","1",1,1,"1","1"},
+  {"CSV","generate",0,1,NULL,"0..1",0,1,NULL,"0..1"},
+  {"CSV","generate_line",1,1,"1","1",1,1,"1","1"},
+  {"CSV","foreach",1,2,"1..2","1..2",1,2,"1..2","1..2"},
+  {"CSV","read",1,1,"1","1",1,1,"1","1"},
+  {"CSV","readlines",1,1,"1","1",1,1,"1","1"},
+  {"CSV","open",1,2,"1..2","1..2",1,2,"1..2","1..2"},
+  {"JSON","parse",1,2,"1..2","1..2",1,2,"1..2","1..2"},
+  {"JSON","generate",1,2,"1..2","1..2",1,2,"1..2","1..2"},
+  {"JSON","dump",1,4,"1..4","1..4",1,4,"1..4","1..4"},
+  {"JSON","load",1,3,"1..3","1..3",1,3,"1..3","1..3"},
+  {"JSON","pretty_generate",1,2,"1..2","1..2",1,2,"1..2","1..2"},
+  {"Digest::MD5","base64digest",1,-1,"1+",NULL,1,-1,"1+",NULL},
+  {"Digest::MD5","file",1,-1,"1+",NULL,1,-1,"1+",NULL},
+  {"Digest::SHA1","base64digest",1,-1,"1+",NULL,1,-1,"1+",NULL},
+  {"Digest::SHA1","file",1,-1,"1+",NULL,1,-1,"1+",NULL},
+  {"Digest::SHA256","base64digest",1,-1,"1+",NULL,1,-1,"1+",NULL},
+  {"Digest::SHA256","file",1,-1,"1+",NULL,1,-1,"1+",NULL},
+  {"StringIO","new",0,2,NULL,"0..2",0,2,NULL,"0..2"},
+  {"StringIO","open",0,2,NULL,"0..2",0,2,NULL,"0..2"},
+  {"StringScanner","new",1,2,"1..2","1..2",1,2,"1..2","1..2"},
+  {"Pathname","new",1,1,"1","1",1,1,"1","1"},
+  {"Pathname","glob",1,2,"1..2","1..2",1,2,"1..2","1..2"},
+  {"Pathname","getwd",0,0,NULL,"0",0,0,NULL,"0"},
+  {"Pathname","pwd",0,0,NULL,"0",0,0,NULL,"0"},
+  {NULL, NULL, 0, 0, NULL, NULL, 0, 0, NULL, NULL}
 };
-static int emit_builtin_arity_guard(Compiler *c, int id, Buf *b) {
+int emit_builtin_arity_guard(Compiler *c, int id, Buf *b) {
   const NodeTable *nt = c->nt;
   const char *name = nt_str(nt, id, "name");
   int recv = nt_ref(nt, id, "receiver");
@@ -9221,9 +10316,18 @@ static int emit_builtin_arity_guard(Compiler *c, int id, Buf *b) {
   const char *safe_op = nt_str(nt, id, "call_operator");
   if (safe_op && sp_streq(safe_op, "&.")) return 0;
   /* several builtins change their accepted counts under a block (Array#fill:
-     1..3 bare, 0..2 with a block) -- the dumped spec describes the bare call,
-     so a call carrying a block stays on the ordinary path */
-  if (nt_ref(nt, id, "block") >= 0) return 0;
+     1..3 bare, 0..2 with a block) -- the spec carries a separate quartet
+     probed with a block, so a call with a LITERAL block checks against that
+     one (a row the probe could not characterize is the -1 sentinel quartet,
+     which never fires). An `&expr` block argument can be nil at runtime,
+     where CRuby applies the bare-call arity: unknowable here, skip. */
+  int blk = nt_ref(nt, id, "block");
+  int with_block = 0;
+  if (blk >= 0) {
+    const char *bt = nt_type(nt, blk);
+    if (bt && sp_streq(bt, "BlockArgumentNode")) return 0;
+    with_block = 1;
+  }
   int anode = nt_ref(nt, id, "arguments");
   int argc = 0; const int *argv = anode >= 0 ? nt_arr(nt, anode, "arguments", &argc) : NULL;
   for (int i = 0; i < argc; i++) {
@@ -9239,19 +10343,24 @@ static int emit_builtin_arity_guard(Compiler *c, int id, Buf *b) {
   if (rty2 && sp_streq(rty2, "ConstantReadNode")) {
     const char *cn = nt_str(nt, recv, "name");
     if (!cn) return 0;
+    /* the analyzer renames Hash.new-with-default; the spec row is "new" */
+    if (sp_streq(name, "__hash_new_default")) name = "new";
     /* a user class by this name owns its own methods */
     int uc = comp_class_index(c, cn);
     if (uc >= 0 && !c->classes[uc].is_native_class) return 0;
     for (int i = 0; sp_builtin_cmeth_arity_spec_tbl[i].cls; i++) {
       if (!sp_streq(sp_builtin_cmeth_arity_spec_tbl[i].cls, cn) ||
           !sp_streq(sp_builtin_cmeth_arity_spec_tbl[i].m, name)) continue;
-      if (argc < sp_builtin_cmeth_arity_spec_tbl[i].min &&
-          sp_builtin_cmeth_arity_spec_tbl[i].lo_exp)
-        snprintf(exp, sizeof exp, "%s", sp_builtin_cmeth_arity_spec_tbl[i].lo_exp);
-      else if (sp_builtin_cmeth_arity_spec_tbl[i].max >= 0 &&
-               argc > sp_builtin_cmeth_arity_spec_tbl[i].max &&
-               sp_builtin_cmeth_arity_spec_tbl[i].hi_exp)
-        snprintf(exp, sizeof exp, "%s", sp_builtin_cmeth_arity_spec_tbl[i].hi_exp);
+      int mn = with_block ? sp_builtin_cmeth_arity_spec_tbl[i].blk_min
+                          : sp_builtin_cmeth_arity_spec_tbl[i].min;
+      int mx = with_block ? sp_builtin_cmeth_arity_spec_tbl[i].blk_max
+                          : sp_builtin_cmeth_arity_spec_tbl[i].max;
+      const char *lo = with_block ? sp_builtin_cmeth_arity_spec_tbl[i].blk_lo_exp
+                                  : sp_builtin_cmeth_arity_spec_tbl[i].lo_exp;
+      const char *hi = with_block ? sp_builtin_cmeth_arity_spec_tbl[i].blk_hi_exp
+                                  : sp_builtin_cmeth_arity_spec_tbl[i].hi_exp;
+      if (mn >= 0 && argc < mn && lo) snprintf(exp, sizeof exp, "%s", lo);
+      else if (mx >= 0 && argc > mx && hi) snprintf(exp, sizeof exp, "%s", hi);
       break;
     }
     if (!exp[0]) return 0;
@@ -9264,18 +10373,37 @@ static int emit_builtin_arity_guard(Compiler *c, int id, Buf *b) {
                     : rt == TY_SYMBOL ? "Symbol"
                     : rt == TY_RANGE || rt == TY_FLOAT_RANGE || rt == TY_STR_RANGE ? "Range"
                     : rt == TY_TIME ? "Time"
+                    : rt == TY_NIL ? "NilClass"
+                    : rt == TY_BOOL ? "TrueClass"  /* FalseClass: same surface */
+                    : rt == TY_RATIONAL ? "Rational" : rt == TY_COMPLEX ? "Complex"
+                    : rt == TY_MUTEX ? "Mutex"
                     : ty_is_array(rt) ? "Array" : ty_is_hash(rt) ? "Hash" : NULL;
+    /* a native (package-backed) receiver checks its own class's rows -- the
+       loose C dispatch dropped excess arguments (StringIO#eof?(1) answered
+       false); a user object falls back to Object's universal rows. Both only
+       for a method the user's own chain does not define. */
+    if (!bcn && ty_is_object(rt)) {
+      int ocid = ty_object_class(rt);
+      if (ocid >= 0 && ocid < c->nclasses &&
+          comp_method_in_chain(c, ocid, name, NULL) < 0 &&
+          !comp_reader_in_chain(c, ocid, name, NULL) &&
+          !comp_writer_in_chain(c, ocid, name, NULL))
+        bcn = c->classes[ocid].is_native_class ? c->classes[ocid].name : "Object";
+    }
     if (!bcn) return 0;
     for (int i = 0; sp_builtin_arity_spec_tbl[i].cls; i++) {
       if (!sp_streq(sp_builtin_arity_spec_tbl[i].cls, bcn) ||
           !sp_streq(sp_builtin_arity_spec_tbl[i].m, name)) continue;
-      if (argc < sp_builtin_arity_spec_tbl[i].min &&
-          sp_builtin_arity_spec_tbl[i].lo_exp)
-        snprintf(exp, sizeof exp, "%s", sp_builtin_arity_spec_tbl[i].lo_exp);
-      else if (sp_builtin_arity_spec_tbl[i].max >= 0 &&
-               argc > sp_builtin_arity_spec_tbl[i].max &&
-               sp_builtin_arity_spec_tbl[i].hi_exp)
-        snprintf(exp, sizeof exp, "%s", sp_builtin_arity_spec_tbl[i].hi_exp);
+      int mn = with_block ? sp_builtin_arity_spec_tbl[i].blk_min
+                          : sp_builtin_arity_spec_tbl[i].min;
+      int mx = with_block ? sp_builtin_arity_spec_tbl[i].blk_max
+                          : sp_builtin_arity_spec_tbl[i].max;
+      const char *lo = with_block ? sp_builtin_arity_spec_tbl[i].blk_lo_exp
+                                  : sp_builtin_arity_spec_tbl[i].lo_exp;
+      const char *hi = with_block ? sp_builtin_arity_spec_tbl[i].blk_hi_exp
+                                  : sp_builtin_arity_spec_tbl[i].hi_exp;
+      if (mn >= 0 && argc < mn && lo) snprintf(exp, sizeof exp, "%s", lo);
+      else if (mx >= 0 && argc > mx && hi) snprintf(exp, sizeof exp, "%s", hi);
       break;
     }
     if (!exp[0]) return 0;
@@ -9572,16 +10700,22 @@ int emit_arg_type_guards(Compiler *c, int id, Buf *b) {
          zero-coercion case (#3883); a String, Symbol or container is the
          "can't be coerced" one (#3862). clamp takes nil for an OPEN side, so
          only a non-nil literal counts there. */
-      int nil_arg = 0, bad_arg = 0;
-      for (int a = 0; a < nc; a++) {
+      /* the FIRST offending literal decides the message, as a real call
+         validates arguments in order */
+      int off = -1; NodeKind offk = (NodeKind)0;
+      for (int a = 0; a < nc && off < 0; a++) {
         if (nv[a] < 0) continue;
         NodeKind ak = nt_kind(nt, nv[a]);
-        if (ak == NK_NilNode) nil_arg = 1;
         /* a keyword hash is an OPTION (`round(half: :even)`), not an operand */
-        else if (ak == NK_StringNode || ak == NK_SymbolNode || ak == NK_ArrayNode ||
-                 ak == NK_TrueNode || ak == NK_FalseNode) bad_arg = 1;
+        if (ak == NK_NilNode || ak == NK_StringNode || ak == NK_SymbolNode ||
+            ak == NK_ArrayNode || ak == NK_TrueNode || ak == NK_FalseNode) {
+          /* nil is an OPEN side for clamp and "no limit" for step */
+          if (ak == NK_NilNode && (sp_streq(nn, "clamp") || sp_streq(nn, "step"))) continue;
+          off = nv[a]; offk = ak;
+        }
       }
-      if (sp_streq(nn, "clamp")) nil_arg = 0;   /* nil is an open side there */
+      int nil_arg = off >= 0 && offk == NK_NilNode;
+      int bad_arg = off >= 0 && offk != NK_NilNode;
       if (hit && sp_streq(nn, "coerce")) hit = 0;   /* see below: Float() owns these errors */
       if (hit && (nil_arg || bad_arg)) {
         /* #between? / #clamp compare rather than coerce, and CRuby's failed
@@ -9594,16 +10728,53 @@ int emit_arg_type_guards(Compiler *c, int id, Buf *b) {
         int cmpform = sp_streq(nn, "between?") || sp_streq(nn, "upto") ||
                       sp_streq(nn, "downto") || sp_streq(nn, "step") ||
                       (bad_arg && sp_streq(nn, "clamp"));
+        /* CRuby's wording splits by how the method consumes the value:
+           round/floor/ceil/truncate/to_s use rb_num2long ("no implicit
+           conversion from nil to integer"), digits and [] use rb_to_int
+           ("of nil into Integer"), the arithmetic family goes through
+           coerce ("nil can't be coerced into Integer"), and gcdlcm has its
+           own "not an integer". A non-nil literal names its class in the
+           conversion forms and its value in the coerce form (:sym, true). */
+        int conv_from = sp_streq(nn, "round") || sp_streq(nn, "floor") ||
+                        sp_streq(nn, "ceil") || sp_streq(nn, "truncate") ||
+                        sp_streq(nn, "to_s");
+        int conv_of = sp_streq(nn, "digits") || sp_streq(nn, "[]");
+        const char *litcls =
+          offk == NK_StringNode ? "String" : offk == NK_SymbolNode ? "Symbol" :
+          offk == NK_ArrayNode ? "Array" : offk == NK_TrueNode ? "true" :
+          offk == NK_FalseNode ? "false" : "nil";
         const char *cn = nrt == TY_FLOAT ? "Float" : "Integer";
         TyKind rty = comp_ntype(c, id);
         const char *dv = default_value(rty);
         buf_puts(b, "({ (void)("); emit_expr(c, nr, b); buf_puts(b, "); ");
-        if (cmpform)
-          buf_printf(b, "sp_raise_cls(\"ArgumentError\", \"comparison of %s with %s failed\"); ",
-                     cn, bad_arg ? "a value" : "nil");
-        else
-          buf_printf(b, "sp_raise_cls(\"TypeError\", \"%s can't be coerced into %s\"); ",
-                     bad_arg ? "String" : "nil", cn);
+        if (cmpform) {
+          /* CRuby names the operand: a class for a String/Array, the value
+             itself for nil/true/false, the inspect form for a Symbol */
+          if (offk == NK_SymbolNode && nt_str(nt, off, "value"))
+            buf_printf(b, "sp_raise_cls(\"ArgumentError\", \"comparison of %s with :%s failed\"); ",
+                       cn, nt_str(nt, off, "value"));
+          else
+            buf_printf(b, "sp_raise_cls(\"ArgumentError\", \"comparison of %s with %s failed\"); ",
+                       cn, litcls);
+        }
+        else if (sp_streq(nn, "gcdlcm"))
+          buf_puts(b, "sp_raise_cls(\"TypeError\", \"not an integer\"); ");
+        else if (conv_from || conv_of) {
+          if (nil_arg && conv_from)
+            buf_puts(b, "sp_raise_cls(\"TypeError\", \"no implicit conversion from nil to integer\"); ");
+          else
+            buf_printf(b, "sp_raise_cls(\"TypeError\", \"no implicit conversion of %s into Integer\"); ",
+                       litcls);
+        }
+        else {
+          /* the coerce form names a Symbol by its inspect form */
+          if (offk == NK_SymbolNode && nt_str(nt, off, "value"))
+            buf_printf(b, "sp_raise_cls(\"TypeError\", \":%s can't be coerced into %s\"); ",
+                       nt_str(nt, off, "value"), cn);
+          else
+            buf_printf(b, "sp_raise_cls(\"TypeError\", \"%s can't be coerced into %s\"); ",
+                       litcls, cn);
+        }
         buf_printf(b, "%s; })", dv ? dv : "0");
         return 1;
       }
@@ -11532,7 +12703,8 @@ void emit_call(Compiler *c, int id, Buf *b) {
         if (evt == TY_STRING || lit_nil) {
           int tk = ++g_tmp, tv = ++g_tmp;
           buf_printf(b, "({ const char *_t%d = ", tk); emit_str_expr(c, argv[0], b);
-          buf_printf(b, "; const char *_t%d = ", tv); emit_str_expr(c, argv[1], b);
+          /* a nil VALUE unsets the variable; only the key is strict */
+          buf_printf(b, "; const char *_t%d = ", tv); emit_str_expr_nilable(c, argv[1], b);
           buf_printf(b, "; if (_t%d) setenv(_t%d, _t%d, 1); else unsetenv(_t%d); _t%d; })",
                      tv, tk, tv, tk, tv);
         }
@@ -13430,7 +14602,7 @@ void emit_call(Compiler *c, int id, Buf *b) {
     }
     if (sp_streq(name, "bytes") && argc == 1) {
       buf_puts(b, "sp_Random_bytes(sp_random_default_get(), ");
-      emit_expr(c, argv[0], b); buf_puts(b, ")");
+      emit_int_expr_conv(c, argv[0], b); buf_puts(b, ")");
       return;
     }
     if (sp_streq(name, "new_seed") && argc == 0) {   /* #2523 */
@@ -13438,12 +14610,12 @@ void emit_call(Compiler *c, int id, Buf *b) {
       return;
     }
     if (sp_streq(name, "urandom") && argc == 1) {     /* #2543 */
-      buf_puts(b, "sp_Random_urandom("); emit_int_expr(c, argv[0], b); buf_puts(b, ")");
+      buf_puts(b, "sp_Random_urandom("); emit_int_expr_conv(c, argv[0], b); buf_puts(b, ")");
       return;
     }
     if (sp_streq(name, "srand")) {                    /* #2525 (returns previous seed) */
       if (argc == 0) { buf_puts(b, "sp_kernel_srand((sp_int)time(NULL))"); return; }
-      buf_puts(b, "sp_kernel_srand("); emit_int_expr(c, argv[0], b); buf_puts(b, ")");
+      buf_puts(b, "sp_kernel_srand("); emit_int_expr_conv(c, argv[0], b); buf_puts(b, ")");
       return;
     }
   }
@@ -13512,7 +14684,7 @@ void emit_call(Compiler *c, int id, Buf *b) {
     }
     if (sp_streq(name, "bytes") && argc == 1) {
       buf_puts(b, "sp_Random_bytes("); emit_expr(c, recv, b); buf_puts(b, ", ");
-      emit_expr(c, argv[0], b); buf_puts(b, ")");
+      emit_int_expr_conv(c, argv[0], b); buf_puts(b, ")");
       return;
     }
     if (sp_streq(name, "seed") && argc == 0) {   /* #2522 */
@@ -14846,7 +16018,8 @@ else { memcpy(dir, sf, n); dir[n] = 0; } }
       TyKind at = comp_ntype(c, av[0]);
       if (at == TY_STRING) {
         buf_puts(b, "sp_str_to_i_strict_base("); emit_expr(c, av[0], b);
-        buf_puts(b, ", "); emit_expr(c, av[1], b); buf_puts(b, ")");
+        /* Integer("5", nil) is CRuby's TypeError, not base 0 */
+        buf_puts(b, ", "); emit_int_expr(c, av[1], b); buf_puts(b, ")");
       }
       else if (at == TY_POLY || at == TY_UNKNOWN) {
         /* a poly value is only known at runtime: a string (plain or shared
@@ -15140,7 +16313,7 @@ else { memcpy(dir, sf, n); dir[n] = 0; } }
     if (sp_streq(name, "srand")) {
       /* srand returns the PREVIOUS seed (#2517). */
       if (ac == 0) { buf_puts(b, "sp_kernel_srand((sp_int)time(NULL))"); return; }
-      buf_puts(b, "sp_kernel_srand("); emit_int_expr(c, av[0], b); buf_puts(b, ")");
+      buf_puts(b, "sp_kernel_srand("); emit_int_expr_conv(c, av[0], b); buf_puts(b, ")");
       return;
     }
   }
@@ -17802,7 +18975,7 @@ else { memcpy(dir, sf, n); dir[n] = 0; } }
               buf_printf(b, "sp_str_concat(%s, ", s); emit_expr(c, av2[0], b); buf_puts(b, ")"); return;
             }
             if (sp_streq(name, "*") && ac2 == 1) {
-              buf_printf(b, "sp_str_repeat(%s, ", s); emit_expr(c, av2[0], b); buf_puts(b, ")"); return;
+              buf_printf(b, "sp_str_repeat(%s, ", s); emit_int_expr(c, av2[0], b); buf_puts(b, ")"); return;
             }
           }
           else if (brt == TY_INT) {
@@ -18699,8 +19872,14 @@ else { memcpy(dir, sf, n); dir[n] = 0; } }
     if ((sp_streq(name, "read") || sp_streq(name, "binread")) && argc == 1) {
       buf_puts(b, "sp_file_read("); emit_str_expr(c, argv[0], b); buf_puts(b, ")"); return;
     }
-    /* File.read(path, length) -> the first length bytes (#2776) */
+    /* File.read(path, length) -> the first length bytes (#2776); a nil
+       length is "the whole file", as CRuby */
     if ((sp_streq(name, "read") || sp_streq(name, "binread")) && argc == 2) {
+      if (comp_ntype(c, argv[1]) == TY_NIL) {
+        buf_puts(b, "({ (void)("); emit_expr(c, argv[1], b);
+        buf_puts(b, "); sp_file_read("); emit_str_expr(c, argv[0], b); buf_puts(b, "); })");
+        return;
+      }
       buf_puts(b, "sp_file_read_len("); emit_str_expr(c, argv[0], b); buf_puts(b, ", ");
       emit_int_expr(c, argv[1], b); buf_puts(b, ")"); return;
     }
@@ -18750,7 +19929,8 @@ else { memcpy(dir, sf, n); dir[n] = 0; } }
       buf_puts(b, "sp_file_split("); emit_str_expr(c, argv[0], b); buf_puts(b, ")"); return;
     }
     if (sp_streq(name, "path") && argc == 1) {
-      emit_expr(c, argv[0], b); return;
+      /* the identity is only for path-like values: File.path(nil) raises */
+      emit_str_expr(c, argv[0], b); return;
     }
     if (sp_streq(name, "absolute_path") && (argc == 1 || argc == 2)) {
       buf_puts(b, "sp_file_expand_path("); emit_str_expr(c, argv[0], b); buf_puts(b, ", ");
@@ -18802,6 +19982,19 @@ else { memcpy(dir, sf, n); dir[n] = 0; } }
           emit_str_expr(c, mv, b); buf_puts(b, ")");
           return;
         }
+      }
+      else if (comp_ntype(c, argv[2]) == TY_NIL) {
+        /* a nil OFFSET is "no offset" -- a plain truncating write, not a
+           write at position 0 (which would keep the file's tail) */
+        buf_puts(b, "({ (void)("); emit_expr(c, argv[2], b);
+        buf_puts(b, "); const char *_wp = "); emit_str_expr(c, argv[0], b);
+        buf_puts(b, "; const char *_wd = ");
+        if (comp_ntype(c, argv[1]) == TY_POLY) {
+          buf_puts(b, "sp_poly_to_s("); emit_expr(c, argv[1], b); buf_puts(b, ")");
+        }
+        else emit_expr(c, argv[1], b);
+        buf_puts(b, "; sp_file_write(_wp, _wd); (sp_int)sp_str_byte_len(_wd); })");
+        return;
       }
       else {
         buf_puts(b, "sp_file_write_at("); emit_str_expr(c, argv[0], b); buf_puts(b, ", ");
@@ -19140,6 +20333,15 @@ else { memcpy(dir, sf, n); dir[n] = 0; } }
       buf_printf(b, "sp_dir_%s(", name); emit_str_expr(c, argv[0], b); buf_puts(b, ")"); return;
     }
     if ((sp_streq(name, "mkdir") || sp_streq(name, "rmdir") || sp_streq(name, "chdir")) && argc >= 1) {
+      if (sp_streq(name, "mkdir") && argc == 2) {
+        /* the permission mode is unused on this backend but still validated:
+           Dir.mkdir(path, nil) is CRuby's TypeError, not a created directory */
+        int tp = ++g_tmp;
+        buf_printf(b, "({ const char *_t%d = ", tp); emit_str_expr(c, argv[0], b);
+        buf_puts(b, "; (void)("); emit_int_expr_conv(c, argv[1], b);
+        buf_printf(b, "); sp_dir_mkdir(_t%d); })", tp);
+        return;
+      }
       buf_printf(b, "sp_dir_%s(", name); emit_str_expr(c, argv[0], b); buf_puts(b, ")"); return;
     }
   }
@@ -19325,10 +20527,10 @@ else { memcpy(dir, sf, n); dir[n] = 0; } }
             const char *svty = nt_type(nt, symv);
             int lit_true  = svty && sp_streq(svty, "TrueNode");
             int lit_false = svty && (sp_streq(svty, "FalseNode") || sp_streq(svty, "NilNode"));
-            if (lit_true) { buf_printf(b, "sp_json_symbolize(%s(", nf->csym); emit_expr(c, argv[0], b); buf_puts(b, "))"); return; }
+            if (lit_true) { buf_printf(b, "sp_json_symbolize(%s(", nf->csym); emit_str_expr(c, argv[0], b); buf_puts(b, "))"); return; }
             if (!lit_false) {
               int tj = ++g_tmp;
-              buf_printf(b, "({ sp_RbVal _t%d = %s(", tj, nf->csym); emit_expr(c, argv[0], b);
+              buf_printf(b, "({ sp_RbVal _t%d = %s(", tj, nf->csym); emit_str_expr(c, argv[0], b);
               buf_puts(b, "); (");
               emit_cond(c, symv, b);
               buf_printf(b, ") ? sp_json_symbolize(_t%d) : _t%d; })", tj, tj);
@@ -19345,12 +20547,12 @@ else { memcpy(dir, sf, n); dir[n] = 0; } }
         for (int ai = 0; ai < nf->nargs && ai < argc; ai++) {
           if (ai) buf_puts(b, ", ");
           const char *spec = nf->args[ai];
-          TyKind at = comp_ntype(c, argv[ai]);
+          /* the typed-slot emitters carry the implicit conversion protocol
+             (poly unboxing, #to_str / #to_int, nil / bool TypeError):
+             Base64.encode64(nil) answered "" and JSON.parse(nil) parsed "" */
           if (sp_streq(spec, "any")) emit_boxed(c, argv[ai], b);
-          else if (sp_streq(spec, "string")) {
-            if (at == TY_POLY) { buf_puts(b, "sp_poly_to_s("); emit_expr(c, argv[ai], b); buf_puts(b, ")"); }
-            else emit_expr(c, argv[ai], b);
-          }
+          else if (sp_streq(spec, "string")) emit_str_expr(c, argv[ai], b);
+          else if (sp_streq(spec, "int")) emit_int_expr(c, argv[ai], b);
           else emit_expr(c, argv[ai], b);
         }
         buf_puts(b, ")");
@@ -19963,7 +21165,7 @@ else { memcpy(dir, sf, n); dir[n] = 0; } }
     if (rre >= 0 && sp_streq(name, "match?") && argc == 1) {
       /* /re/.match?(str): a match boolean that leaves $~ alone (CRuby) */
       if (a0 == TY_POLY) { buf_printf(b, "sp_re_match_p(sp_re_pat_%d, sp_poly_to_s(", rre); emit_expr(c, argv[0], b); buf_puts(b, "))"); }
-      else { buf_printf(b, "sp_re_match_p(sp_re_pat_%d, ", rre); emit_str_expr(c, argv[0], b); buf_puts(b, ")"); }
+      else { buf_printf(b, "sp_re_match_p(sp_re_pat_%d, ", rre); emit_str_expr_nilable(c, argv[0], b); buf_puts(b, ")"); }  /* nil subject: no match */
       return;
     }
     if (rre >= 0 && sp_streq(name, "===") && argc == 1) {
@@ -20336,10 +21538,10 @@ else { memcpy(dir, sf, n); dir[n] = 0; } }
          value (e.g. a `string?` attr read) to const char*, which emit_expr would
          leave as an sp_RbVal into sp_re_matchdata's const char* slot (#3219). */
       if (argc == 1) {
-        buf_printf(b, "sp_re_matchdata(sp_re_pat_%d, ", rre); emit_str_expr(c, argv[0], b); buf_puts(b, ")");
+        buf_printf(b, "sp_re_matchdata(sp_re_pat_%d, ", rre); emit_str_expr_nilable(c, argv[0], b); buf_puts(b, ")");
       }
       else {
-        buf_printf(b, "sp_re_matchdata_at(sp_re_pat_%d, ", rre); emit_str_expr(c, argv[0], b);
+        buf_printf(b, "sp_re_matchdata_at(sp_re_pat_%d, ", rre); emit_str_expr_nilable(c, argv[0], b);
         buf_puts(b, ", "); emit_int_expr(c, argv[1], b); buf_puts(b, ")");
       }
       return;
@@ -20473,7 +21675,7 @@ else { memcpy(dir, sf, n); dir[n] = 0; } }
         if (rp_ok && rp.p) {
           if ((sp_streq(name, "match?") || sp_streq(name, "===")) && argc == 1) {
             if (a0 == TY_POLY) { buf_printf(b, "sp_re_match_p(%s, sp_poly_to_s(", rp.p); emit_expr(c, argv[0], b); buf_puts(b, "))"); }
-            else { buf_printf(b, "sp_re_match_p(%s, ", rp.p); emit_str_expr(c, argv[0], b); buf_puts(b, ")"); }
+            else { buf_printf(b, "sp_re_match_p(%s, ", rp.p); emit_str_expr_nilable(c, argv[0], b); buf_puts(b, ")"); }  /* nil subject: no match */
             free(rp.p); return;
           }
           if (sp_streq(name, "=~") && argc == 1) {
@@ -20528,8 +21730,8 @@ else { memcpy(dir, sf, n); dir[n] = 0; } }
             /* the subject can arrive boxed -- one call site passing an
                untyped block param is enough -- so unbox it into the const
                char * slot the way match? and =~ already do */
-            if (argc == 1) { buf_printf(b, "sp_re_matchdata(%s, ", rp.p); emit_str_expr(c, argv[0], b); buf_puts(b, ")"); }
-            else { buf_printf(b, "sp_re_matchdata_at(%s, ", rp.p); emit_str_expr(c, argv[0], b); buf_puts(b, ", "); emit_expr(c, argv[1], b); buf_puts(b, ")"); }
+            if (argc == 1) { buf_printf(b, "sp_re_matchdata(%s, ", rp.p); emit_str_expr_nilable(c, argv[0], b); buf_puts(b, ")"); }
+            else { buf_printf(b, "sp_re_matchdata_at(%s, ", rp.p); emit_str_expr_nilable(c, argv[0], b); buf_puts(b, ", "); emit_expr(c, argv[1], b); buf_puts(b, ")"); }
             free(rp.p); return;
           }
           free(rp.p);

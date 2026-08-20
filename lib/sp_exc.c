@@ -243,7 +243,11 @@ const char *sp_exc_class_name(volatile sp_Exception *ve) {
 }
 const char *sp_exc_message(volatile sp_Exception *ve) {
   sp_Exception *e = (sp_Exception *)ve;
-  return e ? e->msg : sp_str_empty;
+  /* a message never set (super(nil), Exception.new) defaults to the class
+     name, as CRuby's Exception#message does */
+  if (!e) return sp_str_empty;
+  if (e->msg) return e->msg;
+  return e->cls_name ? sp_str_dup_external(e->cls_name) : sp_str_empty;
 }
 /* Exception#cause: the exception active when this one was raised, or NULL. */
 sp_Exception *sp_exc_cause(volatile sp_Exception *ve) {

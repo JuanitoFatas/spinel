@@ -2134,6 +2134,72 @@ static SP_INLINE const char *sp_poly_arg_str(sp_RbVal v) {
   return sp_poly_arg_str_slow(v);
 }
 
+/* The strict argument forms: nil / true / false in a typed String or Integer
+   slot are CRuby's TypeError (File.join("a", nil), [1].take(nil)), where the
+   loose forms above read them as "" / 0. Codegen emits these at the slots
+   CRuby itself rejects nil in; a slot CRuby accepts nil in ("x".split(nil),
+   StringIO#read(nil)) keeps the loose form. CRuby words the nil-to-Integer
+   case differently from every other pairing ("from nil to integer"). */
+static SP_NOINLINE const char *sp_poly_arg_str_chk_slow(sp_RbVal v) {
+  if (v.tag == SP_TAG_NIL)
+    sp_raise_cls("TypeError", "no implicit conversion of nil into String");
+  if (v.tag == SP_TAG_BOOL)
+    sp_raise_cls("TypeError", v.v.b ? "no implicit conversion of true into String"
+                                    : "no implicit conversion of false into String");
+  /* the run-time half of the static contract: a wrongly-classed scalar in a
+     strict String slot raises the class-naming TypeError, exactly as the
+     emitter does for a value whose class is known at compile time */
+  if (v.tag == SP_TAG_INT || v.tag == SP_TAG_BIGINT)
+    sp_raise_cls("TypeError", "no implicit conversion of Integer into String");
+  if (v.tag == SP_TAG_FLT)
+    sp_raise_cls("TypeError", "no implicit conversion of Float into String");
+  if (v.tag == SP_TAG_SYM)
+    sp_raise_cls("TypeError", "no implicit conversion of Symbol into String");
+  /* a boxed BUILTIN value (negative cls_id) has no #to_str either -- name
+     its class, as CRuby does. A boxed shared-string handle IS a String and
+     passes through (the slow path dereferences it). */
+  if (v.tag == SP_TAG_OBJ && v.cls_id < 0 && !sp_poly_is_strbuf(v))
+    sp_raise_cls("TypeError", sp_sprintf("no implicit conversion of %s into String",
+                                         sp_poly_class_name(v)));
+  return sp_poly_arg_str_slow(v);
+}
+static SP_INLINE const char *sp_poly_arg_str_chk(sp_RbVal v) {
+  if (v.tag == SP_TAG_STR) return v.v.s;
+  return sp_poly_arg_str_chk_slow(v);
+}
+static SP_NOINLINE sp_int sp_poly_arg_int_chk_slow(sp_RbVal v) {
+  /* a boxed int slot's nil sentinel is nil, not a number */
+  if (v.tag == SP_TAG_INT && v.v.i == SP_INT_NIL)
+    sp_raise_cls("TypeError", "no implicit conversion from nil to integer");
+  if (v.tag == SP_TAG_NIL)
+    sp_raise_cls("TypeError", "no implicit conversion from nil to integer");
+  if (v.tag == SP_TAG_BOOL)
+    sp_raise_cls("TypeError", v.v.b ? "no implicit conversion of true into Integer"
+                                    : "no implicit conversion of false into Integer");
+  /* a Float converts (CRuby's to_int truncation); String and Symbol do not */
+  if (v.tag == SP_TAG_STR)
+    sp_raise_cls("TypeError", "no implicit conversion of String into Integer");
+  if (v.tag == SP_TAG_SYM)
+    sp_raise_cls("TypeError", "no implicit conversion of Symbol into Integer");
+  /* boxed builtins: Rational, BigRational, and Complex own #to_int in CRuby
+     and keep converting below; a shared-string handle is a String; every
+     other builtin kind (Array, Hash, Time, Regexp, ...) has no #to_int */
+  if (v.tag == SP_TAG_OBJ && v.cls_id < 0 &&
+      !sp_poly_is_rational(v) && !sp_poly_is_brat(v) &&
+      v.cls_id != SP_BUILTIN_COMPLEX) {
+    if (sp_poly_is_strbuf(v))
+      sp_raise_cls("TypeError", "no implicit conversion of String into Integer");
+    sp_raise_cls("TypeError", sp_sprintf("no implicit conversion of %s into Integer",
+                                         sp_poly_class_name(v)));
+  }
+  if (v.tag == SP_TAG_OBJ && v.cls_id >= 0) return sp_poly_arg_int_obj(v);
+  return sp_poly_to_i(v);
+}
+static SP_INLINE sp_int sp_poly_arg_int_chk(sp_RbVal v) {
+  if (v.tag == SP_TAG_INT && v.v.i != SP_INT_NIL) return v.v.i;
+  return sp_poly_arg_int_chk_slow(v);
+}
+
 static sp_float sp_poly_to_f(sp_RbVal v) { if (v.tag == SP_TAG_FLT) return v.v.f; if (v.tag == SP_TAG_INT || v.tag == SP_TAG_SYM) return (sp_float)v.v.i; if (v.tag == SP_TAG_BIGINT) return sp_bigint_to_double((sp_Bigint *)v.v.p); if (v.tag == SP_TAG_STR) return (sp_float)atof(v.v.s ? v.v.s : sp_str_empty); if (v.tag == SP_TAG_BOOL) return v.v.b ? 1.0 : 0.0; if (v.tag == SP_TAG_OBJ && v.cls_id == SP_BUILTIN_RATIONAL) return sp_rational_to_f(*(sp_Rational *)v.v.p); if (v.tag == SP_TAG_OBJ && v.cls_id == SP_BUILTIN_BIG_RATIONAL) return sp_brat_to_f((sp_BigRational *)v.v.p); if (v.tag == SP_TAG_OBJ && v.cls_id == SP_BUILTIN_TIME && v.v.p) { sp_Time _tt = *(sp_Time *)v.v.p; return (sp_float)_tt.tv_sec + (sp_float)_tt.tv_nsec / 1e9; } return 0.0; }  /* STR arm mirrors sp_poly_to_i's strtoll and the typed String#to_f (atof) */
 /* The same conversions, but a boxed nil lands on the type's sentinel instead
    of the type's zero. A method whose declared return is `Integer?`/`Float?`
@@ -8184,15 +8250,16 @@ const char *sp_file_basename2(const char *path, const char *suffix);
    flatten recursively (#2786), nil is CRuby's TypeError. */
 static void sp_file_join_flat(sp_RbVal v, const char **parts, int *np) {
   if (*np >= 64) return;
-  if (v.tag == SP_TAG_NIL)
-    sp_raise_cls("TypeError", "no implicit conversion of nil into String");
   if (v.tag == SP_TAG_STR) { parts[(*np)++] = v.v.s ? v.v.s : ""; return; }
   if (v.tag == SP_TAG_OBJ && sp_poly_is_array_kind(v.cls_id)) {
     sp_int n = sp_poly_length(v);
     for (sp_int i = 0; i < n; i++) sp_file_join_flat(sp_poly_arr_get(v, i), parts, np);
     return;
   }
-  parts[(*np)++] = sp_poly_to_s(v);
+  /* everything else takes the strict slot's protocol: nil / bool / a
+     wrongly-classed scalar is CRuby's TypeError, a user object converts
+     through #to_str or raises */
+  parts[(*np)++] = sp_poly_arg_str_chk(v);
 }
 static const char *sp_file_join_vals(sp_RbVal *vals, int n) {
   const char *parts[64]; int np = 0;

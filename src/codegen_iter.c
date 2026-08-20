@@ -1895,6 +1895,18 @@ int emit_iteration_stmt(Compiler *c, int id, Buf *b, int indent) {
   const char *name = nt_str(nt, id, "name");
   int recv = nt_ref(nt, id, "receiver");
   if (!name) return 0;
+  /* CRuby checks arity and argument classes at dispatch, before the
+     iteration starts: a loop emitted here never reaches emit_call, so both
+     guards run here too (3.step(4, 1, 2) { } ran the loop with the extra
+     argument dropped; 1.upto("a") { } emitted a pointer/int comparison). */
+  { Buf gb; memset(&gb, 0, sizeof gb);
+    if (emit_builtin_arity_guard(c, id, &gb) || emit_arg_type_guards(c, id, &gb)) {
+      emit_indent(b, indent);
+      buf_printf(b, "%s;\n", gb.p ? gb.p : "");
+      free(gb.p);
+      return 1;
+    }
+    free(gb.p); }
   /* A poly receiver whose name a user class also owns as a block-taking
      method: the loops below walk the receiver as a builtin container, which
      answers empty when the value is the user object. The cls_id dispatch is
