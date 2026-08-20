@@ -50,6 +50,9 @@ static inline void sp_str_split_push(sp_StrArray*a,const char*p,size_t n){
   char*r=sp_str_alloc_raw(n+1);
   memcpy(r,p,n);
   r[n]=0;
+  /* record the real length: alloc_raw leaves it unset, so a piece holding an
+     embedded NUL would answer strlen and read short */
+  sp_str_set_len(r,n);
   sp_StrArray_push(a,r);
 }
 

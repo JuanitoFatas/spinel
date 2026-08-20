@@ -4685,13 +4685,13 @@ static const char *sp_PolyArray_join(sp_PolyArray *a, const char *sep) {
   sp_String *s = sp_String_new("");
   SP_GC_ROOT(s);
   for (sp_int i = 0; i < a->len; i++) {
-    if (i > 0 && sep) sp_String_append(s, sep);
+    if (i > 0 && sep) sp_String_append_bin(s, sep);   /* byte-exact: a separator may hold a NUL */
     sp_RbVal e = a->data[i];
     /* a nested array joins recursively with the same separator (CRuby) */
     if (e.tag == SP_TAG_OBJ && sp_poly_is_array_kind(e.cls_id))
-      sp_String_append(s, sp_poly_join(e, sep));
+      sp_String_append_bin(s, sp_poly_join(e, sep));
     else
-      sp_String_append(s, sp_poly_to_s(e));
+      sp_String_append_bin(s, sp_poly_to_s(e));
   }
   /* Copy out of the sp_String builder: `s` is unrooted once this returns, so a
      later GC would sweep it and its finalizer free the fd-buffer, leaving a
