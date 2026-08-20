@@ -8768,6 +8768,27 @@ static int strbuf_mut_kind(Compiler *c, const char *vn, Scope *vs);
    mutation. Without it a name-keyed mutator table cannot tell `out << "x"`
    (a string append) from `b0 << 4` (an integer shift), and an Integer element
    bound to a local was promoted to a string handle (#3971). */
+/* The element a COLLECTING iterator stores into the array it builds: the tail
+   of its block. `["a"].map { |s| s.dup }` fills the array with fresh mutable
+   strings exactly as `["a".dup]` does, and the two shapes have to be read the
+   same way -- only the literal was, so mutating an element of a mapped array
+   was silently dropped (#4037). Answers -1 when the value is not one. */
+static int strbuf_map_block_tail(Compiler *c, int val) {
+  const NodeTable *nt = c->nt;
+  if (val < 0 || nt_kind(nt, val) != NK_CallNode) return -1;
+  const char *mn = nt_str(nt, val, "name");
+  /* map / collect only: flat_map's block tail is an ARRAY of elements, not one
+     element, so its stores are a level deeper than this reads. That shape is
+     still dropped. */
+  if (!mn || !(sp_streq(mn, "map") || sp_streq(mn, "collect"))) return -1;
+  int blk = nt_ref(nt, val, "block");
+  if (blk < 0 || nt_kind(nt, blk) != NK_BlockNode) return -1;
+  int body = nt_ref(nt, blk, "body");
+  if (body < 0 || nt_kind(nt, body) != NK_StatementsNode) return -1;
+  int bn = 0; const int *bb = nt_arr(nt, body, "body", &bn);
+  return bn > 0 ? bb[bn - 1] : -1;
+}
+
 static int strbuf_container_stores_string(Compiler *c, const char *contn, Scope *conts) {
   const NodeTable *nt = c->nt;
   for (int w = 0; w < nt->count; w++) {
@@ -8783,6 +8804,8 @@ static int strbuf_container_stores_string(Compiler *c, const char *contn, Scope 
         int en = 0; const int *el = nt_arr(nt, val, "elements", &en);
         for (int e = 0; e < en && nst < 64; e++) stores[nst++] = el[e];
       }
+      else if (strbuf_map_block_tail(c, val) >= 0)
+        stores[nst++] = strbuf_map_block_tail(c, val);
       else if (vk == NK_HashNode || vk == NK_KeywordHashNode) {
         int en = 0; const int *el = nt_arr(nt, val, "elements", &en);
         for (int e = 0; e < en && nst < 64; e++)
@@ -8831,6 +8854,8 @@ static int strbuf_demand_container_stores(Compiler *c, const char *contn, Scope 
           int en2 = 0; const int *el2 = nt_arr(nt, val2, "elements", &en2);
           for (int e2 = 0; e2 < en2 && nst < 64; e2++) stores[nst++] = el2[e2];
         }
+        else if (strbuf_map_block_tail(c, val2) >= 0)
+          stores[nst++] = strbuf_map_block_tail(c, val2);
         else if (vk == NK_HashNode || vk == NK_KeywordHashNode) {
           int en2 = 0; const int *el2 = nt_arr(nt, val2, "elements", &en2);
           for (int e2 = 0; e2 < en2 && nst < 64; e2++)
