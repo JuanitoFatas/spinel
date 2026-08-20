@@ -873,6 +873,31 @@ int poly_builtin_zero_arg_name(const char *m) {
   for (int i = 0; B[i]; i++) if (sp_streq(m, B[i])) return 1;
   return 0;
 }
+/* The return a user class gives `name` at this arity, unified over every class
+   that defines it, or TY_UNKNOWN when none does (or none has settled). The
+   poly-dispatch union rules ask this to tell a name whose user answer AGREES
+   with the builtin one from a name whose answer does not. */
+static TyKind an_user_read_ty(Compiler *c, const char *name, int argc) {
+  TyKind r = TY_UNKNOWN; int found = 0;
+  for (int k = 0; k < c->nclasses; k++) {
+    if (c->classes[k].is_native_class) {
+      int nmk = comp_native_method_find(c, k, name, argc, 0);
+      if (nmk >= 0) {
+        TyKind nr = sp_streq(c->native_methods[nmk].ret, "self")
+                      ? ty_object(k) : native_spec_to_ty(c->native_methods[nmk].ret);
+        r = found ? ty_unify(r, nr) : nr; found = 1;
+      }
+      continue;
+    }
+    int mi = comp_method_in_chain(c, k, name, NULL);
+    if (mi >= 0 && c->scopes[mi].ret != TY_UNKNOWN) {
+      r = found ? ty_unify(r, c->scopes[mi].ret) : (TyKind)c->scopes[mi].ret;
+      found = 1;
+    }
+  }
+  return found ? r : TY_UNKNOWN;
+}
+
 TyKind infer_call(Compiler *c, int id) {
 
   /* a yielder push (`y << v` inside an Enumerator.new generator) lowers to a
@@ -3850,7 +3875,20 @@ else {
       if (sp_streq(name, "to_s") || sp_streq(name, "inspect")) return TY_STRING;
       if ((sp_streq(name, "gsub") || sp_streq(name, "sub")) && argc == 2) return TY_STRING;
       if (sp_streq(name, "join")) return TY_STRING;
-      if (sp_streq(name, "to_i") || sp_streq(name, "length") || sp_streq(name, "size")) return TY_INT;
+      /* A length-like read answers an Integer -- unless a user class owns the
+         name and answers something else, in which case the call's value is
+         that union. The dispatch ALWAYS emits the builtin length arms (a
+         symbol, a string, every array and hash kind), so pinning the call to
+         Integer left their sp_int and the user arm's own return meeting in one
+         slot, and the build stopped. Only a DISAGREEING user return widens it:
+         one that answers an Integer already agrees, and widening every
+         `poly.size` would box a count the whole program reads as a number. */
+      if (sp_streq(name, "to_i") || sp_streq(name, "length") || sp_streq(name, "size")) {
+        TyKind ur = an_user_read_ty(c, name, argc);
+        if (sp_streq(name, "to_i") || ur == TY_UNKNOWN || ur == TY_INT || ur == TY_VOID)
+          return TY_INT;
+        return TY_POLY;
+      }
       if (sp_streq(name, "to_f")) return TY_FLOAT;
       /* Hash#keys / #values on a poly hash -> a poly array (boxed elements).
          to_a on a poly value follows the same rule: nil -> [], arrays and
