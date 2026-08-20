@@ -234,3 +234,64 @@ int ty_block_yield(TyKind recv, const char *name, TyKind *out, int max) {
   return 0;
 #undef BY_PUT
 }
+
+int ty_object_protocol_kind(TyKind t) {
+  switch (t) {
+    case TY_FIBER: case TY_THREAD: case TY_QUEUE: case TY_MUTEX: case TY_CONDVAR:
+    case TY_DIR: case TY_ADDRINFO: case TY_IO: case TY_ENUMERATOR: case TY_CURRY:
+    case TY_RANDOM: case TY_OPENSTRUCT: case TY_METHOD: case TY_EXCEPTION:
+    case TY_MATCHDATA:
+      return 1;
+    case TY_TIME: case TY_TMS: case TY_STR_RANGE:
+      return 2;
+    default:
+      return 0;
+  }
+}
+
+/* Kinds whose members may compare equal across storage (1 == 1.0, an
+   IntArray against a PolyArray) share a family; a receiver against an operand
+   of another family is unequal without looking. Every other kind is its own
+   family. This is a coarser partition than eq_family (codegen_util.c), which
+   splits ranges by element type and reports 0 for "undecidable" -- here an
+   unknown kind is decidable: it is simply not equal to anything else. */
+int ty_object_protocol_family(TyKind t) {
+  if (ty_is_numeric(t) || t == TY_RATIONAL || t == TY_COMPLEX) return 1;
+  if (t == TY_STRING || t == TY_STRBUF) return 2;
+  if (ty_is_array(t) || ty_is_obj_array(t)) return 3;
+  if (ty_is_hash(t)) return 4;
+  if (t == TY_RANGE || t == TY_FLOAT_RANGE || t == TY_STR_RANGE) return 5;
+  return 100 + (int)t;
+}
+
+int ty_object_protocol_answers(TyKind rt, TyKind at, const char *name, int argc) {
+  if (!name) return 0;
+  int kind = ty_object_protocol_kind(rt);
+  if (argc == 0) {
+    if (kind == 1) return sp_streq(name, "frozen?") || sp_streq(name, "freeze");
+    /* a Range is always frozen; Time and Tms carry no frozen bit, so neither
+       question is answered for them */
+    if (kind == 2) return rt == TY_STR_RANGE && sp_streq(name, "frozen?");
+    return 0;
+  }
+  if (argc != 1) return 0;
+  int is_equal = sp_streq(name, "equal?");
+  int is_eql = sp_streq(name, "eql?");
+  int is_case = sp_streq(name, "===");
+  int is_eq = is_case || sp_streq(name, "==") || sp_streq(name, "!=");
+  if (!is_eq && !is_eql && !is_equal) return 0;
+  if (kind == 0) {
+    /* the cross-family tier */
+    if (!(rt == TY_RANGE || rt == TY_FLOAT_RANGE || rt == TY_BIGINT || ty_is_array(rt))) return 0;
+    if (ty_is_array(rt) && ty_is_array(at) && at != rt) return !is_equal;
+    if (at == TY_POLY || at == TY_UNKNOWN || at == TY_VOID) return 0;
+    if (ty_is_object(at) || ty_is_obj_array(at)) return 0;
+    return ty_object_protocol_family(at) != ty_object_protocol_family(rt);
+  }
+  /* Proc#=== (a curried one too), Method#=== and Range#=== call, invoke or
+     cover: not identity */
+  if (is_case && (rt == TY_METHOD || rt == TY_CURRY || rt == TY_STR_RANGE)) return 0;
+  /* a by-value struct has no identity to compare */
+  if (kind == 2 && is_equal) return 0;
+  return 1;
+}

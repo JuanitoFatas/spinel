@@ -223,6 +223,9 @@ sp_File *sp_io_stdin(void) {
   return &s.f;
 }
 
+sp_bool sp_io_frozen(sp_File *f) { return f ? (sp_bool)f->frozen : TRUE; }
+sp_File *sp_io_freeze(sp_File *f) { if (f) f->frozen = 1; return f; }
+
 sp_int sp_File_close(sp_File *f) {
   /* never fclose the shared stdout/stderr handles (sp_io_stdout/sp_io_stderr):
      closing the process's standard streams would corrupt the singleton and any

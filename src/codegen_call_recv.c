@@ -4,6 +4,9 @@
 
 #include "codegen_internal.h"
 
+/* Object's identity protocol, text form (defined with its node form at the end of this file). */
+static void emit_native_object_protocol_text(Compiler *c, const char *name, TyKind rt, const char *r, TyKind at, const char *a, Buf *b);
+
 /* Receiver type with the empty-container-literal coercion the inference
    layer applies (`[].m` -> poly array, `{}.m` -> str-keyed poly hash, the
    same C type the emitters build for the bare literals): comp_ntype answers
@@ -9192,6 +9195,13 @@ int emit_value_recv_call(Compiler *c, int id, Buf *b) {
         buf_printf(b, "({ sp_Time _t%d = %s; sp_Time _t%d = ", tt, r, tu); emit_expr(c, argv[0], b);
         buf_printf(b, "; sp_time_cmp(_t%d, _t%d) == 0; })", tt, tu);
       }
+      /* a poly operand may hold a Time: unwrap and compare by instant */
+      else if (comp_ntype(c, argv[0]) == TY_POLY) {
+        int tt = ++g_tmp, tq = ++g_tmp;
+        buf_printf(b, "({ sp_Time _t%d = %s; sp_RbVal _t%d = ", tt, r, tq); emit_expr(c, argv[0], b);
+        buf_printf(b, "; (sp_bool)(_t%d.tag == SP_TAG_OBJ && _t%d.cls_id == SP_BUILTIN_TIME && "
+                      "sp_time_cmp(_t%d, *(sp_Time *)_t%d.v.p) == 0); })", tq, tq, tt, tq);
+      }
       else { buf_puts(b, "((void)("); emit_expr(c, argv[0], b); buf_puts(b, "), 0)"); }
     }
     else if (sp_streq(name, "to_a") && argc == 0) {
@@ -9376,9 +9386,17 @@ int emit_value_recv_call(Compiler *c, int id, Buf *b) {
       if (at == TY_MATCHDATA) { buf_printf(b, "sp_MatchData_eq(%s, ", r); emit_expr(c, argv[0], b); buf_puts(b, ")"); }
       else { buf_printf(b, "((void)(%s), (void)(", r); emit_boxed(c, argv[0], b); buf_puts(b, "), 0)"); }
     }
+    /* MatchData#=== is Object's: == (structural, above); #equal? is identity */
+    else if ((sp_streq(name, "===") || sp_streq(name, "equal?")) && argc == 1) {
+      Buf as = expr_buf(c, argv[0]);
+      emit_native_object_protocol_text(c, name, TY_MATCHDATA, r, comp_ntype(c, argv[0]), as.p ? as.p : "0", b);
+      free(as.p);
+    }
     else if (sp_streq(name, "hash") && argc == 0) buf_printf(b, "sp_MatchData_hash(%s)", r);  /* content-based (#3014) */
-    /* a MatchData is never frozen (#3638) */
-    else if (sp_streq(name, "frozen?") && argc == 0) buf_printf(b, "((void)(%s), 0)", r);
+    /* a MatchData is a heap instance: frozen? reads the bit freeze sets (#3638
+       answered a flat false, which freeze then contradicted) */
+    else if (sp_streq(name, "frozen?") && argc == 0) buf_printf(b, "sp_gc_is_frozen((void *)(%s))", r);
+    else if (sp_streq(name, "freeze") && argc == 0) buf_printf(b, "((sp_MatchData *)sp_gc_freeze((void *)(%s)))", r);
     else if (sp_streq(name, "named_captures") && argc == 0) buf_printf(b, "sp_md_named_captures(%s)", r);
     /* named_captures(symbolize_names: true): symbol keys (#2530) */
     else if (sp_streq(name, "named_captures") && argc == 1) {
@@ -11817,4 +11835,152 @@ int emit_poly_call(Compiler *c, int id, Buf *b) {
     return 1;
   }
   return 0;
+}
+
+/* Object's universal protocol -- ===, ==, !=, equal?, eql?, frozen?, freeze --
+   on the native handle and value kinds that have no arm of their own. Reached
+   only from the tails of emit_call and emit_case_eq_call (and from the
+   MatchData, OpenStruct and IO arms, and the case/when emitter, which
+   delegate), after every typed arm and the user-method routing declined, so it
+   can never shadow a more specific answer: it turns a front-end rejection into
+   the answer Ruby gives. WHICH calls it answers is decided once, in
+   ty_object_protocol_answers (types.c), which infer_call types from as well.
+
+   Two semantics, per CRuby. A heap handle (Fiber, Thread, Queue, Mutex,
+   ConditionVariable, Dir, Addrinfo, IO, Enumerator, Method, Exception,
+   MatchData, a curried Proc) IS its pointer: the predicates are pointer
+   identity and frozen? reads the bit freeze sets (the GC header, or the
+   handle's own flag for an IO, whose standard streams are static storage).
+   Random, OpenStruct, Exception, File::Stat, Time and Process::Tms answer ==
+   and === structurally (state, members, class and message, modification
+   time, instant, fields); eql? and equal? stay identity where the value has
+   one, and OpenStruct's eql? is its table's. Time, Tms and a String range
+   are by-value structs: equal? and (bar the Range, always frozen) frozen?
+   are not answered for them, and `freeze` keeps the identity no-op it had.
+
+   Evaluation order is Ruby's: the receiver first, into a rooted temp, then
+   the operand, then the test -- an allocating operand must not collect a
+   receiver held only in the expression. A poly operand is unwrapped in
+   place: same tag, same builtin id, then the pointer or structural test. A
+   kind with no builtin id (Random) has no boxed form at all, so a poly slot
+   never holds one and the answer is false. */
+static void emit_native_object_protocol_text(Compiler *c, const char *name, TyKind rt,
+                                             const char *r, TyKind at, const char *a, Buf *b) {
+  int kind = ty_object_protocol_kind(rt);
+  Buf ct; memset(&ct, 0, sizeof ct); emit_ctype(c, rt, &ct);
+  const char *cty = ct.p ? ct.p : "void *";
+  if (sp_streq(name, "frozen?")) {
+    if (rt == TY_IO) buf_printf(b, "sp_io_frozen(%s)", r);
+    else if (kind == 1) {
+      int t = ++g_tmp;
+      buf_printf(b, "({ %s _t%d = %s; _t%d ? sp_gc_is_frozen((void *)_t%d) : (sp_bool)1; })", cty, t, r, t, t);
+    }
+    else buf_printf(b, "((void)(%s), (sp_bool)1)", r);
+    free(ct.p);
+    return;
+  }
+  if (sp_streq(name, "freeze")) {
+    if (rt == TY_IO) buf_printf(b, "sp_io_freeze(%s)", r);
+    else buf_printf(b, "((%s)sp_gc_freeze((void *)(%s)))", cty, r);
+    free(ct.p);
+    return;
+  }
+  int is_ne = sp_streq(name, "!=");
+  int is_eql = sp_streq(name, "eql?");
+  int is_equal = sp_streq(name, "equal?");
+  /* the cross-family tier: a Range, Array or Bignum against another family */
+  if (kind == 0) {
+    if (ty_is_array(rt) && ty_is_array(at)) {
+      Buf rb; memset(&rb, 0, sizeof rb); emit_boxed_text(c, rt, r, &rb);
+      Buf ab; memset(&ab, 0, sizeof ab); emit_boxed_text(c, at, a, &ab);
+      buf_printf(b, "(%s%s(%s, %s))", is_ne ? "!" : "", is_eql ? "sp_poly_eql" : "sp_poly_eq",
+                 rb.p ? rb.p : r, ab.p ? ab.p : a);
+      free(rb.p); free(ab.p);
+    }
+    else buf_printf(b, "((void)(%s), (void)(%s), (sp_bool)%d)", r, a, is_ne ? 1 : 0);
+    free(ct.p);
+    return;
+  }
+  /* which comparisons look inside the value rather than at its address */
+  const char *fn = NULL;
+  if (rt == TY_RANDOM && !is_eql && !is_equal) fn = "sp_Random_eq";
+  else if (rt == TY_OPENSTRUCT && !is_equal) fn = is_eql ? "sp_OpenStruct_eql" : "sp_OpenStruct_eq";
+  else if (rt == TY_EXCEPTION && !is_eql && !is_equal) fn = "sp_exc_eq";
+  else if (rt == TY_IO && !is_eql && !is_equal) fn = "sp_io_eq";
+  else if (rt == TY_MATCHDATA && !is_eql && !is_equal) fn = "sp_MatchData_eq";
+  int t = ++g_tmp;
+  /* receiver, then operand, into temps; then the test (negated for !=) */
+  buf_printf(b, "({ %s _t%d = %s; ", cty, t, r);
+  if (kind == 1) buf_printf(b, "SP_GC_ROOT(_t%d); ", t);
+  Buf test; memset(&test, 0, sizeof test);
+  if (at == rt) {
+    buf_printf(b, "%s _u%d = %s; ", cty, t, a);
+    if (kind == 2 && rt == TY_TMS)
+      buf_printf(&test, "(_t%d.utime == _u%d.utime && _t%d.stime == _u%d.stime && "
+                        "_t%d.cutime == _u%d.cutime && _t%d.cstime == _u%d.cstime)", t, t, t, t, t, t, t, t);
+    else if (kind == 2 && rt == TY_TIME) buf_printf(&test, "(sp_time_cmp(_t%d, _u%d) == 0)", t, t);
+    else if (kind == 2) buf_printf(&test, "sp_srange_eq(_t%d, _u%d)", t, t);
+    else if (fn) buf_printf(&test, "%s(_t%d, _u%d)", fn, t, t);
+    else buf_printf(&test, "(_t%d == _u%d)", t, t);
+  }
+  else if (at == TY_POLY && kind == 2) {
+    Buf rb; memset(&rb, 0, sizeof rb);
+    char tref[24]; snprintf(tref, sizeof tref, "_t%d", t);
+    emit_boxed_text(c, rt, tref, &rb);
+    buf_printf(b, "sp_RbVal _u%d = %s; ", t, a);
+    buf_printf(&test, "%s(%s, _u%d)", is_eql ? "sp_poly_eql" : "sp_poly_eq", rb.p ? rb.p : tref, t);
+    free(rb.p);
+  }
+  else if (at == TY_POLY) {
+    const char *bid = ty_nullable_builtin_id(rt);
+    buf_printf(b, "sp_RbVal _u%d = %s; ", t, a);
+    if (!bid) buf_printf(&test, "((void)_u%d, 0)", t);
+    else {
+      buf_printf(&test, "(_u%d.tag == SP_TAG_OBJ && _u%d.cls_id == %s && ", t, t, bid);
+      if (fn) buf_printf(&test, "%s(_t%d, (%s)_u%d.v.p))", fn, t, cty, t);
+      else buf_printf(&test, "_u%d.v.p == (void *)_t%d)", t, t);
+    }
+  }
+  else {
+    /* a value of another static kind is never the same object, nor equal */
+    buf_printf(b, "(void)(%s); ", a);
+    buf_puts(&test, "0");
+  }
+  buf_printf(b, "(sp_bool)%s(%s); })", is_ne ? "!" : "", test.p ? test.p : "0");
+  free(test.p);
+  free(ct.p);
+}
+
+int emit_native_object_protocol(Compiler *c, int id, Buf *b) {
+  const NodeTable *nt = c->nt;
+  const char *name = nt_str(nt, id, "name");
+  int recv = nt_ref(nt, id, "receiver");
+  if (recv < 0 || !name || nt_ref(nt, id, "block") >= 0) return 0;
+  int argc;
+  const int *argv = call_args(nt, id, &argc);
+  TyKind rt = comp_recv_type(c, recv);
+  TyKind at = argc == 1 ? comp_ntype(c, argv[0]) : TY_UNKNOWN;
+  if (!ty_object_protocol_answers(rt, at, name, argc)) return 0;
+  /* a rescued value is typed TY_EXCEPTION, not as its user class: a user
+     exception subclass defining the method keeps it */
+  if (rt == TY_EXCEPTION && exc_subclass_defines(c, name)) return 0;
+  Buf rs = expr_buf(c, recv);
+  Buf as; memset(&as, 0, sizeof as);
+  if (argc == 1) as = expr_buf(c, argv[0]);
+  emit_native_object_protocol_text(c, name, rt, rs.p ? rs.p : "0", at, as.p ? as.p : "0", b);
+  free(rs.p); free(as.p);
+  return 1;
+}
+
+/* `case subj when cond`: Ruby asks `cond === subj`. The case/when emitter
+   calls this before its raw C `==` fallback so a native kind answers the
+   same way there as an explicit `===` does (subj_ref is the subject's temp). */
+int emit_native_case_eq(Compiler *c, int cond, TyKind subj_t, const char *subj_ref, Buf *b) {
+  TyKind ct = comp_ntype(c, cond);
+  if (!ty_object_protocol_answers(ct, subj_t, "===", 1)) return 0;
+  if (ct == TY_EXCEPTION && exc_subclass_defines(c, "===")) return 0;
+  Buf cs = expr_buf(c, cond);
+  emit_native_object_protocol_text(c, "===", ct, cs.p ? cs.p : "0", subj_t, subj_ref, b);
+  free(cs.p);
+  return 1;
 }

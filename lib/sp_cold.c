@@ -1603,6 +1603,30 @@ sp_File *sp_file_lstat_handle(const char *path) {SP_GC_ROOT_STR(path);
   f->lineno = 0;
   return f;
 }
+/* File::Stat#== is Comparable's, over <=>, which File::Stat defines on the
+   modification time: two stats of one unchanged file are equal, and a stat
+   handle is never equal to an open stream. Any other pair of handles compares
+   by identity (Object#==). A pathless stat (IO#stat on a descriptor handle)
+   carries its stream and is fstat(2)ed like its accessors. */
+static int sp_stat_handle_p(sp_File *f) {
+  return f && f->mode && (strcmp(f->mode, "stat") == 0 || strcmp(f->mode, "lstat") == 0);
+}
+static int sp_stat_handle_mtime(sp_File *f, struct stat *st) {
+  if (f->path && f->path[0])
+    return (strcmp(f->mode, "lstat") == 0 ? lstat(f->path, st) : stat(f->path, st)) == 0;
+  return f->fp && fstat(fileno(f->fp), st) == 0;
+}
+sp_bool sp_io_eq(sp_File *a, sp_File *b) {
+  if (a == b) return TRUE;
+  if (!sp_stat_handle_p(a) || !sp_stat_handle_p(b)) return FALSE;
+  struct stat sa, sb;
+  if (!sp_stat_handle_mtime(a, &sa) || !sp_stat_handle_mtime(b, &sb)) return FALSE;
+#if defined(__APPLE__) || defined(__FreeBSD__) || defined(__OpenBSD__) || defined(__NetBSD__) || defined(__DragonFly__)
+  return sa.st_mtimespec.tv_sec == sb.st_mtimespec.tv_sec && sa.st_mtimespec.tv_nsec == sb.st_mtimespec.tv_nsec;
+#else
+  return sa.st_mtim.tv_sec == sb.st_mtim.tv_sec && sa.st_mtim.tv_nsec == sb.st_mtim.tv_nsec;
+#endif
+}
 /* True when the handle came from lstat, so a final symlink is not followed. */
 sp_bool sp_stat_nofollow(sp_File *f) {
   return f && f->mode && strcmp(f->mode, "lstat") == 0;

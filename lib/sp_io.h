@@ -18,7 +18,17 @@ typedef struct {
   unsigned char bin_flag;      /* #binmode was called (#3131) */
   unsigned char no_autoclose;  /* #autoclose = false (#3131) */
   unsigned char is_sock;       /* a socket handle: writes bypass stdio (#2922) */
+  unsigned char frozen;        /* Object#freeze; kept here, not in the GC header,
+                                  because the standard streams are static storage
+                                  with no header to flip (sp_io_stdout) */
 } sp_File;
+
+/* Object#frozen? / #freeze on a handle. A nil slot is nil's answer: frozen. */
+sp_bool sp_io_frozen(sp_File *f);
+sp_File *sp_io_freeze(sp_File *f);
+/* Object#== on two handles: identity, except that two File::Stat handles
+   compare as Comparable does for File::Stat -- by modification time. */
+sp_bool sp_io_eq(sp_File *a, sp_File *b);
 
 /* File.open(path, mode) -> GC-managed handle (block form is codegen-only). */
 sp_File *sp_File_open(const char *path, const char *mode);

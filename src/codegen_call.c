@@ -1004,6 +1004,16 @@ int diag_user_defines(Compiler *c, const char *name) {
    receivers out (#3459). */
 int g_poly_builtin_arm = 0;
 
+/* 1 iff a user class that descends from an exception class defines `name`:
+   a rescued value is typed TY_EXCEPTION rather than as its user class, so
+   the ordinary user-method routing never sees such a definition and the
+   builtin arms must stand down for it themselves. */
+int exc_subclass_defines(Compiler *c, const char *name) {
+  for (int k = 0; k < c->nclasses; k++)
+    if (class_is_exc_subclass(c, k) && comp_method_in_chain(c, k, name, NULL) >= 0) return 1;
+  return 0;
+}
+
 int user_defines_or_reads(Compiler *c, const char *name) {
   if (g_poly_builtin_arm) return 0;
   /* Instance reachability only: a CLASS method of the same name is reached
@@ -7925,6 +7935,8 @@ static int emit_case_eq_call(Compiler *c, int id, Buf *b) {
       emit_boxed(c, argv[0], b); buf_puts(b, "); })");
       return 1;
     }
+    /* the remaining native handles and value kinds share Object's protocol */
+    if (emit_native_object_protocol(c, id, b)) return 1;
     unsupported(c, id, "equality");
   }
   return 0;
@@ -12200,16 +12212,10 @@ void emit_call(Compiler *c, int id, Buf *b) {
       buf_puts(b, ") ? 1 : 0)");
       return;
     }
-    if ((sp_streq(name, "==") || sp_streq(name, "eql?")) && argc == 1 &&
-        comp_ntype(c, argv[0]) == TY_OPENSTRUCT) {
-      buf_puts(b, "sp_OpenStruct_eq("); emit_expr(c, recv, b); buf_puts(b, ", ");
-      emit_expr(c, argv[0], b); buf_puts(b, ")");
-      return;
-    }
-    if ((sp_streq(name, "==") || sp_streq(name, "eql?")) && argc == 1) {
-      buf_puts(b, "((void)("); emit_boxed(c, argv[0], b); buf_puts(b, "), 0)");
-      return;
-    }
+    /* == / != / === / eql? / equal?: Object's protocol arm -- members for
+       == and ===, the table's eql? for eql?, identity for equal?, a poly
+       operand unwrapped in place */
+    if (argc == 1 && emit_native_object_protocol(c, id, b)) return;
     if ((sp_streq(name, "is_a?") || sp_streq(name, "kind_of?") ||
          sp_streq(name, "instance_of?")) && argc == 1 &&
         nt_type(nt, argv[0]) && sp_streq(nt_type(nt, argv[0]), "ConstantReadNode")) {
@@ -14835,15 +14841,17 @@ void emit_call(Compiler *c, int id, Buf *b) {
       buf_puts(b, "((void)("); emit_expr(c, recv, b); buf_puts(b, "), ((sp_Class){0, SPL(\"Random\")}))");
       return;
     }
-    /* equal? is identity; == / eql? compare by internal PRNG state (#2524). */
-    if (sp_streq(name, "equal?") && argc == 1) {
+    /* equal? and eql? are identity; == compares by internal PRNG state
+       (#2524). Random defines no eql? of its own, so Object's applies:
+       Random.new(1).eql?(Random.new(1)) is false where == is true. */
+    if ((sp_streq(name, "equal?") || sp_streq(name, "eql?")) && argc == 1) {
       buf_puts(b, "((void *)("); emit_expr(c, recv, b); buf_puts(b, ") == (void *)(");
       if (comp_ntype(c, argv[0]) == TY_RANDOM) emit_expr(c, argv[0], b);
       else buf_puts(b, "0");
       buf_puts(b, "))");
       return;
     }
-    if ((sp_streq(name, "==") || sp_streq(name, "eql?")) && argc == 1) {
+    if (sp_streq(name, "==") && argc == 1) {
       if (comp_ntype(c, argv[0]) == TY_RANDOM) {
         buf_puts(b, "sp_Random_eq("); emit_expr(c, recv, b); buf_puts(b, ", "); emit_expr(c, argv[0], b); buf_puts(b, ")");
       }
@@ -16892,20 +16900,14 @@ else { memcpy(dir, sf, n); dir[n] = 0; } }
     }
   }
   if (recv >= 0 && comp_ntype(c, recv) == TY_EXCEPTION) {
-    /* equal? is pointer identity; == is CRuby value equality (same class
-       and message). */
-    if (sp_streq(name, "equal?") && argc == 1 &&
-        comp_ntype(c, argv[0]) == TY_EXCEPTION) {
-      buf_puts(b, "(((sp_Exception *)("); emit_expr(c, recv, b);
-      buf_puts(b, ")) == ((sp_Exception *)("); emit_expr(c, argv[0], b); buf_puts(b, ")))");
-      return;
-    }
-    if (sp_streq(name, "==") && argc == 1 &&
-        comp_ntype(c, argv[0]) == TY_EXCEPTION) {
-      buf_puts(b, "sp_exc_eq((sp_Exception *)("); emit_expr(c, recv, b);
-      buf_puts(b, "), (sp_Exception *)("); emit_expr(c, argv[0], b); buf_puts(b, "))");
-      return;
-    }
+    /* equal? and eql? are pointer identity; == and === are CRuby's value
+       equality (same class and message): Object's protocol arm, which also
+       unwraps a poly operand and stands down for a user subclass's own
+       definition */
+    if (argc == 1 &&
+        (sp_streq(name, "==") || sp_streq(name, "!=") || sp_streq(name, "===") ||
+         sp_streq(name, "equal?") || sp_streq(name, "eql?")) &&
+        emit_native_object_protocol(c, id, b)) return;
     if (sp_streq(name, "nil?") && argc == 0) {
       buf_puts(b, "(("); emit_expr(c, recv, b); buf_puts(b, ") == NULL)");
       return;
@@ -16920,18 +16922,7 @@ else { memcpy(dir, sf, n); dir[n] = 0; } }
       buf_puts(b, "((sp_Exception *)sp_gc_freeze((void *)("); emit_expr(c, recv, b); buf_puts(b, ")))");
       return;
     }
-    /* eql? is Object#eql? -- identity, not Exception#== (#2769) */
-    if (sp_streq(name, "eql?") && argc == 1) {
-      if (comp_ntype(c, argv[0]) == TY_EXCEPTION) {
-        buf_puts(b, "(((sp_Exception *)("); emit_expr(c, recv, b);
-        buf_puts(b, ")) == ((sp_Exception *)("); emit_expr(c, argv[0], b); buf_puts(b, ")))");
-      }
-      else {
-        buf_puts(b, "((void)("); emit_expr(c, recv, b); buf_puts(b, "), (void)(");
-        emit_boxed(c, argv[0], b); buf_puts(b, "), 0)");
-      }
-      return;
-    }
+
     /* dup/clone copy the whole (subclass-sized) struct so mutating the copy
        leaves the original alone (#2772) */
     if ((sp_streq(name, "dup") || sp_streq(name, "clone")) && argc == 0) {
@@ -18563,12 +18554,20 @@ else { memcpy(dir, sf, n); dir[n] = 0; } }
        header bit / string marker) -- served by the receiver arms, not the
        identity shortcut. A concurrency handle is a heap instance too, so its
        freeze is equally stateful; taking the shortcut here made `freeze` a
-       no-op and left `frozen?` answering false right after it (#3483). */
+       no-op and left `frozen?` answering false right after it (#3483). The
+       same holds for every other GC-allocated handle -- Random, Dir, Addrinfo,
+       IO, Enumerator, Method, OpenStruct, a curried Proc -- whose frozen?
+       reads the header bit (emit_native_object_protocol). */
     int freeze_stateful = sp_streq(name, "freeze") &&
                           (ty_is_object(recv_t) || recv_t == TY_POLY ||
                            recv_t == TY_MUTEX || recv_t == TY_QUEUE ||
                            recv_t == TY_CONDVAR || recv_t == TY_FIBER ||
-                           recv_t == TY_THREAD);
+                           recv_t == TY_THREAD || recv_t == TY_RANDOM ||
+                           recv_t == TY_DIR || recv_t == TY_ADDRINFO ||
+                           recv_t == TY_IO || recv_t == TY_ENUMERATOR ||
+                           recv_t == TY_METHOD || recv_t == TY_OPENSTRUCT ||
+                           recv_t == TY_CURRY || recv_t == TY_MATCHDATA ||
+                           recv_t == TY_EXCEPTION);
     /* itself is pure identity for every receiver, hashes included; the
        hash exclusion below is for freeze/dup/clone, which need real
        handling on the reference types */
@@ -21429,13 +21428,12 @@ else { memcpy(dir, sf, n); dir[n] = 0; } }
     buf_printf(b, "), %d)", sp_streq(name, "!=") ? 1 : 0);
     return;
   }
-  /* IO handles compare by pointer identity (f.flush.equal?(f), #2799) */
+  /* IO handles compare by pointer identity (f.flush.equal?(f), #2799) --
+     except two File::Stat handles, which compare by modification time as
+     Comparable gives them; Object's protocol arm knows both */
   if (recv >= 0 && comp_ntype(c, recv) == TY_IO && argc == 1 &&
       (sp_streq(name, "equal?") || sp_streq(name, "eql?") || sp_streq(name, "==")) &&
-      comp_ntype(c, argv[0]) == TY_IO) {
-    buf_puts(b, "((void *)("); emit_expr(c, recv, b); buf_puts(b, ") == (void *)(");
-    emit_expr(c, argv[0], b); buf_puts(b, "))"); return;
-  }
+      emit_native_object_protocol(c, id, b)) return;
   if (recv >= 0 && comp_ntype(c, recv) == TY_REGEX && argc == 0) {
     /* a Regexp is frozen; freeze/itself/dup evaluate to the pattern itself. */
     if (sp_streq(name, "frozen?")) { buf_puts(b, "((void)("); emit_expr(c, recv, b); buf_puts(b, "), 1)"); return; }
@@ -25370,6 +25368,9 @@ else { memcpy(dir, sf, n); dir[n] = 0; } }
       }
     }
   }
+
+  /* Object's identity protocol on a native handle no arm above claimed. */
+  if (emit_native_object_protocol(c, id, b)) return;
 
   /* The NoMethodError gate for a call nothing above resolved (defined above). */
   if (emit_unresolved_call(c, id, b)) return;

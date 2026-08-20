@@ -2553,6 +2553,17 @@ else {
     if (sp_streq(name, "kill")) return TY_FIBER;   /* returns the receiver */
   }
 
+  /* Object's identity protocol on the native kinds: typed from the same
+     decision the codegen arm (emit_native_object_protocol) emits from, so the
+     two cannot drift. A user exception subclass's own definition wins, as it
+     does in the arm. */
+  if (recv >= 0 && nt_ref(c->nt, id, "block") < 0 &&
+      ty_object_protocol_answers(rt, argc == 1 ? infer_type(c, argv[0]) : TY_UNKNOWN, name, argc) &&
+      !(rt == TY_EXCEPTION && exc_subclass_defines(c, name))) {
+    if (sp_streq(name, "freeze")) return rt;
+    return TY_BOOL;
+  }
+
   /* universal query methods on the concurrency handles (#3124) */
   if (recv >= 0 && (rt == TY_THREAD || rt == TY_QUEUE || rt == TY_MUTEX ||
                     rt == TY_CONDVAR) && argc == 0) {

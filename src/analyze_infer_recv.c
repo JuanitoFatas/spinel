@@ -52,7 +52,7 @@ int infer_range_call(Compiler *c, int id, TyKind rt, TyKind *out) {
       { *out = argc == 0 ? TY_STRING : TY_STR_ARRAY; return 1; }
     if (sp_streq(name, "cover?") || sp_streq(name, "include?") ||
         sp_streq(name, "member?") || sp_streq(name, "===") ||
-        sp_streq(name, "==") || sp_streq(name, "eql?") ||
+        sp_streq(name, "==") || sp_streq(name, "!=") || sp_streq(name, "eql?") ||
         sp_streq(name, "exclude_end?") || sp_streq(name, "frozen?") ||
         sp_streq(name, "nil?") || sp_streq(name, "is_a?") ||
         sp_streq(name, "kind_of?") || sp_streq(name, "instance_of?") ||
@@ -114,7 +114,7 @@ int infer_range_call(Compiler *c, int id, TyKind rt, TyKind *out) {
     }
     if (sp_streq(name, "cover?") || sp_streq(name, "include?") ||
         sp_streq(name, "member?") || sp_streq(name, "===") ||
-        sp_streq(name, "==") || sp_streq(name, "eql?") ||
+        sp_streq(name, "==") || sp_streq(name, "!=") || sp_streq(name, "eql?") ||
         sp_streq(name, "exclude_end?") || sp_streq(name, "frozen?") ||
         sp_streq(name, "respond_to?") || sp_streq(name, "nil?") ||
         sp_streq(name, "is_a?") || sp_streq(name, "kind_of?") ||
