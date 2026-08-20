@@ -5967,7 +5967,7 @@ void emit_super(Compiler *c, int id, Buf *b) {
       const char *scn2 = class_ruby_name(c, s->class_id);
       if (!scn2) scn2 = c->classes[s->class_id].name;
       buf_printf(b, "(sp_raise_cls(\"NoMethodError\", \"super: no superclass method '%s' for %s\"), %s)",
-                 uname, scn2, default_value(comp_ntype(c, id)));
+                 uname, scn2, raise_tail_value_c(c, comp_ntype(c, id)));
       return;
     }
     buf_printf(b, "sp_%s_s_%s(", c->classes[cdef].c_name, mc(uname));
@@ -6140,8 +6140,12 @@ void emit_super(Compiler *c, int id, Buf *b) {
        time -- the call may sit in a branch that never runs. */
     const char *scn = class_ruby_name(c, s->class_id);
     if (!scn) scn = c->classes[s->class_id].name;
+    /* The raise never returns, so the trailing value only has to type-check
+       in the slot. An UNRESOLVED super -- a module never included, so nothing
+       says what it answers -- has no concrete type, and default_value's "0"
+       did not fit the sp_RbVal an interpolation reads (#4034). */
     buf_printf(b, "(sp_raise_cls(\"NoMethodError\", \"super: no superclass method '%s' for an instance of %s\"), %s)",
-               uname, scn, default_value(comp_ntype(c, id)));
+               uname, scn, raise_tail_value_c(c, comp_ntype(c, id)));
     return;
   }
   buf_printf(b, "sp_%s_%s((sp_%s *)%s", c->classes[defcls].c_name, mc(uname), c->classes[defcls].c_name, g_self);
