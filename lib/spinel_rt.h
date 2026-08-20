@@ -5368,20 +5368,20 @@ static sp_RbVal sp_fmt_named_ref(sp_PolyArray *a, const char *nm) {
     if (h.cls_id == SP_BUILTIN_SYM_POLY_HASH) {
       sp_SymPolyHash *sh = (sp_SymPolyHash *)h.v.p;
       for (sp_int i = 0; i < sh->len; i++)
-        if (sp_str_eq(sp_sym_to_s(sh->order[i]), nm))
+        if (sp_str_eq_cstr(sp_sym_to_s(sh->order[i]), nm))
           return sp_SymPolyHash_get(sh, sh->order[i]);
     }
     else if (h.cls_id == SP_BUILTIN_STR_POLY_HASH) {
       sp_StrPolyHash *th = (sp_StrPolyHash *)h.v.p;
       for (sp_int i = 0; i < th->len; i++)
-        if (sp_str_eq(th->order[i], nm)) return sp_StrPolyHash_get(th, th->order[i]);
+        if (sp_str_eq_cstr(th->order[i], nm)) return sp_StrPolyHash_get(th, th->order[i]);
     }
     else if (h.cls_id == SP_BUILTIN_POLY_POLY_HASH) {
       sp_PolyPolyHash *ph = (sp_PolyPolyHash *)h.v.p;
       for (sp_int i = 0; i < ph->len; i++) {
         sp_RbVal k = ph->keys[ph->order[i]];
-        if ((k.tag == SP_TAG_SYM && sp_str_eq(sp_sym_to_s((sp_sym)k.v.i), nm)) ||
-            (k.tag == SP_TAG_STR && k.v.s && sp_str_eq(k.v.s, nm)))
+        if ((k.tag == SP_TAG_SYM && sp_str_eq_cstr(sp_sym_to_s((sp_sym)k.v.i), nm)) ||
+            (k.tag == SP_TAG_STR && k.v.s && sp_str_eq_cstr(k.v.s, nm)))
           return ph->vals[ph->order[i]];
       }
     }

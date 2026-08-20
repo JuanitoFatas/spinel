@@ -198,6 +198,18 @@ static inline int sp_str_eq(const char*a,const char*b){
   size_t la=sp_str_byte_len(a);
   return la==sp_str_byte_len(b)&&memcmp(a,b,la)==0;
 }
+/* Compare a spinel string against a PLAIN C string (a stack buffer, a literal
+   with no marker byte). sp_str_eq reads a marker in front of BOTH operands to
+   recover a length that can carry an embedded NUL; handing it unmarked memory
+   reads the byte before the object, and when that byte happens to look like a
+   marker it reads a bogus header and answers a garbage length. The plain side
+   has no embedded NUL by construction, so its length is strlen. */
+static inline sp_bool sp_str_eq_cstr(const char *marked, const char *plain) {
+  if (!marked || !plain) return (sp_bool)(marked == plain);
+  size_t lp = strlen(plain);
+  return (sp_bool)(sp_str_byte_len(marked) == lp && memcmp(marked, plain, lp) == 0);
+}
+
 /* String#valid_encoding? — walks the buffer and accepts pure ASCII
    or well-formed UTF-8 (RFC 3629 byte sequences with no overlong
    forms, no surrogate halves, code points <= U+10FFFF). */
