@@ -197,7 +197,7 @@ static const char*sp_str_case_map(const char*s,uint32_t(*fn)(uint32_t),int up){S
 }
 const char*sp_str_upcase(const char*s){SP_GC_ROOT_STR(s);if(!s)sp_nil_recv("upcase");return sp_str_case_map(s,sp_uc_toupper,1);}
 const char*sp_str_downcase(const char*s){SP_GC_ROOT_STR(s);if(!s)sp_nil_recv("downcase");return sp_str_case_map(s,sp_uc_tolower,0);}
-const char*sp_str_swapcase(const char*s){SP_GC_ROOT_STR(s);if(!s)sp_nil_recv("swapcase");size_t l=strlen(s);char*r=sp_str_alloc_raw(l*3+1);size_t oi=0;for(size_t i=0;i<l;){uint32_t cp;int n=sp_utf8_decode(s+i,&cp);i+=(size_t)n;uint32_t up=sp_uc_toupper(cp),lo=sp_uc_tolower(cp);if(up!=cp){/* cp is lowercase -> uppercase */if(cp==0xDF){r[oi++]='S';r[oi++]='S';}
+const char*sp_str_swapcase(const char*s){SP_GC_ROOT_STR(s);if(!s)sp_nil_recv("swapcase");size_t l=sp_str_byte_len(s);char*r=sp_str_alloc_raw(l*3+1);size_t oi=0;for(size_t i=0;i<l;){uint32_t cp;int n=sp_utf8_decode(s+i,&cp);i+=(size_t)n;uint32_t up=sp_uc_toupper(cp),lo=sp_uc_tolower(cp);if(up!=cp){/* cp is lowercase -> uppercase */if(cp==0xDF){r[oi++]='S';r[oi++]='S';}
 else oi+=(size_t)sp_utf8_encode(up,r+oi);}
 else if(lo!=cp){/* cp is uppercase -> lowercase */oi+=(size_t)sp_utf8_encode(lo,r+oi);}
 else oi+=(size_t)sp_utf8_encode(cp,r+oi);}r[oi]=0;sp_str_set_len(r,oi);return r;}
@@ -212,7 +212,7 @@ const char*sp_str_capitalize_ascii(const char*s){SP_GC_ROOT_STR(s);if(!s)sp_nil_
    dump/undump round-trip is byte-identical. */
 const char*sp_str_dump(const char*s){SP_GC_ROOT_STR(s);
   if(!s)sp_nil_recv("dump");
-  size_t n=strlen(s);
+  size_t n=sp_str_byte_len(s);   /* a NUL is a byte to escape, not the end */
   char*out=sp_str_alloc_raw((n*4)+3);size_t oi=0;
   out[oi++]='"';
   for(size_t i=0;i<n;i++){
@@ -229,7 +229,9 @@ const char*sp_str_dump(const char*s){SP_GC_ROOT_STR(s);
     else if(c=='\a'){out[oi++]='\\';out[oi++]='a';}
     else if(c=='\b'){out[oi++]='\\';out[oi++]='b';}
     else if(c==27){out[oi++]='\\';out[oi++]='e';}
-    else if(c==0){out[oi++]='\\';out[oi++]='0';}
+    /* CRuby dumps a NUL as \x00, never \0: the short form would run into a
+       following digit (`"\0" "1"` dumps as "\x001", not "\01") */
+    else if(c==0){out[oi++]='\\';out[oi++]='x';out[oi++]='0';out[oi++]='0';}
     else if(c<0x20){oi+=(size_t)sprintf(out+oi,"\\x%02X",c);}
     /* #dump promises a pure-ASCII, re-evaluable form: a non-ASCII character
        is written as its \uXXXX escape (#3558) */
@@ -291,7 +293,7 @@ const char*sp_str_delete_suffix(const char*s,const char*p){SP_GC_ROOT_STR(s);SP_
    literal with an embedded NUL is still truncated at the C level -- that
    needs length-tracked literals, out of scope.) */
 const char*sp_str_strip(const char*s){SP_GC_ROOT_STR(s);if(!s)sp_nil_recv("strip");size_t len=sp_str_byte_len(s);size_t a=0;while(a<len&&(isspace((unsigned char)s[a])||s[a]=='\0'))a++;size_t b=len;while(b>a&&(isspace((unsigned char)s[b-1])||s[b-1]=='\0'))b--;size_t n=b-a;char*r=sp_str_alloc(n);memcpy(r,s+a,n);r[n]=0;return r;}
-const char*sp_str_chomp(const char*s){SP_GC_ROOT_STR(s);if(!s)sp_nil_recv("chomp");size_t l=strlen(s);if(l>=2&&s[l-2]=='\r'&&s[l-1]=='\n')l-=2;else if(l>0&&s[l-1]=='\n')l--;else if(l>0&&s[l-1]=='\r')l--;char*r=sp_str_alloc_raw(l+1);memcpy(r,s,l);r[l]=0;sp_str_set_len(r,l);return r;}
+const char*sp_str_chomp(const char*s){SP_GC_ROOT_STR(s);if(!s)sp_nil_recv("chomp");size_t l=sp_str_byte_len(s);if(l>=2&&s[l-2]=='\r'&&s[l-1]=='\n')l-=2;else if(l>0&&s[l-1]=='\n')l--;else if(l>0&&s[l-1]=='\r')l--;char*r=sp_str_alloc_raw(l+1);memcpy(r,s,l);r[l]=0;sp_str_set_len(r,l);return r;}
 /* Issue #881: `"hello!".chomp("!")` strips the explicit separator.
    Empty sep strips any trailing newlines (CRuby paragraph mode).
    NULL sep is caller's responsibility (codegen routes nil to a
@@ -319,7 +321,7 @@ else {
   sp_str_set_len(r, l);
   return r;
 }
-const char*sp_str_chop(const char*s){SP_GC_ROOT_STR(s);if(!s)sp_nil_recv("chop");size_t l=strlen(s);if(l>0){if(l>=2&&s[l-2]=='\r'&&s[l-1]=='\n')l-=2;else{l--;/* back up over any UTF-8 continuation bytes to the char boundary (#3085) */while(l>0&&((unsigned char)s[l]&0xC0)==0x80)l--;}}char*r=sp_str_alloc_raw(l+1);memcpy(r,s,l);r[l]=0;sp_str_set_len(r,l);return r;}
+const char*sp_str_chop(const char*s){SP_GC_ROOT_STR(s);if(!s)sp_nil_recv("chop");size_t l=sp_str_byte_len(s);if(l>0){if(l>=2&&s[l-2]=='\r'&&s[l-1]=='\n')l-=2;else{l--;/* back up over any UTF-8 continuation bytes to the char boundary (#3085) */while(l>0&&((unsigned char)s[l]&0xC0)==0x80)l--;}}char*r=sp_str_alloc_raw(l+1);memcpy(r,s,l);r[l]=0;sp_str_set_len(r,l);return r;}
 /* String#chr: the first character (a whole UTF-8 char, not a byte), "" for "" (#3083). */
 const char*sp_str_chr(const char*s){SP_GC_ROOT_STR(s);if(!s)sp_nil_recv("chr");if(*s==0)return sp_str_empty;int n=sp_utf8_advance(s);char*r=sp_str_alloc_raw((size_t)n+1);memcpy(r,s,(size_t)n);r[n]=0;sp_str_set_len(r,(size_t)n);return r;}
 /* The character index at byte offset `byteoff`; preserves -1 (no match) and 0.
@@ -336,8 +338,10 @@ sp_StrArray *sp_str_partition(const char *s, const char *sep) {
   SP_GC_ROOT_STR(s); SP_GC_ROOT_STR(sep);
   sp_StrArray *r = sp_StrArray_new();
   SP_GC_ROOT(r);   /* keep r (and its pushed slices) live across the byteslice allocs */
-  sp_int bl = (sp_int)sp_str_byte_len(s), sl = (sp_int)strlen(sep);
-  const char *f = sl > 0 ? strstr(s, sep) : s;
+  /* byte-exact: strlen/strstr cannot express a NUL in the separator or the
+     subject, so partitioning on one found nothing and answered ["", "", s] */
+  sp_int bl = (sp_int)sp_str_byte_len(s), sl = (sp_int)sp_str_byte_len(sep);
+  const char *f = sl > 0 ? sp_bytestr(s, (size_t)bl, sep, (size_t)sl) : s;
   if (!f) { sp_StrArray_push(r, s); sp_StrArray_push(r, sp_str_empty); sp_StrArray_push(r, sp_str_empty); return r; }
   sp_int pre = (sp_int)(f - s);
   sp_StrArray_push(r, sp_str_byteslice(s, 0, pre));
@@ -351,9 +355,10 @@ sp_StrArray *sp_str_rpartition(const char *s, const char *sep) {
   SP_GC_ROOT_STR(s); SP_GC_ROOT_STR(sep);
   sp_StrArray *r = sp_StrArray_new();
   SP_GC_ROOT(r);   /* keep r (and its pushed slices) live across the byteslice allocs */
-  sp_int bl = (sp_int)sp_str_byte_len(s), sl = (sp_int)strlen(sep);
+  sp_int bl = (sp_int)sp_str_byte_len(s), sl = (sp_int)sp_str_byte_len(sep);
   const char *last = NULL;
-  if (sl > 0) { const char *p = s; while ((p = strstr(p, sep))) { last = p; p++; } }
+  if (sl > 0) { const char *p = s, *e = s + bl;
+    while (p < e) { const char *f2 = sp_bytestr(p, (size_t)(e - p), sep, (size_t)sl); if (!f2) break; last = f2; p = f2 + 1; } }
   if (!last) { sp_StrArray_push(r, sp_str_empty); sp_StrArray_push(r, sp_str_empty); sp_StrArray_push(r, s); return r; }
   sp_int pre = (sp_int)(last - s);
   sp_StrArray_push(r, sp_str_byteslice(s, 0, pre));
@@ -417,7 +422,7 @@ else{if(out+1>=cap){size_t nc=cap*2;char*nb=(char*)realloc(buf,nc);if(!nb){free(
    pattern or subject holding one matched the wrong place or not at all (the
    opportunistic NUL policy -- fix what is met). */
 const char*sp_str_sub(const char*s,const char*pat,const char*rep){SP_GC_ROOT_STR(s);SP_GC_ROOT_STR(pat);SP_GC_ROOT_STR(rep);if(!s)sp_nil_recv("sub");if(!pat||!rep)return s;size_t pl0=sp_str_byte_len(pat),sl0=sp_str_byte_len(s);const char*f=sp_bytestr(s,sl0,pat,pl0);if(!f)return s;char*rep_exp=sp_str_rep_expand(rep,pat,pl0);if(rep_exp)rep=rep_exp;size_t pl=pl0,rl=rep_exp?strlen(rep):sp_str_byte_len(rep),sl=sl0;char*r=sp_str_alloc_raw(sl-pl+rl+1);size_t n=f-s;memcpy(r,s,n);memcpy(r+n,rep,rl);memcpy(r+n+rl,f+pl,sl-n-pl);r[sl-pl+rl]=0;sp_str_set_len(r,sl-pl+rl);if(rep_exp)free(rep_exp);return r;}
-const char*sp_str_capitalize(const char*s){SP_GC_ROOT_STR(s);if(!s)sp_nil_recv("capitalize");size_t l=strlen(s);char*r=sp_str_alloc_raw(l*3+1);size_t oi=0;int first=1;for(size_t i=0;i<l;){uint32_t cp;int n=sp_utf8_decode(s+i,&cp);i+=(size_t)n;if(first){uint32_t u=sp_uc_toupper(cp);if(cp==0xDF){r[oi++]='S';r[oi++]='S';}
+const char*sp_str_capitalize(const char*s){SP_GC_ROOT_STR(s);if(!s)sp_nil_recv("capitalize");size_t l=sp_str_byte_len(s);char*r=sp_str_alloc_raw(l*3+1);size_t oi=0;int first=1;for(size_t i=0;i<l;){uint32_t cp;int n=sp_utf8_decode(s+i,&cp);i+=(size_t)n;if(first){uint32_t u=sp_uc_toupper(cp);if(cp==0xDF){r[oi++]='S';r[oi++]='S';}
 else oi+=(size_t)sp_utf8_encode(u,r+oi);first=0;}
 else oi+=(size_t)sp_utf8_encode(sp_uc_tolower(cp),r+oi);}r[oi]=0;sp_str_set_len(r,oi);return r;}
 const char*sp_str_repeat(const char*s,sp_int n){SP_GC_ROOT_STR(s);
@@ -686,20 +691,20 @@ const char*sp_str_undump(const char*s){SP_GC_ROOT_STR(s);
   }
   out[oi]=0;sp_str_set_len(out,oi);return out;
 }
-const char*sp_str_succ_impl(const char*s){SP_GC_ROOT_STR(s);if(!s)sp_nil_recv("succ");size_t l=strlen(s);if(l==0){char*r=sp_str_alloc_raw(1);r[0]=0;sp_str_set_len(r,0);return r;}/* Find start of last codepoint */size_t lc=l-1;while(lc>0&&((unsigned char)s[lc]&0xC0)==0x80)lc--;if((unsigned char)s[lc]>=0x80){/* Multibyte tail: increment its codepoint */uint32_t cp;sp_utf8_decode(s+lc,&cp);cp++;char enc[4];int el=sp_utf8_encode(cp,enc);char*r=sp_str_alloc_raw(lc+el+1);memcpy(r,s,lc);memcpy(r+lc,enc,el);r[lc+el]=0;sp_str_set_len(r,lc+(size_t)el);return r;}/* ASCII tail: CRuby's alnum-aware carry. The rightmost alphanumeric
+const char*sp_str_succ_impl(const char*s){SP_GC_ROOT_STR(s);if(!s)sp_nil_recv("succ");size_t l=sp_str_byte_len(s);if(l==0){char*r=sp_str_alloc_raw(1);r[0]=0;sp_str_set_len(r,0);return r;}/* Find start of last codepoint */size_t lc=l-1;while(lc>0&&((unsigned char)s[lc]&0xC0)==0x80)lc--;if((unsigned char)s[lc]>=0x80){/* Multibyte tail: increment its codepoint */uint32_t cp;sp_utf8_decode(s+lc,&cp);cp++;char enc[4];int el=sp_utf8_encode(cp,enc);char*r=sp_str_alloc_raw(lc+el+1);memcpy(r,s,lc);memcpy(r+lc,enc,el);r[lc+el]=0;sp_str_set_len(r,lc+(size_t)el);return r;}/* ASCII tail: CRuby's alnum-aware carry. The rightmost alphanumeric
    increments; a wrap (9->0, z->a, Z->A) carries into the adjacent character
    when it is alphanumeric of any class, else into the nearest alphanumeric
    to the left of the SAME class (digit vs alpha); with no carry target left,
    the wrapped class's carry character (1/a/A) is inserted at the wrap
    position. A string with no alphanumerics increments its last byte. */
-char*r=sp_str_alloc_raw(l+2);memcpy(r,s,l+1);
+char*r=sp_str_alloc_raw(l+2);memcpy(r,s,l);r[l]=0;
 #define SP_SUCC_AL(ch) (((ch)>='0'&&(ch)<='9')||((ch)>='a'&&(ch)<='z')||((ch)>='A'&&(ch)<='Z'))
 sp_int i=(sp_int)l-1;
 while(i>=0&&!SP_SUCC_AL((unsigned char)r[i]))i--;
-if(i<0){r[l-1]=(char)((unsigned char)r[l-1]+1);return r;}
+if(i<0){r[l-1]=(char)((unsigned char)r[l-1]+1);sp_str_set_len(r,l);return r;}
 for(;;){
   unsigned char c=(unsigned char)r[i];
-  if(c!='9'&&c!='z'&&c!='Z'){r[i]=(char)(c+1);return r;}
+  if(c!='9'&&c!='z'&&c!='Z'){r[i]=(char)(c+1);sp_str_set_len(r,l);return r;}
   int dig=(c=='9');
   char ins=(c=='9')?'1':(c=='z')?'a':'A';
   r[i]=(c=='9')?'0':(c=='z')?'a':'A';
@@ -707,7 +712,7 @@ for(;;){
   sp_int j=i-1;
   while(j>=0&&!SP_SUCC_AL((unsigned char)r[j]))j--;
   if(j>=0){unsigned char cj=(unsigned char)r[j];int jdig=(cj>='0'&&cj<='9');if(jdig==dig){i=j;continue;}}
-  memmove(r+i+1,r+i,l-(size_t)i+1);r[i]=ins;return r;
+  memmove(r+i+1,r+i,l-(size_t)i+1);r[i]=ins;sp_str_set_len(r,l+1);return r;
 }
 #undef SP_SUCC_AL
 }
@@ -716,7 +721,9 @@ for(;;){
    field one too large. Callers that read sp_str_byte_len (e.g. concat) then
    copy a trailing NUL. This wrapper normalizes the header len to strlen; succ
    never produces an embedded NUL so this is always correct. */
-const char*sp_str_succ(const char*s){SP_GC_ROOT_STR(s);const char*r=sp_str_succ_impl(s);if(r){unsigned char m=((const unsigned char*)r)[-1];if(m==0xfe||m==0xfc)sp_str_set_len((char*)r,strlen(r));}return r;}
+/* succ_impl records the real length on every path now, so the old strlen
+   normalisation here would UNDO it for a source holding a NUL. */
+const char*sp_str_succ(const char*s){SP_GC_ROOT_STR(s);return sp_str_succ_impl(s);}
 sp_StrArray*sp_str_split(const char*s,const char*sep){if(!s)sp_nil_recv("split");
   SP_GC_ROOT_STR(s);
   SP_GC_ROOT_STR(sep);

@@ -88,8 +88,12 @@ void emit_interp(Compiler *c, int id, Buf *b) {
       const char *content = nt_str(nt, pid, "content");
       int off = lits.len;
       long blen = 0;
-      for (const char *p = content ? content : ""; *p; p++, blen++) {
-        unsigned char ch = (unsigned char)*p;
+      /* the node's own byte length, not strlen: an adjacent-literal part
+         holding a NUL (`"\0" "1"`) stopped the walk and the byte was
+         dropped from the fold (the opportunistic NUL policy) */
+      size_t clen = content ? nt_str_len(nt, pid, "content") : 0;
+      for (size_t ci = 0; ci < clen; ci++, blen++) {
+        unsigned char ch = (unsigned char)content[ci];
         if (ch == '\\') buf_puts(&lits, "\\\\");
         else if (ch == '"') buf_puts(&lits, "\\\"");
         else if (ch == '\n') buf_puts(&lits, "\\n");

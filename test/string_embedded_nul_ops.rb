@@ -38,6 +38,25 @@ p "a\0\0b".squeeze("\0").bytesize
 p "aabb".squeeze
 p "abc".tr("b", "-")
 
+p s.chomp.bytesize
+p s.chop.bytesize
+p s.swapcase.bytesize
+p s.capitalize.bytesize
+p s.succ.bytesize
+p "az".succ
+p "zz".succ
+p "abc\n".chomp
+
+p s.partition("\0").map(&:bytesize)
+p s.rpartition("\0").map(&:bytesize)
+p "a-b-c".partition("-")
+p "a-b-c".rpartition("-")
+
+p s.dump
+p s.dump.undump.bytesize
+p("\0" "1").bytesize
+p("x" "\0" "y").bytesize
+
 # and the operations that already carried it
 p s.b.bytesize
 p s.dup.bytesize
