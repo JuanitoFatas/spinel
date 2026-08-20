@@ -6204,6 +6204,7 @@ static void emit_obj_cmp_dispatch(Compiler *c, Buf *b) {
     int obj_operand = 0;
     int pcid = -1;
     const char *scalar_guard = NULL;  /* operand tag a scalar-typed param requires */
+    const char *builtin_guard = NULL; /* operand cls_id a boxed-builtin param requires */
     if (ty_is_object(pt)) {
       int pcls = ty_object_class(pt);
       const char *pcn = c->classes[pcls].name;
@@ -6225,6 +6226,22 @@ static void emit_obj_cmp_dispatch(Compiler *c, Buf *b) {
     else if (pt == TY_FLOAT) {
       scalar_guard = "SP_TAG_FLT";
       snprintf(argbuf, sizeof argbuf, "b.v.f");
+    }
+    /* A `<=>` whose operand param settled on a boxed BUILTIN -- a Rational
+       operand types it that way -- had no arm at all, so the dispatch table
+       came out empty and every comparison through Comparable reported the
+       pair as incomparable, even though the class compares them (#4038). */
+    else if (pt == TY_RATIONAL) {
+      builtin_guard = "SP_BUILTIN_RATIONAL";
+      snprintf(argbuf, sizeof argbuf, "*(sp_Rational *)b.v.p");
+    }
+    else if (pt == TY_COMPLEX) {
+      builtin_guard = "SP_BUILTIN_COMPLEX";
+      snprintf(argbuf, sizeof argbuf, "*(sp_Complex *)b.v.p");
+    }
+    else if (pt == TY_TIME) {
+      builtin_guard = "SP_BUILTIN_TIME";
+      snprintf(argbuf, sizeof argbuf, "*(sp_Time *)b.v.p");
     }
     else {
       continue;
@@ -6248,6 +6265,8 @@ static void emit_obj_cmp_dispatch(Compiler *c, Buf *b) {
     }
     if (scalar_guard)
       buf_printf(b, "      if (b.tag != %s) { *comparable = FALSE; return 0; }\n", scalar_guard);
+    if (builtin_guard)
+      buf_printf(b, "      if (!(b.tag == SP_TAG_OBJ && b.cls_id == %s)) { *comparable = FALSE; return 0; }\n", builtin_guard);
     if (m->ret == TY_INT) {
       buf_printf(b, "      *comparable = TRUE; return (sp_int)sp_%s_%s(%s(sp_%s *)a.v.p, %s);\n",
                  dcn, mc("<=>"), self_vt ? "*" : "", dcn, argbuf);
