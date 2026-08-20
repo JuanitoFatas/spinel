@@ -3876,8 +3876,72 @@ void register_prepends(Compiler *c) {
             /* Record the new dispatch chain entry: method_name -> shadow. */
             comp_prep_chain_add(&c->classes[ci], method_name, shadow);
           }
-          /* Transplant the module scope into class ci. */
-          sc->class_id = ci;
+          /* CLONE the module method into class ci rather than MOVING it. The
+             same module can be prepended by more than one class, and moving
+             gave the first prepender the scope and left every later one with
+             nothing to transplant -- its prepend did nothing, silently, and
+             the call fell through to the included chain (#4039). The include
+             path clones for this reason among others; a prepended module has
+             the same need. */
+          {
+            int ms_i = ms;
+            Scope *dst = comp_scope_new(c, method_name, sc->def_node);
+            int dst_i = c->nscopes - 1;
+            sc = &c->scopes[ms_i];               /* comp_scope_new may realloc */
+            if (sc->body >= 0) {
+              int nb = nt_clone_subtree((NodeTable *)nt, sc->body);
+              comp_grow_node_arrays(c);
+              sc = &c->scopes[ms_i]; dst = &c->scopes[dst_i];
+              if (nb >= 0) { dst->body = nb; walk_scope(c, nb, dst_i, ci); }
+              else dst->body = sc->body;
+            }
+            else dst->body = sc->body;
+            sc = &c->scopes[ms_i]; dst = &c->scopes[dst_i];
+            dst->class_id = ci;
+            dst->is_cmethod = 0;
+            dst->is_include_copy = 1;
+            dst->origin_module_ci = mod_id + 1;   /* #owner names the module */
+            dst->reachable = sc->reachable;
+            dst->yields = sc->yields;
+            dst->nrequired = sc->nrequired;
+            dst->rest_idx = sc->rest_idx;
+            dst->kwrest_idx = sc->kwrest_idx;
+            dst->ret = sc->ret;
+            if (sc->blk_param) dst->blk_param = strdup(sc->blk_param);
+            /* register_locals has already run, so the parameters have to be
+               copied across by hand and their locals re-interned -- exactly
+               what the include clone does, and the half my first attempt at
+               this omitted (the clone came out with no signature at all). */
+            dst->nparams = sc->nparams;
+            if (sc->nparams > 0) {
+              dst->pnames = malloc(sizeof(char *) * (size_t)sc->nparams);
+              dst->pdefault = malloc(sizeof(int) * (size_t)sc->nparams);
+              for (int pq = 0; pq < sc->nparams; pq++) {
+                dst->pnames[pq] = sc->pnames[pq] ? strdup(sc->pnames[pq]) : NULL;
+                dst->pdefault[pq] = sc->pdefault ? sc->pdefault[pq] : -1;
+              }
+              for (int pq = 0; pq < sc->nparams; pq++)
+                if (dst->pnames[pq]) {
+                  LocalVar *lv = scope_local_intern(dst, dst->pnames[pq]);
+                  lv->is_param = 1;
+                }
+            }
+            /* the module body's ivars belong to the prepending class's layout */
+            for (int id2 = 0; id2 < nt->count; id2++) {
+              if (c->nscope[id2] != ms_i) continue;
+              const char *bty = nt_type(nt, id2);
+              if (!bty) continue;
+              if (sp_streq(bty, "InstanceVariableWriteNode") ||
+                  sp_streq(bty, "InstanceVariableReadNode") ||
+                  sp_streq(bty, "InstanceVariableOperatorWriteNode") ||
+                  sp_streq(bty, "InstanceVariableOrWriteNode")) {
+                const char *ivnm = nt_str(nt, id2, "name");
+                if (ivnm) comp_ivar_intern(&c->classes[ci], ivnm);
+              }
+            }
+            sc = &c->scopes[ms_i];
+            sc->is_transplanted_source = 1;
+          }
         }
       }
     }
