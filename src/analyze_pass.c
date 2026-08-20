@@ -5974,8 +5974,14 @@ static void ple_build(Compiler *c) {
     int body = nt_ref(nt, id, "body");
     if (body < 0 || !nt_type(nt, body) || !sp_streq(nt_type(nt, body), "StatementsNode")) continue;
     int bn = 0; const int *bb = nt_arr(nt, body, "body", &bn);
+    /* `lambda { }` / `proc { }` escapes exactly as `->() { }` does -- the
+       caller has the same type-erased proc either way. Testing only for the
+       arrow left the method-call spellings' params defaulting to int, so a
+       lambda returned from a method read a String argument as an Integer
+       (#4035). The block-tail rule below has always tested both. */
     if (bn > 0 && bb[bn - 1] >= 0 && bb[bn - 1] < n &&
-        nt_type(nt, bb[bn - 1]) && sp_streq(nt_type(nt, bb[bn - 1]), "LambdaNode"))
+        nt_type(nt, bb[bn - 1]) &&
+        (sp_streq(nt_type(nt, bb[bn - 1]), "LambdaNode") || is_proc_create(c, bb[bn - 1])))
       ple_escaped[bb[bn - 1]] = 1;
   }
   /* A proc literal that is a BLOCK's tail value escapes too: a collecting
