@@ -6238,7 +6238,11 @@ void emit_stmt_inner(Compiler *c, int id, Buf *b, int indent) {
 else {
                 emit_ctype(c, at, b); buf_printf(b, " _t%d = ", tval); emit_expr(c, argv[0], b); buf_puts(b, ";");
               }
-              buf_printf(b, " switch (_t%d.cls_id) {", tv);
+              /* A boxed NIL carries cls_id 0, which is a real user class id:
+                 switching on the field alone let a nil receiver take class 0's
+                 arm and write through its NULL pointer (#4048). Ask the tag,
+                 as every other cls_id dispatch does. */
+              buf_printf(b, " switch (_t%d.tag == SP_TAG_OBJ ? _t%d.cls_id : 0x7fffffff) {", tv, tv);
               char src[32]; snprintf(src, sizeof src, "_t%d", tval);
               char objp[32]; snprintf(objp, sizeof objp, "_t%d.v.p", tv);
               emit_boxed_writer_arms(c, base, nm, objp, src, at_eff, b);

@@ -19264,7 +19264,23 @@ else { memcpy(dir, sf, n); dir[n] = 0; } }
          it lands in the sp_box_nil default), matching MRI's raise. (#2450) */
       int initm = comp_method_in_chain(c, ci, "initialize", NULL);
       if (initm >= 0 && c->scopes[initm].nrequired != 0) continue;
-      if (c->classes[ci].is_struct || c->classes[ci].is_native_class) continue;
+      if (c->classes[ci].is_native_class) continue;
+      /* A Struct DOES answer a zero-arg `new` -- every member takes nil, which
+         is what the constant spelling emits. Skipping it left a local holding
+         two anon struct classes (so no single one resolves) with an EMPTY
+         switch: the call answered nil and the next write through it took the
+         nil box's cls_id 0 as a real class (#4048). */
+      if (c->classes[ci].is_struct) {
+        int nmem = c->classes[ci].nivars;
+        buf_printf(b, "case %d: _t%d=sp_box_obj(sp_%s_new(", ci, rt2, c->classes[ci].c_name);
+        for (int mq = 0; mq < nmem; mq++) {
+          if (mq) buf_puts(b, ", ");
+          TyKind mt = c->classes[ci].ivar_types[mq];
+          buf_puts(b, (mt == TY_POLY || mt == TY_UNKNOWN) ? "sp_box_nil()" : default_value(mt));
+        }
+        buf_printf(b, "),%d);break;", ci);
+        continue;
+      }
       /* fill any optional constructor params with their defaults (an
          optional-arg initialize is zero-arg-compatible but its C function
          still declares the slots, #2452); the call site supplies no args, so
