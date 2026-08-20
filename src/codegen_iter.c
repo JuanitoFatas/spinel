@@ -1146,6 +1146,11 @@ void emit_block_invoke(Compiler *c, int args_node, Buf *b, int indent, int as_ex
            (sp_streq(nt_type(nt, bd3[bn3 - 1]), "IfNode") ||
             sp_streq(nt_type(nt, bd3[bn3 - 1]), "UnlessNode") ||
             sp_streq(nt_type(nt, bd3[bn3 - 1]), "CaseNode") ||
+            sp_streq(nt_type(nt, bd3[bn3 - 1]), "CaseMatchNode") ||
+            /* `wrap { risky rescue fallback }`: the statement form of a
+               rescue modifier is an if/else over setjmp, whose two arms
+               compute the value and drop it. Same void tail as the rest. */
+            sp_streq(nt_type(nt, bd3[bn3 - 1]), "RescueModifierNode") ||
             sp_streq(nt_type(nt, bd3[bn3 - 1]), "BeginNode"))) {
     /* A GNU statement-expression's value is its last statement only when that
        statement is an EXPRESSION; a trailing if/case/begin STATEMENT yields
