@@ -1564,10 +1564,22 @@ void register_structs(Compiler *c) {
        Synthesize an anon class keyed to the call node itself so the receiver
        resolution (.new / .members / .class) can find it. #2682 */
     else if (sp_streq(ty, "CallNode") && is_struct_call(c, id)) {
-      int is_recv = 0;
+      /* ...or used as a VALUE anywhere else (`p Struct.new(:a)`, an element,
+         a return): the class still has to exist to be printed or passed, and
+         with none registered the call reported `Struct.new` as undefined
+         (#4031). Only a call some name already holds is skipped -- the
+         constant and local arms above register those, keyed by the write. */
+      int is_recv = 0, is_write_value = 0;
       for (int p = 0; p < nt->count && !is_recv; p++)
         if (nt_kind(nt, p) == NK_CallNode && nt_ref(nt, p, "receiver") == id) is_recv = 1;
-      if (is_recv) {
+      for (int p = 0; p < nt->count && !is_write_value; p++) {
+        NodeKind pk = nt_kind(nt, p);
+        if ((pk == NK_ConstantWriteNode || pk == NK_LocalVariableWriteNode ||
+             pk == NK_ClassNode) &&
+            (nt_ref(nt, p, "value") == id || nt_ref(nt, p, "superclass") == id))
+          is_write_value = 1;
+      }
+      if (is_recv || !is_write_value) {
         char an[48];
         snprintf(an, sizeof an, "StructAnon_%d", id);
         ClassInfo *cls = comp_class_new(c, an, id);

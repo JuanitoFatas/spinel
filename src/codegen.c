@@ -7708,6 +7708,15 @@ char *codegen_program(const NodeTable *nt) {
     buf_puts(&b, "static const char *sp_class_to_s(sp_Class c){if(sp_class_nil_p(c))return SPL(\"nil\");if(c.name)return c.name;switch(c.cls_id){");
     for (int i = 0; i < c->nclasses; i++) {
       if (!is_builtin_reopen(c->classes[i].name)) {
+        /* An anonymous Struct/Data class has no Ruby-visible name -- the
+           StructAnon_<n> the compiler keys it by is not one -- and CRuby
+           renders it as the address form. #name already answers nil; this is
+           the same class seen through #to_s / #inspect / `p` (#4031). */
+        if (c->classes[i].is_anon_struct) {
+          buf_printf(&b, "case %d:return sp_sprintf(SPL(\"#<Class:0x%%016llx>\"),"
+                         "(unsigned long long)(uintptr_t)&sp_class_to_s+%d);", i, i);
+          continue;
+        }
         const char *qname = class_ruby_name(c, i);
         if (!qname) qname = c->classes[i].name;
         buf_printf(&b, "case %d:return SPL(\"%s\");", i, qname);
@@ -7771,6 +7780,15 @@ char *codegen_program(const NodeTable *nt) {
       if (!qname) qname = c->classes[i].name;
       buf_printf(&b, "case %d:return SPL(\"%s(keyword_init: true)\");", i, qname);
     }
+    buf_puts(&b, "default:break;} return sp_class_to_s(c); }\n\n");
+    /* #name of an ANONYMOUS class is nil, where #to_s and #inspect are the
+       address form sp_class_to_s renders. The static spelling
+       (`Struct.new(:a).name`) has always answered nil; this is the same class
+       reached through a value (`obj.class.name`) (#4031). */
+    buf_puts(&b, "static const char *sp_class_name_or_nil(sp_Class c){switch(c.cls_id){");
+    for (int i = 0; i < c->nclasses; i++)
+      if (!is_builtin_reopen(c->classes[i].name) && c->classes[i].is_anon_struct)
+        buf_printf(&b, "case %d:return NULL;", i);
     buf_puts(&b, "default:break;} return sp_class_to_s(c); }\n\n");
     /* Inverse of the table above, for resolving a class carried by NAME back to
        its builtin id so the id-keyed hierarchy walks work on it (#3022). Cold

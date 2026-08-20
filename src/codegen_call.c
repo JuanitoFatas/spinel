@@ -17245,10 +17245,11 @@ else { memcpy(dir, sf, n); dir[n] = 0; } }
          sp_poly_class_val): stringify uniformly. */
       int _clt = ++g_tmp;
       buf_printf(b, "({ sp_Class _cl%d = ", _clt); emit_expr(c, recv, b);
-      /* inspect carries a keyword-init Struct class's suffix; name and to_s
-         stay the bare name (#3947) */
+      /* inspect carries a keyword-init Struct class's suffix; to_s stays the
+         bare name (#3947), and name is nil for an anonymous class (#4031) */
       buf_printf(b, "; sp_class_%s(_cl%d); })",
-                 sp_streq(name, "inspect") ? "inspect_name" : "to_s", _clt);
+                 sp_streq(name, "inspect") ? "inspect_name"
+                 : sp_streq(name, "name")  ? "name_or_nil" : "to_s", _clt);
     }
     else emit_expr(c, recv, b);
     return;
@@ -17864,7 +17865,8 @@ else { memcpy(dir, sf, n); dir[n] = 0; } }
         }
       }
       buf_printf(b, "({ sp_Class _cl%d = ", _clt); emit_expr(c, recv, b);
-      buf_printf(b, "; sp_class_to_s(_cl%d); })", _clt);
+      buf_printf(b, "; sp_class_%s(_cl%d); })",
+                 sp_streq(name, "name") ? "name_or_nil" : "to_s", _clt);
       return;
     }
     if (sp_streq(name, "nil?")) {
