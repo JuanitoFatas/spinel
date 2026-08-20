@@ -8033,7 +8033,18 @@ static int mark_empty_hash_key_ctx(Compiler *c) {
         int wv = nt_ref(nt, w, "value");
         if (wv < 0 || wv >= c->node_cap || nt_kind(nt, wv) != NK_HashNode) continue;
         int en2 = 0; nt_arr(nt, wv, "elements", &en2);
-        if (en2 != 0 || ty_is_hash(c->hash_want[wv])) continue;
+        if (en2 != 0) continue;
+        /* An earlier context won -- unless THIS one is the poly-keyed variant.
+           The key sites can disagree (`@h[k] = v` where k is a block param of
+           a poly iteration reads as poly on one round and as the default
+           literal's own symbol kind on another), and the poly-keyed hash is
+           the only representation that holds both. Taking whichever landed
+           first left `@units = {}` symbol-keyed while the writes carried
+           String keys, and every one of them was dropped (#4041). */
+        if (ty_is_hash(c->hash_want[wv]) &&
+            (want != TY_POLY_POLY_HASH || c->hash_want[wv] == TY_POLY_POLY_HASH))
+          continue;
+        if (c->hash_want[wv] == want) continue;
         c->hash_want[wv] = want;
         changed = 1;
       }

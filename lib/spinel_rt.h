@@ -5649,11 +5649,14 @@ static void sp_poly_iter_check(sp_RbVal v, const char *m) {
 static sp_int sp_poly_arr_len_ex(sp_RbVal a) {
   if (a.tag != SP_TAG_OBJ) return 0;
   switch (a.cls_id) {
-    case SP_BUILTIN_STR_POLY_HASH: return ((sp_StrPolyHash *)a.v.p)->len;
-    case SP_BUILTIN_SYM_POLY_HASH: return ((sp_SymPolyHash *)a.v.p)->len;
-    case SP_BUILTIN_POLY_POLY_HASH: return ((sp_PolyPolyHash *)a.v.p)->len;
     case SP_BUILTIN_RANGE: { sp_Range *r = (sp_Range *)a.v.p; sp_int n = r->last - r->first + (r->excl ? 0 : 1); return n > 0 ? n : 0; }
-    default: return sp_poly_arr_len(a);
+    default:
+      /* EVERY hash kind, not just the poly-valued three. sp_poly_each_elem
+         renders a pair for all of them, and this length gated the loop: a
+         String-keyed Hash reaching a poly `each` iterated zero times and the
+         block simply never ran, silently (#4041). */
+      if (sp_poly_is_hash_kind(a.cls_id)) return sp_poly_length(a);
+      return sp_poly_arr_len(a);
   }
 }
 /* sp_poly_each_elem: return the i-th element for sequential each-iteration.
