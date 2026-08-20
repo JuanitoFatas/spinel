@@ -197,7 +197,10 @@ still works.
   silently ignored. (A class that defines its own method by one of these names
   keeps it.)
 - **Frozen literals** — explicit `.freeze` then mutation raises `FrozenError`,
-  matching CRuby. (String literals are *not* implicitly frozen — see below.)
+  matching CRuby. String literals ARE frozen by default here
+  (`frozen_string_literal: true` semantics, with no opt-out) — see
+  "String literals are frozen by default" below for what that changes and
+  where mutable strings come from.
 - **Comparable is keyed on `<=>` presence** — the Comparable operator methods
   (`<`, `<=`, `>`, `>=`, `between?`, `clamp`) work on any class that defines
   `<=>`; CRuby additionally requires `include Comparable` (a `NoMethodError`
