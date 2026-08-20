@@ -11672,16 +11672,25 @@ void emit_call(Compiler *c, int id, Buf *b) {
       }
     }
   }
-  /* `obj.extend(Mod)` on a statically-traceable object (its type is a
-     synthesized singleton subclass) is done at compile time: the module's
-     methods were transplanted into the subclass. The runtime call is a
-     no-op; evaluate the receiver for effect. */
+  /* `obj.extend(Mod)` / `obj.define_singleton_method(:m) { }` on a
+     statically-traceable object (its type is a synthesized singleton subclass)
+     is done at compile time: the module's methods were transplanted into the
+     subclass, and the block was compiled as a method on it. The runtime call
+     is a no-op; evaluate the receiver for effect.
+
+     define_singleton_method reached here only through a CONSTANT receiver,
+     where the call happens not to be emitted at all. A LOCAL one -- the same
+     object, the same synthesized subclass, and `def obj.m` on it works --
+     arrived at the unsupported-feature diagnostic and stopped the build. */
   {
     const char *cnm = nt_str(nt, id, "name");
     int crecv = nt_ref(nt, id, "receiver");
-    if (cnm && sp_streq(cnm, "extend") && crecv >= 0) {
+    if (cnm && (sp_streq(cnm, "extend") ||
+                (sp_streq(cnm, "define_singleton_method") && nt_ref(nt, id, "block") >= 0)) &&
+        crecv >= 0) {
       TyKind crt = comp_ntype(c, crecv);
-      if (ty_is_object(crt) && c->classes[ty_object_class(crt)].is_singleton_of) {
+      if ((ty_is_object(crt) && c->classes[ty_object_class(crt)].is_singleton_of) ||
+          nt_str(nt, id, "sg_resolved") != NULL) {
         buf_puts(b, "((void)("); emit_expr(c, crecv, b); buf_puts(b, "))");
         return;
       }

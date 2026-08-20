@@ -1509,6 +1509,12 @@ void register_singleton_defs(Compiler *c) {
         break;
       }
     }
+    /* Mark the dsm CALL as compile-time resolved. The emitter cannot re-derive
+       this from the receiver's type: a local that also carries a `def obj.m`
+       widens to poly, and reading it back as "not a singleton subclass" sent
+       the call to the unsupported-feature diagnostic, which stopped the build
+       on a form the constant spelling compiles. */
+    if (is_dsm) nt_node_set_str(nt, id, "sg_resolved", "1");
   }
   free(m.wkey); free(m.wci);
 }
