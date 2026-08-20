@@ -82,4 +82,41 @@ class StringIO
       io
     end
   end
+
+  # The iteration surface, plain Ruby over gets / getc / getbyte. The BLOCK
+  # form only: CRuby answers an Enumerator when no block is given, and a
+  # method returning either that or `self` is a union spinel's typing has no
+  # slot for -- `readlines.each` / `each_char.to_a` say the same thing here.
+  def each_line(sep = nil)
+    if sep
+      s = sep.to_s
+      while (line = gets(s))
+        yield line
+      end
+    else
+      while (line = gets)
+        yield line
+      end
+    end
+    self
+  end
+
+  def each(sep = nil, &blk)
+    each_line(sep, &blk)
+  end
+
+
+  def each_char
+    while (ch = getc)
+      yield ch
+    end
+    self
+  end
+
+  def each_byte
+    while !eof?
+      yield getbyte
+    end
+    self
+  end
 end
