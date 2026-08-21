@@ -11667,6 +11667,103 @@ static void ffi_check_buffer_bounds(Compiler *c, int id, int arg,
   unsupported_feature(c, id, msg);
 }
 
+/* Can evaluating this node run user code or otherwise be observed? Only the
+   call forms are treated as such: a read, a literal or a variable has no order
+   to get wrong, and keeping the set narrow leaves every ordinary call site
+   emitting exactly the code it did. */
+static int node_is_effectful(Compiler *c, int n) {
+  if (n < 0) return 0;
+  NodeKind k = nt_kind(c->nt, n);
+  return k == NK_CallNode || k == NK_SuperNode || k == NK_ForwardingSuperNode ||
+         k == NK_YieldNode;
+}
+
+/* Does `txt` mention the temp `_t<n>` -- as that temp, not as a prefix of a
+   longer number (`_t5` must not match inside `_t50`)? */
+static int text_uses_tmp(const char *txt, int n) {
+  if (!txt) return 0;
+  char want[24];
+  int wl = snprintf(want, sizeof want, "_t%d", n);
+  for (const char *q = strstr(txt, want); q; q = strstr(q + 1, want))
+    if (!(q[wl] >= '0' && q[wl] <= '9')) return 1;
+  return 0;
+}
+
+/* the receiver node currently being hoisted for evaluation order (no re-entry) */
+static int g_recv_order_node = -1;
+
+/* Ruby evaluates a call's receiver before its arguments. Spinel hands both to
+   one C call, where the order among the operands is unspecified -- gcc picks
+   right-to-left, so `trace("recv", s).include?(trace("arg", x))` printed `arg`
+   first while clang printed `recv` first, and the same program answered
+   differently on the two platforms.
+
+   Bind the receiver to a temp IN PLACE, inside a statement expression wrapping
+   the call. Not a g_pre line: g_pre is flushed at the enclosing statement, which
+   for an expression inside a spliced block body is outside the block, and the
+   receiver would then be evaluated before the block's own parameters are bound.
+   The root lives in the same statement expression as the call it protects, so it
+   is still held while the arguments allocate.
+
+   The arms pick the temp up through g_argov, the same mirror the hash and range
+   receiver rewrites use, so no arm needs to know about this. An arm that renders
+   the receiver its OWN way would evaluate it twice, which is worse than the
+   wrong order -- so the call goes into a scratch buffer and the whole rewrite is
+   rolled back, temp counter and all, unless the temp appears in it. */
+static int emit_recv_before_args(Compiler *c, int id, Buf *b) {
+  const NodeTable *nt = c->nt;
+  int recv = nt_ref(nt, id, "receiver");
+  if (recv < 0 || id == g_recv_order_node || g_n_argov >= MAX_ARG_OVERRIDE) return 0;
+  if (!node_is_effectful(c, recv)) return 0;
+  int args = nt_ref(nt, id, "arguments");
+  int argc = 0;
+  const int *argv = args >= 0 ? nt_arr(nt, args, "arguments", &argc) : NULL;
+  int effectful_arg = 0;
+  for (int i = 0; i < argc && !effectful_arg; i++)
+    effectful_arg = node_is_effectful(c, argv[i]);
+  if (!effectful_arg) return 0;
+  TyKind rt = comp_ntype(c, recv);
+  if (rt == TY_UNKNOWN || rt == TY_VOID || rt == TY_NIL) return 0;
+
+  size_t pre_mark = g_pre->len;
+  int saved_tmp = g_tmp;
+  int t = ++g_tmp;
+  g_argov_node[g_n_argov] = recv;
+  snprintf(g_argov_text[g_n_argov], sizeof g_argov_text[0], "_t%d", t);
+  g_n_argov++;
+  int saved_node = g_recv_order_node;
+  g_recv_order_node = id;
+  Buf ob; memset(&ob, 0, sizeof ob);
+  emit_call(c, id, &ob);
+  g_recv_order_node = saved_node;
+  g_n_argov--;
+
+  /* An arm may hoist part of the call into g_pre itself. Such a line is placed
+     ABOVE the statement expression, so a reference to the receiver temp from
+     there would name something not declared yet. Decline rather than emit it. */
+  int pre_uses = g_pre->p && g_pre->len > pre_mark &&
+                 text_uses_tmp(g_pre->p + pre_mark, t);
+  if (!text_uses_tmp(ob.p, t) || pre_uses) {
+    free(ob.p);
+    g_pre->len = pre_mark;
+    if (g_pre->p) g_pre->p[pre_mark] = '\0';
+    g_tmp = saved_tmp;
+    return 0;
+  }
+  buf_puts(b, "({ ");
+  emit_ctype(c, rt, b);
+  buf_printf(b, " _t%d = ", t);
+  { Buf rb; memset(&rb, 0, sizeof rb); emit_expr(c, recv, &rb);
+    buf_puts(b, rb.p ? rb.p : default_value(rt)); free(rb.p); }
+  buf_puts(b, "; ");
+  if (rt == TY_POLY) buf_printf(b, "SP_GC_ROOT_RBVAL(_t%d); ", t);
+  else if (needs_root(rt)) buf_printf(b, "SP_GC_ROOT(_t%d); ", t);
+  buf_puts(b, ob.p ? ob.p : "");
+  buf_puts(b, "; })");
+  free(ob.p);
+  return 1;
+}
+
 void emit_call(Compiler *c, int id, Buf *b) {
   /* deep-return pickup (#3227 P6): a marked receiverless call to a method
      whose every return path yields a shared handle -- reset the side
@@ -11690,6 +11787,8 @@ void emit_call(Compiler *c, int id, Buf *b) {
   if (emit_builtin_arity_guard(c, id, b)) return;
   /* An argument whose static class the method cannot take (defined above). */
   if (emit_arg_type_guards(c, id, b)) return;
+  /* Receiver before arguments, which C does not promise (defined above). */
+  if (emit_recv_before_args(c, id, b)) return;
   /* Proc#=== calls the proc; a Proc read out of a container arrives boxed,
      where a value comparison would just answer false (#3683). */
   {
