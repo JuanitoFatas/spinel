@@ -675,7 +675,7 @@ void emit_block_locals_reset(Compiler *c, int blk, Buf *b, int indent) {
           }
           else if (lv->type != TY_PROC && lv->type != TY_INT && lv->type != TY_BOOL &&
                    lv->type != TY_SYMBOL && lv->type != TY_UNKNOWN && cell_is_typed_ptr(c, lv)) {
-            const char *cell_scan = (lv->type == TY_STRING) ? "sp_cell_scan_str" : "sp_cell_scan_ptr";
+            const char *cell_scan = cell_scan_fn(lv->type);
             buf_printf(b, "_cell_%s = (", rn2); emit_ctype(c, lv->type, b);
             buf_puts(b, " *)sp_gc_alloc(sizeof(");
             emit_ctype(c, lv->type, b);

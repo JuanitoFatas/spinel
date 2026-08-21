@@ -1239,7 +1239,7 @@ void emit_scope_decls(Compiler *c, Scope *s, Buf *b) {
           lv->type != TY_UNKNOWN && !ptr_cell)
         unsupported(c, s->def_node, "closure capturing a non-integer variable (later slice)");
       if (ptr_cell) {
-        const char *cell_scan = (lv->type == TY_STRING) ? "sp_cell_scan_str" : "sp_cell_scan_ptr";
+        const char *cell_scan = cell_scan_fn(lv->type);
         buf_puts(b, "    "); emit_ctype(c, lv->type, b);
         buf_printf(b, " *_cell_%s = (", lv->name); emit_ctype(c, lv->type, b);
         buf_puts(b, " *)sp_gc_alloc(sizeof("); emit_ctype(c, lv->type, b);
@@ -2961,6 +2961,18 @@ int proc_slot_via_poly(Compiler *c, TyKind t) {
    (string / array / hash / object), as opposed to a laundered or scalar slot.
    A typed-pointer cell is a plain `T *_cell_x` whose deref is an ordinary
    lvalue, so reads and (re)assignments need no (sp_int)(uintptr_t) cast. */
+/* The scan a closure cell of this type needs. A Regexp is NOT a GC object: it
+   is a compiled program the regexp engine mallocs, which sp_mark_rbval already
+   excludes from sp_gc_mark for exactly this reason. The cell scan missed the
+   same exclusion, so marking a captured Regexp read a GC header one byte in
+   front of the engine's allocation and the collector faulted on the garbage it
+   found there (#4063). NULL scan: the cell itself is GC-allocated and stays
+   alive, and the pattern it points at is never collected. */
+const char *cell_scan_fn(TyKind t) {
+  if (t == TY_REGEX) return "NULL";
+  return (t == TY_STRING) ? "sp_cell_scan_str" : "sp_cell_scan_ptr";
+}
+
 int cell_is_typed_ptr(Compiler *c, LocalVar *lv) {
   return lv && proc_slot_is_ptr(lv->type) && !comp_ty_value_obj(c, lv->type);
 }
@@ -4344,7 +4356,7 @@ else if (orecv >= 0 && onm) {
       buf_printf(pb, " *_cell_%s = (", p);
       emit_ctype(c, lv->type, pb);
       buf_printf(pb, " *)sp_gc_alloc(sizeof(void *), NULL, %s);",
-                 lv->type == TY_STRING ? "sp_cell_scan_str" : "sp_cell_scan_ptr");
+                 cell_scan_fn(lv->type));
       buf_printf(pb, ""
                      " SP_GC_ROOT(_cell_%s); *_cell_%s = lv_%s;%c", p, p, p, 10);
     }
