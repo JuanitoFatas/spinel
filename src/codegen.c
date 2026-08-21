@@ -298,6 +298,24 @@ int obj_conv_method(Compiler *c, TyKind t, const char *conv, TyKind want, int *d
   return mi;
 }
 
+/* The container half of the protocol: a class whose #to_ary / #to_hash is a
+   no-parameter method returning a static Array (or Hash) kind converts
+   through a direct call, typed as that container (Array#zip, #product,
+   Hash#merge). Answers the container kind, or TY_UNKNOWN when the class has
+   no such method -- the method's own return type is the answer, so there is
+   nothing to search the kind space for. */
+TyKind obj_container_conv(Compiler *c, TyKind t, const char *conv, int *def) {
+  if (!ty_is_object(t)) return TY_UNKNOWN;
+  int cid = ty_object_class(t);
+  if (cid < 0 || cid >= c->nclasses) return TY_UNKNOWN;
+  int d = -1, mi = comp_method_in_chain(c, cid, conv, &d);
+  if (mi < 0 || c->scopes[mi].nparams != 0) return TY_UNKNOWN;
+  TyKind ret = c->scopes[mi].ret;
+  if (sp_streq(conv, "to_hash") ? !ty_is_hash(ret) : !ty_is_array(ret)) return TY_UNKNOWN;
+  if (def) *def = d;
+  return ret;
+}
+
 /* 1 iff any class in the program defines a usable #to_int / #to_str. A
    NARROWING into a typed slot compiles the conversion in only then: unlike an
    argument slot, a narrowing sits wherever the analysis put it -- including
@@ -397,7 +415,7 @@ static int emit_obj_conv(Compiler *c, int node, const char *conv, TyKind want,
 /* The static Ruby class name of a scalar/container kind, for TypeError
    wording -- NULL for kinds a conversion arm already handles (poly, object,
    unknown) or that are legal in the slot. */
-static const char *conv_wrong_cls_name(TyKind t) {
+const char *conv_wrong_cls_name(TyKind t) {
   if (t == TY_INT || t == TY_BIGINT) return "Integer";
   if (t == TY_FLOAT) return "Float";
   if (t == TY_SYMBOL) return "Symbol";
@@ -409,6 +427,15 @@ static const char *conv_wrong_cls_name(TyKind t) {
   if (ty_is_array(t)) return "Array";
   if (ty_is_hash(t)) return "Hash";
   return NULL;
+}
+
+/* The Ruby class name a TypeError should name for any settled static kind:
+   the scalar and container names above, "nil" for nil, and a user class by
+   its own name. NULL only where the kind is not settled (poly, unknown). */
+const char *conv_cls_name_of(Compiler *c, TyKind t) {
+  if (t == TY_NIL) return "nil";
+  if (ty_is_object(t)) return class_ruby_name(c, ty_object_class(t));
+  return conv_wrong_cls_name(t);
 }
 
 static int emit_nilbool_conv_raise_w(Compiler *c, int node, TyKind want, int nil_ok,
@@ -509,11 +536,33 @@ void emit_int_expr_conv(Compiler *c, int node, Buf *b) {
   emit_int_expr_ex(c, node, 2, b);
 }
 
-/* Emit a node as an sp_float. A poly value is unboxed via sp_poly_to_f; any
-   other (numeric) value is plain-cast, matching the legacy `(sp_float)(...)`. */
+/* Emit a node as an sp_float. A poly value is unboxed via sp_poly_to_f; a
+   numeric value is plain-cast, matching the legacy `(sp_float)(...)`. The
+   slot follows CRuby's rb_to_float, which converts only a Numeric: a String,
+   Symbol, nil, boolean, container or user object (its #to_f is not asked) is
+   "can't convert X into Float" -- where the raw pointer used to be cast to
+   double and stop the C build (Math.sqrt(obj), Float#rationalize("x")). */
 void emit_float_expr(Compiler *c, int node, Buf *b) {
   if (yield_site_type(c, node) == TY_POLY) {
     buf_puts(b, "sp_poly_to_f("); emit_expr(c, node, b); buf_puts(b, ")");
+    return;
+  }
+  TyKind t = comp_ntype(c, node);
+  if (t == TY_BIGINT) {
+    buf_puts(b, "sp_bigint_to_double("); emit_expr(c, node, b); buf_puts(b, ")");
+    return;
+  }
+  const char *cn = conv_cls_name_of(c, t);
+  if (cn && t != TY_INT && t != TY_FLOAT) {
+    buf_puts(b, "({ (void)(");
+    emit_expr(c, node, b);
+    buf_printf(b, "); sp_raise_cls(\"TypeError\", \"can't convert %s into Float\"); 0.0; })", cn);
+    return;
+  }
+  if (t == TY_BOOL) {
+    buf_puts(b, "({ sp_raise_cls(\"TypeError\", (");
+    emit_expr(c, node, b);
+    buf_puts(b, ") ? \"can't convert true into Float\" : \"can't convert false into Float\"); 0.0; })");
     return;
   }
   Buf tmp; memset(&tmp, 0, sizeof tmp);
@@ -524,6 +573,39 @@ void emit_float_expr(Compiler *c, int node, Buf *b) {
     buf_puts(b, ")");
   }
   free(tmp.p);
+}
+
+/* A Float operand of an arithmetic method (Float#quo, #fdiv): a Numeric
+   converts as the float slot does, and any other class is the coercion
+   failure, "X can't be coerced into Float", where X is the value's inspect
+   for nil, true, false and a Symbol and its class name otherwise -- not the
+   conversion slot's "can't convert X into Float". */
+void emit_float_coerce_expr(Compiler *c, int node, Buf *b) {
+  TyKind t = comp_ntype(c, node);
+  if (t == TY_INT || t == TY_BIGINT || t == TY_FLOAT || t == TY_POLY || t == TY_UNKNOWN ||
+      t == TY_RATIONAL) {
+    emit_float_expr(c, node, b);
+    return;
+  }
+  if (t == TY_BOOL) {
+    buf_puts(b, "({ sp_raise_cls(\"TypeError\", (");
+    emit_expr(c, node, b);
+    buf_puts(b, ") ? \"true can't be coerced into Float\" : \"false can't be coerced into Float\"); 0.0; })");
+    return;
+  }
+  if (t == TY_SYMBOL) {
+    buf_puts(b, "({ sp_raise_cls(\"TypeError\", sp_sprintf(\"%s can't be coerced into Float\", sp_sym_inspect(");
+    emit_expr(c, node, b);
+    buf_puts(b, "))); 0.0; })");
+    return;
+  }
+  const char *cn = conv_cls_name_of(c, t);
+  if (!cn) {
+    emit_float_expr(c, node, b);
+    return;
+  }
+  buf_puts(b, "({ (void)("); emit_expr(c, node, b);
+  buf_printf(b, "); sp_raise_cls(\"TypeError\", \"%s can't be coerced into Float\"); 0.0; })", cn);
 }
 
 /* See codegen_internal.h. */

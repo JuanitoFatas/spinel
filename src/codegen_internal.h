@@ -403,6 +403,11 @@ int  emit_super_inline(Compiler *c, int id, Buf *b, int indent, int as_expr);
 void emit_args_filled(Compiler *c, int callee_idx, int argsNode, const char *lead, Buf *out);
 /* Emit a hash key, unboxing a poly value to the typed-hash's key type. */
 void emit_hash_key(Compiler *c, int key, TyKind kt, Buf *b);
+int hash_key_misses(Compiler *c, int key, TyKind kt);
+const char *conv_wrong_cls_name(TyKind t);
+const char *conv_cls_name_of(Compiler *c, TyKind t);
+TyKind obj_container_conv(Compiler *c, TyKind t, const char *conv, int *def);
+void emit_str_pattern_expr(Compiler *c, int node, Buf *b);
 void emit_boxed_text(Compiler *c, TyKind t, const char *expr, Buf *b);
 int emit_iter_bind_rest(Compiler *c, int block, int np, TyKind elem_t, const char *elem_src, Buf *b, int indent);
 void emit_frozen_obj_guard(Compiler *c, int cid, const char *selfexpr, Buf *b);
@@ -797,8 +802,12 @@ void emit_int_expr(Compiler *c, int node, Buf *b);
 void emit_str_expr(Compiler *c, int node, Buf *b);
 void emit_path_expr(Compiler *c, int node, Buf *b);
 void emit_to_s_expr(Compiler *c, int node, Buf *b);
-/* Converted String operands held across the call they enter (codegen.c). */
-typedef struct { Buf b; int *tmp; int n, cap; } ConvHold;
+/* Converted String operands held across the call they enter (codegen.c).
+   `guarded` declines the hold: the arm wrapped its body in a nil-receiver
+   dispatch check, and a hoisted conversion would run before that check
+   raises its NoMethodError -- CRuby never asks #to_str for a call that
+   does not dispatch. */
+typedef struct { Buf b; int *tmp; int n, cap; int guarded; } ConvHold;
 extern ConvHold *g_conv_hold;
 extern unsigned g_conv_emitted;  /* implicit conversions emitted so far; read as a delta */
 Buf *conv_hold_begin(Buf *b, int *tmp);
@@ -812,6 +821,7 @@ void emit_int_expr_conv(Compiler *c, int node, Buf *b);
 int emit_unresolved_coerced(Compiler *c, int node, TyKind target, Buf *b);
 void emit_int_divisor(Compiler *c, int node, Buf *b);
 void emit_float_expr(Compiler *c, int node, Buf *b);
+void emit_float_coerce_expr(Compiler *c, int node, Buf *b);
 /* Emit `node` as a scalar operand: like a plain emit_expr, except an
    unresolved-constant read (which lowers to a NameError raise valued as an
    sp_Class struct) is voided and replaced by `zero` ("0" / "0.0"), so the

@@ -3409,7 +3409,7 @@ int emit_iteration_stmt(Compiler *c, int id, Buf *b, int indent) {
     emit_indent(b, indent);
     if (cyc_argc == 1) {
       buf_printf(b, "sp_int _t%d = ", tn);
-      emit_expr(c, cyc_argv[0], b); buf_puts(b, ";\n");
+      emit_int_expr_nilable(c, cyc_argv[0], b); buf_puts(b, ";\n");
       emit_indent(b, indent);
       buf_printf(b, "for (sp_int _t%d = 0; _t%d < _t%d; _t%d++) {\n", ti, ti, tn, ti);
     }
@@ -3459,7 +3459,7 @@ int emit_iteration_stmt(Compiler *c, int id, Buf *b, int indent) {
     emit_indent(b, indent); emit_ctype(c, rt, b);
     buf_printf(b, " _t%d = %s;\n", ta, rb.p ? rb.p : ""); free(rb.p);
     emit_indent(b, indent); buf_printf(b, "sp_int _t%d = ", ts);
-    emit_expr(c, es_argv[0], b); buf_puts(b, ";\n");
+    emit_int_expr(c, es_argv[0], b); buf_puts(b, ";\n");
     emit_indent(b, indent);
     buf_printf(b, "for (sp_int _t%d = 0; _t%d < sp_%sArray_length(_t%d); _t%d += _t%d) {\n",
                ti, ti, k, ta, ti, ts);
@@ -3516,14 +3516,32 @@ int emit_iteration_stmt(Compiler *c, int id, Buf *b, int indent) {
       int ws = (aty && sp_streq(aty, "NilNode")) ||
                (aty && sp_streq(aty, "StringNode") && nt_str(nt, sp_argv[0], "content") &&
                 sp_streq(nt_str(nt, sp_argv[0], "content"), " "));
+      int reli = re_lit_index(c, sp_argv[0]);
       if (ws) buf_printf(b, "sp_str_split_ws(%s);\n", rb.p ? rb.p : "");
+      /* a Regexp separator splits with the engine, the way the expression
+         arm does; it is the one class the pattern slot must not word as a
+         wrong argument */
+      else if (reli >= 0) buf_printf(b, "sp_re_split(sp_re_pat_%d, %s);\n", reli, rb.p ? rb.p : "");
+      else if (comp_ntype(c, sp_argv[0]) == TY_REGEX) {
+        buf_puts(b, "sp_re_split("); emit_expr(c, sp_argv[0], b);
+        buf_printf(b, ", %s);\n", rb.p ? rb.p : "");
+      }
       else {
-        buf_printf(b, "sp_str_split_drop_trailing(%s, ", rb.p ? rb.p : ""); emit_expr(c, sp_argv[0], b); buf_puts(b, ");\n");
+        buf_printf(b, "sp_str_split_drop_trailing(%s, ", rb.p ? rb.p : ""); emit_str_pattern_expr(c, sp_argv[0], b); buf_puts(b, ");\n");
       }
     }
     else {
-      buf_printf(b, "sp_str_split_limit(%s, ", rb.p ? rb.p : ""); emit_expr(c, sp_argv[0], b);
-      buf_puts(b, ", "); emit_int_expr(c, sp_argv[1], b); buf_puts(b, ");\n");
+      int reli = re_lit_index(c, sp_argv[0]);
+      if (reli >= 0) buf_printf(b, "sp_re_split_limit(sp_re_pat_%d, %s, ", reli, rb.p ? rb.p : "");
+      else if (comp_ntype(c, sp_argv[0]) == TY_REGEX) {
+        buf_puts(b, "sp_re_split_limit("); emit_expr(c, sp_argv[0], b);
+        buf_printf(b, ", %s, ", rb.p ? rb.p : "");
+      }
+      else {
+        buf_printf(b, "sp_str_split_limit(%s, ", rb.p ? rb.p : ""); emit_str_pattern_expr(c, sp_argv[0], b);
+        buf_puts(b, ", ");
+      }
+      emit_int_expr(c, sp_argv[1], b); buf_puts(b, ");\n");
     }
     free(rb.p);
     emit_indent(b, indent); buf_printf(b, "SP_GC_ROOT(_t%d);\n", tm);

@@ -1500,8 +1500,38 @@ int emit_catch_tag(Compiler *c, int id, Buf *b) {
   unsupported(c, id, "catch/throw with a Float, boolean, nil, or Bignum tag (use a Symbol, String, Integer, or object tag)");
   return 0;
 }
+/* A key whose static kind can never be in a typed hash's table: a String
+   or a user object looked up in an Integer-keyed Hash, a Float where
+   1.eql?(1.0) is false, nil in any of them. Hash looks a key up by #hash and
+   #eql? and converts nothing, so the lookup is a plain miss in CRuby, not a
+   TypeError -- and not the raw pointer in the sp_int slot that stopped the C
+   build ({1 => 2}.dig("a"), .fetch("a"), .except(obj)). The same kinds a
+   poly key of another tag already misses on. A user object is a miss
+   without asking whether its class defines #eql? and #hash: a typed table
+   holds no objects, so nothing in it can be eql? to one. */
+int hash_key_misses(Compiler *c, int key, TyKind kt) {
+  TyKind actual = comp_ntype(c, key);
+  if (kt == TY_POLY || actual == kt || actual == TY_POLY || actual == TY_UNKNOWN) return 0;
+  if (kt == TY_STRING && (actual == TY_STRBUF || actual == TY_SYMBOL)) return 0;
+  return actual == TY_NIL || actual == TY_BOOL || actual == TY_INT ||
+         actual == TY_BIGINT || actual == TY_FLOAT || actual == TY_SYMBOL ||
+         actual == TY_STRING || actual == TY_STRBUF || actual == TY_RANGE ||
+         actual == TY_FLOAT_RANGE || actual == TY_STR_RANGE || actual == TY_TIME ||
+         actual == TY_REGEX || ty_is_array(actual) || ty_is_hash(actual) ||
+         ty_is_object(actual);
+}
+
 void emit_hash_key(Compiler *c, int key, TyKind kt, Buf *b) {
   TyKind actual = comp_ntype(c, key);
+  if (hash_key_misses(c, key, kt)) {
+    /* evaluate the key for its effects, then answer the value no key equals */
+    buf_puts(b, "({ (void)(");
+    emit_expr(c, key, b);
+    if (kt == TY_STRING)      buf_puts(b, "); (const char *)0; })");
+    else if (kt == TY_SYMBOL) buf_puts(b, "); (sp_sym)-1; })");
+    else                      buf_puts(b, "); SP_INT_NIL; })");
+    return;
+  }
   /* A symbol key on a string-keyed hash (Hash.new{}'s StrPolyHash models
      symbol keys by their name) coerces to the symbol's string. A literal
      :sym becomes the name string directly; a symbol value uses sp_sym_to_s. */
