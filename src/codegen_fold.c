@@ -6546,6 +6546,47 @@ else {
   buf_printf(b, " _t%d; })", t);
 }
 
+/* True when an argument of type `pt` built by node `provided` has to be hoisted
+   into a rooted temp before the call runs. A scalar (int/float/...) holds no
+   heap pointer and needs none. A bare read (local/ivar/const/self/nil/string
+   literal) is already reachable from a root where it lives, so it needs none
+   either -- and hoisting one into g_pre is WRONG when the call sits in a
+   sequence-expression that assigns the read variable before the call: the g_pre
+   line is flushed at the statement boundary, capturing the value ABOVE that
+   in-sequence assignment (`a = {...}; foo(a)` as an operand passed a stale `a`).
+   That matches the g_argov skip in emit_args_filled. A param default like `{}`
+   (provided < 0) is a fresh allocation and does want the root -- #1445. */
+int arg_wants_root(Compiler *c, TyKind pt, int provided) {
+  if (pt != TY_POLY && !needs_root(pt)) return 0;
+  if (provided < 0) return 1;
+  const char *aty = nt_type(c->nt, provided);
+  return !(aty && (sp_streq(aty, "LocalVariableReadNode") ||
+                   sp_streq(aty, "InstanceVariableReadNode") ||
+                   sp_streq(aty, "ConstantReadNode") ||
+                   sp_streq(aty, "SelfNode") || sp_streq(aty, "NilNode") ||
+                   sp_streq(aty, "StringNode")));
+}
+
+/* Evaluate the already-rendered argument text `expr` into a g_pre temp of type
+   `pt` and root it, leaving `_tN` in `out`. The root lives in the caller's frame
+   and so covers the whole call, which the callee's own entry root cannot: a
+   sibling argument evaluated after this one can collect before the call is even
+   entered, and C leaves the order between them unspecified. `provided` is the
+   argument's node (or < 0 for a synthesised default), used only for the upcast
+   a narrower object type needs to reach the parameter's. */
+void emit_rooted_operand(Compiler *c, TyKind pt, int provided, const char *expr, Buf *out) {
+  int t = ++g_tmp;
+  emit_indent(g_pre, g_indent);
+  emit_ctype(c, pt, g_pre);
+  buf_printf(g_pre, " _t%d = ", t);
+  if (provided >= 0) emit_obj_upcast_prefix(c, pt, comp_ntype(c, provided), g_pre);
+  buf_printf(g_pre, "%s;\n", expr);
+  emit_indent(g_pre, g_indent);
+  if (pt == TY_POLY) buf_printf(g_pre, "SP_GC_ROOT_RBVAL(_t%d);\n", t);
+  else buf_printf(g_pre, "SP_GC_ROOT(_t%d);\n", t);
+  buf_printf(out, "_t%d", t);
+}
+
 /* Like emit_arg_or_default, but hoists a pointer-backed / poly argument into a
    g_pre temp and roots it before the call. A fresh allocation passed straight
    into a callee that allocates before it roots the parameter -- the canonical
@@ -6563,39 +6604,10 @@ static void emit_arg_rooted(Compiler *c, Scope *m, int idx, int provided, Buf *o
   /* a byref out-param arg is a slot address, not a heap value: it hoists its
      own rooted temp when one is needed (see emit_arg_or_default) */
   if (p && p->byref_out) { emit_arg_or_default(c, m, idx, provided, out); return; }
-  int poly = (pt == TY_POLY);
-  if (!poly && !needs_root(pt)) { emit_arg_or_default(c, m, idx, provided, out); return; }
-  /* A bare read (local/ivar/const/self/nil/string literal) is already reachable
-     from a root where it lives, so it needs no hoisted temp. Hoisting it into
-     g_pre is also WRONG when the call sits in a sequence-expression that assigns
-     the read variable before the call: the g_pre line is flushed at the
-     statement boundary, capturing the value ABOVE that in-sequence assignment
-     (`a = {...}; foo(a)` as an operand passed a stale `a`). Emit inline, matching
-     the g_argov skip in emit_args_filled. A param default like `{}` (provided<0)
-     is a fresh allocation and still hoisted -- the #1445 root case. */
-  if (provided >= 0) {
-    const char *aty = nt_type(c->nt, provided);
-    if (aty && (sp_streq(aty, "LocalVariableReadNode") ||
-                sp_streq(aty, "InstanceVariableReadNode") ||
-                sp_streq(aty, "ConstantReadNode") ||
-                sp_streq(aty, "SelfNode") || sp_streq(aty, "NilNode") ||
-                sp_streq(aty, "StringNode"))) {
-      emit_arg_or_default(c, m, idx, provided, out);
-      return;
-    }
-  }
+  if (!arg_wants_root(c, pt, provided)) { emit_arg_or_default(c, m, idx, provided, out); return; }
   Buf ab; memset(&ab, 0, sizeof ab);
   emit_arg_or_default(c, m, idx, provided, &ab);
-  int t = ++g_tmp;
-  emit_indent(g_pre, g_indent);
-  emit_ctype(c, pt, g_pre);
-  buf_printf(g_pre, " _t%d = ", t);
-  if (provided >= 0) emit_obj_upcast_prefix(c, pt, comp_ntype(c, provided), g_pre);
-  buf_printf(g_pre, "%s;\n", ab.p ? ab.p : default_value(pt));
-  emit_indent(g_pre, g_indent);
-  if (poly) buf_printf(g_pre, "SP_GC_ROOT_RBVAL(_t%d);\n", t);
-  else buf_printf(g_pre, "SP_GC_ROOT(_t%d);\n", t);
-  buf_printf(out, "_t%d", t);
+  emit_rooted_operand(c, pt, provided, ab.p ? ab.p : default_value(pt), out);
   free(ab.p);
 }
 

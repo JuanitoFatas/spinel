@@ -6406,13 +6406,23 @@ static int emit_class_new_call(Compiler *c, int id, Buf *b) {
             int mt_empty = ty_is_array(cls->ivar_types[a]) && !ty_is_obj_array(cls->ivar_types[a]) &&
                            nt_kind(nt, vnode) == NK_ArrayNode;
             if (mt_empty) { int en3 = 0; nt_arr(nt, vnode, "elements", &en3); mt_empty = (en3 == 0); }
+            /* Hoist a heap-backed member value into a rooted temp: a sibling
+               member expression evaluated after it can collect (`Outer.new(
+               Inner.new(i), body(i))`), and sp_<S>_new's own entry root comes
+               too late for that -- by then the value it roots is already
+               dangling and the next mark reads freed memory (#4049). */
+            Buf mv; memset(&mv, 0, sizeof mv);
             if (mt_empty) {
               const char *mk = (cls->ivar_types[a] == TY_POLY_ARRAY) ? "Poly" : array_kind(cls->ivar_types[a]);
-              if (mk) buf_printf(b, "sp_%sArray_new()", mk);
-              else emit_expr(c, vnode, b);
+              if (mk) buf_printf(&mv, "sp_%sArray_new()", mk);
+              else emit_expr(c, vnode, &mv);
             }
-            else if (cls->ivar_types[a] == TY_POLY && comp_ntype(c, vnode) != TY_POLY) emit_boxed(c, vnode, b);
-            else emit_expr(c, vnode, b);
+            else if (cls->ivar_types[a] == TY_POLY && comp_ntype(c, vnode) != TY_POLY) emit_boxed(c, vnode, &mv);
+            else emit_expr(c, vnode, &mv);
+            if (arg_wants_root(c, cls->ivar_types[a], vnode))
+              emit_rooted_operand(c, cls->ivar_types[a], -1, mv.p ? mv.p : "", b);
+            else buf_puts(b, mv.p ? mv.p : "");
+            free(mv.p);
           }
           else if (splat_h >= 0) {
             Buf hv; memset(&hv, 0, sizeof hv); emit_boxed(c, splat_h, &hv);
