@@ -5244,7 +5244,13 @@ void emit_rescue(Compiler *c, int id, Buf *b, int indent, int fr, const char *re
   }
 
   const char *save_cls = g_rescue_cls, *save_msg = g_rescue_msg;
-  static char clsbuf[32], msgbuf[32];
+  /* NOT static: a rescue body containing its own begin/rescue re-enters this
+     function, and shared buffers meant the inner clause's numbering overwrote
+     the outer one's in place. The save/restore below puts back the POINTER, so
+     the outer bare `raise` then emitted the inner frame's _rcls_N / _rmsg_N,
+     which is out of scope by then and failed the C build (#4052). One buffer
+     per clause, alive for as long as its body is emitted, is the fix. */
+  char clsbuf[32], msgbuf[32];
   snprintf(clsbuf, sizeof clsbuf, "_rcls_%d", rc);
   snprintf(msgbuf, sizeof msgbuf, "_rmsg_%d", rc);
 
