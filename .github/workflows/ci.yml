@@ -84,6 +84,17 @@ jobs:
         # AND the PCH fallback.
         run: make -j$(getconf _NPROCESSORS_ONLN) test ${{ matrix.cc == 'clang' && 'OPT=-O0 CC=clang' || 'OPT=-O1' }}
 
+      # Inference/allocation property gates. These assert the SHAPE of the
+      # generated C -- that a slot keeps its typed representation, that the
+      # alloc report keeps its format -- which the output diffs above cannot
+      # see: a boxed hash still prints the right answer. They lived only in the
+      # local `make check` target, so an Int-keyed hash lost its typed variant
+      # and stayed that way for weeks with CI green throughout. Linux/gcc only:
+      # what they read is compiler- and OS-independent.
+      - name: Run inference and allocation property gates
+        if: matrix.os == 'ubuntu-latest' && matrix.cc == 'gcc'
+        run: make alloc-report-test infer-test spin-check
+
       # Benchmark integration test. Compiles every benchmark/*.rb through
       # the full pipeline (cc -Werror) and diffs the output against CRuby.
       # The bench programs are larger and more realistic than the test/*.rb

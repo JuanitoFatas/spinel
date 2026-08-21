@@ -1184,9 +1184,17 @@ gate:
 	+@$(MAKE) --no-print-directory gate-legs
 	@echo "gate: ALL GREEN"
 
-gate-legs: gate-test gate-bench gate-optcarrot gate-rubyspec
+gate-legs: gate-test gate-bench gate-optcarrot gate-rubyspec gate-props
 gate-test:
 	+@$(MAKE) --no-print-directory test OPT=-O1
+# The property gates `check` runs. They were in the fast pre-commit target and
+# NOT in the pre-push one, so the full gate was not a superset of the quick one
+# and a representation regression could pass every leg of it. infer-test caught
+# an Int-keyed hash losing its typed variant; nothing else did, for weeks.
+gate-props:
+	+@$(MAKE) --no-print-directory alloc-report-test
+	+@$(MAKE) --no-print-directory infer-test
+	+@$(MAKE) --no-print-directory spin-check
 gate-bench:
 	+@$(MAKE) --no-print-directory bench
 gate-optcarrot:
