@@ -139,6 +139,14 @@ touch ../spinel-fast/fast_ext.c
 OUT=$("$SPIN" run 2>&1)
 echo "$OUT" | grep -q "^cc fast/fast_ext.c$" || fail "touched .c not recompiled"
 
+# CC is a command line, not a path: a compiler-cache wrapper makes it two words,
+# which is what CI and most developer setups pass. The object cache keys its
+# directory on the compiler, so the space went straight into a path and the
+# unquoted -o argument split at it.
+"$SPIN" clean >/dev/null
+OUT=$(CC="env ${CC:-cc}" "$SPIN" run 2>&1)
+expect "carried-C with a wrapped CC" "40" "$(echo "$OUT" | tail -1)"
+
 # --- unresolved require is a hard error (spin sets SPINEL_REQUIRE_GATE) ---------
 printf 'require "nosuchgem"\nputs 1\n' > bin/broken.rb
 if "$SPIN" build broken >/dev/null 2>"$WORK/gate.err"; then

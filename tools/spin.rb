@@ -199,6 +199,19 @@ def native_cc
   c == "" ? "cc" : c
 end
 
+# A filename-safe name for the compiler, for the object cache's directory. CC
+# is a command line, not a path: "sccache gcc" and "/usr/lib/ccache/cc" both
+# have to reduce to something a directory can be called.
+def cc_cache_key
+  k = ""
+  native_cc.each_char do |ch|
+    ok = (ch >= "a" && ch <= "z") || (ch >= "A" && ch <= "Z") ||
+         (ch >= "0" && ch <= "9") || ch == "-" || ch == "_" || ch == "."
+    k += ok ? ch : "_"
+  end
+  k
+end
+
 # The public runtime headers ship beside the compiler: dev tree ../lib,
 # installed tree ./lib. $0 does not resolve symlinks, so when spin runs as
 # the /usr/local/bin/spin symlink the sibling is the /usr/local/bin/spinel
@@ -295,7 +308,11 @@ def native_objs_for(name, dir, version)
   excl = native_build_workdirs(dir)
   cs = collect_c(dir, excl)
   return [] if cs == ""
-  odir = native_cache_dir(name + "-" + version + "-" + File.basename(native_cc))
+  # The cache key names a DIRECTORY, so the compiler part of it has to be
+  # spellable as one. A CC of "sccache gcc" or "ccache cc" -- what CI and most
+  # developer setups use -- put a space in the path, and the unquoted -o
+  # argument below then split into two words at it.
+  odir = native_cache_dir(name + "-" + version + "-" + cc_cache_key)
   hdr = spinel_hdr_dir
   hnew = newest_native_input(dir, 0, excl)
   objs = []
@@ -303,9 +320,9 @@ def native_objs_for(name, dir, version)
     rel = c[dir.length + 1..-1].to_s
     o = File.join(odir, rel.gsub("/", "_")[0..-3] + ".o")
     if !File.exist?(o) || File.mtime(o).to_i < hnew
-      cmd = native_cc + " -O2 -c #{c} -I #{dir}"
-      cmd += " -I #{hdr}" if hdr != ""
-      cmd += " -o #{o}"
+      cmd = native_cc + " -O2 -c '#{c}' -I '#{dir}'"
+      cmd += " -I '#{hdr}'" if hdr != ""
+      cmd += " -o '#{o}'"
       spin_die("native compile failed: " + rel + " (" + name + ")") unless system(cmd)
       puts "cc #{name}/#{rel}"
     end
