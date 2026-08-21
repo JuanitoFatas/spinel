@@ -1487,7 +1487,10 @@ int emit_array_call(Compiler *c, int id, Buf *b) {
         if (is_range) {
           int tr = ++g_tmp;
           emit_indent(g_pre, g_indent);
-          buf_printf(g_pre, "sp_Range _t%d = ", tr); emit_expr(c, argv[0], g_pre); buf_puts(g_pre, ";\n");
+          /* rendered first: emit_expr may want g_pre lines of its own (#4065) */
+          { Buf rgb2; memset(&rgb2, 0, sizeof rgb2); emit_expr(c, argv[0], &rgb2);
+            buf_printf(g_pre, "sp_Range _t%d = %s;\n", tr, rgb2.p ? rgb2.p : "(sp_Range){0}");
+            free(rgb2.p); }
           emit_indent(g_pre, g_indent);
           buf_printf(g_pre, "sp_int _t%d = _t%d.first; if (_t%d < 0) _t%d += _t%d; if (_t%d < 0) _t%d = 0;\n",
                      ts, tr, ts, ts, tn, ts, ts);

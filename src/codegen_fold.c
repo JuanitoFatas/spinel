@@ -4925,7 +4925,11 @@ int emit_collect_expr(Compiler *c, int id, Buf *b) {
   if (range_recv) {
     int tr = ++g_tmp;
     emit_indent(g_pre, g_indent);
-    buf_printf(g_pre, "sp_Range _t%d = ", tr); emit_expr(c, recv, g_pre); buf_puts(g_pre, ";\n");
+    /* rendered first: see the note at the poly-callable temp in codegen_call.c
+       -- emit_expr may want g_pre lines of its own (#4065) */
+    { Buf rgb; memset(&rgb, 0, sizeof rgb); emit_expr(c, recv, &rgb);
+      buf_printf(g_pre, "sp_Range _t%d = %s;\n", tr, rgb.p ? rgb.p : "(sp_Range){0}");
+      free(rgb.p); }
     buf_printf(&rb, "sp_range_to_ia(_t%d)", tr);
     rt = TY_INT_ARRAY;
   }

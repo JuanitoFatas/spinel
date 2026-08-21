@@ -13396,8 +13396,17 @@ void emit_call(Compiler *c, int id, Buf *b) {
       if (comp_method_in_class(c, _k, name) >= 0) has_user_call = 1;
     if (!has_user_call) {
       int t = ++g_tmp;
-      emit_indent(g_pre, g_indent);
-      buf_printf(g_pre, "sp_RbVal _t%d = ", t); emit_expr(c, recv, g_pre); buf_puts(g_pre, ";\n");
+      /* Render first, then write the line. emit_expr may need g_pre lines of
+         its own -- a container literal builds itself there -- and writing
+         straight into a half-built line spliced them into the MIDDLE of it,
+         which is not C at all: `{ plain: ->(v){}, quoted: ->(v){} }[style].call`
+         emitted the hash's construction inside the index call's argument list
+         (#4065). */
+      { Buf rvb; memset(&rvb, 0, sizeof rvb);
+        emit_expr(c, recv, &rvb);
+        emit_indent(g_pre, g_indent);
+        buf_printf(g_pre, "sp_RbVal _t%d = %s;\n", t, rvb.p ? rvb.p : "sp_box_nil()");
+        free(rvb.p); }
       /* the poly callable may be a Proc or a bound Method (different ABIs).
          Under promote the bound method is poly-signatured, so call it through
          the poly ABI and unbox the result back to the sp_int the Proc arm
