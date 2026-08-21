@@ -614,6 +614,62 @@ static void emit_slot_nil_test(Compiler *c, TyKind t, int tmp, int want_nil, Buf
   (void)c;
 }
 
+/* Is `id` somewhere inside the subtree at `root`? */
+static int node_in_subtree(const NodeTable *nt, int root, int id) {
+  if (root < 0) return 0;
+  if (root == id) return 1;
+  int nr = nt_num_refs(nt, root);
+  for (int i = 0; i < nr; i++)
+    if (node_in_subtree(nt, nt_ref_at(nt, root, i), id)) return 1;
+  int na = nt_num_arrs(nt, root);
+  for (int i = 0; i < na; i++) {
+    int n = 0;
+    const int *ids = nt_arr_at(nt, root, i, &n);
+    for (int j = 0; j < n; j++)
+      if (node_in_subtree(nt, ids[j], id)) return 1;
+  }
+  return 0;
+}
+
+/* Does this rescue clause (or one further along its chain) catch a NameError?
+   A bare rescue does -- it matches StandardError, which NameError is under. */
+static int rescue_chain_catches_nameerror(const NodeTable *nt, int rescue_id) {
+  for (int r = rescue_id; r >= 0; r = nt_ref(nt, r, "subsequent")) {
+    int nexc = 0;
+    const int *exc = nt_arr(nt, r, "exceptions", &nexc);
+    if (nexc == 0) return 1;
+    for (int i = 0; i < nexc; i++) {
+      const char *en = nt_str(nt, exc[i], "name");
+      /* a computed exception list says nothing statically: assume it may */
+      if (!en) return 1;
+      if (sp_streq(en, "NameError") || sp_streq(en, "StandardError") ||
+          sp_streq(en, "Exception")) return 1;
+    }
+  }
+  return 0;
+}
+
+/* Is this constant reference written inside something that catches the
+   NameError it raises? Referencing a missing constant on purpose, behind a
+   `rescue NameError`, is how a program probes for one -- ruby/spec does exactly
+   that -- and CRuby says nothing about it at any stage. Warning there reports a
+   program whose behaviour is already right (#4062). */
+static int const_ref_is_rescued(Compiler *c, int id) {
+  const NodeTable *nt = c->nt;
+  for (int b = 0; b < nt->count; b++) {
+    NodeKind k = nt_kind(nt, b);
+    if (k == NK_BeginNode) {
+      int rc = nt_ref(nt, b, "rescue_clause");
+      if (rc < 0 || !rescue_chain_catches_nameerror(nt, rc)) continue;
+      if (node_in_subtree(nt, nt_ref(nt, b, "statements"), id)) return 1;
+    }
+    /* `X rescue fallback` catches StandardError, so it catches this too */
+    else if (k == NK_RescueModifierNode &&
+             node_in_subtree(nt, nt_ref(nt, b, "expression"), id)) return 1;
+  }
+  return 0;
+}
+
 /* One build-time warning per constant that the whole program never defines.
    The reference still emits its runtime NameError (CRuby's behaviour, which
    ruby/spec asserts), but the build no longer says nothing at all about a name
@@ -1772,7 +1828,7 @@ void emit_expr(Compiler *c, int id, Buf *b) {
              build succeeds and the first request crashes (#3976). It stays a
              warning, not an error: referencing a missing constant to test the
              NameError is legal Ruby, and ruby/spec does exactly that. */
-          warn_undefined_constant(c, id, nm);
+          if (!const_ref_is_rescued(c, id)) warn_undefined_constant(c, id, nm);
           buf_printf(b, "(sp_raise_cls(\"NameError\", \"uninitialized constant %s\"), ((sp_Class){-1}))", nm);
         }
       }
@@ -1942,7 +1998,7 @@ void emit_expr(Compiler *c, int id, Buf *b) {
         snprintf(fullname, sizeof fullname, "%s::%s", par_nmc, nm);
       else if (nm) snprintf(fullname, sizeof fullname, "%s", nm);
       else snprintf(fullname, sizeof fullname, "?");
-      warn_undefined_constant(c, id, fullname);
+      if (!const_ref_is_rescued(c, id)) warn_undefined_constant(c, id, fullname);
       buf_printf(b, "(sp_raise_cls(\"NameError\", \"uninitialized constant %s\"), ((sp_Class){-1}))", fullname);
     }
     return;
