@@ -13842,6 +13842,13 @@ void analyze_program(Compiler *c) {
      reads an sp_RbVal at the wrong layout and every element comes back as its
      raw bits (#3514). Only widening toward POLY, so a narrowing the passes
      above established is never undone. */
+  /* Rounds, because the widening propagates: a method whose value IS one of
+     these calls answers the widened type too, and so does its own caller. One
+     pass left `def m = self.class.key` declared sp_sym while the dispatch it
+     returns had become sp_RbVal, which does not compile (#4053). */
+  char *wnode = calloc((size_t)c->nt->count, 1);
+  for (int wround = 0; wround < 8; wround++) {
+  int wdid = 0;
   for (int s = 0; s < c->nscopes; s++) {
     Scope *sc = &c->scopes[s];
     if (sc->ret == TY_POLY || sc->ret == TY_UNKNOWN || sc->ret == TY_VOID) continue;
@@ -13850,11 +13857,20 @@ void analyze_program(Compiler *c) {
     if (!bb || bn < 1) continue;
     int tail = bb[bn - 1];
     const char *tt = nt_type(c->nt, tail);
-    if (!tt || !sp_streq(tt, "InstanceVariableReadNode")) continue;
-    const char *ivn = nt_str(c->nt, tail, "name");
-    int iv = ivn ? comp_ivar_index(&c->classes[sc->class_id], ivn) : -1;
-    if (iv < 0 || c->classes[sc->class_id].ivar_types[iv] != TY_POLY) continue;
+    if (!tt) continue;
+    if (sp_streq(tt, "InstanceVariableReadNode")) {
+      const char *ivn = nt_str(c->nt, tail, "name");
+      int iv = ivn ? comp_ivar_index(&c->classes[sc->class_id], ivn) : -1;
+      if (iv < 0 || c->classes[sc->class_id].ivar_types[iv] != TY_POLY) continue;
+    }
+    /* the value is a call THIS pass widened: the method answers it. Only a
+       call this pass touched -- a tail call that was already poly says nothing
+       about a return the passes above deliberately narrowed, and an --rbs seed
+       pinned the return on purpose. */
+    else if (!(wnode && sp_streq(tt, "CallNode") && wnode[tail])) continue;
+    if (sc->ret_rbs_seeded) continue;
     sc->ret = TY_POLY;
+    wdid = 1;
     c->ntype[tail] = TY_POLY;
     if (c->ntype[sc->body] != TY_UNKNOWN) c->ntype[sc->body] = TY_POLY;
     /* the callers were typed from the old return, and a call still carrying
@@ -13868,10 +13884,35 @@ void analyze_program(Compiler *c) {
       int ac = 0; if (args >= 0) nt_arr(c->nt, args, "arguments", &ac);
       if (recv < 0 || ac != 0 || nt_ref(c->nt, cid, "block") >= 0) continue;
       TyKind rt = c->ntype[recv];
-      if (!(ty_is_object(rt) && ty_object_class(rt) == sc->class_id) && rt != TY_POLY) continue;
-      if (c->ntype[cid] != TY_UNKNOWN && c->ntype[cid] != TY_VOID) c->ntype[cid] = TY_POLY;
+      int hits = (rt == TY_POLY);
+      /* the receiver's own chain resolving the name HERE, rather than the
+         receiver being exactly this class: a subclass that inherits the method
+         unchanged calls this very scope, and its call was left at the old type */
+      if (!hits && ty_is_object(rt))
+        hits = comp_method_in_chain(c, ty_object_class(rt), cn, NULL) == s;
+      /* `Klass.m` / `obj.class.m`: a class-method call reaching this scope. */
+      if (!hits && rt == TY_CLASS && sc->is_cmethod) {
+        int rci = -1;
+        if (nt_kind(c->nt, recv) == NK_ConstantReadNode || nt_kind(c->nt, recv) == NK_ConstantPathNode)
+          rci = comp_class_index(c, nt_str(c->nt, recv, "name"));
+        else if (nt_kind(c->nt, recv) == NK_CallNode && nt_str(c->nt, recv, "name") &&
+                 sp_streq(nt_str(c->nt, recv, "name"), "class")) {
+          int robj = nt_ref(c->nt, recv, "receiver");
+          TyKind rot = robj >= 0 ? c->ntype[robj] : TY_UNKNOWN;
+          if (ty_is_object(rot)) rci = ty_object_class(rot);
+        }
+        if (rci >= 0) hits = comp_cmethod_in_chain(c, rci, cn, NULL) == s;
+      }
+      if (!hits) continue;
+      if (c->ntype[cid] != TY_UNKNOWN && c->ntype[cid] != TY_VOID && c->ntype[cid] != TY_POLY) {
+        c->ntype[cid] = TY_POLY;
+        if (wnode) wnode[cid] = 1;
+      }
     }
   }
+  if (!wdid) break;
+  }
+  free(wnode);
 
   /* A proc form holds its block as a real parameter, so a nested block that
      yields and is itself lifted to a standalone proc has to capture it -- the

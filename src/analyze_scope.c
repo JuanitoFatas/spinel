@@ -3817,7 +3817,6 @@ void specialize_inherited_cls_new(Compiler *c) {
        (#1451). nscopes growth below stands in for the old did_clone flag. */
     specialize_cmethod_for(c, mi, def_cls, ci);
   }
-  free(body_cls);
   did_clone = (c->nscopes > snap);
   /* Index of every CallNode with a constant receiver, built once: the
      called-direct check below otherwise rescans all nodes per shadowed cmethod
@@ -3873,9 +3872,33 @@ void specialize_inherited_cls_new(Compiler *c) {
       if (!encl || !encl->is_cmethod || encl->class_id < 0) continue;
       if (comp_cmethod_in_chain(c, encl->class_id, nm2, NULL) == s) called_direct = 1;
     }
+    /* ... or if a receiver-less call in a class BODY resolves to this source:
+       self there is the class, and a class that needed no specialized copy of
+       its own emits that call against this one. */
+    for (int id = 0; id < node_count && !called_direct; id++) {
+      if (!body_cls || body_cls[id] < 0) continue;
+      const char *nm3 = nt_str(nt, id, "name");
+      if (!nm3 || !sp_streq(nm3, src->name)) continue;
+      if (comp_cmethod_in_chain(c, body_cls[id], nm3, NULL) == s) called_direct = 1;
+    }
+    /* ... or if an `obj.class.<name>` call exists anywhere. That compiles to a
+       switch over the receiver's cls_id whose DEFAULT arm calls this source, so
+       the source is referenced even though no `Const.<name>` call names it, and
+       DCEing it left the arm pointing at a symbol that was never emitted --
+       an implicit declaration, mistyped arms, and a link error (#4053). */
+    for (int id = 0; id < node_count && !called_direct; id++) {
+      if (nt_kind(nt, id) != NK_CallNode) continue;
+      const char *nm4 = nt_str(nt, id, "name");
+      if (!nm4 || !sp_streq(nm4, src->name)) continue;
+      int r4 = nt_ref(nt, id, "receiver");
+      if (r4 < 0 || nt_kind(nt, r4) != NK_CallNode) continue;
+      const char *rn4 = nt_str(nt, r4, "name");
+      if (rn4 && sp_streq(rn4, "class")) called_direct = 1;
+    }
     if (!called_direct) src->is_transplanted_source = 1;
   }
   free(ccall);
+  free(body_cls);
   /* The cloned bodies introduced new local/ivar nodes; intern them. */
   if (did_clone) register_locals(c);
 }

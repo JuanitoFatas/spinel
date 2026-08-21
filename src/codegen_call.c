@@ -17358,26 +17358,21 @@ else { memcpy(dir, sf, n); dir[n] = 0; } }
               buf_printf(b, "); _t%d = sp_box_nil(); break;", rtmp);
             }
             else {
+              /* emit_boxed_text, not a hand-listed set of box functions: an arm
+                 whose return type was not in that list (a Symbol, a range, an
+                 object) assigned its raw value to the sp_RbVal result, which
+                 does not compile (#4053). */
+              Buf ab; memset(&ab, 0, sizeof ab);
+              emit_method_cname(c, &c->scopes[kmi], &ab);
+              buf_puts(&ab, "(");
+              { const char *ld = emit_cmethod_self_cls_arg(c, kmi, k, &ab);
+                emit_args_filled(c, kmi, nt_ref(nt, id, "arguments"), ld, &ab); }
+              buf_puts(&ab, ")");
               buf_printf(b, "_t%d = ", rtmp);
-              if (unified == TY_POLY) {
-                const char *boxfn = (kr == TY_INT) ? "sp_box_int" :
-                                    (kr == TY_STRING) ? "sp_box_str" :
-                                    (kr == TY_FLOAT) ? "sp_box_float" :
-                                    (kr == TY_BOOL) ? "sp_box_bool" : NULL;
-                if (boxfn) buf_printf(b, "%s(", boxfn);
-              }
-              emit_method_cname(c, &c->scopes[kmi], b);
-              buf_puts(b, "(");
-              { const char *ld = emit_cmethod_self_cls_arg(c, kmi, k, b);
-                emit_args_filled(c, kmi, nt_ref(nt, id, "arguments"), ld, b); }
-              buf_puts(b, ")");
-              if (unified == TY_POLY) {
-                const char *boxfn = (kr == TY_INT) ? "sp_box_int" :
-                                    (kr == TY_STRING) ? "sp_box_str" :
-                                    (kr == TY_FLOAT) ? "sp_box_float" :
-                                    (kr == TY_BOOL) ? "sp_box_bool" : NULL;
-                if (boxfn) buf_puts(b, ")");
-              }
+              if (unified == TY_POLY && kr != TY_POLY)
+                emit_boxed_text(c, kr, ab.p ? ab.p : "0", b);
+              else buf_puts(b, ab.p ? ab.p : "0");
+              free(ab.p);
               buf_puts(b, "; break;");
             }
           }
@@ -17392,26 +17387,17 @@ else { memcpy(dir, sf, n); dir[n] = 0; } }
               buf_printf(b, "); _t%d = sp_box_nil(); break;", rtmp);
             }
             else {
+              Buf db; memset(&db, 0, sizeof db);
+              emit_method_cname(c, &c->scopes[defmi], &db);
+              buf_puts(&db, "(");
+              { const char *ld = emit_cmethod_self_cls_arg(c, defmi, cid, &db);
+                emit_args_filled(c, defmi, nt_ref(nt, id, "arguments"), ld, &db); }
+              buf_puts(&db, ")");
               buf_printf(b, "_t%d = ", rtmp);
-              if (unified == TY_POLY) {
-                const char *boxfn = (dr == TY_INT) ? "sp_box_int" :
-                                    (dr == TY_STRING) ? "sp_box_str" :
-                                    (dr == TY_FLOAT) ? "sp_box_float" :
-                                    (dr == TY_BOOL) ? "sp_box_bool" : NULL;
-                if (boxfn) buf_printf(b, "%s(", boxfn);
-              }
-              emit_method_cname(c, &c->scopes[defmi], b);
-              buf_puts(b, "(");
-              { const char *ld = emit_cmethod_self_cls_arg(c, defmi, cid, b);
-                emit_args_filled(c, defmi, nt_ref(nt, id, "arguments"), ld, b); }
-              buf_puts(b, ")");
-              if (unified == TY_POLY) {
-                const char *boxfn = (dr == TY_INT) ? "sp_box_int" :
-                                    (dr == TY_STRING) ? "sp_box_str" :
-                                    (dr == TY_FLOAT) ? "sp_box_float" :
-                                    (dr == TY_BOOL) ? "sp_box_bool" : NULL;
-                if (boxfn) buf_puts(b, ")");
-              }
+              if (unified == TY_POLY && dr != TY_POLY)
+                emit_boxed_text(c, dr, db.p ? db.p : "0", b);
+              else buf_puts(b, db.p ? db.p : "0");
+              free(db.p);
               buf_printf(b, "; break;");
             }
           }
