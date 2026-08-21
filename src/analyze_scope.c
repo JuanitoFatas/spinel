@@ -1422,7 +1422,8 @@ static void sg_transplant_module(Compiler *c, int mod_ci, int newci) {
 }
 
 void register_singleton_defs(Compiler *c) {
-  const NodeTable *nt = c->nt;
+  /* not const: the pass marks a resolved dsm call on the node itself */
+  NodeTable *nt = (NodeTable *)c->nt;
   SgMap m = {0};
   /* Find `def <recv>.m`, `<recv>.define_singleton_method(:m){}`, and
      `<recv>.extend(Mod)` whose receiver is a constant or local that statically
