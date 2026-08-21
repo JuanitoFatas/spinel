@@ -4046,6 +4046,54 @@ int infer_inherited_ivars(Compiler *c) {
   return changed;
 }
 
+/* `@@h = {}` / `@@a = []` followed by `@@h[k] = v` / `@@a.push(x)` elsewhere:
+   an empty container literal carries no key/value or element type, so the class
+   variable's inferred type stayed UNKNOWN and its file-scope slot was declared
+   `sp_int` (the codegen fallback) while the write site emitted a real container
+   -- the C compiler rejected the store. Globals (#3205, #3263) and constants
+   (#2879) already derive a variant from usage; this is the same rule for class
+   variables. Returns UNKNOWN when the RHS is not an empty container. */
+static TyKind cvar_hash_variant_from_writes(Compiler *c, const char *cvname) {
+  const NodeTable *nt = c->nt;
+  TyKind kt = TY_UNKNOWN, vt = TY_UNKNOWN;
+  int saw = 0;
+  for (int w = 0; w < nt->count; w++) {
+    if (nt_kind(nt, w) != NK_CallNode) continue;
+    const char *wn = nt_str(nt, w, "name");
+    if (!wn || (!sp_streq(wn, "[]=") && !sp_streq(wn, "store"))) continue;
+    int wr = nt_ref(nt, w, "receiver");
+    if (wr < 0 || nt_kind(nt, wr) != NK_ClassVariableReadNode) continue;
+    const char *rn = nt_str(nt, wr, "name");
+    if (!rn || !sp_streq(rn, cvname)) continue;
+    int wa = nt_ref(nt, w, "arguments");
+    int wan = 0; const int *wav = wa >= 0 ? nt_arr(nt, wa, "arguments", &wan) : NULL;
+    if (wan < 2) continue;
+    kt = ty_unify(kt, infer_type(c, wav[0]));
+    vt = ty_unify(vt, infer_type(c, wav[1]));
+    saw = 1;
+  }
+  /* No resolved index-write: the slot still has to be declarable, so take the
+     variant a bare `{}` emits rather than leaving it typeless. */
+  if (!saw) return TY_STR_POLY_HASH;
+  TyKind want = (kt == TY_SYMBOL) ? TY_SYM_POLY_HASH
+              : (kt == TY_UNKNOWN) ? TY_POLY_POLY_HASH : ty_hash_of(kt, vt);
+  if (!ty_is_hash(want)) want = (kt == TY_STRING) ? TY_STR_POLY_HASH : TY_POLY_POLY_HASH;
+  return want;
+}
+
+/* The type an empty-container RHS gives a class variable, or `vt` unchanged. */
+static TyKind cvar_empty_container_type(Compiler *c, int vnode, const char *nm, TyKind vt) {
+  if (vnode < 0 || !nm) return vt;
+  if (!ty_is_hash(vt) && node_is_empty_hash_producer(c, vnode))
+    return cvar_hash_variant_from_writes(c, nm);
+  if (vt == TY_UNKNOWN && nt_kind(c->nt, vnode) == NK_ArrayNode) {
+    int en = 0; nt_arr(c->nt, vnode, "elements", &en);
+    /* an empty `[]` holds whatever is pushed later, so a poly array (#3263) */
+    if (en == 0) return TY_POLY_ARRAY;
+  }
+  return vt;
+}
+
 /* @ivar types from their assignments across the class's methods. */
 /* Register each class variable (@@x) in its owning class and infer its type
    from the write sites' RHS. */
@@ -4066,7 +4114,8 @@ int infer_cvar_types(Compiler *c) {
         const char *nm = nt_str(nt, s, "name");
         if (!nm) continue;
         int idx = comp_cvar_intern(&c->classes[ci], nm);
-        TyKind vt = infer_type(c, nt_ref(nt, s, "value"));
+        int vnode = nt_ref(nt, s, "value");
+        TyKind vt = cvar_empty_container_type(c, vnode, nm, infer_type(c, vnode));
         if (vt == TY_NIL) continue;
         TyKind merged = ty_unify(c->classes[ci].cvar_types[idx], vt);
         if (merged != c->classes[ci].cvar_types[idx]) { c->classes[ci].cvar_types[idx] = merged; changed = 1; }
@@ -4099,7 +4148,8 @@ int infer_cvar_types(Compiler *c) {
     if (!nm || s->class_id < 0) continue;
     ClassInfo *ci = &c->classes[s->class_id];
     int idx = comp_cvar_intern(ci, nm);
-    TyKind vt = infer_type(c, nt_ref(nt, id, "value"));
+    int vnode = nt_ref(nt, id, "value");
+    TyKind vt = cvar_empty_container_type(c, vnode, nm, infer_type(c, vnode));
     if (vt == TY_NIL) continue;
     TyKind merged = ty_unify(ci->cvar_types[idx], vt);
     if (merged != ci->cvar_types[idx]) { ci->cvar_types[idx] = merged; changed = 1; }
@@ -4136,7 +4186,8 @@ int infer_cvar_types(Compiler *c) {
     if (tl_idx < 0) { comp_class_new(c, "Toplevel", -1); tl_idx = c->nclasses - 1; }
     ClassInfo *ci = &c->classes[tl_idx];
     int idx = comp_cvar_intern(ci, nm);
-    TyKind vt = infer_type(c, nt_ref(nt, id, "value"));
+    int vnode = nt_ref(nt, id, "value");
+    TyKind vt = cvar_empty_container_type(c, vnode, nm, infer_type(c, vnode));
     if (vt == TY_NIL) continue;
     TyKind merged = ty_unify(ci->cvar_types[idx], vt);
     if (merged != ci->cvar_types[idx]) { ci->cvar_types[idx] = merged; changed = 1; }
