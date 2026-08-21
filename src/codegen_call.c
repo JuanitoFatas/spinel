@@ -1290,13 +1290,22 @@ void emit_proc_call_args(Compiler *c, int argc, const int *argv, Buf *b, int for
       else if (proc_slot_is_ptr(at) || at == TY_PROC) { emit_indent(g_pre, g_indent); buf_printf(g_pre, "SP_GC_ROOT(_t%d);\n", atmp[k]); }
       free(vb.p);
     }
+    /* The boxed side channel is ONE global array, so its writes belong to the
+       call, not to the statement above it. As prelude lines, two calls in one
+       expression both published before either ran and the first call read the
+       second's arguments -- `f.call(x) == f.call(x)` answered with a cleared
+       slot, which a composed Proc's first stage saw as nil (#4059). A comma
+       expression in the array-argument position keeps each publish immediately
+       in front of its own call. The temps above stay in the prelude: they are
+       per-call, and they are what the roots are taken on. */
+    buf_puts(b, "(");
     for (int k = 0; k < nargs; k++) {
       TyKind at = comp_ntype(c, argv[k]);
       int storable = ty_is_object(at) || c_type_name(at) != NULL;
       char tn[24]; snprintf(tn, sizeof tn, "_t%d", atmp[k]);
-      emit_indent(g_pre, g_indent); buf_printf(g_pre, "_sp_proc_poly_args[%d] = ", k);
-      if (storable) emit_boxed_text(c, at, tn, g_pre); else buf_puts(g_pre, "sp_box_nil()");
-      buf_puts(g_pre, ";\n");
+      buf_printf(b, "_sp_proc_poly_args[%d] = ", k);
+      if (storable) emit_boxed_text(c, at, tn, b); else buf_puts(b, "sp_box_nil()");
+      buf_puts(b, ", ");
     }
     buf_puts(b, "(sp_int[16]){");
     for (int k = 0; k < nargs; k++) {
@@ -1312,7 +1321,7 @@ void emit_proc_call_args(Compiler *c, int argc, const int *argv, Buf *b, int for
       else buf_printf(b, "_t%d", atmp[k]);
     }
     if (nargs == 0) buf_puts(b, "0");  /* C99: no empty initializer list */
-    buf_puts(b, "})");
+    buf_puts(b, "}))");
   }
   else {
     buf_puts(b, "(sp_int[16]){");
