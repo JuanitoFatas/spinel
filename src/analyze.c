@@ -7988,7 +7988,20 @@ static int mark_empty_hash_key_ctx(Compiler *c) {
       want = (wv == TY_INT || wv == TY_STRING) ? ty_hash_of(TY_STRING, wv)
                                                : TY_STR_POLY_HASH;
     }
-    else if (kt == TY_INT) want = TY_POLY_POLY_HASH;  /* no Int->poly variant */
+    else if (kt == TY_INT) {
+      /* The same argument the String branch makes: this mark is permanent and
+         only ever widens, so pinning the boxed variant throws away a value type
+         the slot's own `h[k] = v` writes state right there. `[]=` joined this
+         rule's name list in 9309c09f, which is when an Int-keyed literal first
+         started reaching it, and every hash built only by writes lost its typed
+         representation from then on. There is no Int->poly variant, so a value
+         that is neither Int nor String still takes the boxed one. */
+      int nw = 0;
+      TyKind wv = aset_value_type_ex(c, recv, &nw);
+      if (nw > 0 && wv == TY_UNKNOWN && g_infer_optimistic) continue;
+      want = (wv == TY_INT || wv == TY_STRING) ? ty_hash_of(TY_INT, wv)
+                                               : TY_POLY_POLY_HASH;
+    }
     /* a boxed key (one call site passes a String, another an Integer) is only
        representable by the poly-keyed variant; the StrPolyHash default would
        hand the boxed value to a const char * slot and segfault */
