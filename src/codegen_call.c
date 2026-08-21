@@ -11667,17 +11667,6 @@ static void ffi_check_buffer_bounds(Compiler *c, int id, int arg,
   unsupported_feature(c, id, msg);
 }
 
-/* Can evaluating this node run user code or otherwise be observed? Only the
-   call forms are treated as such: a read, a literal or a variable has no order
-   to get wrong, and keeping the set narrow leaves every ordinary call site
-   emitting exactly the code it did. */
-static int node_is_effectful(Compiler *c, int n) {
-  if (n < 0) return 0;
-  NodeKind k = nt_kind(c->nt, n);
-  return k == NK_CallNode || k == NK_SuperNode || k == NK_ForwardingSuperNode ||
-         k == NK_YieldNode;
-}
-
 /* Does `txt` mention the temp `_t<n>` -- as that temp, not as a prefix of a
    longer number (`_t5` must not match inside `_t50`)? */
 static int text_uses_tmp(const char *txt, int n) {
@@ -11719,6 +11708,11 @@ static int g_operand_order_node = -1;
    statement expression as the call they protect, which is exactly as long as
    the call needs them.
 
+   Which operands count is subtree_has_side_effect, the predicate emit_args_filled
+   already sequences a user call's arguments by -- so a scalar operator stays
+   free (counting `x + ix` as an effect cost the life benchmark 12% once) and a
+   call nested inside a literal still counts.
+
    The arms pick the temps up through g_argov, the same mirror the hash and range
    receiver rewrites use, so no arm needs to know about this. Two ways an arm can
    defeat that, both answered by declining rather than emitting something worse:
@@ -11746,22 +11740,38 @@ static int emit_operands_in_order(Compiler *c, int id, Buf *b) {
   int argc = 0;
   const int *argv = args >= 0 ? nt_arr(nt, args, "arguments", &argc) : NULL;
 
-  /* the operands worth binding: observable, and typed well enough to declare */
+  /* Collect the operands, in Ruby's order. An operand is BINDABLE when it is a
+     call form: the callee receives its value, so naming that value changes
+     nothing about how the arm treats it. A container literal is observable but
+     not bindable -- binding one materializes it, and some arms deliberately
+     never do: `x.clamp(lo..hi)` passes the bounds and refuses to build a Range
+     of objects at all, so binding the range argument turned a working program
+     into a compile-time refusal.
+
+     If any observable operand is not bindable, decline the whole rewrite rather
+     than bind a subset: binding only the later one would evaluate it FIRST,
+     which is a worse order than the one C picked. */
   int node[8], nb = 0;
   TyKind ty[8];
-  if (recv >= 0 && node_is_effectful(c, recv)) {
-    TyKind rt = comp_ntype(c, recv);
-    if (rt != TY_UNKNOWN && rt != TY_VOID && rt != TY_NIL) { node[nb] = recv; ty[nb] = rt; nb++; }
-  }
-  for (int i = 0; i < argc && nb < 8; i++) {
-    if (!node_is_effectful(c, argv[i])) continue;
-    TyKind at = comp_ntype(c, argv[i]);
-    if (at == TY_UNKNOWN || at == TY_VOID || at == TY_NIL) continue;
-    node[nb] = argv[i]; ty[nb] = at; nb++;
+  int operand[9], nop = 0;
+  if (recv >= 0) operand[nop++] = recv;
+  for (int i = 0; i < argc && nop < 9; i++) operand[nop++] = argv[i];
+  int observable = 0;
+  for (int i = 0; i < nop; i++) {
+    if (!subtree_has_side_effect(c, operand[i])) continue;
+    observable++;
+    NodeKind k = nt_kind(nt, operand[i]);
+    int bindable = (k == NK_CallNode || k == NK_SuperNode ||
+                    k == NK_ForwardingSuperNode || k == NK_YieldNode);
+    if (!bindable) return 0;
+    TyKind t = comp_ntype(c, operand[i]);
+    if (t == TY_UNKNOWN || t == TY_VOID || t == TY_NIL) return 0;
+    if (nb >= 8) return 0;
+    node[nb] = operand[i]; ty[nb] = t; nb++;
   }
   /* One observable operand has no sibling to be ordered against or collected by:
      it is the only thing running, and the call consumes it immediately. */
-  if (nb < 2 || g_n_argov + nb > MAX_ARG_OVERRIDE) return 0;
+  if (observable < 2 || nb < 2 || g_n_argov + nb > MAX_ARG_OVERRIDE) return 0;
 
   size_t pre_mark = g_pre->len;
   int saved_tmp = g_tmp;
