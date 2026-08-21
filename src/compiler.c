@@ -982,6 +982,7 @@ TyKind native_spec_to_ty(const char *spec) {
   if (!spec) return TY_UNKNOWN;
   if (sp_streq(spec, "any"))    return TY_POLY;
   if (sp_streq(spec, "string")) return TY_STRING;
+  if (sp_streq(spec, "text"))   return TY_STRING; /* write payload: String, or anything's #to_s */
   if (sp_streq(spec, "string?")) return TY_POLY;  /* nullable string -> boxed */
   if (sp_streq(spec, "nstring")) return TY_STRING; /* NULL-able string, unboxed */
   if (sp_streq(spec, "cstring")) return TY_STRING; /* borrowed C string (static buffer): call site dups */
@@ -1026,23 +1027,31 @@ int comp_native_method_find(Compiler *c, int class_id, const char *name, int arg
 int comp_native_method_find_typed(Compiler *c, int class_id, const char *name, int argc, int kind,
                                   const TyKind *argtys) {
   if (class_id < 0 || !name) return -1;
-  int arity_match = -1, loose = -1;
+  int arity_match = -1, loose = -1, typed = -1;
   for (int i = 0; i < c->n_native_methods; i++) {
     NativeMethod *m = &c->native_methods[i];
     if (m->class_id != class_id || m->kind != kind || !sp_streq(m->name, name)) continue;
     if (m->nargs == argc) {
       if (argtys) {
-        int all = 1;
+        /* a binding whose every slot takes the actual as-is wins outright;
+           one that merely tolerates a boxed or unknown actual in a typed
+           slot is kept as the typed fallback, so `io.puts(x)` with a boxed
+           x reaches the [:any] binding declared after the [:string] one */
+        int all = 1, exact = 1;
         for (int a = 0; a < argc; a++) {
           TyKind want = native_spec_to_ty(m->args[a]);
-          if (want != TY_POLY && argtys[a] != TY_UNKNOWN && argtys[a] != TY_POLY && argtys[a] != want) { all = 0; break; }
+          if (want == TY_POLY || argtys[a] == want) continue;
+          exact = 0;
+          if (argtys[a] != TY_UNKNOWN && argtys[a] != TY_POLY) { all = 0; break; }
         }
-        if (all) return i;
+        if (all && exact) return i;
+        if (all && typed < 0) typed = i;
       }
       if (arity_match < 0) arity_match = i;
     }
     if (loose < 0) loose = i;
   }
+  if (typed >= 0) return typed;
   return arity_match >= 0 ? arity_match : loose;
 }
 

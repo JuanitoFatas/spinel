@@ -36,6 +36,8 @@ sp_File *sp_File_open(const char *path, const char *mode);
 int sp_io_make_pipe(int fds[2]);
 /* IO.pipe end: wrap a raw pipe fd in a GC-managed sp_File. */
 sp_File *sp_io_fdopen(int fd, const char *mode);
+sp_File *sp_io_fdopen_ex(int fd, const char *mode, int owns_fd);
+sp_File *sp_File_open_perm(const char *path, const char *mode, sp_int perm);
 /* Wrap a connected/listening socket fd. Reads stay on the buffered FILE* so
    #gets and friends work; writes bypass stdio straight to write(2), matching
    CRuby sockets' sync = true. `kind` labels the handle ("tcp", "tcpserver",
