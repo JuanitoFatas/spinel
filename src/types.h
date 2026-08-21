@@ -114,6 +114,17 @@ extern int g_infer_optimistic;
 TyKind ty_array_of(TyKind elem);       /* element type -> array kind */
 TyKind ty_array_elem(TyKind arr);      /* array kind -> element type */
 int ty_is_hash(TyKind t);
+/* Object's identity protocol on the native kinds (=== == != equal? eql?
+   frozen? freeze), answered by emit_native_object_protocol and typed by
+   infer_call from this ONE decision so the two can never drift. kind: 1 a
+   GC heap handle (its pointer is its identity), 2 a by-value struct (Time,
+   Process::Tms, a String range: equal values, no identity), 0 neither.
+   answers: whether the arm claims `name` on a receiver of kind rt with an
+   operand of kind at (argc 0 or 1); the cross-family tier for a Range, Array
+   or Bignum receiver lives here too. */
+int ty_object_protocol_kind(TyKind t);
+int ty_object_protocol_family(TyKind t);
+int ty_object_protocol_answers(TyKind rt, TyKind at, const char *name, int argc);
 TyKind ty_hash_of(TyKind key, TyKind val); /* (key,val) -> hash kind (UNKNOWN if unsupported) */
 TyKind ty_hash_key(TyKind h);
 TyKind ty_hash_val(TyKind h);

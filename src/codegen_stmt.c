@@ -4026,7 +4026,14 @@ void emit_case(Compiler *c, int id, Buf *b, int indent) {
             else buf_puts(b, sref); }
           buf_puts(b, "))");
         }
-        else { buf_printf(b, "(_t%d == ", t); emit_expr(c, conds[j], b); buf_puts(b, ")"); }
+        else {
+          char sref2[32]; snprintf(sref2, sizeof sref2, "_t%d", t);
+          /* a native handle or value kind answers `cond === subj` the way
+             an explicit === does (emit_native_object_protocol) */
+          if (!emit_native_case_eq(c, conds[j], pt, sref2, b)) {
+            buf_printf(b, "(_t%d == ", t); emit_expr(c, conds[j], b); buf_puts(b, ")");
+          }
+        }
           }
           } /* close non-ConstantReadNode else */
           } /* close else { int reidx... } */
@@ -4336,7 +4343,14 @@ void emit_case_expr(Compiler *c, int id, Buf *b) {
             else buf_puts(b, sref); }
           buf_puts(b, "))");
         }
-        else { buf_printf(b, "(_t%d == ", t); emit_expr(c, conds[j], b); buf_puts(b, ")"); }
+        else {
+          char sref2[32]; snprintf(sref2, sizeof sref2, "_t%d", t);
+          /* a native handle or value kind answers `cond === subj` the way
+             an explicit === does (emit_native_object_protocol) */
+          if (!emit_native_case_eq(c, conds[j], pt, sref2, b)) {
+            buf_printf(b, "(_t%d == ", t); emit_expr(c, conds[j], b); buf_puts(b, ")");
+          }
+        }
         } /* close non-ConstantReadNode else */
       }
       else { buf_puts(b, "("); emit_expr(c, conds[j], b); buf_puts(b, ")"); }
