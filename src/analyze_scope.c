@@ -2979,7 +2979,12 @@ int infer_global_const_types(Compiler *c) {
       const char *cnm = nt_str(nt, id, "name");
       if (!cnm) continue;
       int is_push = (sp_streq(cnm, "<<") || sp_streq(cnm, "push") || sp_streq(cnm, "append"));
-      if (!is_push) continue;
+      /* `CONST[i] = v` is the other way a constant bound to an empty literal
+         gets filled -- the table-building shape (`DISPATCH[opcode] = args`).
+         Without it the constant stayed UNKNOWN, which reads as "defined
+         nowhere" and raises NameError on every reference (#4051). */
+      int is_iset = sp_streq(cnm, "[]=");
+      if (!is_push && !is_iset) continue;
       int crecv = nt_ref(nt, id, "receiver");
       if (crecv < 0) continue;
       const char *rty = nt_type(nt, crecv);
@@ -2991,8 +2996,9 @@ int infer_global_const_types(Compiler *c) {
       int cargs = nt_ref(nt, id, "arguments");
       int cac = 0;
       const int *cav = cargs >= 0 ? nt_arr(nt, cargs, "arguments", &cac) : NULL;
-      if (cac < 1 || !cav) continue;
-      TyKind et = infer_type(c, cav[0]);
+      if (cac < (is_iset ? 2 : 1) || !cav) continue;
+      /* the stored value is the last argument: `push(v)` / `[]=(i, v)` */
+      TyKind et = infer_type(c, cav[is_iset ? 1 : 0]);
       if (et == TY_UNKNOWN || et == TY_NIL) continue;
       vt = ty_array_of(et);
       if (vt == TY_UNKNOWN) vt = TY_POLY_ARRAY;

@@ -12057,6 +12057,26 @@ void analyze_program(Compiler *c) {
     free(recCi); free(recIv); free(recLs); free(recLi);
   }
 
+  /* Backstop: a constant bound to an EMPTY array literal has no element type to
+     read off the literal, and nothing else in the program need ever narrow it
+     (`DISPATCH = []` filled only through `DISPATCH[op] = args`, whose value type
+     may itself still be settling). Leaving it UNKNOWN does not read as "unknown"
+     downstream, it reads as UNDEFINED: every reference reports the constant as
+     defined nowhere and raises NameError, where CRuby answers the empty array
+     (#4051). Default it the way an empty literal bound to a local defaults. This
+     runs after the fixpoint, so any real element evidence still wins. */
+  for (int id = 0; id < c->nt->count; id++) {
+    if (nt_kind(c->nt, id) != NK_ConstantWriteNode) continue;
+    const char *cwn = nt_str(c->nt, id, "name");
+    LocalVar *cwv = cwn ? comp_const(c, cwn) : NULL;
+    if (!cwv || cwv->type != TY_UNKNOWN) continue;
+    int cwval = nt_ref(c->nt, id, "value");
+    if (cwval < 0 || nt_kind(c->nt, cwval) != NK_ArrayNode) continue;
+    int cwn_els = 0;
+    nt_arr(c->nt, cwval, "elements", &cwn_els);
+    if (cwn_els == 0) cwv->type = TY_POLY_ARRAY;
+  }
+
   /* Backstop: a parameter still unknown but with a `= nil` default is a
      nullable param -- represent it as poly so it can hold nil or a value.
      Also widen TY_SYMBOL/TY_BOOL params: those types have no nil sentinel
