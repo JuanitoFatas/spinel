@@ -131,6 +131,10 @@ sp_bool sp_sym_plain_name_p(const char *p, sp_bool allow_suffix) {
 }
 sp_bool sp_sym_simple_p(const char *n) {SP_GC_ROOT_STR(n);
   if (!n || !*n) return FALSE;
+  /* A name holding a NUL is never a plain identifier, and the walks below all
+     stop at it -- `:"a\0b"` would read as the plain name "a" and print bare
+     (#nul symbols). Quote it, and sp_str_inspect spells the byte. */
+  if (sp_str_byte_len(n) != strlen(n)) return FALSE;
   if (*n == '$') return sp_sym_plain_name_p(n + 1, FALSE);
   if (*n == '@') { const char *p = n + 1; if (*p == '@') p++; return sp_sym_plain_name_p(p, FALSE); }
   if (sp_sym_plain_name_p(n, TRUE)) return TRUE;

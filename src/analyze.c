@@ -11722,7 +11722,9 @@ void analyze_program(Compiler *c) {
     const char *ty = nt_type(c->nt, id);
     if (ty && sp_streq(ty, "SymbolNode")) {
       const char *v = nt_str(c->nt, id, "value");
-      if (v) comp_sym_intern(c, v);
+      /* the node's own byte length: a symbol literal may hold a NUL, and
+         interning it by strlen registers the short name codegen then emits */
+      if (v) comp_sym_intern_n(c, v, nt_str_len(c->nt, id, "value"));
     }
     /* a def in value position evaluates to :name */
     else if (ty && sp_streq(ty, "DefNode")) {

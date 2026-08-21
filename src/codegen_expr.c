@@ -720,7 +720,9 @@ void emit_expr(Compiler *c, int id, Buf *b) {
   if (sp_streq(ty, "FalseNode")) { buf_puts(b, "0"); return; }
   if (sp_streq(ty, "NilNode"))   { buf_puts(b, "0"); return; }  /* default in numeric/bool context */
   if (sp_streq(ty, "SymbolNode")) {
-    int sid = comp_sym_intern(c, nt_str(nt, id, "value"));
+    /* the node's own byte length: a symbol literal may hold a NUL (#nul) */
+    const char *svl = nt_str(nt, id, "value");
+    int sid = comp_sym_intern_n(c, svl ? svl : "", svl ? nt_str_len(nt, id, "value") : 0);
     buf_printf(b, "((sp_sym)%d)", sid);
     return;
   }

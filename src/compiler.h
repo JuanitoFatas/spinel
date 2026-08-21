@@ -446,6 +446,8 @@ typedef struct {
   int lvw_built;
 
   char **symbols;   /* interned symbol names; index = sp_sym id */
+  size_t *symbol_lens;  /* each name's BYTE length: a name may hold a NUL, and
+                           strlen would end it there (#nul symbols) */
   int nsymbols, csymbols;
 
   ClassInfo *classes;
@@ -568,6 +570,7 @@ LocalVar *scope_local_intern(Scope *s, const char *name);
 
 /* Symbol intern table. comp_sym_intern returns the symbol's id. */
 int comp_sym_intern(Compiler *c, const char *name);
+int comp_sym_intern_n(Compiler *c, const char *name, size_t len);
 
 /* Look up an ffi_callback type by (module, name); returns index or -1. */
 int ffi_find_callback(Compiler *c, const char *mod, const char *name);

@@ -178,15 +178,29 @@ void comp_add_gvar_alias(Compiler *c, const char *from, const char *to) {
 LocalVar *comp_const(Compiler *c, const char *name) { return lv_find(c->consts, c->nconsts, name); }
 LocalVar *comp_const_intern(Compiler *c, const char *name) { return lv_intern(&c->consts, &c->nconsts, &c->cconsts, name); }
 
-int comp_sym_intern(Compiler *c, const char *name) {
+/* Intern a symbol name of a known BYTE length. A symbol's name may hold a NUL
+   -- `:"a\0b"` -- and the node table carries it, so the compiler has to as
+   well: strdup and sp_streq would both end the name at that byte, conflating
+   `:"a\0b"` with `:a` and emitting the short form. */
+int comp_sym_intern_n(Compiler *c, const char *name, size_t len) {
   for (int i = 0; i < c->nsymbols; i++)
-    if (sp_streq(c->symbols[i], name)) return i;
+    if (c->symbol_lens[i] == len && memcmp(c->symbols[i], name, len) == 0) return i;
   if (c->nsymbols >= c->csymbols) {
     c->csymbols = c->csymbols ? c->csymbols * 2 : 8;
     c->symbols = realloc(c->symbols, sizeof(char *) * (size_t)c->csymbols);
+    c->symbol_lens = realloc(c->symbol_lens, sizeof(size_t) * (size_t)c->csymbols);
   }
-  c->symbols[c->nsymbols] = strdup(name);
+  char *cp = malloc(len + 1);
+  if (!cp) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+  memcpy(cp, name, len); cp[len] = 0;
+  c->symbols[c->nsymbols] = cp;
+  c->symbol_lens[c->nsymbols] = len;
   return c->nsymbols++;
+}
+/* The name is a plain C string (a method name, a kind label): no NUL by
+   construction. */
+int comp_sym_intern(Compiler *c, const char *name) {
+  return comp_sym_intern_n(c, name, name ? strlen(name) : 0);
 }
 
 Scope *comp_scope_new(Compiler *c, const char *name, int def_node) {

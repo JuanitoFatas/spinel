@@ -7698,10 +7698,28 @@ char *codegen_program(const NodeTable *nt) {
   if (g_emit_sym_rt) {
     int ns = c->nsymbols;
     if (ns > 0) {
+      /* A name holding a NUL cannot use either inline literal form: both are
+         GNU statement expressions, and this is a STATIC initializer, which
+         needs constant expressions. A file-scope object with a real sp_str_hdr
+         is one -- `_sym_N.d` is an address constant -- so such a name gets its
+         own struct beside the table and the table points at it. Ordinary
+         names keep the compact marked-literal form and cost nothing extra.
+         sp_str_byte_len then reads the header for the 0xf1 entries and falls
+         back to strlen for the 0xff ones, which is right for both. */
+      for (int i = 0; i < ns; i++) {
+        size_t sl = c->symbol_lens ? c->symbol_lens[i] : strlen(c->symbols[i]);
+        if (sl <= strlen(c->symbols[i])) continue;
+        buf_printf(&b, "static struct { sp_str_hdr h; unsigned char m; char d[%zu]; } _sym_%d = "
+                       "{ { NULL, %zu, %zu, 0 }, 0xf1, \"", sl + 1, i, sl + 1, sl);
+        emit_c_escaped_n(&b, c->symbols[i], sl);
+        buf_puts(&b, "\" };\n");
+      }
       buf_printf(&b, "static const char *const sp_sym_names[%d] = {", ns);
       for (int i = 0; i < ns; i++) {
         if (i) buf_puts(&b, ", ");
-        emit_str_literal(&b, c->symbols[i]);
+        size_t sl = c->symbol_lens ? c->symbol_lens[i] : strlen(c->symbols[i]);
+        if (sl > strlen(c->symbols[i])) buf_printf(&b, "_sym_%d.d", i);
+        else emit_str_literal(&b, c->symbols[i]);
       }
       buf_puts(&b, "};\n");
     }
@@ -7727,11 +7745,23 @@ char *codegen_program(const NodeTable *nt) {
                    "if(id>=%d&&id<%d+sp_ndyn)return sp_dyn_syms[id-%d];"
                    "return sp_str_empty;}\n",
                    ns, ns > 0 ? "sp_sym_names[id]" : "sp_str_empty", ns, ns, ns);
-    buf_printf(&b, "static sp_sym sp_sym_intern(const char *s){"
-                   "for(int i=0;i<%d;i++)if(strcmp(%s,s)==0)return (sp_sym)i;"
-                   "for(int i=0;i<sp_ndyn;i++)if(strcmp(sp_dyn_syms[i],s)==0)return (sp_sym)(%d+i);"
-                   "if(sp_ndyn<SP_DYN_SYMS_MAX){sp_dyn_syms[sp_ndyn]=sp_str_dup_external(s);return (sp_sym)(%d+sp_ndyn++);}"
-                   "return (sp_sym)0;}\n\n", ns, ns > 0 ? "sp_sym_names[i]" : "\"\"", ns, ns);
+    /* Byte-exact interning: a name may hold a NUL, which strcmp cannot see
+       past. The stored entries carry their length (a 0xf1 struct entry in its
+       header, a 0xff literal through strlen, a dyn entry through its heap
+       header), so sp_str_byte_len answers for all three.
+
+       sp_sym_intern keeps strlen semantics for its argument: generated code
+       calls it with BARE C literals, which have no marker byte in front, and
+       asking sp_str_byte_len for one reads past the object. A caller that HAS
+       a spinel string -- String#to_sym -- calls the _n form with the real
+       length. The first-byte test keeps strcmp's early exit: without it every
+       candidate paid a full length walk before the compare could fail. */
+    buf_printf(&b, "static sp_sym sp_sym_intern_n(const char *s, size_t n){"
+                   "for(int i=0;i<%d;i++){const char*_c=%s;if(_c[0]==s[0]&&sp_str_byte_len(_c)==n&&memcmp(_c,s,n)==0)return (sp_sym)i;}"
+                   "for(int i=0;i<sp_ndyn;i++){const char*_c=sp_dyn_syms[i];if(_c[0]==s[0]&&sp_str_byte_len(_c)==n&&memcmp(_c,s,n)==0)return (sp_sym)(%d+i);}"
+                   "if(sp_ndyn<SP_DYN_SYMS_MAX){sp_dyn_syms[sp_ndyn]=sp_str_from_bytes(s,n);return (sp_sym)(%d+sp_ndyn++);}"
+                   "return (sp_sym)0;}\n", ns, ns > 0 ? "sp_sym_names[i]" : "sp_str_empty", ns, ns);
+    buf_puts(&b, "static sp_sym sp_sym_intern(const char *s){return sp_sym_intern_n(s,s?strlen(s):0);}\n\n");
   }
   /* sp_class_to_s serves the runtime's SP_TAG_CLASS render arms (sp_poly_puts
      / sp_poly_to_s / sp_poly_inspect). Emitted whenever anything in the

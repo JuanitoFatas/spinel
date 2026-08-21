@@ -6265,7 +6265,12 @@ int emit_scalar_call(Compiler *c, int id, Buf *b) {
         emit_boxed(c, argv[0], b);
         buf_printf(b, ").v.p, %s)", r);
       }
-      else if (sp_streq(name, "to_sym") || sp_streq(name, "intern")) buf_printf(b, "sp_sym_intern(%s)", r);
+      /* the receiver is a spinel string, so its own byte length is what the
+         symbol's name is -- a NUL in it is a byte of the name (#nul) */
+      else if (sp_streq(name, "to_sym") || sp_streq(name, "intern")) {
+        int tsy = ++g_tmp;
+        buf_printf(b, "({ const char *_t%d = %s; sp_sym_intern_n(_t%d, sp_str_byte_len(_t%d)); })", tsy, r, tsy, tsy);
+      }
       else if (sp_streq(name, "to_c") && argc == 0) buf_printf(b, "sp_str_to_c(%s)", r);
       else if (sp_streq(name, "chr") && argc == 0) buf_printf(b, "sp_str_chr(%s)", r);
       else if (sp_streq(name, "length") || sp_streq(name, "size")) {
@@ -11238,10 +11243,10 @@ int emit_poly_call(Compiler *c, int id, Buf *b) {
            data pointer and allocates, so a GC mid-intern could otherwise free
            an unrooted temporary String out from under it. */
         buf_printf(b, "({ sp_RbVal _t%d = ", t); emit_expr(c, recv, b);
-        buf_printf(b, "; SP_GC_ROOT_RBVAL(_t%d); _t%d.tag == SP_TAG_STR ? sp_sym_intern(_t%d.v.s)"
+        buf_printf(b, "; SP_GC_ROOT_RBVAL(_t%d); _t%d.tag == SP_TAG_STR ? sp_sym_intern_n(_t%d.v.s, sp_str_byte_len(_t%d.v.s))"
                       " : (_t%d.tag == SP_TAG_SYM ? (sp_sym)_t%d.v.i"
                       " : (sp_raise_poly_nomethod(\"to_sym\", _t%d), (sp_sym)0)); })",
-                   t, t, t, t, t, t);
+                   t, t, t, t, t, t, t);
         if (box_sym) buf_puts(b, ")");
         return 1;
       }
