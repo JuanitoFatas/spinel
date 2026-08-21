@@ -1447,12 +1447,15 @@ int emit_minmax_by_expr(Compiler *c, int id, Buf *b) {
      in. It is still a key: every element ties, so CRuby answers the first one.
      Carry it boxed, like a String or an Array key (#4006). */
   int bvt_nil = (bvt == TY_VOID || bvt == TY_NIL);
+  /* A Rational or a Bignum key is a comparable number carried as a pointer, so
+     it orders through the boxed comparison exactly as a String key does (#4061). */
+  int bvt_num_obj = (bvt == TY_RATIONAL || bvt == TY_BIGINT);
   if (!bvt_nil && bvt != TY_INT && bvt != TY_FLOAT && bvt != TY_POLY &&
-      bvt != TY_STRING && bvt != TY_SYMBOL && !bvt_arr) return 0;
+      bvt != TY_STRING && bvt != TY_SYMBOL && !bvt_arr && !bvt_num_obj) return 0;
   /* A String/Symbol key orders lexicographically: box it and compare with the
      poly ordering (sp_poly_lt/gt use String#<=>). Only the plain min_by/max_by
      form is wired for it here; the count and minmax_by forms keep rejecting. */
-  int key_box = (bvt == TY_STRING || bvt == TY_SYMBOL || bvt_arr || bvt_nil);
+  int key_box = (bvt == TY_STRING || bvt == TY_SYMBOL || bvt_arr || bvt_nil || bvt_num_obj);
   TyKind bvt_slot = key_box ? TY_POLY : bvt;
   /* 2+-param block over a poly array of sub-arrays: auto-splat each element
      across the params. The winning element is stored from an element temp
@@ -1466,7 +1469,12 @@ int emit_minmax_by_expr(Compiler *c, int id, Buf *b) {
      descending). */
   int mb_args = nt_ref(nt, id, "arguments");
   int mb_argc = 0; const int *mb_argv = mb_args >= 0 ? nt_arr(nt, mb_args, "arguments", &mb_argc) : NULL;
-  if ((is_min || is_max) && mb_argc == 1 && p0 && !autosplat && !key_box) {
+  /* The count form boxes every key into a PolyArray and orders them with the
+     poly comparison, so a key that needs boxing is no harder here than in the
+     plain form -- only a nil key, which has no boxed rendering of its own,
+     still declines. Rejecting all of them sent `min_by(2) { Rational(..) }`
+     to the unresolved-call raise (#4061). */
+  if ((is_min || is_max) && mb_argc == 1 && p0 && !autosplat && !bvt_nil) {
     int trv = ++g_tmp, tn = ++g_tmp, tkeys = ++g_tmp, tidx = ++g_tmp, ti = ++g_tmp,
         tres = ++g_tmp, tcnt = ++g_tmp, ttake = ++g_tmp, tg = ++g_tmp;
     Buf rb; memset(&rb, 0, sizeof rb); emit_expr(c, recv, &rb);
@@ -3886,8 +3894,13 @@ int emit_sortby_expr(Compiler *c, int id, Buf *b) {
   /* A key whose value IS nil types VOID/NIL. It still boxes (emit_boxed_text
      evaluates the expression and yields nil), and nil ties with nil, so the
      sort is the stable identity -- which is what CRuby answers (#4006). */
+  /* A Rational or a Bignum key is a comparable number carried as a pointer.
+     The keys are boxed here regardless, and sp_poly_cmp orders both, so the
+     only thing refusing them did was drop the call to the unresolved-call
+     raise: NoMethodError for `sort_by` on an Array (#4061). */
   if (kt != TY_INT && kt != TY_FLOAT && kt != TY_STRING && kt != TY_POLY &&
-      kt != TY_SYMBOL && kt != TY_VOID && kt != TY_NIL && !ty_is_array(kt)) return 0;
+      kt != TY_SYMBOL && kt != TY_VOID && kt != TY_NIL &&
+      kt != TY_RATIONAL && kt != TY_BIGINT && !ty_is_array(kt)) return 0;
 
   /* Schwartzian transform: compute each element's sort key exactly once (CRuby
      semantics -- the old bubble sort re-ran the block per comparison), stable-sort
