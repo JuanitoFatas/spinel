@@ -11689,61 +11689,112 @@ static int text_uses_tmp(const char *txt, int n) {
   return 0;
 }
 
-/* the receiver node currently being hoisted for evaluation order (no re-entry) */
-static int g_recv_order_node = -1;
+/* the call node currently being rewritten for operand order (no re-entry) */
+static int g_operand_order_node = -1;
 
-/* Ruby evaluates a call's receiver before its arguments. Spinel hands both to
-   one C call, where the order among the operands is unspecified -- gcc picks
-   right-to-left, so `trace("recv", s).include?(trace("arg", x))` printed `arg`
-   first while clang printed `recv` first, and the same program answered
-   differently on the two platforms.
+/* Ruby evaluates a call's receiver first, then its arguments left to right, and
+   every one of them stays alive until the call runs. Spinel handed them all to
+   one C call, which promises neither.
 
-   Bind the receiver to a temp IN PLACE, inside a statement expression wrapping
-   the call. Not a g_pre line: g_pre is flushed at the enclosing statement, which
-   for an expression inside a spliced block body is outside the block, and the
-   receiver would then be evaluated before the block's own parameters are bound.
-   The root lives in the same statement expression as the call it protects, so it
-   is still held while the arguments allocate.
+   The order is unspecified among a call's operands, and the compilers disagree:
+   gcc picks right-to-left, clang left-to-right. So
 
-   The arms pick the temp up through g_argov, the same mirror the hash and range
-   receiver rewrites use, so no arm needs to know about this. An arm that renders
-   the receiver its OWN way would evaluate it twice, which is worse than the
-   wrong order -- so the call goes into a scratch buffer and the whole rewrite is
-   rolled back, temp counter and all, unless the temp appears in it. */
-static int emit_recv_before_args(Compiler *c, int id, Buf *b) {
+     trace("recv", s).include?(trace("arg", x))
+
+   printed `arg` first on Linux and `recv` first on macOS -- the same program,
+   two answers, neither of them the language's.
+
+   Lifetime is the same hand, harder to see. An operand that is a fresh
+   allocation is reachable from nothing until the call stores it, so a sibling
+   operand evaluated afterwards can collect it: `File.join(mk(a), mk(b))` with
+   both sides building Strings answered with a freed first operand on 297 of 300
+   iterations under SPINEL_GC_STRESS=1. That is the argument-position shape
+   #4049 fixed for a constructor's members; every other call had it too.
+
+   Bind each observable operand to a rooted temp, in order, IN PLACE -- inside a
+   statement expression wrapping the call, not as lines at the statement above.
+   g_pre is flushed at the enclosing statement, which for an expression inside a
+   spliced block body is outside the block, so hoisting there evaluated operands
+   before the block's own parameters were bound. The roots live in the same
+   statement expression as the call they protect, which is exactly as long as
+   the call needs them.
+
+   The arms pick the temps up through g_argov, the same mirror the hash and range
+   receiver rewrites use, so no arm needs to know about this. Two ways an arm can
+   defeat that, both answered by declining rather than emitting something worse:
+   an arm that renders an operand its OWN way would evaluate it twice, and an arm
+   that hoists part of the call into g_pre itself would name a temp from above
+   its declaration. The call goes into a scratch buffer and the whole rewrite is
+   rolled back, temp counter included, unless every temp appears in the call and
+   none appears in g_pre. */
+/* Does this rendered text carry one of the raise tokens an unresolved name
+   lowers to? Such a call is typed at the USE site by a coercing emit that
+   text-matches the token at the head of the expression -- the node itself stays
+   UNKNOWN. Wrapping it in a statement expression hides the token from that
+   match, and the raise's boxed value then lands in a `const char *` slot.
+   Matched on the tokens here, the way the coercions themselves are. */
+static int text_is_raise_token(const char *txt) {
+  if (!txt) return 0;
+  return strstr(txt, "sp_raise_nomethod") != NULL || strstr(txt, "sp_raise_cls(") != NULL;
+}
+
+static int emit_operands_in_order(Compiler *c, int id, Buf *b) {
   const NodeTable *nt = c->nt;
+  if (id == g_operand_order_node) return 0;
   int recv = nt_ref(nt, id, "receiver");
-  if (recv < 0 || id == g_recv_order_node || g_n_argov >= MAX_ARG_OVERRIDE) return 0;
-  if (!node_is_effectful(c, recv)) return 0;
   int args = nt_ref(nt, id, "arguments");
   int argc = 0;
   const int *argv = args >= 0 ? nt_arr(nt, args, "arguments", &argc) : NULL;
-  int effectful_arg = 0;
-  for (int i = 0; i < argc && !effectful_arg; i++)
-    effectful_arg = node_is_effectful(c, argv[i]);
-  if (!effectful_arg) return 0;
-  TyKind rt = comp_ntype(c, recv);
-  if (rt == TY_UNKNOWN || rt == TY_VOID || rt == TY_NIL) return 0;
+
+  /* the operands worth binding: observable, and typed well enough to declare */
+  int node[8], nb = 0;
+  TyKind ty[8];
+  if (recv >= 0 && node_is_effectful(c, recv)) {
+    TyKind rt = comp_ntype(c, recv);
+    if (rt != TY_UNKNOWN && rt != TY_VOID && rt != TY_NIL) { node[nb] = recv; ty[nb] = rt; nb++; }
+  }
+  for (int i = 0; i < argc && nb < 8; i++) {
+    if (!node_is_effectful(c, argv[i])) continue;
+    TyKind at = comp_ntype(c, argv[i]);
+    if (at == TY_UNKNOWN || at == TY_VOID || at == TY_NIL) continue;
+    node[nb] = argv[i]; ty[nb] = at; nb++;
+  }
+  /* One observable operand has no sibling to be ordered against or collected by:
+     it is the only thing running, and the call consumes it immediately. */
+  if (nb < 2 || g_n_argov + nb > MAX_ARG_OVERRIDE) return 0;
 
   size_t pre_mark = g_pre->len;
   int saved_tmp = g_tmp;
-  int t = ++g_tmp;
-  g_argov_node[g_n_argov] = recv;
-  snprintf(g_argov_text[g_n_argov], sizeof g_argov_text[0], "_t%d", t);
-  g_n_argov++;
-  int saved_node = g_recv_order_node;
-  g_recv_order_node = id;
+  Buf opb[8];
+  int rendered = 0, ok = 1;
+  for (; rendered < nb && ok; rendered++) {
+    memset(&opb[rendered], 0, sizeof opb[0]);
+    emit_expr(c, node[rendered], &opb[rendered]);
+    if (text_is_raise_token(opb[rendered].p)) ok = 0;
+  }
   Buf ob; memset(&ob, 0, sizeof ob);
-  emit_call(c, id, &ob);
-  g_recv_order_node = saved_node;
-  g_n_argov--;
-
-  /* An arm may hoist part of the call into g_pre itself. Such a line is placed
-     ABOVE the statement expression, so a reference to the receiver temp from
-     there would name something not declared yet. Decline rather than emit it. */
-  int pre_uses = g_pre->p && g_pre->len > pre_mark &&
-                 text_uses_tmp(g_pre->p + pre_mark, t);
-  if (!text_uses_tmp(ob.p, t) || pre_uses) {
+  int tmp[8];
+  if (ok) {
+    for (int i = 0; i < nb; i++) {
+      tmp[i] = ++g_tmp;
+      g_argov_node[g_n_argov] = node[i];
+      snprintf(g_argov_text[g_n_argov], sizeof g_argov_text[0], "_t%d", tmp[i]);
+      g_n_argov++;
+    }
+    int saved_node = g_operand_order_node;
+    g_operand_order_node = id;
+    emit_call(c, id, &ob);
+    g_operand_order_node = saved_node;
+    g_n_argov -= nb;
+    if (text_is_raise_token(ob.p)) ok = 0;
+    for (int i = 0; i < nb && ok; i++) {
+      if (!text_uses_tmp(ob.p, tmp[i])) ok = 0;
+      else if (g_pre->p && g_pre->len > pre_mark &&
+               text_uses_tmp(g_pre->p + pre_mark, tmp[i])) ok = 0;
+    }
+  }
+  if (!ok) {
+    for (int i = 0; i < rendered; i++) free(opb[i].p);
     free(ob.p);
     g_pre->len = pre_mark;
     if (g_pre->p) g_pre->p[pre_mark] = '\0';
@@ -11751,13 +11802,13 @@ static int emit_recv_before_args(Compiler *c, int id, Buf *b) {
     return 0;
   }
   buf_puts(b, "({ ");
-  emit_ctype(c, rt, b);
-  buf_printf(b, " _t%d = ", t);
-  { Buf rb; memset(&rb, 0, sizeof rb); emit_expr(c, recv, &rb);
-    buf_puts(b, rb.p ? rb.p : default_value(rt)); free(rb.p); }
-  buf_puts(b, "; ");
-  if (rt == TY_POLY) buf_printf(b, "SP_GC_ROOT_RBVAL(_t%d); ", t);
-  else if (needs_root(rt)) buf_printf(b, "SP_GC_ROOT(_t%d); ", t);
+  for (int i = 0; i < nb; i++) {
+    emit_ctype(c, ty[i], b);
+    buf_printf(b, " _t%d = %s; ", tmp[i], opb[i].p ? opb[i].p : default_value(ty[i]));
+    if (ty[i] == TY_POLY) buf_printf(b, "SP_GC_ROOT_RBVAL(_t%d); ", tmp[i]);
+    else if (needs_root(ty[i])) buf_printf(b, "SP_GC_ROOT(_t%d); ", tmp[i]);
+    free(opb[i].p);
+  }
   buf_puts(b, ob.p ? ob.p : "");
   buf_puts(b, "; })");
   free(ob.p);
@@ -11787,8 +11838,8 @@ void emit_call(Compiler *c, int id, Buf *b) {
   if (emit_builtin_arity_guard(c, id, b)) return;
   /* An argument whose static class the method cannot take (defined above). */
   if (emit_arg_type_guards(c, id, b)) return;
-  /* Receiver before arguments, which C does not promise (defined above). */
-  if (emit_recv_before_args(c, id, b)) return;
+  /* Operands in Ruby's order, each held across the call (defined above). */
+  if (emit_operands_in_order(c, id, b)) return;
   /* Proc#=== calls the proc; a Proc read out of a container arrives boxed,
      where a value comparison would just answer false (#3683). */
   {
