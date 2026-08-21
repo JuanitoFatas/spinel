@@ -1570,7 +1570,9 @@ void emit_expr(Compiler *c, int id, Buf *b) {
     int idx = comp_cvar_index(&c->classes[cid], nm);
     if (idx >= 0) ct = c->classes[cid].cvar_types[idx];
     buf_printf(b, "(cvar_%s_%s = ", c->classes[cid].name, nm + 2);
-    if (ct == TY_POLY) emit_boxed(c, v, b); else emit_expr(c, v, b);
+    if (emit_empty_container_for_slot(c, v, ct, b)) { /* emitted at the slot's type */ }
+    else if (ct == TY_POLY) emit_boxed(c, v, b);
+    else emit_expr(c, v, b);
     buf_puts(b, ")");
     return;
   }

@@ -6696,7 +6696,8 @@ else {
     if (idx >= 0) ct = c->classes[sc].cvar_types[idx];
     emit_indent(b, indent);
     buf_printf(b, "cvar_%s_%s = ", c->classes[sc].name, nm + 2);
-    if (ct == TY_POLY) emit_boxed(c, v, b);
+    if (emit_empty_container_for_slot(c, v, ct, b)) { /* emitted at the slot's type */ }
+    else if (ct == TY_POLY) emit_boxed(c, v, b);
     /* an int into a bigint slot promotes at the boundary, as everywhere else */
     else if (ct == TY_BIGINT && comp_ntype(c, v) != TY_BIGINT) emit_bigint_operand_ext(c, v, b);
     else emit_expr(c, v, b);

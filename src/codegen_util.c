@@ -734,6 +734,53 @@ int strbuf_ivar_owner(Compiler *c, int node) {
 /* Emit-side lvalue for a shared-mutable string receiver: lv_<x> for a
    strbuf local, <self>-><iv_x> (or civ_Toplevel_x) for a strbuf ivar.
    Returns 1 and fills `out`, or 0 when the receiver is neither (#3227). */
+/* An empty `[]` / `{}` assigned into a typed slot has to be built at the SLOT's
+   representation, not at the literal's own default: the literal carries no
+   element or key type, so emit_expr answers an IntArray / StrPolyHash and the
+   store lands on a slot of a different C type. The global and constant writes
+   spell this out inline; class variables share the rule (#4054). Returns 1
+   when it emitted. */
+int emit_empty_container_for_slot(Compiler *c, int v, TyKind slot, Buf *b) {
+  const NodeTable *nt = c->nt;
+  if (v < 0) return 0;
+  const char *vty = nt_type(nt, v);
+  if (!vty) return 0;
+  int n = 0;
+  if (sp_streq(vty, "ArrayNode")) {
+    nt_arr(nt, v, "elements", &n);
+    if (n != 0) return 0;
+    if (slot == TY_POLY_ARRAY) { buf_puts(b, "sp_PolyArray_new()"); return 1; }
+    if (array_kind(slot)) { buf_printf(b, "sp_%sArray_new()", array_kind(slot)); return 1; }
+    return 0;
+  }
+  if (sp_streq(vty, "HashNode") || sp_streq(vty, "KeywordHashNode")) {
+    nt_arr(nt, v, "elements", &n);
+    if (n != 0) return 0;
+    const char *hcn = ty_is_hash(slot) ? ty_hash_cname(slot) : NULL;
+    if (!hcn) return 0;
+    buf_printf(b, "sp_%sHash_new()", hcn);
+    return 1;
+  }
+  /* `Hash.new` with no arguments or block is the same empty producer, and the
+     typed slot needs the same fresh `sp_XHash_new()` rather than the boxed
+     value the untyped call would emit (the global write says this too). */
+  if (sp_streq(vty, "CallNode") && ty_is_hash(slot)) {
+    const char *cn = nt_str(nt, v, "name");
+    int r = nt_ref(nt, v, "receiver");
+    const char *rn = (r >= 0 && nt_kind(nt, r) == NK_ConstantReadNode) ? nt_str(nt, r, "name") : NULL;
+    int a = nt_ref(nt, v, "arguments");
+    int an = 0; if (a >= 0) nt_arr(nt, v, "arguments", &an);
+    if (cn && rn && sp_streq(cn, "new") && sp_streq(rn, "Hash") && an == 0 &&
+        nt_ref(nt, v, "block") < 0) {
+      const char *hcn = ty_hash_cname(slot);
+      if (!hcn) return 0;
+      buf_printf(b, "sp_%sHash_new()", hcn);
+      return 1;
+    }
+  }
+  return 0;
+}
+
 int emit_poly_rhs_coerced(Compiler *c, TyKind slot, int v, Buf *b) {
   /* yield_site_type, not comp_ntype: a `yield` carries the union over every
      call site, and the block spliced HERE may already hand back the scalar
