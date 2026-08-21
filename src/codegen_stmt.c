@@ -9438,9 +9438,13 @@ void emit_stmt_tail_inner(Compiler *c, int id, Buf *b, int indent) {
      yield the slot's zero; control never reaches the assignment anyway.
      (#3021, #3060) */
   /* an unknown constant read emits a raise too, and its sp_Class result type
-     mismatches the slot the same way a raising call's does (#3748) */
+     mismatches the slot the same way a raising call's does (#3748). The
+     QUALIFIED spelling raises identically and was not in this list, so
+     `begin; NoSuchMod::Missing; rescue NameError; "s"; end` assigned an
+     sp_Class to a `const char *` and did not build -- a program CRuby runs. */
   else if (g_result_var && !g_result_poly &&
-           (sp_streq(ty, "CallNode") || sp_streq(ty, "ConstantReadNode")) &&
+           (sp_streq(ty, "CallNode") || sp_streq(ty, "ConstantReadNode") ||
+            sp_streq(ty, "ConstantPathNode")) &&
            (vty == TY_VOID || vty == TY_NIL ||
             (g_result_ty != TY_UNKNOWN && vty != g_result_ty &&
              /* a numeric slot takes an int-ish raise result, but not a struct
@@ -9453,8 +9457,11 @@ void emit_stmt_tail_inner(Compiler *c, int id, Buf *b, int indent) {
     buf_puts(b, "("); emit_tail_value(c, id, b);
     /* A struct-valued slot (sp_Class, sp_Range, ...) cannot take a scalar
        cast, so name its zero directly when the slot type is known. */
+    /* raise_tail_value_c, not default_value: a by-value USER class's zero is
+       `((sp_Frame){0})`, where default_value answers the NULL that suits a
+       pointer-backed one -- and a struct slot cannot take it. */
     if (g_result_ty != TY_UNKNOWN && comp_ty_value_obj(c, g_result_ty))
-      buf_printf(b, ", %s)", default_value(g_result_ty));
+      buf_printf(b, ", %s)", raise_tail_value_c(c, g_result_ty));
     else if (g_result_ty != TY_UNKNOWN && !ty_is_numeric(g_result_ty) &&
              g_result_ty != TY_BOOL && g_result_ty != TY_SYMBOL &&
              default_value(g_result_ty) && default_value(g_result_ty)[0] == '(')

@@ -614,6 +614,14 @@ static void emit_slot_nil_test(Compiler *c, TyKind t, int tmp, int want_nil, Buf
   (void)c;
 }
 
+/* The zero for a result slot of this type. default_value answers NULL for an
+   object, which suits a pointer-backed class and not a by-value one, whose C
+   representation is a bare struct -- `sp_Frame _t9 = NULL` is not valid C. */
+static const char *slot_zero(Compiler *c, TyKind t) {
+  if (comp_ty_value_obj(c, t)) return raise_tail_value_c(c, t);
+  return default_value(t);
+}
+
 /* Is `id` somewhere inside the subtree at `root`? */
 static int node_in_subtree(const NodeTable *nt, int root, int id) {
   if (root < 0) return 0;
@@ -2827,7 +2835,7 @@ else {
     int t = ++g_tmp;
     buf_puts(b, "({ ");
     emit_ctype(c, rt, b);
-    buf_printf(b, " _t%d = %s; sp_exc_rootmark[sp_exc_top] = sp_gc_nroots; sp_rescue_mark[sp_exc_top] = sp_rescue_sp; sp_exc_msg[sp_exc_top] = 0; sp_exc_obj[sp_exc_top] = 0; sp_exc_top++;\n", t, default_value(rt));
+    buf_printf(b, " _t%d = %s; sp_exc_rootmark[sp_exc_top] = sp_gc_nroots; sp_rescue_mark[sp_exc_top] = sp_rescue_sp; sp_exc_msg[sp_exc_top] = 0; sp_exc_obj[sp_exc_top] = 0; sp_exc_top++;\n", t, slot_zero(c, rt));
     buf_puts(b, "if (setjmp(sp_exc_stack[sp_exc_top-1]) == 0) {\n");
     /* expression arm — assign result to temp (skip diverging exprs like raise) */
     TyKind et = e >= 0 ? comp_ntype(c, e) : TY_UNKNOWN;
@@ -2928,14 +2936,14 @@ else {
     TyKind srt = g_result_ty; g_result_ty = rt;
     if (g_pre) {
       emit_indent(g_pre, g_indent); emit_ctype(c, rt, g_pre);
-      buf_printf(g_pre, " _t%d = %s;\n", t, default_value(rt));
+      buf_printf(g_pre, " _t%d = %s;\n", t, slot_zero(c, rt));
       emit_begin(c, id, g_pre, g_indent, rv);
     }
     else {
       /* No prelude available (e.g. inside another expression's prelude):
          fall back to a GCC statement expression. */
       buf_puts(b, "({ ");
-      emit_ctype(c, rt, b); buf_printf(b, " _t%d = %s;\n", t, default_value(rt));
+      emit_ctype(c, rt, b); buf_printf(b, " _t%d = %s;\n", t, slot_zero(c, rt));
       emit_begin(c, id, b, 0, rv);
       buf_printf(b, "_t%d; })", t);
       g_result_poly = sp; g_result_ty = srt;
