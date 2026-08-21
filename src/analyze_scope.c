@@ -3609,6 +3609,37 @@ static int cmethod_reaches_override(Compiler *c, int mi, int ci, int def_cls, in
   return 0;
 }
 
+/* Does the inherited cls method `mi` (defined on def_cls) name a class-level
+   @ivar -- in its own body, or TRANSITIVELY through a bare call to another
+   cmethod the subclass inherits unchanged? A class-level @ivar is per-class, so
+   whoever ends up reading it has to read the CALLING class's storage; a DSL
+   writes one indirectly (`field` calls `fields`, which is the one that says
+   `@fields`), and reading only mi's own body left `field` unspecialized and
+   still pointed at the base class's slot (#4051). The depth cap bounds the walk
+   and doubles as a cycle guard for mutually-recursive cmethods. */
+static int cmethod_reaches_class_ivar(Compiler *c, int mi, int def_cls, int depth) {
+  if (depth > 64) return 0;
+  const NodeTable *nt = c->nt;
+  for (int id = 0; id < nt->count; id++) {
+    if (c->nscope[id] != mi) continue;
+    NodeKind k = nt_kind(nt, id);
+    if (k == NK_InstanceVariableReadNode || k == NK_InstanceVariableWriteNode ||
+        k == NK_InstanceVariableOperatorWriteNode || k == NK_InstanceVariableOrWriteNode ||
+        k == NK_InstanceVariableAndWriteNode || k == NK_InstanceVariableTargetNode) return 1;
+  }
+  NT_FOREACH_KIND(nt, NK_CallNode, id) {
+    if (c->nscope[id] != mi) continue;
+    if (nt_ref(nt, id, "receiver") >= 0) continue;   /* receiverless only */
+    const char *nm = nt_str(nt, id, "name");
+    if (!nm || sp_streq(nm, "new")) continue;
+    int sub_def = -1;
+    int mdef = comp_cmethod_in_chain(c, def_cls, nm, &sub_def);
+    if (mdef >= 0 && mdef != mi && sub_def >= 0 &&
+        cmethod_reaches_class_ivar(c, mdef, sub_def, depth + 1)) return 1;
+  }
+  return 0;
+}
+
 /* Does the inherited cls method `mi` (defined on def_cls) contain a bare call
    that would resolve differently when run as a class method of `ci`? That is:
    a bare `new` (constructs ci), or a bare cmethod call that resolves to ci's
@@ -3631,15 +3662,7 @@ int cmethod_needs_specialization(Compiler *c, int mi, int ci, int def_cls, int *
      on ci (civ_<Sub>_...). Without this, Sub.tag read Base's civ_ -- a value Ruby
      never shares down the hierarchy. @@class-variables ARE shared and use a
      separate mechanism, so only plain @ivar nodes trigger this. */
-  if (!need) {
-    for (int id = 0; id < nt->count; id++) {
-      if (c->nscope[id] != mi) continue;
-      NodeKind k = nt_kind(nt, id);
-      if (k == NK_InstanceVariableReadNode || k == NK_InstanceVariableWriteNode ||
-          k == NK_InstanceVariableOperatorWriteNode || k == NK_InstanceVariableOrWriteNode ||
-          k == NK_InstanceVariableAndWriteNode || k == NK_InstanceVariableTargetNode) { need = 1; break; }
-    }
-  }
+  if (!need && cmethod_reaches_class_ivar(c, mi, def_cls, 0)) need = 1;
   if (cmethod_reaches_override(c, mi, ci, def_cls, 0)) need = 1;
   return need;
 }
@@ -3721,6 +3744,31 @@ void specialize_inherited_cls_new(Compiler *c) {
   int snap = c->nscopes;
   int node_count = nt->count;   /* don't scan nodes appended by cloning */
   int did_clone = 0;
+  /* self in a class body is the class, so a receiver-less call there names a
+     class method of THAT class even though the statement belongs to no class
+     method scope. Map each such statement to its class up front; the loop below
+     then treats it exactly like the `Klass.m` form, so an inherited DSL method
+     (`class User < Model; field :id; end`) specializes for User and writes
+     User's class-level ivar instead of Model's (#4051). Direct body statements
+     only, matching what codegen runs from a class body. */
+  int *body_cls = malloc((size_t)node_count * sizeof(int));
+  if (body_cls) {
+    for (int i = 0; i < node_count; i++) body_cls[i] = -1;
+    for (int cn = 0; cn < node_count; cn++) {
+      if (nt_kind(nt, cn) != NK_ClassNode && nt_kind(nt, cn) != NK_ModuleNode) continue;
+      int cp = nt_ref(nt, cn, "constant_path");
+      const char *cnm = cp >= 0 ? nt_str(nt, cp, "name") : NULL;
+      int bci = cnm ? comp_class_index(c, cnm) : -1;
+      if (bci < 0) continue;
+      int bd = nt_ref(nt, cn, "body");
+      int bn = 0;
+      const int *bstmts = bd >= 0 ? nt_arr(nt, bd, "body", &bn) : NULL;
+      for (int k = 0; k < bn; k++)
+        if (bstmts[k] >= 0 && bstmts[k] < node_count && nt_kind(nt, bstmts[k]) == NK_CallNode &&
+            nt_ref(nt, bstmts[k], "receiver") < 0)
+          body_cls[bstmts[k]] = bci;
+    }
+  }
   for (int id = 0; id < node_count; id++) {
     const char *ty = nt_type(nt, id);
     if (!ty || !sp_streq(ty, "CallNode")) continue;
@@ -3734,8 +3782,9 @@ void specialize_inherited_cls_new(Compiler *c) {
          CALLING class. Clone for the enclosing class exactly like the
          Const-receiver form (`def self.upsert; build { |kv| ... }; end`). */
       Scope *encl = comp_scope_of(c, id);
-      if (!encl || !encl->is_cmethod || encl->class_id < 0) continue;
-      ci = encl->class_id;
+      if (encl && encl->is_cmethod && encl->class_id >= 0) ci = encl->class_id;
+      else if (body_cls && body_cls[id] >= 0) ci = body_cls[id];
+      else continue;
     }
     else {
       const char *rty = nt_type(nt, recv);
@@ -3768,6 +3817,7 @@ void specialize_inherited_cls_new(Compiler *c) {
        (#1451). nscopes growth below stands in for the old did_clone flag. */
     specialize_cmethod_for(c, mi, def_cls, ci);
   }
+  free(body_cls);
   did_clone = (c->nscopes > snap);
   /* Index of every CallNode with a constant receiver, built once: the
      called-direct check below otherwise rescans all nodes per shadowed cmethod

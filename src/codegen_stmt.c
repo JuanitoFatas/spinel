@@ -8764,6 +8764,13 @@ else {
             diagnose_unsupported_call(c, stmts[k])) return;
         int is_output = cn && (sp_streq(cn, "puts") || sp_streq(cn, "print") || sp_streq(cn, "p"));
         int is_user = cn && comp_method_index(c, cn) >= 0;
+        /* self in a class body is the class, so a receiver-less call naming one
+           of its class methods (its own or an ancestor's) is a real call, not a
+           declaration macro -- the shape every declarative DSL uses (`key :a`,
+           `validates :name`). Skipping it left the state it establishes unset
+           and nothing said so (#4051). */
+        if (!is_user && cn && g_class_body_id >= 0)
+          is_user = comp_cmethod_in_chain(c, g_class_body_id, cn, NULL) >= 0;
         if (!is_output && !is_user) continue;
       }
       emit_stmt(c, stmts[k], b, indent);
