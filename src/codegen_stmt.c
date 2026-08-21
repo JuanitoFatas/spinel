@@ -10024,7 +10024,16 @@ int emit_array_mutate_stmt(Compiler *c, int id, Buf *b, int indent) {
        -len..len (i == len appends, matching CRuby); anything outside raises
        IndexError with the original index. The (start,len) and Range / Regexp
        forms remain unsupported (string splice). */
-    if (assignable && sp_streq(name, "[]=") && argc == 2 && comp_ntype(c, argv[0]) == TY_INT) {
+    /* A boxed index reaches here whenever the value came out of a container --
+       a destructured block parameter (`pairs.each { |r, c| s[c] = "*" }`), an
+       element read, an untyped argument. It was not in the gate, so the call
+       fell through to "undefined method '[]=' for an instance of String" for a
+       program CRuby runs (#4060). emit_int_expr converts it through the
+       CHECKED form, so a boxed Integer works and a Range or String -- the
+       splice forms spinel does not support -- raises TypeError rather than
+       being read as a number. */
+    if (assignable && sp_streq(name, "[]=") && argc == 2 &&
+        (comp_ntype(c, argv[0]) == TY_INT || comp_ntype(c, argv[0]) == TY_POLY)) {
       int ti = ++g_tmp;
       emit_indent(b, indent); buf_puts(b, "sp_str_check_mutable("); emit_expr(c, recv, b); buf_puts(b, ");\n");
       emit_indent(b, indent);
