@@ -95,7 +95,11 @@ rm -f test/streams_test.rb test/streams_test.rb.expected
 mkdir -p "$WORK/sib/spinel"
 cp "$SPIN" "$WORK/sib/spin"
 printf 'puts "sib"\n' > test/sib_test.rb        # fresh: must actually compile
-expect "test (sibling spinel dir)" "1/1 passed" "$("$WORK/sib/spin" test sib_test.rb 2>&1 | tail -1)"
+# What it falls through TO is the compiler on PATH, so put it there rather than
+# relying on the caller's: a developer shell usually has bin/ on PATH and CI
+# does not, which is the difference between this passing everywhere and only
+# passing locally.
+expect "test (sibling spinel dir)" "1/1 passed" "$(PATH="$(dirname "$SPIN"):$PATH" "$WORK/sib/spin" test sib_test.rb 2>&1 | tail -1)"
 rm -rf "$WORK/sib"; rm -f test/sib_test.rb test/sib_test.rb.expected
 
 # a large test/ directory: enumerating ~60 entries allocates enough to GC
