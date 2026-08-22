@@ -10485,7 +10485,23 @@ static int splice_recv_index_slot(Compiler *c, int recv, int *outer, int *oidx) 
   int ro = nt_ref(nt, recv, "receiver");
   if (ro < 0) return 0;
   int rargc; const int *rargv = call_args(nt, recv, &rargc);
-  if (rargc != 1 || comp_ntype(c, rargv[0]) != TY_INT) return 0;
+  /* A boxed index is addressable too: emit_int_expr converts it. Requiring
+     TY_INT here dropped `rows[r][c] = "*"` when `r` came from a destructured
+     block parameter -- the store fell to the by-value form, which writes into
+     a copy of the element and loses the assignment (#4078). */
+  if (rargc != 1) return 0;
+  { TyKind it = comp_ntype(c, rargv[0]);
+    /* The slot helpers address the outer by INTEGER index, so a boxed index is
+       only usable when the outer really is an array -- a boxed Hash KEY would
+       be converted to an int and refused. Requiring TY_INT outright dropped
+       `rows[r][c] = "*"` when `r` came from a destructured block parameter:
+       the store fell to the by-value form, which writes into a copy of the
+       element and loses the assignment (#4078). */
+    if (it != TY_INT) {
+      if (it != TY_POLY) return 0;
+      TyKind ot = comp_ntype(c, ro);
+      if (!ty_is_array(ot)) return 0;
+    } }
   *outer = ro; *oidx = rargv[0];
   return 1;
 }
