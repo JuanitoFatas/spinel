@@ -1022,7 +1022,9 @@ int user_defines_or_reads(Compiler *c, const char *name) {
      `def self.<name>` instead (#3520). */
   for (int uk = 0; uk < c->nclasses; uk++)
     if (comp_method_in_chain(c, uk, name, NULL) >= 0) return 1;
-  if (comp_method_index(c, name) >= 0) return 1;
+  /* A top-level method is private on Object, so no explicit receiver can reach
+     it and it never owns a name here -- the twin in analyze_infer.c carries the
+     reasoning. */
   for (int uk = 0; uk < c->nclasses; uk++)
     if (comp_is_reader(&c->classes[uk], name)) return 1;
   return 0;

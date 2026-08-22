@@ -108,8 +108,12 @@ int an_user_defines_or_reads(Compiler *c, const char *name) {
      reachable through a Class-valued receiver, so it cannot be the answer to
      an instance call. Counting it made `k.downcase` on a String bind to a
      `def self.downcase(s)` elsewhere in the program and compile to the arity
-     raise (#3520). */
-  if (!ans) ans = comp_method_index(c, name) >= 0;
+     raise (#3520). A TOP-LEVEL method is out for the same reason one step on:
+     it lands on Object as a PRIVATE method, so an explicit receiver can never
+     reach it -- CRuby answers `nil.size` after `def size(v)` with "private
+     method 'size' called", not with the method. Counting it made every caller
+     of this predicate stand its builtin arm down, and `def upcase(v) = v.upcase`
+     compiled its own body to an unconditional NoMethodError. */
   if (memo && udr_n < udr_cap) {
     udr_names[udr_n] = strdup(name);
     if (udr_names[udr_n]) {
