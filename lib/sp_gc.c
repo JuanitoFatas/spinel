@@ -88,6 +88,16 @@ static int sp_gc_max_bytes_init = 0;
    every generated TU includes does not change. */
 #define SP_GC_FULL_INTERVAL_MAX 128
 static int sp_gc_full_interval = SP_GC_FULL_INTERVAL;
+/* What the last full sweep found LIVE in the old generation, and the slack a
+   heap may grow past it before a full is forced. The adaptive interval bounds
+   the TIME between full sweeps and nothing bounded the SPACE: a phase that
+   promotes heavily piles garbage onto a list nothing walks, sp_gc_old_bytes
+   counts it as live, the object threshold retunes off that inflated total, and
+   the interval's own correction is gated behind the full cycle it is
+   postponing (#4076). A heap that really is live never trips this, because old
+   stays where the last sweep left it. */
+static size_t sp_gc_old_live = 0;
+#define SP_GC_OLD_GROWTH_SLACK (4u * 1024u * 1024u)
 static int sp_gc_full_interval_fixed = 0;   /* SPINEL_GC_FULL_INTERVAL pins it */
 int sp_gc_full_runs = 0;    /* read by GC.stat (lib/sp_cold.c) */
 /* High-water mark of the remembered set, for GC.stat. A minor collection
@@ -385,6 +395,11 @@ static SP_NOINLINE void sp_gc_verify_gen_run(void) {
 void sp_gc_collect(void){
   size_t ob_before = sp_gc_bytes;
   int full=(sp_gc_cycle%sp_gc_full_interval==0);sp_gc_cycle++;
+  /* Forced by growth rather than by the schedule: the old generation has
+     outgrown what the last full found live in it. */
+  int forced_full=0;
+  if(!full&&!sp_gc_full_interval_fixed&&
+     sp_gc_old_bytes>sp_gc_old_live*2+SP_GC_OLD_GROWTH_SLACK){ full=1; forced_full=1; }
   if(full)sp_gc_full_runs++;
   /* new mark generation: every object becomes unmarked without touching it.
      On the (30-bit) wrap, clear the whole heap once so no stale stamp can
@@ -435,7 +450,16 @@ void sp_gc_collect(void){
        held past its death. The second case is not hypothetical: at a fixed
        interval of 128 a workload that promotes and then drops 20k arrays per
        round peaked at 285 MB against 26 at 8, and ran slower for it. */
-    if(old_before>0&&!sp_gc_full_interval_fixed){
+    sp_gc_old_live=sp_gc_old_bytes;   /* re-baseline the space bound */
+    /* The survival ratio is a statement about a sample taken ON SCHEDULE. A
+       full forced by growth is not that sample -- it is evidence the cadence
+       was already too long for this phase, and reading survival there gets the
+       answer backwards: growth that is still live reads as ~100% survival and
+       DOUBLES the interval. So shorten on a forced full and do not adapt. */
+    if(!sp_gc_full_interval_fixed&&forced_full){
+      if(sp_gc_full_interval>SP_GC_FULL_INTERVAL) sp_gc_full_interval/=2;
+    }
+    else if(old_before>0&&!sp_gc_full_interval_fixed){
       size_t kept=sp_gc_old_bytes;
       if(kept>old_before-(old_before>>2)){            /* >75% survived */
         if(sp_gc_full_interval<SP_GC_FULL_INTERVAL_MAX) sp_gc_full_interval*=2;
