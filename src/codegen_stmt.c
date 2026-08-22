@@ -588,7 +588,10 @@ int emit_output_call(Compiler *c, int id, Buf *b, int indent) {
   const char *name = nt_str(nt, id, "name");
   int recv = nt_ref(nt, id, "receiver");
   if (!name || recv >= 0) return 0;
-  if (comp_method_index(c, name) >= 0) return 0; /* user method shadows builtin */
+  /* a user method shadows the builtin: the enclosing class's own chain first
+     (it sits above Kernel), then the top-level table (Object) */
+  if (bare_call_class_owned(c, id)) return 0;
+  if (comp_method_index(c, name) >= 0) return 0;
   int args = nt_ref(nt, id, "arguments");
   int argc = 0;
   const int *argv = NULL;

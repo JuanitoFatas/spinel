@@ -11922,6 +11922,55 @@ void emit_call(Compiler *c, int id, Buf *b) {
   free(hold.b.p); free(hold.tmp); free(ob.p);
 }
 
+/* A receiverless call whose name the enclosing class's own chain answers. The
+   class sits ABOVE Kernel in the ancestry, so its member wins and the Kernel
+   arm must stand down -- `class K; def puts(v); def run = puts(1)` ran
+   Kernel#puts, because the implicit-self resolution sits below those arms and
+   they are reached by position. The top-level table is asked ahead of the arms
+   (see emit_call_body's head); this is the other half of the same ancestry. */
+int bare_call_class_owned(Compiler *c, int id) {
+  const NodeTable *nt = c->nt;
+  if (nt_ref(nt, id, "receiver") >= 0) return 0;
+  const char *name = nt_str(nt, id, "name");
+  if (!name) return 0;
+  Scope *sc = comp_scope_of(c, id);
+  if (!sc) return 0;
+  int cid = (g_ie_class_id >= 0) ? g_ie_class_id
+          : (g_emitting_class_id >= 0) ? g_emitting_class_id : sc->class_id;
+  if (cid < 0 || cid >= c->nclasses) return 0;
+  if (sc->is_cmethod) return comp_cmethod_in_chain(c, cid, name, NULL) >= 0;
+  return comp_method_in_chain(c, cid, name, NULL) >= 0 ||
+         comp_reader_in_chain(c, cid, name, NULL);
+}
+
+/* The implicit-self member a receiverless call names: an attr reader on the
+   dispatch class, or a method its own chain defines. Answers 1 when it emitted
+   the call. Asked from two places -- in front of the Kernel arms, so a class
+   that defines `puts` answers its own bare `puts`, and again at the ordinary
+   implicit-self resolution, which also carries the template-method and
+   builtin-reopening fallbacks that must NOT preempt a builtin. */
+static int emit_implicit_self_member(Compiler *c, int id, Buf *b) {
+  const NodeTable *nt = c->nt;
+  const char *name = nt_str(nt, id, "name");
+  if (!name || nt_ref(nt, id, "receiver") >= 0) return 0;
+  Scope *self = comp_scope_of(c, id);
+  if (!self) return 0;
+  int dispatch_cid = (g_ie_class_id >= 0) ? g_ie_class_id
+                   : (g_emitting_class_id >= 0) ? g_emitting_class_id : self->class_id;
+  if (dispatch_cid < 0) return 0;
+  if (comp_reader_in_chain(c, dispatch_cid, name, NULL)) {
+    const char *rn = comp_resolve_alias(c, dispatch_cid, name);
+    buf_printf(b, "%s%siv_%s", g_self, g_self_deref, iv_c(rn));
+    return 1;
+  }
+  if (comp_method_in_chain(c, dispatch_cid, name, NULL) >= 0) {
+    emit_dispatch(c, dispatch_cid, name, g_self, nt_ref(nt, id, "arguments"),
+                  nt_ref(nt, id, "block"), b);
+    return 1;
+  }
+  return 0;
+}
+
 static void emit_call_body(Compiler *c, int id, Buf *b) {
   /* deep-return pickup (#3227 P6): a marked receiverless call to a method
      whose every return path yields a shared handle -- reset the side
@@ -12670,7 +12719,7 @@ static void emit_call_body(Compiler *c, int id, Buf *b) {
   /* loop { break val } as expression: emit pre-statement for-loop, result via break var */
   /* Kernel#caller / caller(start) / caller(start, len) -> the current stack
      (method-granularity, via sp_caller_now). Bare `caller` is `caller(1)`. */
-  if (recv < 0 && sp_streq(name, "caller") && argc <= 2) {
+  if (recv < 0 && sp_streq(name, "caller") && argc <= 2 && !bare_call_class_owned(c, id)) {
     buf_puts(b, "sp_caller(");
     if (argc >= 1) emit_int_expr(c, argv[0], b); else buf_puts(b, "1");
     if (argc == 2) { buf_puts(b, ", 1, "); emit_int_expr(c, argv[1], b); }
@@ -12685,13 +12734,13 @@ static void emit_call_body(Compiler *c, int id, Buf *b) {
      length) arguments are still evaluated for their side effects, as CRuby
      evaluates them before the call; the `(void)` casts keep a literal arg from
      tripping -Wunused-value. */
-  if (recv < 0 && sp_streq(name, "caller_locations") && argc <= 2) {
+  if (recv < 0 && sp_streq(name, "caller_locations") && argc <= 2 && !bare_call_class_owned(c, id)) {
     buf_puts(b, "(");
     for (int ai = 0; ai < argc; ai++) { buf_puts(b, "(void)("); emit_expr(c, argv[ai], b); buf_puts(b, "), "); }
     buf_puts(b, "sp_PolyArray_new())");
     return;
   }
-  if (recv < 0 && sp_streq(name, "loop") && argc == 0) {
+  if (recv < 0 && sp_streq(name, "loop") && argc == 0 && !bare_call_class_owned(c, id)) {
     int blk = nt_ref(nt, id, "block");
     if (blk >= 0) {
       TyKind bt = infer_type(c, id);
@@ -12756,7 +12805,7 @@ static void emit_call_body(Compiler *c, int id, Buf *b) {
 
   /* catch(:tag) { ... [throw :tag, val] ... } as expression: a setjmp scope
      whose value is the block's last expression, or the thrown value. */
-  if (recv < 0 && sp_streq(name, "catch") && argc <= 1) {
+  if (recv < 0 && sp_streq(name, "catch") && argc <= 1 && !bare_call_class_owned(c, id)) {
     int blk = nt_ref(nt, id, "block");
     if (blk >= 0) {
       TyKind bt = comp_ntype(c, id);
@@ -12855,7 +12904,7 @@ static void emit_call_body(Compiler *c, int id, Buf *b) {
   }
 
   /* throw :tag[, val] -> non-local jump to the matching catch scope. */
-  if (recv < 0 && sp_streq(name, "throw")) {
+  if (recv < 0 && sp_streq(name, "throw") && !bare_call_class_owned(c, id)) {
     int tag_kind = 0;
     Buf tb; memset(&tb, 0, sizeof tb);
     if (argc >= 1) tag_kind = emit_catch_tag(c, argv[0], &tb);
@@ -12869,7 +12918,7 @@ static void emit_call_body(Compiler *c, int id, Buf *b) {
   }
 
   /* system(cmd, ...) expr: run and return bool */
-  if (recv < 0 && sp_streq(name, "system") && argc >= 1) {
+  if (recv < 0 && sp_streq(name, "system") && argc >= 1 && !bare_call_class_owned(c, id)) {
     int ts = ++g_tmp;
     buf_printf(b, "({ const char *_sys_%d[] = { ", ts);
     for (int k = 0; k < argc; k++) { if (k > 0) buf_puts(b, ", "); emit_expr(c, argv[k], b); }
@@ -16342,7 +16391,7 @@ else { memcpy(dir, sf, n); dir[n] = 0; } }
 
   /* at_exit { ... } -> register the block as a Proc; main()'s tail runs the
      hooks in reverse order. The registration expression evaluates to the proc. */
-  if (recv < 0 && sp_streq(name, "at_exit") && nt_ref(nt, id, "block") >= 0) {
+  if (recv < 0 && sp_streq(name, "at_exit") && nt_ref(nt, id, "block") >= 0 && !bare_call_class_owned(c, id)) {
     g_needs_at_exit = 1;
     buf_puts(b, "(sp_at_exit_hooks[sp_at_exit_count++] = ");
     emit_proc_literal(c, id, b);
@@ -16858,7 +16907,7 @@ else { memcpy(dir, sf, n); dir[n] = 0; } }
   /* A bare `exit` inside a class that defines its own `exit` reader/method is
      that member, not Kernel#exit (Ruby's implicit-self dispatch prefers the
      defined method) -- fall through to the normal resolution (#3207). */
-  if (recv < 0 && (sp_streq(name, "exit") || sp_streq(name, "exit!"))) {
+  if (recv < 0 && (sp_streq(name, "exit") || sp_streq(name, "exit!")) && !bare_call_class_owned(c, id)) {
     Scope *xsc = comp_scope_of(c, id);
     int xcls = xsc ? xsc->class_id : -1;
     if (xcls >= 0 && (comp_reader_in_chain(c, xcls, name, NULL) ||
@@ -16879,7 +16928,7 @@ else { memcpy(dir, sf, n); dir[n] = 0; } }
     return;
     }
   }
-  if (recv < 0 && sp_streq(name, "abort")) {
+  if (recv < 0 && sp_streq(name, "abort") && !bare_call_class_owned(c, id)) {
     /* abort raises a rescuable SystemExit(1) after writing the message to
        stderr (#3077) */
     if (argc >= 1) {
@@ -16895,7 +16944,7 @@ else { memcpy(dir, sf, n); dir[n] = 0; } }
 
   /* Kernel#puts / #print as an expression: run the statement emitters inside
      a statement-expression and yield nil (their Ruby value). */
-  if (recv < 0 && (sp_streq(name, "puts") || sp_streq(name, "print")) &&
+  if (recv < 0 && !bare_call_class_owned(c, id) && (sp_streq(name, "puts") || sp_streq(name, "print")) &&
       nt_ref(nt, id, "block") < 0) {
     buf_puts(b, "({ ");
     if (argc == 0 && sp_streq(name, "puts")) buf_puts(b, "putchar('\n');\n");
@@ -16913,7 +16962,7 @@ else { memcpy(dir, sf, n); dir[n] = 0; } }
      the user-object hook), and unboxed back to the static type. */
   /* p(a, b, ...) as a value: prints each argument's inspect, returns the
      argument array. */
-  if (recv < 0 && (sp_streq(name, "p") || sp_streq(name, "pp")) && argc >= 2 && nt_ref(nt, id, "block") < 0) {
+  if (recv < 0 && !bare_call_class_owned(c, id) && (sp_streq(name, "p") || sp_streq(name, "pp")) && argc >= 2 && nt_ref(nt, id, "block") < 0) {
     int t = ++g_tmp;
     buf_printf(b, "({ sp_PolyArray *_t%d = sp_PolyArray_new(); SP_GC_ROOT(_t%d); ", t, t);
     for (int k = 0; k < argc; k++) {
@@ -16926,7 +16975,7 @@ else { memcpy(dir, sf, n); dir[n] = 0; } }
                t, t, t, t, t, t, t);
     return;
   }
-  if (recv < 0 && (sp_streq(name, "p") || sp_streq(name, "pp")) && argc == 1 && nt_ref(nt, id, "block") < 0) {
+  if (recv < 0 && !bare_call_class_owned(c, id) && (sp_streq(name, "p") || sp_streq(name, "pp")) && argc == 1 && nt_ref(nt, id, "block") < 0) {
     TyKind at = comp_ntype(c, argv[0]);
     int t = ++g_tmp;
     buf_printf(b, "({ sp_RbVal _t%d = ", t);
@@ -16940,7 +16989,7 @@ else { memcpy(dir, sf, n); dir[n] = 0; } }
   /* Kernel#warn / #printf / #putc / p() as an expression: run the statement
      emitter inside a statement-expression and yield the Ruby value (nil for
      warn/printf/p(), the argument for putc). */
-  if (recv < 0 && (sp_streq(name, "warn") || sp_streq(name, "printf") ||
+  if (recv < 0 && !bare_call_class_owned(c, id) && (sp_streq(name, "warn") || sp_streq(name, "printf") ||
                    (sp_streq(name, "putc") && argc == 1) ||
                    ((sp_streq(name, "p") || sp_streq(name, "pp")) && argc == 0)) &&
       nt_ref(nt, id, "block") < 0) {
@@ -16954,7 +17003,7 @@ else { memcpy(dir, sf, n); dir[n] = 0; } }
 
   /* raise */
   /* `fail` is an exact alias of `Kernel#raise`. */
-  if (recv < 0 && (sp_streq(name, "raise") || sp_streq(name, "fail"))) {
+  if (recv < 0 && !bare_call_class_owned(c, id) && (sp_streq(name, "raise") || sp_streq(name, "fail"))) {
     int args = nt_ref(nt, id, "arguments");
     int ac = 0; const int *av = args >= 0 ? nt_arr(nt, args, "arguments", &ac) : NULL;
     /* Resolve a raise target's runtime class name: a ConstantPathNode naming a
@@ -19441,11 +19490,7 @@ else { memcpy(dir, sf, n); dir[n] = 0; } }
     int dispatch_cid = (g_ie_class_id >= 0) ? g_ie_class_id
                      : (g_emitting_class_id >= 0) ? g_emitting_class_id : self->class_id;
     if (dispatch_cid >= 0) {
-      if (comp_reader_in_chain(c, dispatch_cid, name, NULL)) {
-        const char *rn = comp_resolve_alias(c, dispatch_cid, name);
-        buf_printf(b, "%s%siv_%s", g_self, g_self_deref, iv_c(rn));
-        return;
-      }
+      if (emit_implicit_self_member(c, id, b)) return;
       int mi = comp_method_in_chain(c, dispatch_cid, name, NULL);
       /* Template-method pattern: a base-class method calls an abstract method
          that is implemented only in subclasses. Not found up the chain, but if a

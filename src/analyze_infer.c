@@ -902,6 +902,23 @@ static TyKind an_user_read_ty(Compiler *c, const char *name, int argc) {
   return found ? r : TY_UNKNOWN;
 }
 
+/* The analyze twin of codegen's bare_call_class_owned: a receiverless call the
+   enclosing class's own chain answers. The class sits ABOVE Kernel, so the
+   builtin arms below must stand down for it, or the two halves of the compiler
+   name different methods for the same call. */
+static int an_bare_call_class_owned(Compiler *c, int id) {
+  const NodeTable *nt = c->nt;
+  if (nt_ref(nt, id, "receiver") >= 0) return 0;
+  const char *name = nt_str(nt, id, "name");
+  if (!name) return 0;
+  Scope *sc = comp_scope_of(c, id);
+  int cid = sc ? sc->class_id : -1;
+  if (cid < 0 || cid >= c->nclasses) return 0;
+  if (sc->is_cmethod) return comp_cmethod_in_chain(c, cid, name, NULL) >= 0;
+  return comp_method_in_chain(c, cid, name, NULL) >= 0 ||
+         comp_reader_in_chain(c, cid, name, NULL);
+}
+
 TyKind infer_call(Compiler *c, int id) {
 
   /* a yielder push (`y << v` inside an Enumerator.new generator) lowers to a
@@ -1485,12 +1502,13 @@ TyKind infer_call(Compiler *c, int id) {
   if (recv < 0 && sp_streq(name, "__dir__") && argc == 0) return TY_STRING;
 
   /* Kernel#caller -> the call stack as strings (empty in release builds) */
-  if (recv < 0 && sp_streq(name, "caller") && argc <= 2) return TY_STR_ARRAY;
+  if (recv < 0 && sp_streq(name, "caller") && argc <= 2 &&
+      !an_bare_call_class_owned(c, id)) return TY_STR_ARRAY;
   /* caller_locations -> an array of Backtrace::Location objects. AOT builds keep
      no runtime frame stack (like `caller`, which is empty in release), so this is
      an empty array. Returning a poly array (not nil) keeps `&.first&.label`,
      `.each`, `.map`, and `.is_a?(Array)` well-typed and nil-safe. */
-  if (recv < 0 && sp_streq(name, "caller_locations") && argc <= 2) return TY_POLY_ARRAY;
+  if (recv < 0 && !an_bare_call_class_owned(c, id) && sp_streq(name, "caller_locations") && argc <= 2) return TY_POLY_ARRAY;
 
   /* bare `name` inside a class method body -> the class name string */
   if (recv < 0 && sp_streq(name, "name") && argc == 0) {
@@ -1506,7 +1524,7 @@ TyKind infer_call(Compiler *c, int id) {
   }
 
   /* loop { break val } -> the type of the break value */
-  if (recv < 0 && sp_streq(name, "loop")) {
+  if (recv < 0 && sp_streq(name, "loop") && !an_bare_call_class_owned(c, id)) {
     int blk = nt_ref(nt, id, "block");
     if (blk >= 0) {
       int body = nt_ref(nt, blk, "body");
@@ -1527,7 +1545,7 @@ TyKind infer_call(Compiler *c, int id) {
   /* catch(:tag) { ... } -> unify the block's last value with every throw
      value that can target the tag, across method boundaries (the throw need
      not be syntactically inside the body). */
-  if (recv < 0 && sp_streq(name, "catch")) {
+  if (recv < 0 && !an_bare_call_class_owned(c, id) && sp_streq(name, "catch")) {
     int blk = nt_ref(nt, id, "block");
     TyKind result = TY_UNKNOWN;
     if (blk >= 0) {
@@ -2731,9 +2749,9 @@ else {
   /* Kernel#p returns its argument (one arg; several return the array), so it
      composes as an expression: x = p(y), f(p(y)). Statement-position p keeps
      its own emitter; this types the value form. */
-  if (recv < 0 && (sp_streq(name, "p") || sp_streq(name, "pp")) && nt_ref(nt, id, "block") < 0 && argc >= 2)
+  if (recv < 0 && !an_bare_call_class_owned(c, id) && (sp_streq(name, "p") || sp_streq(name, "pp")) && nt_ref(nt, id, "block") < 0 && argc >= 2)
     return TY_POLY_ARRAY;   /* p(a, b, ...) returns the array of its arguments */
-  if (recv < 0 && (sp_streq(name, "p") || sp_streq(name, "pp")) && nt_ref(nt, id, "block") < 0 && argc == 1)
+  if (recv < 0 && !an_bare_call_class_owned(c, id) && (sp_streq(name, "p") || sp_streq(name, "pp")) && nt_ref(nt, id, "block") < 0 && argc == 1)
     return infer_type(c, argv[0]);
   /* Object#instance_variables: a static symbol list for a typed object */
   if (recv >= 0 && ty_is_object(rt) && argc == 0 &&
@@ -2741,16 +2759,16 @@ else {
     return TY_POLY_ARRAY;
 
   /* Kernel#puts / #print return nil; typed so the value form composes. */
-  if (recv < 0 && (sp_streq(name, "puts") || sp_streq(name, "print")) &&
+  if (recv < 0 && !an_bare_call_class_owned(c, id) && (sp_streq(name, "puts") || sp_streq(name, "print")) &&
       nt_ref(nt, id, "block") < 0)
     return TY_NIL;
   /* Kernel#warn / #printf / p() (no args) return nil in value position. */
-  if (recv < 0 && (sp_streq(name, "warn") || sp_streq(name, "printf") ||
+  if (recv < 0 && !an_bare_call_class_owned(c, id) && (sp_streq(name, "warn") || sp_streq(name, "printf") ||
                    ((sp_streq(name, "p") || sp_streq(name, "pp")) && argc == 0)) &&
       nt_ref(nt, id, "block") < 0)
     return TY_NIL;
   /* Kernel#putc returns its argument. */
-  if (recv < 0 && sp_streq(name, "putc") && argc == 1 && nt_ref(nt, id, "block") < 0)
+  if (recv < 0 && !an_bare_call_class_owned(c, id) && sp_streq(name, "putc") && argc == 1 && nt_ref(nt, id, "block") < 0)
     return infer_type(c, argv[0]);
 
   /* TY_RANDOM instance methods */

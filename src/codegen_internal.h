@@ -583,6 +583,9 @@ int eq_family(TyKind t);
    -1 not determinable here. `exact` is instance_of? (no ancestor match). */
 int ty_matches_class(TyKind t, const char *cn, int exact);
 void emit_method_call(Compiler *c, int id, Buf *b);
+/* A receiverless call the enclosing class's own chain answers (see
+   codegen_call.c): the Kernel arms must stand down for it. */
+int bare_call_class_owned(Compiler *c, int id);
 /* Resolve a forwarded `&blk` (a BlockArgumentNode handing on the active block
    param) to the caller's already-inlined block g_block_id (-1 when no block was
    given, so the forward becomes a nil block). Any other block node is returned
