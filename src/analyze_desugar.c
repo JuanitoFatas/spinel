@@ -663,6 +663,7 @@ int desugar_implicit_send(Compiler *c) {
     nt_node_set_str(nt, id, "name", namebuf);              /* retarget the call */
     nt_node_set_ref(nt, id, "arguments", newargs);         /* drop the name arg */
     if (vis_enf) nt_node_set_str(nt, id, "vis_enforce", "1");
+    else nt_node_set_str(nt, id, "send_blind", "1");   /* see desugar_public_send_recv */
     comp_grow_node_arrays(c);
     int encl = c->nscope[id];
     for (int j = base; j < nt->count; j++) c->nscope[j] = encl;
@@ -731,6 +732,12 @@ int desugar_public_send_recv(Compiler *c) {
     nt_node_set_str(nt, id, "name", namebuf);
     nt_node_set_ref(nt, id, "arguments", newargs);
     if (is_pub && !m_is_send) nt_node_set_str(nt, id, "vis_enforce", "1");
+    /* `x.send(:m)` ignores visibility, which is the whole point of it: a
+       top-level `def` is Object's PRIVATE instance method, so a plain
+       `x.m` cannot reach it but a send can. The retargeted call carries
+       that permission, since nothing else distinguishes it from the
+       ordinary call it now looks like (#4070 follow-up). */
+    if (is_snd) nt_node_set_str(nt, id, "send_blind", "1");
     comp_grow_node_arrays(c);
     int encl = c->nscope[id];
     for (int j = base; j < nt->count; j++) c->nscope[j] = encl;

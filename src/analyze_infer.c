@@ -943,6 +943,18 @@ TyKind infer_call(Compiler *c, int id) {
   if (args >= 0) argv = nt_arr(nt, args, "arguments", &argc);
   if (!name) return TY_UNKNOWN;
 
+  /* A retargeted `x.send(:m)` reaching a top-level def: see the codegen twin. */
+  if (nt_str(nt, id, "send_blind") && recv >= 0 && nt_ref(nt, id, "block") < 0) {
+    int smi = comp_method_index(c, name);
+    if (smi >= 0 && !(smi < c->nscopes && c->scopes[smi].yields)) {
+      TyKind srt = infer_type(c, recv);
+      int owns = ty_is_object(srt) &&
+                 (comp_method_in_chain(c, ty_object_class(srt), name, NULL) >= 0 ||
+                  comp_reader_in_chain(c, ty_object_class(srt), name, NULL));
+      if (!owns) return method_call_ret(c, smi, id);
+    }
+  }
+
   /* A call with NO receiver resolves the way CRuby's ancestry does: the
      enclosing scope's own chain first, then Object -- where a top-level `def`
      lands -- and only then a Kernel builtin. The user-method arm further down
@@ -952,7 +964,7 @@ TyKind infer_call(Compiler *c, int id) {
      declared sp_StrArray * and assigned a const char *. One rule, asked before
      any builtin arm, keeps the two halves of the compiler on the same method. */
   if (recv < 0 && nt_ref(nt, id, "block") < 0 &&
-      !nt_int(nt, id, "vis_enforce", 0)) {
+      !nt_str(nt, id, "vis_enforce")) {
     int bmi = comp_method_index(c, name);
     if (bmi < 0) bmi = comp_included_method_index(c, name);
     if (bmi >= 0) {
