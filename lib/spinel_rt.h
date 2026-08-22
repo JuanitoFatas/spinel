@@ -9566,6 +9566,23 @@ static sp_RbVal sp_curry_realize_poly(sp_Curry *c) {
   return _sp_proc_poly_ret;
 }
 
+/* `curry.call(a, ...)` where the base proc's arity is NOT statically known --
+   the curry arrived through a parameter, a container, an untyped slot. Whether
+   this application saturates the curry is then a run-time property of the
+   accumulator, so decide it here: apply each argument, realize when the count
+   reaches the target's arity, and answer the new curry boxed otherwise. The
+   static paths kept answering a Curry for a saturating call, so a method taking
+   a curried Proc returned a Proc where CRuby returns the value (#4068). */
+static sp_RbVal sp_curry_call_poly(sp_Curry *c, sp_int argc, const sp_RbVal *args) {
+  if (!c) return sp_box_nil();
+  SP_GC_ROOT(c);
+  for (sp_int i = 0; i < argc; i++) c = sp_curry_apply(c, args[i]);
+  sp_int want = c->target ? c->target->arity : 0;
+  if (want < 0) want = -want - 1;   /* variadic: the required count */
+  if (c->nargs >= want) return sp_curry_realize_poly(c);
+  return sp_box_obj((void *)c, SP_BUILTIN_CURRY);
+}
+
 /* Proc#>> / #<< over a curried Proc: composition threads sp_Proc values, and a
    curry is an argument accumulator rather than one. Wrap it in a Proc whose
    trampoline applies the call's arguments and realizes the result, so a curry

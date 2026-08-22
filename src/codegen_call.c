@@ -2962,10 +2962,15 @@ static int emit_complex_rational_call(Compiler *c, int id, Buf *b) {
        zero-arity base it is the call that realizes the curry (#3654). */
     if (crt == TY_CURRY && (sp_streq(name, "[]") || sp_streq(name, "call") || sp_streq(name, "()")) && argc == 0) {
       int complete0 = 0; TyKind cret0 = TY_UNKNOWN;
-      int realize0 = curry_apply_info(c, id, &complete0, &cret0) && complete0;
-      if (realize0) buf_puts(b, cret0 == TY_INT ? "sp_curry_to_int(" : "sp_curry_realize_poly(");
+      int traced0 = curry_apply_info(c, id, &complete0, &cret0);
+      if (!traced0) {   /* run-time saturation, as above */
+        buf_puts(b, "sp_curry_call_poly("); emit_expr(c, recv, b);
+        buf_puts(b, ", 0, (sp_RbVal[]){sp_box_nil()})");
+        return 1;
+      }
+      if (complete0) buf_puts(b, cret0 == TY_INT ? "sp_curry_to_int(" : "sp_curry_realize_poly(");
       emit_expr(c, recv, b);
-      if (realize0) buf_puts(b, ")");
+      if (complete0) buf_puts(b, ")");
       return 1;
     }
     if (crt == TY_CURRY && (sp_streq(name, "[]") || sp_streq(name, "call") || sp_streq(name, "()")) && argc >= 1) {
@@ -2973,7 +2978,19 @@ static int emit_complex_rational_call(Compiler *c, int id, Buf *b) {
          (int) result; earlier applications return another curry. curry[a, b]
          chains one apply per argument. */
       int complete = 0; TyKind cret = TY_UNKNOWN;
-      int realize = curry_apply_info(c, id, &complete, &cret) && complete;
+      int traced = curry_apply_info(c, id, &complete, &cret);
+      /* The base's arity is unknown -- the curry came through a parameter, a
+         container, an untyped slot -- so whether THIS call saturates it is a
+         run-time property. Deciding it statically as "not yet" answered a Proc
+         where CRuby answers the value (#4068). */
+      if (!traced) {
+        buf_puts(b, "sp_curry_call_poly("); emit_expr(c, recv, b);
+        buf_printf(b, ", %d, (sp_RbVal[]){", argc);
+        for (int k = 0; k < argc; k++) { if (k) buf_puts(b, ", "); emit_boxed(c, argv[k], b); }
+        buf_puts(b, "})");
+        return 1;
+      }
+      int realize = complete;
       if (realize) buf_puts(b, cret == TY_INT ? "sp_curry_to_int(" : "sp_curry_realize_poly(");
       for (int k = 0; k < argc; k++) buf_puts(b, "sp_curry_apply(");
       emit_expr(c, recv, b);
