@@ -6012,10 +6012,29 @@ static void ple_build(Compiler *c) {
     int body = nt_ref(nt, id, "body");
     if (body < 0 || !nt_type(nt, body) || !sp_streq(nt_type(nt, body), "StatementsNode")) continue;
     int bn = 0; const int *bb = nt_arr(nt, body, "body", &bn);
-    if (bn > 0 && bb[bn - 1] >= 0 && bb[bn - 1] < n &&
-        nt_type(nt, bb[bn - 1]) &&
-        (sp_streq(nt_type(nt, bb[bn - 1]), "LambdaNode") || is_proc_create(c, bb[bn - 1])))
-      ple_escaped[bb[bn - 1]] = 1;
+    int tail = bn > 0 ? bb[bn - 1] : -1;
+    /* Look through the capture wrapper. desugar_block_capture_wrap rewrites a
+       block whose parameter is captured into `->(__cap){ <body> }.call(param)`,
+       so the block's tail becomes that call and the value it yields is the
+       WRAPPER's tail. Reading the block's tail alone found a call where the
+       literal used to be, the literal was never marked as escaping, and its
+       parameters took the arithmetic Integer default -- so a Proc collected out
+       of `map` was called with the wrong representation (#4064). */
+    for (int hop = 0; hop < 8 && tail >= 0 && tail < n; hop++) {
+      if (nt_kind(nt, tail) != NK_CallNode) break;
+      const char *tn = nt_str(nt, tail, "name");
+      int trecv = nt_ref(nt, tail, "receiver");
+      if (!tn || !sp_streq(tn, "call") || trecv < 0 || trecv >= n ||
+          nt_kind(nt, trecv) != NK_LambdaNode) break;
+      int wbody = nt_ref(nt, trecv, "body");
+      if (wbody < 0 || !nt_type(nt, wbody) || !sp_streq(nt_type(nt, wbody), "StatementsNode")) break;
+      int wn2 = 0; const int *wb = nt_arr(nt, wbody, "body", &wn2);
+      if (wn2 <= 0) break;
+      tail = wb[wn2 - 1];
+    }
+    if (tail >= 0 && tail < n && nt_type(nt, tail) &&
+        (sp_streq(nt_type(nt, tail), "LambdaNode") || is_proc_create(c, tail)))
+      ple_escaped[tail] = 1;
   }
 }
 static int proc_literal_escapes_as_arg(Compiler *c, int lit) {
