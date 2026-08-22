@@ -11709,8 +11709,19 @@ int emit_poly_call(Compiler *c, int id, Buf *b) {
       }
     }
     else {
-      buf_printf(b, "sp_poly_set_poly("); emit_expr(c, recv, b);
-      buf_puts(b, ", "); emit_boxed(c, argv[0], b);
+      /* A computed `outer[idx]` receiver needs the store-back form even for a
+         boxed key: a String inner splices into a fresh buffer, and writing to
+         the inner value alone dropped the assignment (#4067). */
+      int outer_k, oidx_k;
+      if (splice_recv_index_slot(c, recv, &outer_k, &oidx_k)) {
+        buf_puts(b, "sp_poly_slot_set_key("); emit_boxed(c, outer_k, b);
+        buf_puts(b, ", "); emit_int_expr(c, oidx_k, b);
+        buf_puts(b, ", "); emit_boxed(c, argv[0], b);
+      }
+      else {
+        buf_printf(b, "sp_poly_set_poly("); emit_expr(c, recv, b);
+        buf_puts(b, ", "); emit_boxed(c, argv[0], b);
+      }
     }
     buf_printf(b, ", _t%d); _t%d; })", tv, tv);
     (void)vt;

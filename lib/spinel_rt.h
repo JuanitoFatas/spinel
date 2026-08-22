@@ -6666,9 +6666,40 @@ static sp_RbVal sp_poly_slot_splice_range(sp_RbVal outer, sp_int oidx, sp_Range 
    every raise condition has been checked. */
 static sp_RbVal sp_poly_slot_set(sp_RbVal outer, sp_int oidx, sp_int ikey, sp_RbVal val) {
   sp_RbVal inner = sp_poly_slot_inner(outer, oidx);
+  /* A String inner splices into a FRESH buffer, so the result has to be stored
+     back; widen_and_set has no string arm and dropped the write (#4067). */
+  if (inner.tag == SP_TAG_STR || sp_poly_is_strbuf(inner)) {
+    sp_RbVal sres = sp_poly_splice(inner, ikey, 1, val);
+    sp_poly_set_poly(outer, sp_box_int(oidx), sres);
+    return val;
+  }
   sp_RbVal res = sp_poly_arr_widen_and_set(inner, ikey, val);
   sp_poly_set_poly(outer, sp_box_int(oidx), res);
   return val;
+}
+/* `outer[oidx][key] = val` where the KEY is boxed: the same store-back as
+   sp_poly_slot_set, for an index whose static type stayed poly (a destructured
+   block parameter, an element read). Without it the write went straight to
+   sp_poly_set_poly on the inner value, which has no String arm at all, so a
+   character assignment into a String held in a container was silently dropped
+   (#4067). A container inner mutates in place and needs no store-back, but
+   going through the same helper keeps one rule rather than two. */
+static sp_RbVal sp_poly_slot_set_key(sp_RbVal outer, sp_int oidx, sp_RbVal key, sp_RbVal val) {
+  sp_RbVal inner = sp_poly_slot_inner(outer, oidx);
+  if (inner.tag == SP_TAG_STR || sp_poly_is_strbuf(inner)) {
+    /* the index of a character assignment is an Integer, and anything else is
+       the TypeError the typed path raises rather than a write to drop */
+    if (key.tag == SP_TAG_FLT) key = sp_box_int((sp_int)key.v.f);
+    else if (key.tag != SP_TAG_INT)
+      sp_raise_cls("TypeError", key.tag == SP_TAG_NIL
+                   ? SPL("no implicit conversion from nil to integer")
+                   : sp_sprintf("no implicit conversion of %s into Integer",
+                                sp_poly_class_name(key)));
+    sp_RbVal sres = sp_poly_splice(inner, key.v.i, 1, val);
+    sp_poly_set_poly(outer, sp_box_int(oidx), sres);
+    return val;
+  }
+  return sp_poly_set_poly(inner, key, val);
 }
 /* Hash#compare_by_identity? for a poly-carried receiver: spinel hashes are
    always value-keyed (the mutating variant is a compile error), so any hash
