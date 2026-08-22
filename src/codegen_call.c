@@ -1,5 +1,9 @@
 #include "codegen_internal.h"
 
+/* The call whose poly-hash face is being re-emitted, so the arm that installs
+   the face does not fire again on its own substituted receiver. */
+static int g_pp_hash_node = -1;
+
 const int *call_args(const NodeTable *nt, int id, int *argc) {
   *argc = 0;
   int args = nt_ref(nt, id, "arguments");
@@ -4762,6 +4766,21 @@ static int emit_poly_method_dispatch(Compiler *c, int id, Buf *b) {
         buf_puts(b, "; break;");
         obj_default_done = 1;
       }
+      /* Same shape one step on: `join` reaches this dispatch only because a
+         user class owns the name, and a builtin array receiver still has to be
+         joined rather than told it has no such method (#4071). Named arms, not
+         the default: an OBJECT of a class whose `join` takes an argument is an
+         arity error, which the raise below words. */
+      if (argc == 0 && sp_streq(name, "join")) {
+        char jv[80];
+        snprintf(jv, sizeof jv, "sp_poly_join(_t%d, sp_str_empty)", tv);
+        buf_puts(b, " case SP_BUILTIN_INT_ARRAY: case SP_BUILTIN_STR_ARRAY:"
+                    " case SP_BUILTIN_FLT_ARRAY: case SP_BUILTIN_POLY_ARRAY: ");
+        buf_printf(b, "_t%d = ", tr);
+        if (ret == TY_POLY) emit_boxed_text(c, TY_STRING, jv, b);
+        else buf_puts(b, jv);
+        buf_puts(b, "; break;");
+      }
       if (!obj_default_done)
         buf_printf(b, " default: sp_raise_nomethod(sp_nomethod_msg(\"%s\", _t%d)); break;", name, tv);
       buf_printf(b, " } _t%d; })", tr);
@@ -4892,9 +4911,14 @@ static int emit_poly_method_dispatch(Compiler *c, int id, Buf *b) {
        positional. */
     int is_pmerge = sp_streq(name, "merge") && nt_ref(nt, id, "block") < 0 &&
                     !has_splat_arg && (pos_argc >= 1 || kwh >= 0);
+    /* join on a poly value that is a builtin array, alongside the user arms.
+       The dedicated poly-join arm stands down when a user class owns the name
+       (#4071), so without this the Array case reached the raise. */
+    int is_pjoin = sp_streq(name, "join") && argc <= 1 && !has_splat_arg &&
+                   nt_ref(nt, id, "block") < 0;
     int is_cover = sp_streq(name, "cover?") && argc == 1 && !diag_user_defines(c, name);
     int is_gcdlcm = sp_streq(name, "gcdlcm") && argc == 1 && !diag_user_defines(c, name);
-    if (ncand > 0 || is_index || is_pdelete || is_pdig || is_pvalues_at || is_pfirstn || is_include || is_fetch || is_push || is_pred || is_strftime || is_intersect || is_arr_index || is_cover || is_gcdlcm || is_pmerge) {
+    if (ncand > 0 || is_index || is_pdelete || is_pdig || is_pvalues_at || is_pfirstn || is_include || is_fetch || is_push || is_pjoin || is_pred || is_strftime || is_intersect || is_arr_index || is_cover || is_gcdlcm || is_pmerge) {
       TyKind ret = comp_ntype(c, id);
       int tv = ++g_tmp, tr = ++g_tmp;
       int *atmp = malloc(sizeof(int) * argc);
@@ -4984,9 +5008,12 @@ static int emit_poly_method_dispatch(Compiler *c, int id, Buf *b) {
         else buf_printf(b, "(sp_int)(uintptr_t)_t%d", tg2);
         buf_puts(b, "; }\nelse ");
       }
-      /* include? on a TAG_STR receiver: check tag before entering cls_id switch */
+      /* include? on a TAG_STR receiver: check tag before entering cls_id switch.
+         Boxed when a user arm widened the dispatch result to poly (#4072). */
       if (is_include && infer_type(c, argv[0]) == TY_STRING)
-        buf_printf(b, "if (_t%d.tag == SP_TAG_STR) { _t%d = sp_str_include(_t%d.v.s, _t%d); }\nelse ", tv, tr, tv, atmp[0]);
+        buf_printf(b, "if (_t%d.tag == SP_TAG_STR) { _t%d = %ssp_str_include(_t%d.v.s, _t%d)%s; }\nelse ",
+                   tv, tr, ret == TY_POLY ? "sp_box_bool(" : "", tv, atmp[0],
+                   ret == TY_POLY ? ")" : "");
       /* delete(chars) on a TAG_STR receiver: String#delete, boxed when the
          dispatch result stays poly. */
       if (is_strdel && (ret == TY_POLY || ret == TY_STRING)) {
@@ -5345,7 +5372,28 @@ else {
         if (ret == TY_POLY) buf_printf(b, " _t%d = _t%d;", tr, tv);
         buf_puts(b, " break;");
       }
+      if (is_pjoin) {
+        /* every array kind joins through the same runtime helper; the separator
+           is the call's own argument (absent means "") */
+        buf_puts(b, " case SP_BUILTIN_INT_ARRAY: case SP_BUILTIN_STR_ARRAY:"
+                    " case SP_BUILTIN_FLT_ARRAY: case SP_BUILTIN_POLY_ARRAY: ");
+        Buf jb; memset(&jb, 0, sizeof jb);
+        buf_printf(&jb, "sp_poly_join(_t%d, ", tv);
+        if (argc >= 1) buf_printf(&jb, "_t%d", atmp[0]);
+        else buf_puts(&jb, "sp_str_empty");
+        buf_puts(&jb, ")");
+        buf_printf(b, "_t%d = ", tr);
+        if (ret == TY_POLY) emit_boxed_text(c, TY_STRING, jb.p ? jb.p : "", b);
+        else buf_puts(b, jb.p ? jb.p : "");
+        buf_puts(b, "; break;");
+        free(jb.p);
+      }
       if (is_include) {
+        /* The builtin arms answer a C bool. When a user class's own include?
+           answers something else the call widened to poly (#4072), so the
+           accumulator is an sp_RbVal and these have to box. */
+        const char *ibo = (ret == TY_POLY) ? "sp_box_bool(" : "";
+        const char *ibc = (ret == TY_POLY) ? ")" : "";
         /* a user Enumerable read out of a container answers from its elements;
            -1 means "not one", and the arms below still decide (#3761) */
         { Buf ab5; memset(&ab5, 0, sizeof ab5);
@@ -5355,25 +5403,25 @@ else {
           /* not a user Enumerable -> the answer the switch used to fall
              through to (false), so no other receiver changes */
           buf_printf(b, " default: { int _ui%d = sp_poly_user_include(_t%d, %s);"
-                        " _t%d = _ui%d > 0; break; }",
-                     tv, tv, ab5.p ? ab5.p : "sp_box_nil()", tr, tv);
+                        " _t%d = %s_ui%d > 0%s; break; }",
+                     tv, tv, ab5.p ? ab5.p : "sp_box_nil()", tr, ibo, tv, ibc);
           free(ab5.p); }
         TyKind at = infer_type(c, argv[0]);
         if (at == TY_INT) {
-          buf_printf(b, " case SP_BUILTIN_INT_ARRAY: _t%d = sp_IntArray_include((sp_IntArray *)_t%d.v.p, _t%d); break;", tr, tv, atmp[0]);
-          buf_printf(b, " case SP_BUILTIN_RANGE: _t%d = sp_range_include((sp_Range *)_t%d.v.p, _t%d); break;", tr, tv, atmp[0]);
-          buf_printf(b, " case SP_BUILTIN_FLOAT_RANGE: _t%d = sp_frange_cover(*(sp_FloatRange *)_t%d.v.p, (sp_float)_t%d); break;", tr, tv, atmp[0]);
+          buf_printf(b, " case SP_BUILTIN_INT_ARRAY: _t%d = %ssp_IntArray_include((sp_IntArray *)_t%d.v.p, _t%d)%s; break;", tr, ibo, tv, atmp[0], ibc);
+          buf_printf(b, " case SP_BUILTIN_RANGE: _t%d = %ssp_range_include((sp_Range *)_t%d.v.p, _t%d)%s; break;", tr, ibo, tv, atmp[0], ibc);
+          buf_printf(b, " case SP_BUILTIN_FLOAT_RANGE: _t%d = %ssp_frange_cover(*(sp_FloatRange *)_t%d.v.p, (sp_float)_t%d)%s; break;", tr, ibo, tv, atmp[0], ibc);
         }
         else if (at == TY_STRING) {
-          buf_printf(b, " case SP_BUILTIN_STR_ARRAY: _t%d = sp_StrArray_include((sp_StrArray *)_t%d.v.p, _t%d); break;", tr, tv, atmp[0]);
-          buf_printf(b, " case SP_BUILTIN_STR_INT_HASH: _t%d = sp_StrIntHash_has_key((sp_StrIntHash *)_t%d.v.p, _t%d); break;", tr, tv, atmp[0]);
-          buf_printf(b, " case SP_BUILTIN_STR_STR_HASH: _t%d = sp_StrStrHash_has_key((sp_StrStrHash *)_t%d.v.p, _t%d); break;", tr, tv, atmp[0]);
-          buf_printf(b, " case SP_BUILTIN_STR_POLY_HASH: _t%d = sp_StrPolyHash_has_key((sp_StrPolyHash *)_t%d.v.p, _t%d); break;", tr, tv, atmp[0]);
+          buf_printf(b, " case SP_BUILTIN_STR_ARRAY: _t%d = %ssp_StrArray_include((sp_StrArray *)_t%d.v.p, _t%d)%s; break;", tr, ibo, tv, atmp[0], ibc);
+          buf_printf(b, " case SP_BUILTIN_STR_INT_HASH: _t%d = %ssp_StrIntHash_has_key((sp_StrIntHash *)_t%d.v.p, _t%d)%s; break;", tr, ibo, tv, atmp[0], ibc);
+          buf_printf(b, " case SP_BUILTIN_STR_STR_HASH: _t%d = %ssp_StrStrHash_has_key((sp_StrStrHash *)_t%d.v.p, _t%d)%s; break;", tr, ibo, tv, atmp[0], ibc);
+          buf_printf(b, " case SP_BUILTIN_STR_POLY_HASH: _t%d = %ssp_StrPolyHash_has_key((sp_StrPolyHash *)_t%d.v.p, _t%d)%s; break;", tr, ibo, tv, atmp[0], ibc);
         }
         else if (at == TY_SYMBOL) {
           /* sym array is stored as IntArray (sp_sym == sp_int) */
-          buf_printf(b, " case SP_BUILTIN_SYM_ARRAY: _t%d = sp_IntArray_include((sp_IntArray *)_t%d.v.p, _t%d); break;", tr, tv, atmp[0]);
-          buf_printf(b, " case SP_BUILTIN_SYM_POLY_HASH: _t%d = sp_SymPolyHash_has_key((sp_SymPolyHash *)_t%d.v.p, _t%d); break;", tr, tv, atmp[0]);
+          buf_printf(b, " case SP_BUILTIN_SYM_ARRAY: _t%d = %ssp_IntArray_include((sp_IntArray *)_t%d.v.p, _t%d)%s; break;", tr, ibo, tv, atmp[0], ibc);
+          buf_printf(b, " case SP_BUILTIN_SYM_POLY_HASH: _t%d = %ssp_SymPolyHash_has_key((sp_SymPolyHash *)_t%d.v.p, _t%d)%s; break;", tr, ibo, tv, atmp[0], ibc);
         }
         else if (at == TY_POLY) {
           /* promote: the include? arg widened to poly. A Range receiver
@@ -5382,11 +5430,11 @@ else {
              container cases. Typed arrays match only when the boxed arg's tag
              fits the element type (a Set difference against an Array literal
              reaches these; a mismatched tag is simply not a member). */
-          buf_printf(b, " case SP_BUILTIN_RANGE: _t%d = sp_range_include((sp_Range *)_t%d.v.p, sp_poly_to_i(_t%d)); break;", tr, tv, atmp[0]);
-          buf_printf(b, " case SP_BUILTIN_FLOAT_RANGE: _t%d = sp_frange_cover(*(sp_FloatRange *)_t%d.v.p, sp_poly_to_f(_t%d)); break;", tr, tv, atmp[0]);
-          buf_printf(b, " case SP_BUILTIN_INT_ARRAY: _t%d = _t%d.tag == SP_TAG_INT && sp_IntArray_include((sp_IntArray *)_t%d.v.p, _t%d.v.i); break;", tr, atmp[0], tv, atmp[0]);
-          buf_printf(b, " case SP_BUILTIN_FLT_ARRAY: _t%d = _t%d.tag == SP_TAG_FLT && sp_FloatArray_include((sp_FloatArray *)_t%d.v.p, _t%d.v.f); break;", tr, atmp[0], tv, atmp[0]);
-          buf_printf(b, " case SP_BUILTIN_STR_ARRAY: _t%d = _t%d.tag == SP_TAG_STR && sp_StrArray_include((sp_StrArray *)_t%d.v.p, _t%d.v.s); break;", tr, atmp[0], tv, atmp[0]);
+          buf_printf(b, " case SP_BUILTIN_RANGE: _t%d = %ssp_range_include((sp_Range *)_t%d.v.p, sp_poly_to_i(_t%d))%s; break;", tr, ibo, tv, atmp[0], ibc);
+          buf_printf(b, " case SP_BUILTIN_FLOAT_RANGE: _t%d = %ssp_frange_cover(*(sp_FloatRange *)_t%d.v.p, sp_poly_to_f(_t%d))%s; break;", tr, ibo, tv, atmp[0], ibc);
+          buf_printf(b, " case SP_BUILTIN_INT_ARRAY: _t%d = %s_t%d.tag == SP_TAG_INT && sp_IntArray_include((sp_IntArray *)_t%d.v.p, _t%d.v.i)%s; break;", tr, ibo, atmp[0], tv, atmp[0], ibc);
+          buf_printf(b, " case SP_BUILTIN_FLT_ARRAY: _t%d = %s_t%d.tag == SP_TAG_FLT && sp_FloatArray_include((sp_FloatArray *)_t%d.v.p, _t%d.v.f)%s; break;", tr, ibo, atmp[0], tv, atmp[0], ibc);
+          buf_printf(b, " case SP_BUILTIN_STR_ARRAY: _t%d = %s_t%d.tag == SP_TAG_STR && sp_StrArray_include((sp_StrArray *)_t%d.v.p, _t%d.v.s)%s; break;", tr, ibo, atmp[0], tv, atmp[0], ibc);
         }
         /* PolyArray: box the arg for runtime comparison */
         {
@@ -5394,7 +5442,7 @@ else {
           buf_printf(b, " case SP_BUILTIN_POLY_ARRAY: { sp_RbVal _t%d = ", tbox);
           char tn[32]; snprintf(tn, sizeof tn, "_t%d", atmp[0]);
           emit_boxed_text(c, at, tn, b);
-          buf_printf(b, "; _t%d = sp_PolyArray_include((sp_PolyArray *)_t%d.v.p, _t%d); break; }", tr, tv, tbox);
+          buf_printf(b, "; _t%d = %ssp_PolyArray_include((sp_PolyArray *)_t%d.v.p, _t%d)%s; break; }", tr, ibo, tv, tbox, ibc);
         }
         /* PolyPolyHash: keys are boxed sp_RbVal */
         {
@@ -5402,7 +5450,7 @@ else {
           buf_printf(b, " case SP_BUILTIN_POLY_POLY_HASH: { sp_RbVal _t%d = ", tbox);
           char tn[32]; snprintf(tn, sizeof tn, "_t%d", atmp[0]);
           emit_boxed_text(c, at, tn, b);
-          buf_printf(b, "; _t%d = sp_PolyPolyHash_has_key((sp_PolyPolyHash *)_t%d.v.p, _t%d); break; }", tr, tv, tbox);
+          buf_printf(b, "; _t%d = %ssp_PolyPolyHash_has_key((sp_PolyPolyHash *)_t%d.v.p, _t%d)%s; break; }", tr, ibo, tv, tbox, ibc);
         }
       }
       if (is_arr_index) {
@@ -11310,23 +11358,56 @@ int emit_unresolved_call(Compiler *c, int id, Buf *b) {
         free(fpp.p);
       }
     }
-    if (grt == TY_POLY && ty_poly_hash_face_name(nt_str(nt, id, "name")) &&
+    /* The re-entry below used to be guarded only by retyping the receiver node,
+       and a type cache is not a recursion guard: anything under emit_call that
+       asks the inference re-establishes the node's own type, the arm fires
+       again on its own substituted receiver, and it converts the conversion --
+       `v&.entries` on a nilable hash emitted sp_poly_as_pp_hash 63 times, each
+       applied to the last. Guard on the node id, like the safe-navigation
+       re-entry does. */
+    if (grt == TY_POLY && g_pp_hash_node != id &&
+        ty_poly_hash_face_name(nt_str(nt, id, "name")) &&
         g_n_argov < MAX_ARG_OVERRIDE) {
       const char *hnm = nt_str(nt, id, "name");
       int thv = ++g_tmp;
       Buf hrb; memset(&hrb, 0, sizeof hrb); emit_boxed(c, recv, &hrb);
-      emit_indent(g_pre, g_indent);
-      buf_printf(g_pre, "sp_PolyPolyHash *_t%d = sp_poly_as_pp_hash(%s, \"%s\"); SP_GC_ROOT(_t%d);\n",
-                 thv, hrb.p ? hrb.p : "sp_box_nil()", hnm, thv);
+      /* Inside a safe-navigation value arm the conversion must NOT go to the
+         statement prelude: that lands in front of the nil guard, and
+         sp_poly_as_pp_hash raises on the nil the guard exists to catch. Keep it
+         inline there, in a statement expression around the re-emitted call. */
+      int hinl = (g_sn_skip >= 0);
+      Buf hib; memset(&hib, 0, sizeof hib);
+      if (hinl)
+        buf_printf(&hib, "({ sp_PolyPolyHash *_t%d = sp_poly_as_pp_hash(%s, \"%s\"); SP_GC_ROOT(_t%d); ",
+                   thv, hrb.p ? hrb.p : "sp_box_nil()", hnm, thv);
+      else {
+        emit_indent(g_pre, g_indent);
+        buf_printf(g_pre, "sp_PolyPolyHash *_t%d = sp_poly_as_pp_hash(%s, \"%s\"); SP_GC_ROOT(_t%d);\n",
+                   thv, hrb.p ? hrb.p : "sp_box_nil()", hnm, thv);
+      }
       free(hrb.p);
       g_argov_node[g_n_argov] = recv;
       snprintf(g_argov_text[g_n_argov], sizeof g_argov_text[0], "_t%d", thv);
       g_n_argov++;
       TyKind svh = c->ntype[recv]; c->ntype[recv] = TY_POLY_POLY_HASH;
+      /* and pin it for the inference too: the cached type alone does not hold,
+         because anything under the re-emission that asks re-establishes it and
+         the re-dispatch then finds no arm for a poly receiver (#4070 follow-up
+         -- `v&.entries` raised NoMethodError with the conversion already made) */
+      int sv_face = an_hash_face_node(); an_set_hash_face_node(recv);
       int hren = sp_streq(hnm, "each_entry");   /* same yield as each_pair */
       if (hren) nt_node_set_str((NodeTable *)nt, id, "name", "each_pair");
-      emit_call(c, id, b);
+      int sv_pp = g_pp_hash_node; g_pp_hash_node = id;
+      if (hinl) {
+        emit_call(c, id, &hib);
+        buf_puts(&hib, "; })");
+        buf_puts(b, hib.p ? hib.p : "");
+      }
+      else emit_call(c, id, b);
+      free(hib.p);
+      g_pp_hash_node = sv_pp;
       if (hren) nt_node_set_str((NodeTable *)nt, id, "name", "each_entry");
+      an_set_hash_face_node(sv_face);
       c->ntype[recv] = svh;
       g_n_argov--;
       return 1;
@@ -13405,7 +13486,33 @@ static void emit_call_body(Compiler *c, int id, Buf *b) {
           g_argov_node[slot2] = recv;
           snprintf(g_argov_text[slot2], sizeof g_argov_text[0], "_sn%d", tsn);
           int sv_skip = g_sn_skip; g_sn_skip = id;
+          /* The call is typed poly but its natural answer may render as a C
+             pointer (a poly-hash face answering an array): box the text under
+             that type, or the guard's two arms disagree (#4070 follow-up). */
+          TyKind natg = ret2 == TY_POLY ? infer_uncached(c, id) : ret2;
+          /* A Hash/Enumerable face name answers what it would under the face
+             the arm below installs -- ask with the same pin, or the answer
+             comes back poly while the value arm renders that face's C type. */
+          if (ret2 == TY_POLY && natg == TY_POLY &&
+              ty_poly_hash_face_name(nt_str(nt, id, "name"))) {
+            int svf = an_hash_face_node(); an_set_hash_face_node(recv);
+            TyKind fac = infer_uncached(c, id);
+            an_set_hash_face_node(svf);
+            /* only the array answers: a face that answers another hash boxes
+               through a different entry point than emit_boxed_text picks */
+            if (ty_is_array(fac)) natg = fac;
+          }
+          int gbox = (!sn_ptr && ret2 == TY_POLY && natg != TY_POLY &&
+                      natg != TY_UNKNOWN && natg != TY_VOID);
           if (sn_ptr) emit_expr(c, id, b);
+          else if (gbox) {
+            Buf gvb; memset(&gvb, 0, sizeof gvb);
+            TyKind sv_g = comp_sn_retype(c, id, natg);
+            emit_expr(c, id, &gvb);
+            comp_sn_retype(c, id, sv_g);
+            emit_boxed_text(c, natg, gvb.p ? gvb.p : "", b);
+            free(gvb.p);
+          }
           else emit_boxed(c, id, b);
           g_sn_skip = sv_skip;
           g_n_argov--;

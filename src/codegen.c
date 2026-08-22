@@ -1321,7 +1321,9 @@ void emit_scope_decls(Compiler *c, Scope *s, Buf *b) {
          the cell (emit_loop_body). */
       if (lv->cell_shadow && !lv->is_param) declare_local(c, b, lv, 0);
       if (lv->type == TY_PROC) {
-        buf_printf(b, "    sp_int *_cell_%s = (sp_int *)sp_gc_alloc(sizeof(sp_int), NULL, NULL);\n", lv->name);
+        /* the cell is an int slot holding a collectable Proc: it needs a scan,
+           or the capture keeps the cell and nothing keeps the proc (#4077) */
+        buf_printf(b, "    sp_int *_cell_%s = (sp_int *)sp_gc_alloc(sizeof(sp_int), NULL, sp_cell_scan_procint);\n", lv->name);
         buf_printf(b, "    SP_GC_ROOT(_cell_%s);\n", lv->name);
         if (lv->is_param) buf_printf(b, "    *_cell_%s = (sp_int)(uintptr_t)lv_%s;\n", lv->name, lv->name);
         else buf_printf(b, "    *_cell_%s = 0;\n", lv->name);

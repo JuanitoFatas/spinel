@@ -1,0 +1,4 @@
+retained: 7
+threshold positive: yes
+collector still running: yes
+heap bounded: yes

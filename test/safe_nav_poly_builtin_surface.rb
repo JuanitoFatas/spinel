@@ -8,6 +8,24 @@
 # had written yet. This file is that program.
 VALS = [1, "abc", 1.5, [1], { "a" => 1 }]
 
+# the Hash/Enumerable face names, whose arm converts the receiver before it
+# re-dispatches: the conversion must sit INSIDE the nil guard, and must happen
+# once (it used to be hoisted in front of the guard, and to convert its own
+# conversion 63 times over)
+def face_entries(v) = v&.entries
+def face_to_a(v) = v&.to_a
+def face_keys(v) = v&.keys
+def face_values(v) = v&.values
+
+p face_entries({ "a" => 1 })
+p face_entries(nil)
+p face_to_a({ "a" => 1 })
+p face_to_a(nil)
+p face_keys({ "a" => 1 })
+p face_keys(nil)
+p face_values({ "a" => 1 })
+p face_values(nil)
+
 def f_abs(v) = v&.abs
 def f_begin(v) = v&.begin
 def f_bit_length(v) = v&.bit_length

@@ -232,7 +232,17 @@ static inline void sp_gc_bytes_sub(size_t n) {
 }
 #else
 static inline void sp_gc_bytes_add(size_t n) { sp_gc_bytes += n; }
-static inline void sp_gc_bytes_sub(size_t n) { sp_gc_bytes -= n; }
+/* Floored: the counter is a heuristic the retune divides by, and a wrapped
+   value there is not a large heap but a collector that never triggers again
+   (#4073). */
+/* Floored. The counter is a heuristic the retune divides by and multiplies, and
+   an array-growth path can subtract a capacity larger than the counter holds
+   (measured: sp_array.h's StrArray grow, 20472 against 10344) -- wrapping it
+   makes the trigger fire on every allocation until the next collection resets
+   it, and used to make the retune set a threshold that never fires at all. */
+static inline void sp_gc_bytes_sub(size_t n) {
+  sp_gc_bytes = sp_gc_bytes >= n ? sp_gc_bytes - n : 0;
+}
 #endif
 
 /* Push a header onto the shared sp_gc_heap list. Under SP_THREADS this is a
@@ -398,6 +408,14 @@ static inline void sp_mark_rbval(sp_RbVal v) {
 static inline void sp_cell_scan_str(void *p) { sp_mark_string(*(const char **)p); }
 static inline void sp_cell_scan_ptr(void *p) { sp_gc_mark(*(void **)p); }
 static inline void sp_cell_scan_rbval(void *p) { sp_mark_rbval(*(sp_RbVal *)p); }
+/* A captured Proc rides in an sp_int cell as (sp_int)(uintptr_t)ptr -- the cell
+   is an integer slot, but what it holds is a collectable object, and without a
+   scan the capture kept the CELL alive and nothing kept the proc. A nested
+   `proc { |v| two.call(v, v) }` then called through freed memory (#4077). */
+static inline void sp_cell_scan_procint(void *p) {
+  sp_int v = *(sp_int *)p;
+  if (v) sp_gc_mark((void *)(uintptr_t)v);
+}
 /* A low-bit-tagged root entry is an sp_RbVal* (see SP_GC_ROOT_RBVAL);
    an untagged entry is a plain void** to a direct GC pointer. */
 static inline void sp_gc_mark_root_entry(void **e) {
