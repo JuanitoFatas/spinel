@@ -135,11 +135,23 @@ void sp_alloc_worker_tune(int workers) {
 
 /* Re-tune the object / string GC thresholds from the pre-collect live bytes
    (the heuristic mirrors the original inline code in sp_gc_alloc / sp_str_alloc). */
+/* size_t multiply that stops at the top instead of wrapping. A threshold that
+   wraps is not a large threshold, it is an OFF switch: `bytes >= threshold`
+   never fires again, nothing collects, and the retune that would correct it is
+   only reached by a collection (#4073). */
+static size_t sp_gc_sat_mul(size_t v, size_t k) {
+  return (k && v > (size_t)-1 / k) ? (size_t)-1 : v * k;
+}
 void sp_gc_retune_object(size_t before) {
   if (sp_gc_stress_pin) { sp_gc_threshold = sp_gc_threshold_init; return; }
-  size_t freed = before - sp_gc_bytes;
-  if (freed < before / 4) { sp_gc_threshold = before * 2; }
-  else if (sp_gc_bytes > 0) { sp_gc_threshold = sp_gc_bytes * 4; if (sp_gc_threshold < sp_gc_threshold_init) sp_gc_threshold = sp_gc_threshold_init; }
+  size_t live = sp_gc_bytes;
+  /* saturating: the live counter is a heuristic and is allowed to lag, so it
+     can read above the pre-collect total. Wrapping made `freed` enormous, the
+     productive-sweep test went false, and the threshold was taken from a live
+     count that had itself wrapped. */
+  size_t freed = before > live ? before - live : 0;
+  if (freed < before / 4) { sp_gc_threshold = sp_gc_sat_mul(before, 2); }
+  else if (live > 0) { sp_gc_threshold = sp_gc_sat_mul(live, 4); if (sp_gc_threshold < sp_gc_threshold_init) sp_gc_threshold = sp_gc_threshold_init; }
   else { sp_gc_threshold = sp_gc_threshold_init; }
 }
 /* `before` is the pre-sweep live bytes; `after` the survivors. The threshold is
@@ -160,9 +172,9 @@ static void sp_str_retune(size_t before, size_t promoted) {
      collecting harder and harder as the old generation grows. */
   size_t after = sp_str_heap_bytes + promoted;
 #endif
-  size_t freed = before - after;
-  if (freed < before / 4) { sp_str_threshold = before * 2; }
-  else if (after > 0) { sp_str_threshold = after * 4; if (sp_str_threshold < sp_str_threshold_init) sp_str_threshold = sp_str_threshold_init; }
+  size_t freed = before > after ? before - after : 0;   /* saturating; see sp_gc_retune_object */
+  if (freed < before / 4) { sp_str_threshold = sp_gc_sat_mul(before, 2); }
+  else if (after > 0) { sp_str_threshold = sp_gc_sat_mul(after, 4); if (sp_str_threshold < sp_str_threshold_init) sp_str_threshold = sp_str_threshold_init; }
   else { sp_str_threshold = sp_str_threshold_init; }
 }
 

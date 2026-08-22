@@ -21,6 +21,12 @@ TyKind ivar_value_ty(ClassInfo *ci, int iv) {
 }
 
 static int g_hash_face_node = -1;
+/* Codegen normalizes a boxed receiver to the general hash before re-dispatching
+   its Hash/Enumerable face, and needs the inference to answer the same way for
+   the duration -- poking the node's cached type does not survive, because
+   anything under the re-emission that asks re-establishes it. */
+void an_set_hash_face_node(int node) { g_hash_face_node = node; }
+int an_hash_face_node(void) { return g_hash_face_node; }
 #define SP_NMEMO_SZ 16384
 static unsigned g_narrow_gen = 1;
 static struct { unsigned gen; long key; signed char val; } g_nmemo[SP_NMEMO_SZ];
@@ -906,6 +912,22 @@ static TyKind an_user_read_ty(Compiler *c, const char *name, int argc) {
    enclosing class's own chain answers. The class sits ABOVE Kernel, so the
    builtin arms below must stand down for it, or the two halves of the compiler
    name different methods for the same call. */
+/* 1 when a user class defines `name` as an instance method whose return is not
+   `want`. The poly dispatch emits that class's arm beside the builtin ones and
+   accumulates them all in one C temp, so the call's type has to be one both can
+   hold: `Tags#include?` answering an index came back through an sp_bool slot as
+   true/false, and `0` -- truthy in Ruby -- arrived as false (#4072). */
+static int an_user_ret_disagrees(Compiler *c, const char *name, TyKind want) {
+  if (!name) return 0;
+  for (int k = 0; k < c->nclasses; k++) {
+    int mi = comp_method_in_chain(c, k, name, NULL);
+    if (mi < 0 || mi >= c->nscopes) continue;
+    TyKind r = (TyKind)c->scopes[mi].ret;
+    if (r != want && r != TY_UNKNOWN) return 1;
+  }
+  return 0;
+}
+
 static int an_bare_call_class_owned(Compiler *c, int id) {
   const NodeTable *nt = c->nt;
   if (nt_ref(nt, id, "receiver") >= 0) return 0;
@@ -3943,6 +3965,9 @@ else {
        not infer the enclosing Money type). */
     if (argc == 0 && (sp_streq(name, "-@") || sp_streq(name, "+@"))) return TY_POLY;
     if (argc == 0 && sp_streq(name, "~")) return TY_INT;
+    if ((sp_streq(name, "include?") || sp_streq(name, "member?")) &&
+        an_user_ret_disagrees(c, name, TY_BOOL))
+      return TY_POLY;   /* the user arm answers something a bool cannot hold */
     if (sp_streq(name, "<") || sp_streq(name, ">") || sp_streq(name, "<=") ||
         sp_streq(name, ">=") || sp_streq(name, "==") || sp_streq(name, "!=") ||
         sp_streq(name, "nil?") || sp_streq(name, "is_a?") || sp_streq(name, "kind_of?") ||
@@ -3969,8 +3994,13 @@ else {
          their C type (an sp_RbVal nil against an sp_PolyArray *) (#3461). */
       {
         const char *call_op = nt_str(nt, id, "call_operator");
+        /* The array-returning names: they lower to a C pointer, for which NULL
+           already reads as nil, so widening the whole expression to poly left
+           the guard's two arms disagreeing (#3461). `entries` is `to_a` under
+           another name and was missing, which is the hazard of listing names
+           for what is really a property of the answer's C type. */
         int sn_arr = (sp_streq(name, "keys") || sp_streq(name, "values") ||
-                      sp_streq(name, "to_a")) && argc == 0;
+                      sp_streq(name, "to_a") || sp_streq(name, "entries")) && argc == 0;
         if (recv >= 0 && call_op && sp_streq(call_op, "&.") && !sn_arr) return TY_POLY;
       }
       if (sp_streq(name, "to_s") || sp_streq(name, "inspect")) return TY_STRING;
