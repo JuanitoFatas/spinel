@@ -11102,7 +11102,12 @@ int emit_poly_call(Compiler *c, int id, Buf *b) {
     return 1;
   }
   if (recv >= 0 && rt == TY_POLY && argc == 0) {
-    if (sp_streq(name, "nil?")) { buf_puts(b, "sp_poly_nil_p("); emit_expr(c, recv, b); buf_puts(b, ")"); return 1; }
+    /* Skip when a user class defines nil? so its method wins the dispatch --
+       the same reason the to_a arm below gives. A Null Object answering true
+       was folded to the tag test and its guard silently never fired. */
+    if (sp_streq(name, "nil?") && !user_defines_or_reads(c, name)) {
+      buf_puts(b, "sp_poly_nil_p("); emit_expr(c, recv, b); buf_puts(b, ")"); return 1;
+    }
     /* to_a on a runtime-tagged value: nil -> [], array -> itself, hash -> its
        pairs, anything else CRuby's NoMethodError. Skip when a user class
        defines to_a so its method wins the dispatch. */
