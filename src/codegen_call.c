@@ -13229,32 +13229,53 @@ static void emit_call_body(Compiler *c, int id, Buf *b) {
          poly (it may be nil), so the value arm has to be boxed to agree with
          the nil arm -- otherwise the two ternary arms have different C types
          and the program does not build (#3899). */
-      if (rrt == TY_POLY && comp_ntype(c, id) == TY_POLY && argc == 0 &&
+      if (rrt == TY_POLY && comp_ntype(c, id) == TY_POLY &&
           g_sn_skip != id && nt_ref(nt, id, "block") < 0) {
-        static const char *const BOOLQ[] = {
-          "positive?", "negative?", "zero?", "nan?", "finite?", "even?", "odd?",
-          "empty?", "frozen?", "integer?", "eql?", NULL };
-        static const char *const INTQ[] = {
-          "bytesize", "ord", "bit_length", "numerator", "denominator",
-          "infinite?", NULL };
-        const char *boxfn = NULL;
-        for (int q = 0; BOOLQ[q] && !boxfn; q++) if (sp_streq(name, BOOLQ[q])) boxfn = "sp_box_bool";
-        for (int q = 0; INTQ[q] && !boxfn; q++) if (sp_streq(name, INTQ[q])) boxfn = "sp_box_int";
-        if (boxfn && !user_defines_or_reads(c, name)) {
+        /* The universal predicates and conversions the poly runtime answers as
+           a RAW C scalar while inference calls the call itself poly: the name
+           is the only signal there, so it is named (emit_poly_pred_value and
+           the to_i/to_f arm are where these are rendered). Everything else is
+           read off the natural type, which is what brought the predicates that
+           take an argument (`&.start_with?("a")`) and `&.nil?` in -- a list
+           alone had left them on the unboxed path, where the two arms
+           disagreed and the program did not build (#4070). */
+        static const struct { const char *name; TyKind ty; } UNBOXEDQ[] = {
+          { "positive?", TY_BOOL }, { "negative?", TY_BOOL }, { "zero?", TY_BOOL },
+          { "nan?", TY_BOOL }, { "finite?", TY_BOOL }, { "even?", TY_BOOL },
+          { "odd?", TY_BOOL }, { "empty?", TY_BOOL }, { "frozen?", TY_BOOL },
+          { "integer?", TY_BOOL }, { "eql?", TY_BOOL }, { "instance_of?", TY_BOOL },
+          { "bytesize", TY_INT }, { "ord", TY_INT }, { "bit_length", TY_INT },
+          { "numerator", TY_INT }, { "denominator", TY_INT }, { "infinite?", TY_INT },
+          { "to_i", TY_INT }, { "hash", TY_INT }, { "to_f", TY_FLOAT },
+          { NULL, TY_UNKNOWN } };
+        TyKind nat = infer_uncached(c, id);
+        int boxit = (nat == TY_BOOL);
+        for (int q = 0; UNBOXEDQ[q].name && !boxit; q++)
+          if (sp_streq(name, UNBOXEDQ[q].name)) { nat = UNBOXEDQ[q].ty; boxit = 1; }
+        if (boxit && !user_defines_or_reads(c, name)) {
           int tsn = ++g_tmp;
           buf_printf(b, "({ sp_RbVal _sn_%d = ", tsn); emit_expr(c, recv, b);
-          buf_printf(b, "; _sn_%d.tag == SP_TAG_NIL ? sp_box_nil() : %s(", tsn, boxfn);
+          buf_printf(b, "; _sn_%d.tag == SP_TAG_NIL ? sp_box_nil() : ", tsn);
           if (g_n_argov < MAX_ARG_OVERRIDE) {
             int slot3 = g_n_argov++;
             g_argov_node[slot3] = recv;
             snprintf(g_argov_text[slot3], sizeof g_argov_text[0], "_sn_%d", tsn);
             int sv_skip3 = g_sn_skip; g_sn_skip = id;
-            emit_expr(c, id, b);
+            /* Re-enter with the call's NATURAL type in place of the widened
+               poly one: a dispatch that reads it (`poly.include?` declares its
+               accumulator from it) then renders the unboxed answer the box
+               below expects, instead of an sp_RbVal the arms assign bools to. */
+            TyKind sv_ty = comp_sn_retype(c, id, nat);
+            Buf vb; memset(&vb, 0, sizeof vb);
+            emit_expr(c, id, &vb);
+            comp_sn_retype(c, id, sv_ty);
             g_sn_skip = sv_skip3;
             g_n_argov--;
+            emit_boxed_text(c, nat, vb.p ? vb.p : "", b);
+            free(vb.p);
           }
           else emit_expr(c, id, b);
-          buf_puts(b, "); })");
+          buf_puts(b, "; })");
           return;
         }
       }
@@ -13321,7 +13342,12 @@ static void emit_call_body(Compiler *c, int id, Buf *b) {
          temp (via the arg-override table); g_sn_skip suppresses this block
          on re-entry. */
       int sn_obj = ty_is_object(rrt) && !comp_ty_value_obj(c, rrt);
-      if ((sn_obj || rrt == TY_STRING) && g_sn_skip != id) {
+      /* A specialized container answers a miss with the ELEMENT type's own C
+         nil -- a NULL string, SP_INT_NIL -- so `h["zz"]&.empty?` reaches the
+         guard with a concrete receiver, not a poly one. Guard those too, or
+         the miss takes the result type's zero and `&.` answers false (#4070). */
+      int sn_scalar = (rrt == TY_INT || rrt == TY_FLOAT);
+      if ((sn_obj || rrt == TY_STRING || sn_scalar) && g_sn_skip != id) {
         int tsn2 = ++g_tmp;
         TyKind ret2 = comp_ntype(c, id);
         /* The temp lives in g_pre (statement scope), not an inline ({ }):
@@ -13334,11 +13360,17 @@ static void emit_call_body(Compiler *c, int id, Buf *b) {
           buf_printf(g_pre, "sp_%s *_sn%d = %s; SP_GC_ROOT(_sn%d);\n",
                      c->classes[ty_object_class(rrt)].c_name, tsn2,
                      rsn.p ? rsn.p : "NULL", tsn2);
+        else if (rrt == TY_INT)
+          buf_printf(g_pre, "sp_int _sn%d = %s;\n", tsn2, rsn.p ? rsn.p : "SP_INT_NIL");
+        else if (rrt == TY_FLOAT)
+          buf_printf(g_pre, "sp_float _sn%d = %s;\n", tsn2, rsn.p ? rsn.p : "sp_float_nil()");
         else
           buf_printf(g_pre, "const char *_sn%d = %s; SP_GC_ROOT_STR(_sn%d);\n",
                      tsn2, rsn.p ? rsn.p : "NULL", tsn2);
         free(rsn.p);
-        buf_printf(b, "(_sn%d == NULL ? ", tsn2);
+        if (rrt == TY_INT)        buf_printf(b, "(_sn%d == SP_INT_NIL ? ", tsn2);
+        else if (rrt == TY_FLOAT) buf_printf(b, "(sp_float_is_nil(_sn%d) ? ", tsn2);
+        else                      buf_printf(b, "(_sn%d == NULL ? ", tsn2);
         if (ret2 == TY_POLY) buf_puts(b, "sp_box_nil()");
         else if (ret2 == TY_INT) buf_puts(b, "SP_INT_NIL");
         else if (ret2 == TY_FLOAT) buf_puts(b, "sp_float_nil()");
@@ -13350,15 +13382,48 @@ static void emit_call_body(Compiler *c, int id, Buf *b) {
           g_argov_node[slot2] = recv;
           snprintf(g_argov_text[slot2], sizeof g_argov_text[0], "_sn%d", tsn2);
           int sv_skip = g_sn_skip; g_sn_skip = id;
-          emit_expr(c, id, b);
+          /* infer_type widened a C bool answer to poly so the nil arm has
+             somewhere to live; the value arm still renders the bool. Emit it
+             under its natural type and box the text. */
+          TyKind nat2 = ret2 == TY_POLY ? infer_uncached(c, id) : ret2;
+          int sn_box = (ret2 == TY_POLY && nat2 != TY_POLY &&
+                        nat2 != TY_UNKNOWN && nat2 != TY_VOID);
+          TyKind sv_ty2 = sn_box ? comp_sn_retype(c, id, nat2) : ret2;
+          Buf vb; memset(&vb, 0, sizeof vb);
+          emit_expr(c, id, &vb);
+          if (sn_box) comp_sn_retype(c, id, sv_ty2);
           g_sn_skip = sv_skip;
           g_n_argov--;
+          if (sn_box) emit_boxed_text(c, nat2, vb.p ? vb.p : "", b);
+          else buf_puts(b, vb.p ? vb.p : "");
+          free(vb.p);
         }
         else emit_expr(c, recv, b);  /* override table full: degrade to unguarded */
         buf_puts(b, "))");
         return;
       }
-      /* other concrete receivers (scalars, value types): never nil, dispatch as normal */
+      /* Other concrete receivers -- a by-value struct, a Symbol, an array --
+         are never the C nil the guards above test, so the call dispatches as
+         normal. It is still typed poly (infer_type widens a `&.` whose answer
+         is a C bool, and the receiver's type does not narrow that), and the
+         value arm still renders that bool: box it under its natural type or
+         the slot it lands in disagrees (#4070). */
+      {
+        TyKind ret3 = comp_ntype(c, id);
+        TyKind nat3 = ret3 == TY_POLY ? infer_uncached(c, id) : ret3;
+        if (ret3 == TY_POLY && g_sn_skip != id &&
+            nat3 != TY_POLY && nat3 != TY_UNKNOWN && nat3 != TY_VOID) {
+          int sv_skip3 = g_sn_skip; g_sn_skip = id;
+          TyKind sv_ty3 = comp_sn_retype(c, id, nat3);
+          Buf vb3; memset(&vb3, 0, sizeof vb3);
+          emit_expr(c, id, &vb3);
+          comp_sn_retype(c, id, sv_ty3);
+          g_sn_skip = sv_skip3;
+          emit_boxed_text(c, nat3, vb3.p ? vb3.p : "", b);
+          free(vb3.p);
+          return;
+        }
+      }
     }
   }
 

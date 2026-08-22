@@ -724,6 +724,19 @@ const char *comp_resolve_alias_at(Compiler *c, int class_id, const char *name, i
    not a yield in a spliced context. */
 extern int (*sp_yield_site_type_hook)(const Compiler *c, int id, TyKind *out);
 
+/* Swap a node's cached type for the duration of one re-entered emission and
+   answer the old one, so the caller can restore it. `x&.pred?` is inferred
+   poly (its nil arm needs somewhere to live) while the value arm still
+   renders a C bool: the safe-navigation emitter puts the natural type back
+   while it emits that arm, because dispatches downstream read the cache to
+   type their own temps (#4070). */
+static inline TyKind comp_sn_retype(Compiler *c, int id, TyKind t) {
+  if (id < 0 || id >= c->nt->count) return t;
+  TyKind old = c->ntype[id];
+  c->ntype[id] = t;
+  return old;
+}
+
 /* Node type cache. */
 static inline TyKind comp_ntype(const Compiler *c, int id) {
   if (id < 0 || id >= c->nt->count) return TY_UNKNOWN;

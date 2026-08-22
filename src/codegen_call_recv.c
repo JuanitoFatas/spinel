@@ -6894,9 +6894,23 @@ int emit_scalar_call(Compiler *c, int id, Buf *b) {
         int _tn = ++g_tmp;
         buf_printf(b, "({ sp_int _t%d = (%s); _t%d == SP_INT_NIL ? SPL(\"nil\") : sp_int_to_s(_t%d); })", _tn, r, _tn, _tn);
       }
-      else if (sp_streq(name, "to_f"))   buf_printf(b, "((sp_float)(%s))", r);
-      else if ((sp_streq(name, "to_i") || sp_streq(name, "to_int") || sp_streq(name, "floor") ||
-                sp_streq(name, "ceil") || sp_streq(name, "round") || sp_streq(name, "truncate")) &&
+      /* A miss on a specialized container hands this slot SP_INT_NIL, and the
+         conversions are the ones CRuby answers FOR nil rather than refusing:
+         `nil.to_i` is 0, `nil.to_f` is 0.0. Identity used to pass the sentinel
+         straight through, so `h["zz"].to_i` printed nil (#4070). The to_s and
+         inspect arms above already spell the same check. */
+      else if (sp_streq(name, "to_f")) {
+        int _tn = ++g_tmp;
+        buf_printf(b, "({ sp_int _t%d = (%s); _t%d == SP_INT_NIL ? 0.0 : ((sp_float)_t%d); })",
+                   _tn, r, _tn, _tn);
+      }
+      else if ((sp_streq(name, "to_i") || sp_streq(name, "to_int")) && argc == 0) {
+        int _tn = ++g_tmp;
+        buf_printf(b, "({ sp_int _t%d = (%s); _t%d == SP_INT_NIL ? 0 : _t%d; })",
+                   _tn, r, _tn, _tn);
+      }
+      else if ((sp_streq(name, "floor") || sp_streq(name, "ceil") ||
+                sp_streq(name, "round") || sp_streq(name, "truncate")) &&
                argc == 0) buf_printf(b, "(%s)", r);
       else if (sp_streq(name, "round") && argc >= 1 && nt_type(nt, argv[argc - 1]) &&
                sp_streq(nt_type(nt, argv[argc - 1]), "KeywordHashNode")) {
@@ -7014,12 +7028,26 @@ int emit_scalar_call(Compiler *c, int id, Buf *b) {
                       " sp_PolyArray_push(_t%d, (%s) < 0 ? sp_box_float(3.141592653589793) : sp_box_int(0)); _t%d; })",
                    o, o, o, r, r, r, o, r, o);
       }
-      else if (sp_streq(name, "even?"))  buf_printf(b, "((%s) %% 2 == 0)", r);
-      else if (sp_streq(name, "odd?"))   buf_printf(b, "((%s) %% 2 != 0)", r);
-      else if (sp_streq(name, "zero?"))  buf_printf(b, "((%s) == 0)", r);
+      /* An Integer slot carries SP_INT_NIL for a miss on a specialized
+         container, and CRuby REFUSES these on nil rather than answering
+         false: `h["zz"].positive?` was a silent false (#4070). The
+         conversions nil does answer are checked further up. */
+      else if (sp_streq(name, "even?") || sp_streq(name, "odd?") ||
+               sp_streq(name, "zero?") || sp_streq(name, "positive?") ||
+               sp_streq(name, "negative?")) {
+        const char *op = sp_streq(name, "even?") ? "% 2 == 0"
+                       : sp_streq(name, "odd?")  ? "% 2 != 0"
+                       : sp_streq(name, "zero?") ? "== 0"
+                       : sp_streq(name, "positive?") ? "> 0" : "< 0";
+        int _tn = ++g_tmp;
+        buf_printf(b, "({ sp_int _t%d = (%s); _t%d == SP_INT_NIL ?"
+                      " (sp_raise_cls(\"NoMethodError\","
+                      " \"undefined method '%s' for nil\"), FALSE) : (_t%d ",
+                   _tn, r, _tn, name, _tn);
+        buf_puts(b, op);
+        buf_puts(b, "); })");
+      }
       else if (sp_streq(name, "nonzero?")) buf_printf(b, "((%s) == 0 ? SP_INT_NIL : (%s))", r, r);
-      else if (sp_streq(name, "positive?")) buf_printf(b, "((%s) > 0)", r);
-      else if (sp_streq(name, "negative?")) buf_printf(b, "((%s) < 0)", r);
       else if (sp_streq(name, "divmod") && argc == 1 && comp_ntype(c, argv[0]) == TY_FLOAT) {
         /* a Float divisor divides as floats: [floor-quotient Integer, Float mod] */
         int tb = ++g_tmp, tq = ++g_tmp, o = ++g_tmp;
