@@ -770,6 +770,14 @@ void emit_unbox_text(Compiler *c, TyKind t, const char *expr, Buf *b);
 TyKind yield_site_type(Compiler *c, int node);
 void emit_int_expr(Compiler *c, int node, Buf *b);
 void emit_str_expr(Compiler *c, int node, Buf *b);
+void emit_path_expr(Compiler *c, int node, Buf *b);
+void emit_to_s_expr(Compiler *c, int node, Buf *b);
+/* Converted String operands held across the call they enter (codegen.c). */
+typedef struct { Buf b; int *tmp; int n, cap; } ConvHold;
+extern ConvHold *g_conv_hold;
+extern unsigned g_conv_emitted;  /* implicit conversions emitted so far; read as a delta */
+Buf *conv_hold_begin(Buf *b, int *tmp);
+void conv_hold_end(int tmp);
 /* nil-accepting slots ("x".split(nil), StringIO#read(nil)): no strict
    nil/true/false TypeError arm -- see emit_nilbool_conv_raise in codegen.c */
 void emit_int_expr_nilable(Compiler *c, int node, Buf *b);

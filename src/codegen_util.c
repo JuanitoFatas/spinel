@@ -1079,6 +1079,7 @@ const char *native_c_type(const char *spec) {
   if (sp_streq(spec, "any"))    return "sp_RbVal";
   if (sp_streq(spec, "ptr"))    return "void *";   /* raw pointer passthrough */
   if (sp_streq(spec, "string")) return "const char *";
+  if (sp_streq(spec, "text"))   return "const char *";   /* write payload: the operand's #to_s */
   if (sp_streq(spec, "string?")) return "const char *";  /* nullable; call site wraps */
   if (sp_streq(spec, "nstring")) return "const char *";   /* NULL-able string, unboxed */
   if (sp_streq(spec, "cstring")) return "const char *";   /* borrowed C string; call site dups */

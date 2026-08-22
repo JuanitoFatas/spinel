@@ -322,6 +322,10 @@ extern void (*sp_json_hash_set_fn)(sp_RbVal, const char *, sp_RbVal);
 /* Recursive #inspect of a boxed value, for lib/sp_inspect.c's container walker
    (set to sp_poly_inspect; same idiom as the JSON hooks). */
 extern const char *(*sp_poly_inspect_fn)(sp_RbVal);
+/* #to_s of any boxed value, for a package that writes one (StringIO#puts):
+   the generated TU installs sp_poly_to_s, which renders a user object
+   through its own #to_s or the #<Name:0xADDR> default. */
+extern const char *(*sp_poly_to_s_fn)(sp_RbVal);
 /* Convert a plain object (a Struct) to a boxed StrPoly hash of its members,
    generic (no format knowledge). The generated program installs it (switch on
    cls_id) when it has Structs and a package consumes it; a consumer such as
@@ -355,6 +359,9 @@ extern const char *(*sp_obj_to_s_fn)(int cls_id, void *p);
    the default arm (*ok = 0 / NULL) and the caller raises CRuby's TypeError. */
 extern sp_int (*sp_obj_to_int_fn)(int cls_id, void *p, int *ok);
 extern const char *(*sp_obj_to_str_fn)(int cls_id, void *p);
+/* #to_path, which File/Dir/IO's path slots ask before #to_str (CRuby's
+   rb_get_path); NULL when the class defines none. */
+extern const char *(*sp_obj_to_path_fn)(int cls_id, void *p);
 /* Ruby class name for a user cls_id (the generated id->name table), so a
    runtime TU can word a TypeError the way CRuby does. */
 extern const char *(*sp_obj_cls_name_fn)(int cls_id);

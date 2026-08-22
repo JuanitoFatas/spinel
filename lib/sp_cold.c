@@ -451,19 +451,26 @@ const char *sp_file_join(const char **parts, int n) {
   /* CRuby boundary rule (#2785): exactly one separator joins adjacent
      components -- when the accumulated path already ends with '/', the next
      component's leading '/'s are dropped; otherwise one is inserted. */
+  /* The parts are read in full before the result is allocated: a part may
+     be a String nothing else holds -- a #to_path's fresh answer -- and the
+     allocation can collect it. */
   size_t total = 0;
   for (int i = 0; i < n; i++) { if (parts[i]) total += strlen(parts[i]); total++; }
-  char *r = sp_str_alloc((sp_int)total);
+  char *tmp = (char *)malloc(total + 1);
+  if (!tmp) sp_oom_die();
   size_t off = 0;
   for (int i = 0; i < n; i++) {
     const char *p = parts[i] ? parts[i] : "";
     if (i > 0) {
-      if (off > 0 && r[off - 1] == '/') { while (*p == '/') p++; }
-      else if (*p != '/') r[off++] = '/';
+      if (off > 0 && tmp[off - 1] == '/') { while (*p == '/') p++; }
+      else if (*p != '/') tmp[off++] = '/';
     }
     size_t l = strlen(p);
-    memcpy(r + off, p, l); off += l;
+    memcpy(tmp + off, p, l); off += l;
   }
+  char *r = sp_str_alloc((sp_int)off);
+  memcpy(r, tmp, off);
+  free(tmp);
   r[off] = 0;
   sp_str_set_len(r, off);
   return r;
@@ -917,7 +924,10 @@ sp_bool sp_poly_cbi_p(sp_RbVal v) {
   return FALSE;
 }
 
-void sp_file_write(const char *path, const char *data) {SP_GC_ROOT_STR(path);SP_GC_ROOT_STR(data);
+/* File.write(path, data): answers the byte count it wrote, measured by the
+   same rule that sizes the write, so an embedded NUL in a stringified value
+   counts once in both places. */
+sp_int sp_file_write(const char *path, const char *data) {SP_GC_ROOT_STR(path);SP_GC_ROOT_STR(data);
   if (sp_file_directory(path)) {
     sp_raise_cls("Errno::EISDIR", sp_sprintf("Is a directory @ rb_sysopen - %s", path));
   }
@@ -925,10 +935,21 @@ void sp_file_write(const char *path, const char *data) {SP_GC_ROOT_STR(path);SP_
   if (!f) {
     sp_raise_cls(errno == ENOENT ? "Errno::ENOENT" : errno == EACCES ? "Errno::EACCES" : "RuntimeError",
                  sp_sprintf("%s @ rb_sysopen - %s", strerror(errno), path));
-    return;
+    return 0;
   }
-  fwrite(data, 1, sp_str_byte_len(data), f);
-  fclose(f);
+  size_t n = sp_str_byte_len(data);
+  /* a short write or a failed close is the write's error, not a count:
+     CRuby raises the errno (a full disk is Errno::ENOSPC) */
+  size_t w = fwrite(data, 1, n, f);
+  int err = (w < n || ferror(f)) ? (errno ? errno : EIO) : 0;
+  if (fclose(f) != 0 && !err) err = errno ? errno : EIO;
+  if (err) {
+    errno = err;
+    sp_raise_cls(err == ENOSPC ? "Errno::ENOSPC" : "SystemCallError",
+                 sp_sprintf("%s @ rb_sys_fail_on_write - %s", strerror(err), path));
+    return 0;
+  }
+  return (sp_int)w;
 }
 
 const char *sp_backtick(const char *cmd) {
@@ -1293,6 +1314,7 @@ sp_int sp_file_truncate(const char *path, sp_int n);
 sp_int sp_file_write_at(const char *path, const char *data, sp_int off);
 sp_int sp_file_write_mode(const char *path, const char *data, const char *mode);
 sp_File *sp_File_open_flags(const char *path, sp_int fl);
+sp_File *sp_File_open_flags_perm(const char *path, sp_int fl, sp_int perm);
 void sp_file_stat_scan(void *p);
 sp_File *sp_file_stat_handle(const char *path);
 sp_int sp_file_stat_mode(const char *path);
@@ -1556,20 +1578,76 @@ sp_int sp_file_write_mode(const char *path, const char *data, const char *mode) 
     sp_raise_cls("Errno::ENOENT",
                  sp_sprintf("No such file or directory @ rb_sysopen - %s", path ? path : ""));
   size_t n = sp_str_byte_len(data ? data : sp_str_empty);
-  fwrite(data ? data : "", 1, n, fp);
-  fclose(fp);
-  return (sp_int)n;
+  size_t w = fwrite(data ? data : "", 1, n, fp);
+  int err = (w < n || ferror(fp)) ? (errno ? errno : EIO) : 0;
+  if (fclose(fp) != 0 && !err) err = errno ? errno : EIO;
+  if (err) {
+    errno = err;
+    sp_raise_cls(err == ENOSPC ? "Errno::ENOSPC" : "SystemCallError",
+                 sp_sprintf("%s @ rb_sys_fail_on_write - %s", strerror(err), path ? path : ""));
+    return 0;
+  }
+  return (sp_int)w;
 }
-sp_File *sp_File_open_flags(const char *path, sp_int fl) {SP_GC_ROOT_STR(path);
-  int fd = open(path ? path : "", (int)fl, 0666);
-  if (fd < 0)
-    sp_raise_cls("Errno::ENOENT",
-                 sp_sprintf("No such file or directory @ rb_sysopen - %s", path ? path : ""));
+/* File.open(path, flags, perm): the flag word selects the fdopen mode; the
+   permission bits reach open(2) only through this entry, so a created file
+   carries the bits the caller asked for rather than 0666. */
+static void sp_file_open_raise(const char *path) {
+  int e = errno;
+  const char *cls = e == ENOENT ? "Errno::ENOENT" : e == EACCES ? "Errno::EACCES"
+                  : e == EEXIST ? "Errno::EEXIST" : e == EISDIR ? "Errno::EISDIR" : "SystemCallError";
+  sp_raise_cls(cls, sp_sprintf("%s @ rb_sysopen - %s", strerror(e), path ? path : ""));
+}
+sp_File *sp_File_open_flags_perm(const char *path, sp_int fl, sp_int perm) {SP_GC_ROOT_STR(path);
+  if (perm == SP_INT_NIL) perm = 0666;
+  int fd = open(path ? path : "", (int)fl | O_CLOEXEC, (mode_t)perm);
+  if (fd < 0) sp_file_open_raise(path);
   int acc = (int)fl & O_ACCMODE;
   const char *m = (acc == O_RDONLY) ? "r"
                 : (acc == O_WRONLY) ? (((int)fl & O_APPEND) ? "a" : "w")
                 : (((int)fl & O_APPEND) ? "a+" : "r+");
-  return sp_io_fdopen(fd, m);
+  sp_File *f = sp_io_fdopen(fd, m);
+  f->path = path;
+  return f;
+}
+sp_File *sp_File_open_flags(const char *path, sp_int fl) {
+  return sp_File_open_flags_perm(path, fl, 0666);
+}
+/* File.open(path, "w", perm): the mode string selects the open(2) flags the
+   way fopen(3) reads it -- `+` for read-write, `x` for exclusive creation --
+   so the permission bits reach the syscall as they do for the flag-word
+   form. The mode is checked before the file is opened, so a bad one raises
+   CRuby's ArgumentError and leaves no descriptor behind. A nil perm (SP_INT_NIL)
+   is CRuby's default, 0666. */
+sp_File *sp_File_open_perm(const char *path, const char *mode, sp_int perm) {SP_GC_ROOT_STR(path);SP_GC_ROOT_STR(mode);
+  const char *m = mode && mode[0] ? mode : "r";
+  int fl;
+  switch (m[0]) {
+    case 'r': fl = O_RDONLY; break;
+    case 'w': fl = O_WRONLY | O_CREAT | O_TRUNC; break;
+    case 'a': fl = O_WRONLY | O_CREAT | O_APPEND; break;
+    default:  sp_raise_cls("ArgumentError", sp_sprintf("invalid access mode %s", m)); return NULL;
+  }
+  for (const char *q = m + 1; *q && *q != ':'; q++) {
+    if (*q == '+') fl = (fl & ~O_ACCMODE) | O_RDWR;
+    else if (*q == 'x' && m[0] == 'w') fl |= O_EXCL;  /* exclusive create is a w mode only */
+    else if (*q != 'b' && *q != 't' && *q != 'e') {
+      sp_raise_cls("ArgumentError", sp_sprintf("invalid access mode %s", m)); return NULL;
+    }
+  }
+  if (perm == SP_INT_NIL) perm = 0666;
+  int fd = open(path ? path : "", fl | O_CLOEXEC, (mode_t)perm);
+  if (fd < 0) sp_file_open_raise(path);
+  /* fdopen reads its own mode grammar ("wx+" is write-only to it): hand it
+     the access mode the flag word says, as the flags form does */
+  int acc = fl & O_ACCMODE;
+  const char *fm = (acc == O_RDONLY) ? "r"
+                 : (acc == O_WRONLY) ? ((fl & O_APPEND) ? "a" : "w")
+                 : ((fl & O_APPEND) ? "a+" : (m[0] == 'w') ? "w+" : "r+");
+  sp_File *f = sp_io_fdopen(fd, fm);
+  f->path = path;
+  f->mode = m;
+  return f;
 }
 void sp_file_stat_scan(void *p) {
   sp_File *f = (sp_File *)p;
@@ -2880,7 +2958,7 @@ sp_PolyArray *sp_io_pipe(void) {
 sp_File *sp_io_for_fd(sp_int fd, const char *mode, sp_bool autoclose) {SP_GC_ROOT_STR(mode);
   if (fd < 0 || fcntl((int)fd, F_GETFD) < 0)
     sp_raise_cls("Errno::EBADF", "Bad file descriptor");
-  sp_File *f = sp_io_fdopen((int)fd, mode && *mode ? mode : "r");
+  sp_File *f = sp_io_fdopen_ex((int)fd, mode && *mode ? mode : "r", 0);
   if (f && !autoclose) f->no_autoclose = 1;
   return f;
 }

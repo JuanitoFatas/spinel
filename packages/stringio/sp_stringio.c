@@ -61,9 +61,9 @@ sp_int sp_StringIO_size(sp_StringIO *s) { return s->len; }
 /* Binary-safe: a Ruby String may carry an embedded NUL (`[0].pack("C")`),
    so the operand is measured with its recorded length, not strlen. */
 sp_int sp_StringIO_write(sp_StringIO *s, const char *str) { return sio_write(s, str, (int64_t)sp_str_byte_len(str)); }
-sp_int sp_StringIO_puts(sp_StringIO *s, const char *str) { int64_t l = (int64_t)sp_str_byte_len(str); sio_write(s, str, l); if (l == 0 || str[l-1] != '\n') sio_write(s, "\n", 1); return 0; }
-sp_int sp_StringIO_puts_empty(sp_StringIO *s) { sio_write(s, "\n", 1); return 0; }
-sp_int sp_StringIO_print(sp_StringIO *s, const char *str) { return sio_write(s, str, (int64_t)sp_str_byte_len(str)); }
+void sp_StringIO_puts(sp_StringIO *s, const char *str) { int64_t l = (int64_t)sp_str_byte_len(str); sio_write(s, str, l); if (l == 0 || str[l-1] != '\n') sio_write(s, "\n", 1); }
+void sp_StringIO_puts_empty(sp_StringIO *s) { sio_write(s, "\n", 1); }
+void sp_StringIO_print(sp_StringIO *s, const char *str) { sio_write(s, str, (int64_t)sp_str_byte_len(str)); }
 sp_int sp_StringIO_putc(sp_StringIO *s, sp_int ch) { char c = (char)(ch & 0xFF); sio_write(s, &c, 1); return ch; }
 const char *sp_StringIO_read(sp_StringIO *s) {SP_GC_ROOT(s); if (s->pos >= s->len) return sp_str_empty; size_t rem = s->len - s->pos; char *r = sp_str_alloc(rem); memcpy(r, s->buf + s->pos, rem); r[rem] = 0; s->pos = s->len; return r; }
 const char *sp_StringIO_read_n(sp_StringIO *s, sp_int n) {SP_GC_ROOT(s); if (s->pos >= s->len) return sp_str_empty; int64_t rem = s->len - s->pos; if (n > rem) n = rem; char *r = sp_str_alloc_raw(n+1); memcpy(r, s->buf + s->pos, n); r[n] = '\0'; sp_str_set_len(r, (size_t)n); s->pos += n; return r; }
@@ -140,7 +140,7 @@ sp_RbVal sp_StringIO_readlines(sp_StringIO *s) {SP_GC_ROOT(s);
    value's to_s; puts additionally flattens arrays (each element on its own
    line, via the generic container hooks) and terminates lines. A value kind
    this in-memory stream can't render raises rather than writing garbage. */
-static void sio_write_val(sp_StringIO *s, sp_RbVal v, int is_puts) {SP_GC_ROOT(s);
+static void sio_write_val(sp_StringIO *s, sp_RbVal v, int is_puts) {SP_GC_ROOT(s);SP_GC_ROOT_RBVAL(v);
   int64_t p0 = s->pos;
   switch (v.tag) {
     case SP_TAG_STR: { const char *t = v.v.s ? v.v.s : ""; sio_write(s, t, (int64_t)sp_str_byte_len(t)); break; }
@@ -154,15 +154,27 @@ static void sio_write_val(sp_StringIO *s, sp_RbVal v, int is_puts) {SP_GC_ROOT(s
         for (sp_int i = 0; i < n; i++) sio_write_val(s, sp_json_aref_fn(v, i), 1);
         return;  /* elements each terminated their own line */
       }
+      /* anything else writes its #to_s, as IO#write and Kernel#print do. A
+         user #to_s answers a Ruby String, measured by its recorded length so
+         an embedded NUL survives; the generic renderer may answer a static
+         class or symbol name with no length in front of it. */
+      if (v.tag == SP_TAG_OBJ && v.cls_id >= 0 && v.v.p && sp_obj_to_s_fn) {
+        const char *t = sp_obj_to_s_fn((int)v.cls_id, v.v.p);
+        if (t) { sio_write(s, t, (int64_t)sp_str_byte_len(t)); break; }
+      }
+      if (sp_poly_to_s_fn) {
+        const char *t = sp_poly_to_s_fn(v);
+        sio_write(s, t, (int64_t)strlen(t)); break;
+      }
       sp_raise_cls("TypeError", "can't write value to StringIO");
   }
   /* terminate the line unless THIS value's bytes already ended with one */
   if (is_puts && (s->pos == p0 || s->buf[s->pos - 1] != '\n')) sio_write(s, "\n", 1);
 }
 
-sp_int sp_StringIO_print_v1(sp_StringIO *s, sp_RbVal a) { sio_write_val(s, a, 0); return 0; }
-sp_int sp_StringIO_print_v2(sp_StringIO *s, sp_RbVal a, sp_RbVal b) { sio_write_val(s, a, 0); sio_write_val(s, b, 0); return 0; }
-sp_int sp_StringIO_print_v3(sp_StringIO *s, sp_RbVal a, sp_RbVal b, sp_RbVal c2) { sio_write_val(s, a, 0); sio_write_val(s, b, 0); sio_write_val(s, c2, 0); return 0; }
-sp_int sp_StringIO_puts_v1(sp_StringIO *s, sp_RbVal a) { sio_write_val(s, a, 1); return 0; }
-sp_int sp_StringIO_puts_v2(sp_StringIO *s, sp_RbVal a, sp_RbVal b) { sio_write_val(s, a, 1); sio_write_val(s, b, 1); return 0; }
-sp_int sp_StringIO_puts_v3(sp_StringIO *s, sp_RbVal a, sp_RbVal b, sp_RbVal c2) { sio_write_val(s, a, 1); sio_write_val(s, b, 1); sio_write_val(s, c2, 1); return 0; }
+void sp_StringIO_print_v1(sp_StringIO *s, sp_RbVal a) { sio_write_val(s, a, 0); }
+void sp_StringIO_print_v2(sp_StringIO *s, sp_RbVal a, sp_RbVal b) { sio_write_val(s, a, 0); sio_write_val(s, b, 0); }
+void sp_StringIO_print_v3(sp_StringIO *s, sp_RbVal a, sp_RbVal b, sp_RbVal c2) { sio_write_val(s, a, 0); sio_write_val(s, b, 0); sio_write_val(s, c2, 0); }
+void sp_StringIO_puts_v1(sp_StringIO *s, sp_RbVal a) { sio_write_val(s, a, 1); }
+void sp_StringIO_puts_v2(sp_StringIO *s, sp_RbVal a, sp_RbVal b) { sio_write_val(s, a, 1); sio_write_val(s, b, 1); }
+void sp_StringIO_puts_v3(sp_StringIO *s, sp_RbVal a, sp_RbVal b, sp_RbVal c2) { sio_write_val(s, a, 1); sio_write_val(s, b, 1); sio_write_val(s, c2, 1); }

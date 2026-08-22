@@ -8786,6 +8786,8 @@ int emit_object_call(Compiler *c, int id, Buf *b) {
           if (sp_streq(m->args[ai], "any")) emit_boxed(c, argv[ai], b);
           else if (sp_streq(m->args[ai], "regexp"))
             buf_printf(b, "sp_re_pat_%d", re_lit_index(c, argv[ai]));
+          /* a write payload is the operand's #to_s, as IO#write takes it */
+          else if (sp_streq(m->args[ai], "text")) emit_to_s_expr(c, argv[ai], b);
           /* the typed-slot emitters carry the implicit conversion protocol
              (poly unboxing, #to_str / #to_int on a user object) */
           else if (aw == TY_STRING) emit_str_expr(c, argv[ai], b);
@@ -9111,7 +9113,12 @@ int emit_value_recv_call(Compiler *c, int id, Buf *b) {
       int mutate = sp_streq(name, "localtime") && r_lval;
       if (mutate) buf_printf(b, "(%s = ", r);
       buf_printf(b, "sp_time_getlocal_off(%s, ", r);
-      if (comp_ntype(c, argv[0]) == TY_STRING) { buf_puts(b, "sp_time_offset_from_str("); emit_str_expr(c, argv[0], b); buf_puts(b, ")"); }
+      /* a String offset ("+01:00"), or a user object naming one through
+         #to_str, parses; anything else is a second count */
+      TyKind ot = comp_ntype(c, argv[0]);
+      if (ot == TY_STRING || obj_conv_method(c, ot, "to_str", TY_STRING, NULL) >= 0) {
+        buf_puts(b, "sp_time_offset_from_str("); emit_str_expr(c, argv[0], b); buf_puts(b, ")");
+      }
       else emit_int_expr(c, argv[0], b);
       buf_puts(b, ")");
       if (mutate) buf_puts(b, ")");

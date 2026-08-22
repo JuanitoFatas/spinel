@@ -34,18 +34,11 @@ extern const char *sp_sprintf(const char *fmt, ...);
 static void sp_File_fin(void *p) { sp_File *f = (sp_File *)p; if (f->fp) { fclose(f->fp); f->fp = NULL; } }
 static void sp_File_scan(void *p) { sp_File *f = (sp_File *)p; if (f->path) sp_mark_string(f->path); if (f->mode) sp_mark_string(f->mode); }
 
-sp_File *sp_File_open(const char *path, const char *mode) {SP_GC_ROOT_STR(path);SP_GC_ROOT_STR(mode);
-  sp_File *f = (sp_File *)sp_gc_alloc(sizeof(sp_File), sp_File_fin, sp_File_scan);
-  f->fp = fopen(path ? path : "", mode ? mode : "r");
-  if (!f->fp) { sp_raise_cls("Errno::ENOENT", "No such file or directory"); return NULL; }
-  /* CRuby opens with O_CLOEXEC, so #close_on_exec? is true for a file it
-     opened and #fcntl(F_GETFD) reports the flag (#3038). */
-  { int _fd = fileno(f->fp);
-    if (_fd >= 0) { int _fl = fcntl(_fd, F_GETFD); if (_fl >= 0) fcntl(_fd, F_SETFD, _fl | FD_CLOEXEC); } }
-  f->path = path;
-  f->mode = mode;
-  f->lineno = 0;
-  return f;
+/* The two-argument form is the permission form with CRuby's default bits:
+   the same mode scan (which refuses "rx"), O_CLOEXEC, and the errno-named
+   error, rather than fopen's looser mode and a flat ENOENT. */
+sp_File *sp_File_open(const char *path, const char *mode) {
+  return sp_File_open_perm(path, mode ? mode : "r", SP_INT_NIL);
 }
 
 /* Returns 0 on success, -1 on error. */
@@ -55,15 +48,23 @@ int sp_io_make_pipe(int fds[2]) {
 
 /* IO.pipe end: wrap a raw pipe fd in a GC-managed sp_File so the
    sp_File_* I/O ops work on it. Same finalizer/scan as sp_File_open. */
-sp_File *sp_io_fdopen(int fd, const char *mode) {SP_GC_ROOT_STR(mode);
+/* owns_fd: the descriptor is this handle's to release when fdopen fails --
+   true for one open(2) or pipe(2) just made, false for IO.for_fd, whose fd
+   belongs to the program (closing its stdout on a bad mode lost the output). */
+sp_File *sp_io_fdopen_ex(int fd, const char *mode, int owns_fd) {SP_GC_ROOT_STR(mode);
   sp_File *f = (sp_File *)sp_gc_alloc(sizeof(sp_File), sp_File_fin, sp_File_scan);
   f->fp = fdopen(fd, mode ? mode : "r");
-  if (!f->fp) { sp_raise_cls("IOError", "fdopen failed"); return NULL; }
+  if (!f->fp) {
+    if (owns_fd) close(fd);
+    sp_raise_cls("IOError", "fdopen failed");
+    return NULL;
+  }
   f->path = NULL;
   f->mode = mode;
   f->lineno = 0;
   return f;
 }
+sp_File *sp_io_fdopen(int fd, const char *mode) { return sp_io_fdopen_ex(fd, mode, 1); }
 
 /* Wrap a socket fd (#2922). The FILE* serves the buffered READ side (gets and
    friends need lookahead); every write bypasses stdio straight to write(2) --

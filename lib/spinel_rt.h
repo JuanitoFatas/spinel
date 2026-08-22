@@ -2172,6 +2172,21 @@ static SP_INLINE const char *sp_poly_arg_str_chk(sp_RbVal v) {
   if (v.tag == SP_TAG_STR) return v.v.s;
   return sp_poly_arg_str_chk_slow(v);
 }
+/* A boxed value entering a PATH slot (File, Dir and IO's path arguments).
+   CRuby's rb_get_path asks #to_path before #to_str, which is how a Pathname,
+   or any user class that names a file, is accepted wherever a String path is.
+   Everything else is the strict String slot's protocol, unchanged. */
+static SP_NOINLINE const char *sp_poly_arg_path_slow(sp_RbVal v) {
+  if (v.tag == SP_TAG_OBJ && v.cls_id >= 0 && v.v.p && sp_obj_to_path_fn) {
+    const char *r = sp_obj_to_path_fn((int)v.cls_id, v.v.p);
+    if (r) return r;
+  }
+  return sp_poly_arg_str_chk_slow(v);
+}
+static SP_INLINE const char *sp_poly_arg_path(sp_RbVal v) {
+  if (v.tag == SP_TAG_STR) return v.v.s;
+  return sp_poly_arg_path_slow(v);
+}
 static SP_NOINLINE sp_int sp_poly_arg_int_chk_slow(sp_RbVal v) {
   /* a boxed int slot's nil sentinel is nil, not a number */
   if (v.tag == SP_TAG_INT && v.v.i == SP_INT_NIL)
@@ -2203,6 +2218,12 @@ static SP_NOINLINE sp_int sp_poly_arg_int_chk_slow(sp_RbVal v) {
 static SP_INLINE sp_int sp_poly_arg_int_chk(sp_RbVal v) {
   if (v.tag == SP_TAG_INT && v.v.i != SP_INT_NIL) return v.v.i;
   return sp_poly_arg_int_chk_slow(v);
+}
+/* File.open's permission slot: nil is CRuby's default (SP_INT_NIL to the
+   open entries), anything else converts as an Integer argument does. */
+static SP_INLINE sp_int sp_poly_arg_perm(sp_RbVal v) {
+  if (v.tag == SP_TAG_NIL || (v.tag == SP_TAG_INT && v.v.i == SP_INT_NIL)) return SP_INT_NIL;
+  return sp_poly_arg_int_chk(v);
 }
 
 static sp_float sp_poly_to_f(sp_RbVal v) { if (v.tag == SP_TAG_FLT) return v.v.f; if (v.tag == SP_TAG_INT || v.tag == SP_TAG_SYM) return (sp_float)v.v.i; if (v.tag == SP_TAG_BIGINT) return sp_bigint_to_double((sp_Bigint *)v.v.p); if (v.tag == SP_TAG_STR) return (sp_float)atof(v.v.s ? v.v.s : sp_str_empty); if (v.tag == SP_TAG_BOOL) return v.v.b ? 1.0 : 0.0; if (v.tag == SP_TAG_OBJ && v.cls_id == SP_BUILTIN_RATIONAL) return sp_rational_to_f(*(sp_Rational *)v.v.p); if (v.tag == SP_TAG_OBJ && v.cls_id == SP_BUILTIN_BIG_RATIONAL) return sp_brat_to_f((sp_BigRational *)v.v.p); if (v.tag == SP_TAG_OBJ && v.cls_id == SP_BUILTIN_TIME && v.v.p) { sp_Time _tt = *(sp_Time *)v.v.p; return (sp_float)_tt.tv_sec + (sp_float)_tt.tv_nsec / 1e9; } return 0.0; }  /* STR arm mirrors sp_poly_to_i's strtoll and the typed String#to_f (atof) */
@@ -7318,6 +7339,7 @@ __attribute__((constructor)) static void sp_json_install_hooks(void) {
      include and skips the hook (the archive-side consumers null-check it). */
 #ifndef SP_TU_NO_POLY_RENDER
   sp_poly_inspect_fn = sp_poly_inspect;
+  sp_poly_to_s_fn = sp_poly_to_s;
 #endif
   /* JSON.parse builds objects as string-keyed hashes (CRuby returns String
      keys, and this matches a `{ "k" => v }` literal for equality). */
@@ -8213,7 +8235,7 @@ void sp_fiber_reraise(const char *cls, const char *msg, void *obj) {
 const char *sp_file_read(const char *path);
 
 /* sp_file_write: moved to lib/sp_cold.c */
-void sp_file_write(const char *path, const char *data);
+sp_int sp_file_write(const char *path, const char *data);
 /* sp_file_mtime: moved to lib/sp_cold.c */
 sp_Time sp_file_mtime(const char *path);
 sp_Time sp_file_atime(const char *path);
@@ -8251,6 +8273,8 @@ sp_int sp_file_write_mode(const char *path, const char *data, const char *mode);
 /* File.open with integer open(2) flags: open the fd, then wrap it in the
    stdio handle the sp_File surface expects (#2788). */
 sp_File *sp_File_open_flags(const char *path, sp_int fl);
+sp_File *sp_File_open_flags_perm(const char *path, sp_int fl, sp_int perm);
+sp_File *sp_File_open_perm(const char *path, const char *mode, sp_int perm);
 /* File.stat(path) / File#stat: a path-carrying handle whose metadata methods
    (size/mtime/atime/ctime/ftype/mode) stat the path -- the pragmatic subset of
    File::Stat this backend models (#2775, #2790). */
@@ -8306,23 +8330,29 @@ const char *sp_file_basename(const char *path);
 const char *sp_file_basename2(const char *path, const char *suffix);
 /* File.join with runtime-typed components: strings pass through, arrays
    flatten recursively (#2786), nil is CRuby's TypeError. */
-static void sp_file_join_flat(sp_RbVal v, const char **parts, int *np) {
-  if (*np >= 64) return;
-  if (v.tag == SP_TAG_STR) { parts[(*np)++] = v.v.s ? v.v.s : ""; return; }
+/* The flattened components are held in a GC-scanned array, not a raw
+   pointer array: a #to_path or #to_str may build its answer, and the next
+   component's conversion (or the join's own allocation) can collect a
+   String nothing else holds. */
+static void sp_file_join_flat(sp_RbVal v, sp_StrArray *parts, int depth) {
+  if (v.tag == SP_TAG_STR) { sp_StrArray_push(parts, v.v.s ? v.v.s : ""); return; }
   if (v.tag == SP_TAG_OBJ && sp_poly_is_array_kind(v.cls_id)) {
+    /* an Array nested past any sane depth is one that contains itself */
+    if (depth >= 64) sp_raise_cls("ArgumentError", "recursive array");
     sp_int n = sp_poly_length(v);
-    for (sp_int i = 0; i < n; i++) sp_file_join_flat(sp_poly_arr_get(v, i), parts, np);
+    for (sp_int i = 0; i < n; i++) sp_file_join_flat(sp_poly_arr_get(v, i), parts, depth + 1);
     return;
   }
-  /* everything else takes the strict slot's protocol: nil / bool / a
+  /* everything else takes the path slot's protocol: nil / bool / a
      wrongly-classed scalar is CRuby's TypeError, a user object converts
-     through #to_str or raises */
-  parts[(*np)++] = sp_poly_arg_str_chk(v);
+     through #to_path or #to_str, or raises */
+  sp_StrArray_push(parts, sp_poly_arg_path(v));
 }
 static const char *sp_file_join_vals(sp_RbVal *vals, int n) {
-  const char *parts[64]; int np = 0;
-  for (int i = 0; i < n; i++) sp_file_join_flat(vals[i], parts, &np);
-  return sp_file_join(parts, np);
+  sp_StrArray *parts = sp_StrArray_new();
+  SP_GC_ROOT(parts);
+  for (int i = 0; i < n; i++) sp_file_join_flat(vals[i], parts, 0);
+  return sp_file_join(parts->data, (int)parts->len);
 }
 /* Issue #892: File.dirname / File.extname / Dir.pwd. */
 const char *sp_file_dirname(const char *path);

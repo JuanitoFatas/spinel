@@ -301,6 +301,55 @@ int prog_has_conv_method(Compiler *c, const char *conv, TyKind want) {
   return 0;
 }
 
+/* The direct call of a compiled conversion method on a statically-typed
+   object: sp_Cls_to_str((sp_Cls *)(expr)). */
+/* A conversion that answers a String -- an object's #to_path or #to_str, a
+   boxed value through sp_poly_arg_path or sp_poly_to_s -- may build that
+   String, and nothing holds it while a sibling operand converts or the
+   callee allocates before reading it. emit_call collects every such
+   conversion into a rooted temp declared in front of the call, so the
+   converting emitters render `_tN` in the slot and the conversion itself
+   into the hold. A conversion emitted outside a call renders inline as
+   before. */
+ConvHold *g_conv_hold = NULL;
+unsigned g_conv_emitted = 0;
+Buf *conv_hold_begin(Buf *b, int *tmp) {
+  g_conv_emitted++;  /* counted before the hold test: a hold-less render converts too */
+  if (!g_conv_hold) return NULL;
+  if (g_conv_hold->n >= g_conv_hold->cap) {
+    g_conv_hold->cap = g_conv_hold->cap ? g_conv_hold->cap * 2 : 8;
+    g_conv_hold->tmp = (int *)realloc(g_conv_hold->tmp, sizeof(int) * (size_t)g_conv_hold->cap);
+    if (!g_conv_hold->tmp) { fprintf(stderr, "out of memory\n"); exit(1); }
+  }
+  *tmp = ++g_tmp;
+  g_conv_hold->tmp[g_conv_hold->n++] = *tmp;
+  buf_printf(&g_conv_hold->b, "const char *_t%d = ", *tmp);
+  buf_printf(b, "_t%d", *tmp);
+  return &g_conv_hold->b;
+}
+void conv_hold_end(int tmp) {
+  buf_printf(&g_conv_hold->b, "; SP_GC_ROOT(_t%d); ", tmp);
+}
+
+static void emit_obj_conv_call_inline(Compiler *c, int node, TyKind t, int def, const char *conv, Buf *b);
+static void emit_obj_conv_call(Compiler *c, int node, TyKind t, int def, const char *conv, Buf *b) {
+  int tmp;
+  /* an Integer answer needs no root, so #to_int renders inline -- still a
+     conversion for the operand-order gate's count */
+  if (sp_streq(conv, "to_int")) g_conv_emitted++;
+  Buf *hb = sp_streq(conv, "to_int") ? NULL : conv_hold_begin(b, &tmp);
+  if (!hb) { emit_obj_conv_call_inline(c, node, t, def, conv, b); return; }
+  emit_obj_conv_call_inline(c, node, t, def, conv, hb);
+  conv_hold_end(tmp);
+}
+static void emit_obj_conv_call_inline(Compiler *c, int node, TyKind t, int def, const char *conv, Buf *b) {
+  buf_printf(b, "sp_%s_%s(", c->classes[def].c_name, mc(conv));
+  if (!comp_ty_value_obj(c, t)) buf_printf(b, "(sp_%s *)", c->classes[def].c_name);
+  buf_puts(b, "(");
+  emit_expr(c, node, b);
+  buf_puts(b, "))");
+}
+
 static int emit_obj_conv(Compiler *c, int node, const char *conv, TyKind want,
                          const char *into, Buf *b) {
   TyKind t = comp_ntype(c, node);
@@ -309,11 +358,7 @@ static int emit_obj_conv(Compiler *c, int node, const char *conv, TyKind want,
   if (cid < 0 || cid >= c->nclasses) return 0;
   int def = -1;
   if (obj_conv_method(c, t, conv, want, &def) >= 0) {
-    buf_printf(b, "sp_%s_%s(", c->classes[def].c_name, mc(conv));
-    if (!comp_ty_value_obj(c, t)) buf_printf(b, "(sp_%s *)", c->classes[def].c_name);
-    buf_puts(b, "(");
-    emit_expr(c, node, b);
-    buf_puts(b, "))");
+    emit_obj_conv_call(c, node, t, def, conv, b);
     return 1;
   }
   /* The class is static and settled here, so a missing #to_str / #to_int is
@@ -414,6 +459,9 @@ static void emit_int_expr_ex(Compiler *c, int node, int strict, Buf *b) {
     return;
   }
   if (yield_site_type(c, node) == TY_POLY) {
+    /* a boxed value may carry a user object whose #to_int runs here; only a
+       program defining one makes this a conversion the order gate counts */
+    if (strict && prog_has_conv_method(c, "to_int", TY_INT)) g_conv_emitted++;
     buf_puts(b, strict ? "sp_poly_arg_int_chk(" : "sp_poly_to_i(");
     emit_expr(c, node, b); buf_puts(b, ")");
     return;
@@ -496,8 +544,11 @@ static void emit_str_expr_ex(Compiler *c, int node, int strict, Buf *b) {
        converts through #to_str or raises, where to_s rendered it as
        "#<Name ...>" and the builtin searched for that text; the _chk form
        additionally raises for a boxed nil / true / false as CRuby does */
-    buf_puts(b, strict ? "sp_poly_arg_str_chk(" : "sp_poly_arg_str(");
-    emit_expr(c, node, b); buf_puts(b, ")");
+    int tmp; Buf *hb = conv_hold_begin(b, &tmp);
+    Buf *ob = hb ? hb : b;
+    buf_puts(ob, strict ? "sp_poly_arg_str_chk(" : "sp_poly_arg_str(");
+    emit_expr(c, node, ob); buf_puts(ob, ")");
+    if (hb) conv_hold_end(tmp);
     return;
   }
   if (emit_nilbool_conv_raise_w(c, node, TY_STRING, !strict, 0, b)) return;
@@ -518,6 +569,76 @@ static void emit_str_expr_ex(Compiler *c, int node, int strict, Buf *b) {
 
 void emit_str_expr(Compiler *c, int node, Buf *b) {
   emit_str_expr_ex(c, node, 1, b);
+}
+
+/* A node entering a PATH slot: File, Dir and IO's path arguments. CRuby's
+   rb_get_path asks the object for #to_path before #to_str, which is how a
+   Pathname, or any user class that names a file, is accepted wherever a
+   String path is. A statically-typed object converts through a direct call;
+   a boxed one goes through sp_poly_arg_path, whose generated bridge reaches
+   the same methods. A class defining neither is refused at compile time the
+   way the String slot refuses it, naming both methods. */
+void emit_path_expr(Compiler *c, int node, Buf *b) {
+  if (yield_site_type(c, node) == TY_POLY) {
+    int tmp; Buf *hb = conv_hold_begin(b, &tmp);
+    Buf *ob = hb ? hb : b;
+    buf_puts(ob, "sp_poly_arg_path("); emit_expr(c, node, ob); buf_puts(ob, ")");
+    if (hb) conv_hold_end(tmp);
+    return;
+  }
+  TyKind t = comp_ntype(c, node);
+  int cid = ty_is_object(t) ? ty_object_class(t) : -1;
+  if (cid >= 0 && cid < c->nclasses && !c->classes[cid].is_native_class) {
+    int def = -1;
+    if (obj_conv_method(c, t, "to_path", TY_STRING, &def) >= 0) {
+      emit_obj_conv_call(c, node, t, def, "to_path", b);
+      return;
+    }
+    int mi = comp_method_in_chain(c, cid, "to_path", &def);
+    if (mi >= 0) {
+      /* a #to_path the analysis could not pin to String -- one backed by an
+         accessor, or with a nil branch -- answers a boxed value. CRuby checks
+         the RESULT of #to_path, so the boxed answer takes the strict String
+         slot's check, which raises CRuby's TypeError for a non-String. Any
+         other shape is not this protocol, and says which method is at fault. */
+      if (c->scopes[mi].nparams == 0 && c->scopes[mi].ret == TY_POLY) {
+        int tmp; Buf *hb = conv_hold_begin(b, &tmp);
+        Buf *ob = hb ? hb : b;
+        buf_puts(ob, "sp_poly_arg_str_chk(");
+        emit_obj_conv_call_inline(c, node, t, def, "to_path", ob);
+        buf_puts(ob, ")");
+        if (hb) conv_hold_end(tmp);
+        return;
+      }
+      const char *cn = class_ruby_name(c, cid);
+      char msg[256];
+      snprintf(msg, sizeof msg,
+               "no implicit conversion of %s into String (%s#to_path must take no arguments and answer a String)",
+               cn ? cn : "Object", cn ? cn : "Object");
+      unsupported_feature(c, node, msg);
+    }
+    if (comp_method_in_chain(c, cid, "to_str", NULL) < 0) {
+      const char *cn = class_ruby_name(c, cid);
+      char msg[256];
+      snprintf(msg, sizeof msg,
+               "no implicit conversion of %s into String (%s defines neither #to_path nor #to_str)",
+               cn ? cn : "Object", cn ? cn : "the class");
+      unsupported_feature(c, node, msg);
+    }
+  }
+  emit_str_expr(c, node, b);
+}
+
+/* A node entering a WRITE payload slot (IO#write, #pwrite, #write_nonblock):
+   CRuby writes the operand's #to_s, so a String passes through and anything
+   else renders the way puts renders it -- a user object through its own
+   #to_s. The #to_str protocol of the String slots is the wrong one here. */
+void emit_to_s_expr(Compiler *c, int node, Buf *b) {
+  if (comp_ntype(c, node) == TY_STRING) { emit_expr(c, node, b); return; }
+  int tmp; Buf *hb = conv_hold_begin(b, &tmp);
+  Buf *ob = hb ? hb : b;
+  buf_puts(ob, "sp_poly_to_s("); emit_boxed(c, node, ob); buf_puts(ob, ")");
+  if (hb) conv_hold_end(tmp);
 }
 
 /* The slot accepts nil in CRuby: keep the historical looseness. */
@@ -5704,6 +5825,10 @@ static void emit_obj_inspect_dispatch(Compiler *c, Buf *b) {
   emit_conv_bridge(c, b, "to_str", TY_STRING,
                    "const char *", "static const char *sp_obj_to_str_sw(int cls_id, void *p)",
                    0, "return NULL;");
+  /* #to_path, asked first by the path slots (sp_poly_arg_path) */
+  emit_conv_bridge(c, b, "to_path", TY_STRING,
+                   "const char *", "static const char *sp_obj_to_path_sw(int cls_id, void *p)",
+                   0, "return NULL;");
   buf_puts(b, "static const char *sp_obj_cls_name_rt(int cls_id) {\n"
               "  sp_Class _c = {cls_id}; return sp_class_to_s(_c);\n}\n");
   buf_puts(b, "static const char *sp_obj_inspect_sw(int cls_id, void *p) {\n");
@@ -6750,6 +6875,7 @@ void emit_regex_section(Compiler *c, Buf *b) {
     buf_puts(b, "  sp_obj_to_s_fn = sp_obj_to_s_sw;\n");
     buf_puts(b, "  sp_obj_to_int_fn = sp_obj_to_int_sw;\n");
     buf_puts(b, "  sp_obj_to_str_fn = sp_obj_to_str_sw;\n");
+    buf_puts(b, "  sp_obj_to_path_fn = sp_obj_to_path_sw;\n");
     buf_puts(b, "  sp_obj_cls_name_fn = sp_obj_cls_name_rt;\n");
   }
   if (g_uses_marshal) {
@@ -7371,11 +7497,12 @@ static void scan_prologue_features(Compiler *c) {
     if (!collect_mode()) { emit_call; }                       \
     else {                                                    \
       size_t _saved_len = body->len;                          \
+      ConvHold *_saved_hold = g_conv_hold;                    \
       if (setjmp(g_unsup_recover) == 0) {                     \
         g_unsup_armed = 1; emit_call; g_unsup_armed = 0;      \
       } \
       else {                                                \
-        g_unsup_armed = 0;                                    \
+        g_unsup_armed = 0; g_conv_hold = _saved_hold;         \
         body->len = _saved_len;                               \
         if (body->p) body->p[_saved_len] = '\0';              \
       }                                                       \
@@ -8393,6 +8520,7 @@ char *codegen_program(const NodeTable *nt) {
     buf_puts(&b, "static const char *sp_obj_to_s_sw(int cls_id, void *p) __attribute__((cold, noinline));\n");
     buf_puts(&b, "static sp_int sp_obj_to_int_sw(int cls_id, void *p, int *ok) __attribute__((cold, noinline));\n");
     buf_puts(&b, "static const char *sp_obj_to_str_sw(int cls_id, void *p) __attribute__((cold, noinline));\n");
+    buf_puts(&b, "static const char *sp_obj_to_path_sw(int cls_id, void *p) __attribute__((cold, noinline));\n");
     buf_puts(&b, "static const char *sp_obj_cls_name_rt(int cls_id) __attribute__((cold, noinline));\n");
   }
   /* The #message / #to_s dispatchers below call these bodies unconditionally,
