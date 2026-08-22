@@ -4766,6 +4766,20 @@ static int emit_poly_method_dispatch(Compiler *c, int id, Buf *b) {
         buf_puts(b, "; break;");
         obj_default_done = 1;
       }
+      /* The blockless index enumerators, same shape: an Array reaching this
+         dispatch still answers them with an Enumerator. */
+      if (argc == 0 && (sp_streq(name, "each_index") || sp_streq(name, "each_with_index"))) {
+        int ewi = !sp_streq(name, "each_index");
+        char ev[96];
+        snprintf(ev, sizeof ev, "%s(_t%d%s)",
+                 ewi ? "sp_Enumerator_new_ewi" : "sp_Enumerator_new_indices", tv, ewi ? ", 0" : "");
+        buf_puts(b, " case SP_BUILTIN_INT_ARRAY: case SP_BUILTIN_STR_ARRAY:"
+                    " case SP_BUILTIN_FLT_ARRAY: case SP_BUILTIN_POLY_ARRAY: ");
+        buf_printf(b, "_t%d = ", tr);
+        if (ret == TY_POLY) emit_boxed_text(c, TY_ENUMERATOR, ev, b);
+        else buf_puts(b, ev);
+        buf_puts(b, "; break;");
+      }
       /* Same shape one step on: `join` reaches this dispatch only because a
          user class owns the name, and a builtin array receiver still has to be
          joined rather than told it has no such method (#4071). Named arms, not
@@ -11109,9 +11123,13 @@ int emit_blockless_enumerator(Compiler *c, int id, Buf *b) {
      Enumerator: each_with_index yields [element, index] pairs, each_index
      yields the indices. A chained/terminal use (each_with_index.map/.to_a) is
      matched earlier by emit_each_with_index_terminal and never reaches here. */
+  /* A BOXED receiver stands down for a user class that owns the name: the arm
+     built an Enumerator over the object, so the method was never entered and
+     iterating the result yielded nothing (its analyze twin already asks, and
+     this one did not). A concretely-typed array receiver is not in doubt. */
   if (recv >= 0 && argc == 0 && nt_ref(nt, id, "block") < 0 &&
       (ty_is_array(comp_ntype(c, recv)) || comp_ntype(c, recv) == TY_ENUMERATOR ||
-       comp_ntype(c, recv) == TY_POLY) &&
+       (comp_ntype(c, recv) == TY_POLY && !user_defines_or_reads(c, name))) &&
       (sp_streq(name, "each_with_index") || sp_streq(name, "each_index"))) {
     /* An Enumerator receiver (`arr.each.each_with_index`) is materialized to its
        element array first (#2487). */

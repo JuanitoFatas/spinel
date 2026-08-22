@@ -917,7 +917,7 @@ static TyKind an_user_read_ty(Compiler *c, const char *name, int argc) {
    accumulates them all in one C temp, so the call's type has to be one both can
    hold: `Tags#include?` answering an index came back through an sp_bool slot as
    true/false, and `0` -- truthy in Ruby -- arrived as false (#4072). */
-static int an_user_ret_disagrees(Compiler *c, const char *name, TyKind want) {
+int an_user_ret_disagrees(Compiler *c, const char *name, TyKind want) {
   if (!name) return 0;
   for (int k = 0; k < c->nclasses; k++) {
     int mi = comp_method_in_chain(c, k, name, NULL);
@@ -4212,8 +4212,14 @@ else {
          of these synthesized, so any program with a Struct in it typed
          `arr.each_with_index` as that Struct (#4021). */
       if (found && !an_builtin_only && argc == 0 && nt_ref(nt, id, "block") < 0 &&
-          (sp_streq(name, "each_with_index") || sp_streq(name, "each_index")))
+          (sp_streq(name, "each_with_index") || sp_streq(name, "each_index"))) {
+        /* ... but the user arm is in the dispatch too, and both arms share one
+           C temp. Typed from the builtin alone, its answer was crammed into an
+           sp_Enumerator * -- so when the two disagree the call is poly, which
+           is the only thing that holds either. */
+        if (an_user_ret_disagrees(c, name, TY_ENUMERATOR)) return TY_POLY;
         return TY_ENUMERATOR;
+      }
       /* `merge` needs no container precondition either: a boxed receiver can
          always be a Hash, and the dispatch ends in the runtime merge that lets
          it answer for itself. Typed from the user arm alone the switch and the
