@@ -448,7 +448,6 @@ void sp_gc_collect(void){
   /* minor: the old list is not walked at all -- an old object's stale stamp
      simply reads as unmarked next generation, which is what a fresh unmark
      pass used to produce. */
-  sp_gc_bytes=sp_gc_old_bytes;
   /* Decided BEFORE the object sweep, because the threaded path sweeps the
      string heap from inside it (each worker takes its own slot) and would
      otherwise read this flag while it was still 0 -- and then sweep the old
@@ -468,6 +467,14 @@ void sp_gc_collect(void){
 #else
   sp_gc_sweep_young(&sp_gc_heap);
 #endif
+  /* Take the live total AFTER the sweep, not before it. The sweep accumulates
+     each survivor's size into sp_gc_old_bytes as it promotes, so this reads the
+     same number either way -- but a dead object's finalizer subtracts the
+     buffer it accounted for on the way up, and against a total already reset to
+     the live set those bytes were never there. Churning large arrays walked the
+     counter below zero; the retune read the wrapped value and set a threshold
+     near SIZE_MAX, which never fires again (#4073). */
+  sp_gc_bytes=sp_gc_old_bytes;
   /* The remembered set has done its job and starts over after EVERY cycle, not
      only a full one. Every young object it led the mark to has just been
      promoted by the sweep above, so a holder that is not written to again has

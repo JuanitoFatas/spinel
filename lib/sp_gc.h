@@ -232,7 +232,17 @@ static inline void sp_gc_bytes_sub(size_t n) {
 }
 #else
 static inline void sp_gc_bytes_add(size_t n) { sp_gc_bytes += n; }
-static inline void sp_gc_bytes_sub(size_t n) { sp_gc_bytes -= n; }
+/* Floored: the counter is a heuristic the retune divides by, and a wrapped
+   value there is not a large heap but a collector that never triggers again
+   (#4073). */
+/* Floored. The counter is a heuristic the retune divides by and multiplies, and
+   an array-growth path can subtract a capacity larger than the counter holds
+   (measured: sp_array.h's StrArray grow, 20472 against 10344) -- wrapping it
+   makes the trigger fire on every allocation until the next collection resets
+   it, and used to make the retune set a threshold that never fires at all. */
+static inline void sp_gc_bytes_sub(size_t n) {
+  sp_gc_bytes = sp_gc_bytes >= n ? sp_gc_bytes - n : 0;
+}
 #endif
 
 /* Push a header onto the shared sp_gc_heap list. Under SP_THREADS this is a
