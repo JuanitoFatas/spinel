@@ -1674,13 +1674,21 @@ static const char *const SP_RT_PREFIXES[] = {
 };
 
 /* The mangled name of a top-level method: `mc(name)`, with an `rb_` infix when
-   the plain form would sit in the runtime's own namespace. */
+   the plain form would sit in the runtime's own namespace.
+
+   The segment compared is the whole name when it carries no underscore. A
+   prefix names both a runtime NAMESPACE (sp_sym_intern, sp_int_add) and, for
+   about a dozen of them, a runtime IDENTIFIER of its own -- the typedefs
+   sp_sym and sp_int, sp_raise, sp_thread. Looking only in front of an
+   underscore protected the namespace and left the identifier open, so `def
+   sym` collided with the typedef and the program failed to build on a C
+   diagnostic that never mentions the name the author wrote. */
 const char *mc_top(const char *name) {
   static char buf[272];
   const char *m = mc(name);
   const char *us = strchr(m, '_');
-  if (us && us > m) {
-    size_t seg = (size_t)(us - m);
+  size_t seg = (us && us > m) ? (size_t)(us - m) : strlen(m);
+  if (seg > 0) {
     for (int i = 0; SP_RT_PREFIXES[i]; i++) {
       if (strlen(SP_RT_PREFIXES[i]) != seg) continue;
       if (strncmp(m, SP_RT_PREFIXES[i], seg) != 0) continue;
