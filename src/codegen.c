@@ -634,7 +634,15 @@ void emit_path_expr(Compiler *c, int node, Buf *b) {
    else renders the way puts renders it -- a user object through its own
    #to_s. The #to_str protocol of the String slots is the wrong one here. */
 void emit_to_s_expr(Compiler *c, int node, Buf *b) {
-  if (comp_ntype(c, node) == TY_STRING) { emit_expr(c, node, b); return; }
+  TyKind wt = comp_ntype(c, node);
+  if (wt == TY_STRING) { emit_expr(c, node, b); return; }
+  /* An UNTYPED node is not a boxed value, and emit_boxed renders one as
+     `(expr, sp_box_nil())` -- it evaluates the payload and then throws it
+     away. `@wrk.pack("C*")` on a nilable ivar is a const char * typed
+     TY_UNKNOWN (optcarrot's ROM#save_battery), and boxing it wrote an empty
+     file where the String slot these payloads used to take wrote the bytes.
+     Keep that rendering for an untyped operand; a poly one still converts. */
+  if (wt == TY_UNKNOWN || wt == TY_VOID) { emit_str_expr(c, node, b); return; }
   int tmp; Buf *hb = conv_hold_begin(b, &tmp);
   Buf *ob = hb ? hb : b;
   buf_puts(ob, "sp_poly_to_s("); emit_boxed(c, node, ob); buf_puts(ob, ")");
