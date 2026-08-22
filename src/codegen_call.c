@@ -13326,29 +13326,13 @@ static void emit_call_body(Compiler *c, int id, Buf *b) {
          and the program does not build (#3899). */
       if (rrt == TY_POLY && comp_ntype(c, id) == TY_POLY &&
           g_sn_skip != id && nt_ref(nt, id, "block") < 0) {
-        /* The universal predicates and conversions the poly runtime answers as
-           a RAW C scalar while inference calls the call itself poly: the name
-           is the only signal there, so it is named (emit_poly_pred_value and
-           the to_i/to_f arm are where these are rendered). Everything else is
-           read off the natural type, which is what brought the predicates that
-           take an argument (`&.start_with?("a")`) and `&.nil?` in -- a list
-           alone had left them on the unboxed path, where the two arms
-           disagreed and the program did not build (#4070). */
-        static const struct { const char *name; TyKind ty; } UNBOXEDQ[] = {
-          { "positive?", TY_BOOL }, { "negative?", TY_BOOL }, { "zero?", TY_BOOL },
-          { "nan?", TY_BOOL }, { "finite?", TY_BOOL }, { "even?", TY_BOOL },
-          { "odd?", TY_BOOL }, { "empty?", TY_BOOL }, { "frozen?", TY_BOOL },
-          { "integer?", TY_BOOL }, { "eql?", TY_BOOL }, { "instance_of?", TY_BOOL },
-          { "bytesize", TY_INT }, { "ord", TY_INT }, { "bit_length", TY_INT },
-          { "numerator", TY_INT }, { "denominator", TY_INT }, { "infinite?", TY_INT },
-          { "to_i", TY_INT }, { "hash", TY_INT }, { "object_id", TY_INT },
-          { "to_f", TY_FLOAT }, { "to_r", TY_RATIONAL }, { "to_c", TY_COMPLEX },
-          { "class", TY_CLASS },   /* sp_poly_class_val answers an sp_Class */
-          { NULL, TY_UNKNOWN } };
+        /* The call's natural type: infer_call states what the poly runtime
+           answers as a raw C scalar, so this arm needs no table of its own --
+           it boxes whatever the type names. A hand-kept list stood here and
+           went stale within a day of being written. */
         TyKind nat = infer_uncached(c, id);
-        int boxit = (nat == TY_BOOL);
-        for (int q = 0; UNBOXEDQ[q].name && !boxit; q++)
-          if (sp_streq(name, UNBOXEDQ[q].name)) { nat = UNBOXEDQ[q].ty; boxit = 1; }
+        int boxit = (nat != TY_POLY && nat != TY_UNKNOWN && nat != TY_VOID &&
+                     !ty_is_array(nat) && nat != TY_STRING);
         if (boxit && !user_defines_or_reads(c, name)) {
           int tsn = ++g_tmp;
           buf_printf(b, "({ sp_RbVal _sn_%d = ", tsn); emit_expr(c, recv, b);

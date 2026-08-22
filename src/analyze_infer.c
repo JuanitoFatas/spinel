@@ -943,6 +943,34 @@ TyKind infer_call(Compiler *c, int id) {
   if (args >= 0) argv = nt_arr(nt, args, "arguments", &argc);
   if (!name) return TY_UNKNOWN;
 
+  /* The universal predicates and conversions the poly runtime answers as a RAW
+     C scalar. The emitters have always known this; the TYPE did not say it, so
+     `x&.frozen?` was inferred poly while its value arm rendered an sp_bool, and
+     the safe-navigation emitter carried a hand-kept table of these names to
+     put the two back together. A table of what a call ANSWERS belongs in the
+     inference, where every consumer reads it -- and it went stale as tables do
+     (#4070 follow-up: `begin`, `end`, `count` and `bytes` were missing and
+     `infinite?` was listed with the wrong type). Guarded the way the emitter
+     guarded its table: a user class owning the name answers for itself. */
+  if (recv >= 0 && nt_ref(nt, id, "block") < 0 && !an_user_defines_or_reads(c, name) &&
+      infer_type(c, recv) == TY_POLY) {
+    static const struct { const char *n; int ac; TyKind t; } POLY_RAW[] = {
+      { "frozen?", 0, TY_BOOL }, { "nil?", 0, TY_BOOL }, { "zero?", 0, TY_BOOL },
+      { "positive?", 0, TY_BOOL }, { "negative?", 0, TY_BOOL },
+      { "even?", 0, TY_BOOL }, { "odd?", 0, TY_BOOL }, { "nan?", 0, TY_BOOL },
+      { "finite?", 0, TY_BOOL }, { "integer?", 0, TY_BOOL }, { "empty?", 0, TY_BOOL },
+      { "eql?", 1, TY_BOOL }, { "equal?", 1, TY_BOOL }, { "instance_of?", 1, TY_BOOL },
+      { "bytesize", 0, TY_INT }, { "ord", 0, TY_INT }, { "bit_length", 0, TY_INT },
+      { "numerator", 0, TY_INT }, { "denominator", 0, TY_INT },
+      { "to_i", 0, TY_INT }, { "hash", 0, TY_INT }, { "object_id", 0, TY_INT },
+      { "begin", 0, TY_INT }, { "end", 0, TY_INT }, { "count", 0, TY_INT },
+      { "to_f", 0, TY_FLOAT }, { "to_r", 0, TY_RATIONAL }, { "to_c", 0, TY_COMPLEX },
+      { "class", 0, TY_CLASS }, { "bytes", 0, TY_INT_ARRAY },
+      { NULL, 0, TY_UNKNOWN } };
+    for (int q = 0; POLY_RAW[q].n; q++)
+      if (POLY_RAW[q].ac == argc && sp_streq(name, POLY_RAW[q].n)) return POLY_RAW[q].t;
+  }
+
   /* A retargeted `x.send(:m)` reaching a top-level def: see the codegen twin. */
   if (nt_str(nt, id, "send_blind") && recv >= 0 && nt_ref(nt, id, "block") < 0) {
     int smi = comp_method_index(c, name);
