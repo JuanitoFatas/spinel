@@ -11455,10 +11455,15 @@ void analyze_program(Compiler *c) {
   /* after the arg/receiver marks: a bare `{}` with no other context takes its
      variant from the peer it is compared against (#3040) or from the key it is
      indexed with (#3028, #3029) */
+  /* Same argument, for the four passes mark_empty_literal_args is called
+     alongside: none of them creates or renames a scope either, and each crosses
+     the node table with method lookups underneath. */
+  comp_scope_index_set_frozen(1);
   mark_mixed_key_hash_locals(c);
   mark_empty_hash_cmp_peers(c);
   (void)mark_empty_hash_key_ctx(c);
   mark_empty_hash_const_writes(c);
+  comp_scope_index_set_frozen(0);
 
   /* A bare identifier inside a class method that names a `class << self`
      attr reader is an implicit-self read of that singleton attribute; give it
@@ -11659,6 +11664,14 @@ void analyze_program(Compiler *c) {
       blk_fwd_callee[fe] = fmi;
     }
   }
+  /* The yield-inlining analysis below reads scope shape but never creates or
+     renames a scope, so the shape index is stable across it -- the same argument
+     mark_empty_literal_args makes for its own body. Frozen, the method lookups
+     underneath it (per scope * per node, through a_block_is_lifted -> infer_type
+     -> infer_call) take the O(1) hash index instead of the unfrozen O(nscopes)
+     reverse scan, and the name-keyed memo in an_user_defines_or_reads -- which
+     stands down while the index is unfrozen -- is live for them. */
+  comp_scope_index_set_frozen(1);
   char *inline_cand = (char *)calloc((size_t)(c->nscopes > 0 ? c->nscopes : 1), 1);
   int cfwd = 64, nfwd = 0;
   int *fwd_from = (int *)malloc(sizeof(int) * (size_t)cfwd);
@@ -11749,6 +11762,7 @@ void analyze_program(Compiler *c) {
   }
   for (int mi = 0; mi < c->nscopes; mi++)
     if (inline_cand[mi]) c->scopes[mi].yields = 1;
+  comp_scope_index_set_frozen(0);
   free(inline_cand); free(fwd_from); free(fwd_to);
   free(blk_call_recv);
   free(blk_arg_expr);
