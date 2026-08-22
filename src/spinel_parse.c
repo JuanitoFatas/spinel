@@ -2888,8 +2888,7 @@ static char *rewrite_syntax_sugar(char *source) {
     /* `.send(...)` is NOT rewritten here (it used to be): the textual pass
        has no types, so it also erased sends on BasicObject subclasses, which
        lack #send and must raise (#2725). The analyze-side send desugar
-       retargets it with the receiver's class in hand. `.__send__` stays: it
-       IS a BasicObject method, so the blind rewrite is always right. */
+       retargets it with the receiver's class in hand. */
     /* Load-path manipulation in statement position -- the pre-bundler
        `$:.unshift File.dirname(__FILE__)` preamble and its variants
        (`$LOAD_PATH.unshift/push/append/<<`). Under whole-program AOT there
@@ -3009,17 +3008,14 @@ static char *rewrite_syntax_sugar(char *source) {
         }
       }
     }
-    /* .__send__(:foo, args) → .foo(args). CRuby's overrides-resistant
-       alias of send; semantically identical for Spinel's static dispatch. */
-    if (i + 11 < len && strncmp(source + i, ".__send__(:", 11) == 0) {
-      REWRITE_SEND_CALL(".__send__(:", 11, 0);
-      continue;
-    }
-    /* .__send__("foo", args) → .foo(args). String-form variant. */
-    if (i + 11 < len && strncmp(source + i, ".__send__(\"", 11) == 0) {
-      REWRITE_SEND_CALL(".__send__(\"", 11, 1);
-      continue;
-    }
+    /* `.__send__(...)` is not rewritten here either. It used to be, on the
+       grounds that __send__ IS a BasicObject method so the blind rewrite is
+       always right -- which is true about the RECEIVER and says nothing about
+       what the rewrite costs: the textual pass produces a plain `.foo(args)`
+       with nothing to mark, and send's whole point is that it ignores
+       visibility. The analyze-side desugar retargets it with the receiver's
+       class in hand and stamps the permission (see desugar_public_send_recv);
+       its blank-slate guard already exempts __send__. */
     /* `&:symbol` symbol-to-proc. Prism parses `&:sym` natively, but
        Spinel only lowers the native BlockArgumentNode+SymbolNode shape
        for a few methods (inject / reduce / sort_by); general block

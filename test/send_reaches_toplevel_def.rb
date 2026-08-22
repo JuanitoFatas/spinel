@@ -38,3 +38,32 @@ class Priv
 end
 
 p Priv.new.call_it
+
+# __send__ is the same protocol, and takes the same route now: the textual
+# rewrite that consumed it before the analyzer could stamp it is gone
+class Alias
+  def go = self.__send__(:zork, 8)
+  def bare = __send__(:zork, 9)
+  def own = self.__send__(:mine)
+  def hidden_call = self.__send__(:hidden)
+  def mine = "class-mine"
+
+  private
+
+  def hidden = "class-hidden"
+end
+
+a = Alias.new
+p a.go
+p a.bare
+p a.own
+p a.hidden_call
+p Alias.new.__send__("mine")
+
+# still a BasicObject method, which is why the rewrite was blind to begin with
+class Bare < BasicObject
+  def go = __send__(:inner)
+  def inner = "basic"
+end
+
+p Bare.new.go
