@@ -3602,17 +3602,18 @@ void emit_fiber_new(Compiler *c, int id, Buf *b, int as_gen, int size_node) {
         if (lty == TY_POLY) {
           buf_puts(pb, vb.p ? vb.p : "sp_box_nil()");
         }
-        else if (lty == TY_RANGE || lty == TY_FLOAT_RANGE || lty == TY_STR_RANGE ||
-                 lty == TY_TIME || lty == TY_TMS) {
-          /* a by-value struct tail (`(1..3).each { }` answers its Range) has no
-             box_open form; box it through the generic boxer (#3587) */
+        else {
+          /* Everything else goes through the generic boxer. The open/close pair
+             that used to stand here knows the scalars, the arrays and the
+             objects, and NOT the hashes -- so a `Thread.new { h.each { } }`,
+             whose tail answers the hash, emitted a bare `_fb->yielded_value =
+             <sp_StrIntHash *>` with an unbalanced close paren after it (#4081).
+             A by-value struct tail (`(1..3).each { }` answers its Range) had
+             already needed the generic form for the same reason (#3587). */
           Buf rb2 = {0};
           emit_boxed_text(c, lty, vb.p ? vb.p : "", &rb2);
           buf_puts(pb, rb2.p ? rb2.p : "sp_box_nil()");
           free(rb2.p);
-        }
-        else {
-          emit_box_open(c, lty, pb); buf_puts(pb, vb.p ? vb.p : ""); emit_box_close(c, lty, pb);
         }
         buf_puts(pb, ";\n");
         free(pre2.p); free(vb.p);
