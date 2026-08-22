@@ -13246,7 +13246,9 @@ static void emit_call_body(Compiler *c, int id, Buf *b) {
           { "integer?", TY_BOOL }, { "eql?", TY_BOOL }, { "instance_of?", TY_BOOL },
           { "bytesize", TY_INT }, { "ord", TY_INT }, { "bit_length", TY_INT },
           { "numerator", TY_INT }, { "denominator", TY_INT }, { "infinite?", TY_INT },
-          { "to_i", TY_INT }, { "hash", TY_INT }, { "to_f", TY_FLOAT },
+          { "to_i", TY_INT }, { "hash", TY_INT }, { "object_id", TY_INT },
+          { "to_f", TY_FLOAT }, { "to_r", TY_RATIONAL }, { "to_c", TY_COMPLEX },
+          { "class", TY_CLASS },   /* sp_poly_class_val answers an sp_Class */
           { NULL, TY_UNKNOWN } };
         TyKind nat = infer_uncached(c, id);
         int boxit = (nat == TY_BOOL);

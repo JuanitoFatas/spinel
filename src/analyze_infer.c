@@ -6170,13 +6170,24 @@ TyKind infer_type(Compiler *c, int id) {
   /* `x&.pred?` on a receiver that may be nil answers nil OR a boolean, and a
      C bool has no nil: the two arms of the emitted guard then disagreed about
      their type and the program did not build (#3899). Such a call is poly.
+     A bool is not the only such answer -- a Symbol, a Class, a Rational and a
+     Complex have no C nil either, and the guard boxed nil into their slot all
+     the same. The two rules in infer_uncached that call a `&.` poly are placed
+     by POSITION in the inference chain, so a name resolved before them
+     (`class`, `to_sym`) never reached one; this one runs after every arm and
+     asks the property that actually decides it: can the answer's C type hold
+     a nil? Integer and Float have their sentinels, String and the arrays and
+     the reference objects have NULL, so those keep their concrete type and
+     the guard uses that nil (the array trio of #3461 is this same rule).
      The receiver's type does not narrow this. A miss on a specialized
      container is the element type's C nil -- a NULL string, SP_INT_NIL --
      not a poly nil, so `h["zz"]&.empty?` reached the guard with a concrete
      receiver and answered `false` where CRuby answers nil (#4070). `&.` is
      the program saying nil is possible; the answer has to be able to hold
      one. */
-  if (t == TY_BOOL && nt_kind(c->nt, id) == NK_CallNode) {
+  if ((t == TY_BOOL || t == TY_CLASS || t == TY_SYMBOL ||
+       t == TY_RATIONAL || t == TY_COMPLEX) &&
+      nt_kind(c->nt, id) == NK_CallNode) {
     const char *sn_op = nt_str(c->nt, id, "call_operator");
     int sn_recv = nt_ref(c->nt, id, "receiver");
     if (sn_op && sp_streq(sn_op, "&.") && sn_recv >= 0) t = TY_POLY;
