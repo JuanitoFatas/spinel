@@ -8254,6 +8254,23 @@ char *codegen_program(const NodeTable *nt) {
         }
       }
     }
+    /* An `obj.extend(Mod)` records its membership on the synthesized singleton
+       subclass rather than as an `include` statement in a class body, so the
+       scan above cannot see it -- the extended object answered is_a?(Mod) with
+       false (#4080). Merge what analyze recorded, deduped against the scan. */
+    for (int ci = 0; ci < c->nclasses; ci++) {
+      ClassInfo *mci = &c->classes[ci];
+      for (int m = 0; m < mci->nincluded_mods; m++) {
+        int mid3 = mci->included_mods[m];
+        if (mid3 < 0 || mid3 >= c->nclasses) continue;
+        int seen3 = 0;
+        for (int q = 0; q < cls_nincs[ci]; q++) if (cls_incs[ci][q] == mid3) { seen3 = 1; break; }
+        if (seen3) continue;
+        cls_incs[ci] = realloc(cls_incs[ci], sizeof(int) * (size_t)(cls_nincs[ci] + 1));
+        if (!cls_incs[ci]) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+        cls_incs[ci][cls_nincs[ci]++] = mid3;
+      }
+    }
     /* Emit sp_class_ancestors using the include info. */
     buf_puts(&b, "static sp_PolyArray *sp_class_ancestors(sp_Class c){\n");
     buf_puts(&b, "  sp_PolyArray *a=sp_PolyArray_new();\n");

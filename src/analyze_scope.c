@@ -1361,6 +1361,25 @@ static int sg_binding(Compiler *c, int id, int recv, int *is_const, const char *
 /* Copy module `mod_ci`'s instance methods onto subclass `newci` (obj.extend). */
 static void sg_transplant_module(Compiler *c, int mod_ci, int newci) {
   const NodeTable *nt = c->nt;
+  /* Record the membership the way `include` does, so the extended object
+     answers is_a?(Mod) -- it reported false, because only the methods were
+     transplanted and nothing said the synthesized subclass was a member
+     (#4080). */
+  {
+    ClassInfo *sci = &c->classes[newci];
+    int seen = 0;
+    for (int m = 0; m < sci->nincluded_mods; m++)
+      if (sci->included_mods[m] == mod_ci) { seen = 1; break; }
+    if (!seen) {
+      if (sci->nincluded_mods >= sci->cincluded_mods) {
+        sci->cincluded_mods = sci->cincluded_mods ? sci->cincluded_mods * 2 : 4;
+        int *nm3 = realloc(sci->included_mods, sizeof(int) * (size_t)sci->cincluded_mods);
+        if (!nm3) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+        sci->included_mods = nm3;
+      }
+      sci->included_mods[sci->nincluded_mods++] = mod_ci;
+    }
+  }
   int snap = c->nscopes;
   for (int ms = 0; ms < snap; ms++) {
     Scope *src = &c->scopes[ms];
