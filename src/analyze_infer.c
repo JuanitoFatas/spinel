@@ -4112,7 +4112,12 @@ else {
       /* poly.unpack1(fmt): String#unpack1 on a value that widened to poly
          (pervasive in doom's binary WAD parsing). Mirrors the rt==TY_STRING
          rule so a single-directive int format stays int, not poly. */
-      if (sp_streq(name, "unpack1") && argc == 1) return an_unpack1_lit_type(nt, argv[0]);
+      if (sp_streq(name, "unpack1") && argc == 1) {
+        /* a user class owning the name puts its own arm in the dispatch, and
+           both arms share one C temp: type the call for what both can hold */
+        TyKind u1 = an_unpack1_lit_type(nt, argv[0]);
+        return an_user_ret_disagrees(c, name, u1) ? TY_POLY : u1;
+      }
       /* poly.delete(chars): String#delete on a value that widened to poly
          (`data[offset, 8].delete("\x00").upcase` stripping NUL padding off a
          fixed-width WAD name field in doom's texture parser). Resolve it here

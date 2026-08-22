@@ -4916,9 +4916,15 @@ static int emit_poly_method_dispatch(Compiler *c, int id, Buf *b) {
        (#4071), so without this the Array case reached the raise. */
     int is_pjoin = sp_streq(name, "join") && argc <= 1 && !has_splat_arg &&
                    nt_ref(nt, id, "block") < 0;
+    /* pack / unpack1 on a poly value that is a builtin container or string,
+       alongside the user arms: their own arms stand down when a user class owns
+       the name, and without these the builtin case reached the raise -- or, for
+       unpack1, read an object through a char * (#4071's shape). */
+    int is_ppack = (sp_streq(name, "pack") || sp_streq(name, "unpack1")) &&
+                   argc == 1 && !has_splat_arg && nt_ref(nt, id, "block") < 0;
     int is_cover = sp_streq(name, "cover?") && argc == 1 && !diag_user_defines(c, name);
     int is_gcdlcm = sp_streq(name, "gcdlcm") && argc == 1 && !diag_user_defines(c, name);
-    if (ncand > 0 || is_index || is_pdelete || is_pdig || is_pvalues_at || is_pfirstn || is_include || is_fetch || is_push || is_pjoin || is_pred || is_strftime || is_intersect || is_arr_index || is_cover || is_gcdlcm || is_pmerge) {
+    if (ncand > 0 || is_index || is_pdelete || is_pdig || is_pvalues_at || is_pfirstn || is_include || is_fetch || is_push || is_pjoin || is_ppack || is_pred || is_strftime || is_intersect || is_arr_index || is_cover || is_gcdlcm || is_pmerge) {
       TyKind ret = comp_ntype(c, id);
       int tv = ++g_tmp, tr = ++g_tmp;
       int *atmp = malloc(sizeof(int) * argc);
@@ -5007,6 +5013,18 @@ static int emit_poly_method_dispatch(Compiler *c, int id, Buf *b) {
         else if (ret == TY_INT_ARRAY) buf_printf(b, "_t%d", tg2);
         else buf_printf(b, "(sp_int)(uintptr_t)_t%d", tg2);
         buf_puts(b, "; }\nelse ");
+      }
+      /* unpack1 on a TAG_STR receiver: its own poly arm stands down when a user
+         class owns the name, so the String case needs one here -- and the old
+         fallthrough read the receiver as a char * whatever it held. */
+      if (is_ppack && sp_streq(name, "unpack1")) {
+        Buf ub; memset(&ub, 0, sizeof ub);
+        buf_printf(&ub, "sp_PolyArray_get(sp_str_unpack(_t%d.v.s, _t%d), 0)", tv, atmp[0]);
+        buf_printf(b, "if (_t%d.tag == SP_TAG_STR) { _t%d = ", tv, tr);
+        if (ret == TY_POLY) buf_puts(b, ub.p ? ub.p : "");
+        else emit_unbox_text(c, is_scalar_ret(ret) ? ret : TY_INT, ub.p ? ub.p : "", b);
+        buf_puts(b, "; }\nelse ");
+        free(ub.p);
       }
       /* include? on a TAG_STR receiver: check tag before entering cls_id switch.
          Boxed when a user arm widened the dispatch result to poly (#4072). */
@@ -5371,6 +5389,21 @@ else {
         }
         if (ret == TY_POLY) buf_printf(b, " _t%d = _t%d;", tr, tv);
         buf_puts(b, " break;");
+      }
+      if (is_ppack) {
+        int upk = sp_streq(name, "unpack1");
+        Buf pb2; memset(&pb2, 0, sizeof pb2);
+        if (upk) { /* a String receiver: handled by the tag pre-arm above */ }
+        else {
+          buf_puts(b, " case SP_BUILTIN_INT_ARRAY: case SP_BUILTIN_STR_ARRAY:"
+                      " case SP_BUILTIN_FLT_ARRAY: case SP_BUILTIN_POLY_ARRAY: ");
+          buf_printf(&pb2, "sp_poly_pack(_t%d, _t%d)", tv, atmp[0]);
+          buf_printf(b, "_t%d = ", tr);
+          if (ret == TY_POLY) emit_boxed_text(c, TY_STRING, pb2.p ? pb2.p : "", b);
+          else buf_puts(b, pb2.p ? pb2.p : "");
+          buf_puts(b, "; break;");
+        }
+        free(pb2.p);
       }
       if (is_pjoin) {
         /* every array kind joins through the same runtime helper; the separator

@@ -11611,7 +11611,8 @@ int emit_poly_call(Compiler *c, int id, Buf *b) {
      raising "undefined method 'unpack1' for poly". Mirrors the rt==TY_STRING
      codegen and its inference rule (a single-directive numeric format
      yields an unboxed int or float). */
-  if (recv >= 0 && rt == TY_POLY && sp_streq(name, "unpack1") && argc == 1) {
+  if (recv >= 0 && rt == TY_POLY && sp_streq(name, "unpack1") && argc == 1 &&
+      !user_defines_or_reads(c, name)) {
     TyKind u1t = comp_ntype(c, id);
     if (u1t == TY_INT)        buf_puts(b, "sp_poly_to_i(");
     else if (u1t == TY_FLOAT) buf_puts(b, "sp_poly_to_f_opt(");
@@ -11858,7 +11859,8 @@ int emit_poly_call(Compiler *c, int id, Buf *b) {
     return 1;
   }
   /* poly receiver: pack(fmt) -> runtime dispatch (nullable array). */
-  if (recv >= 0 && rt == TY_POLY && sp_streq(name, "pack") && argc == 1) {
+  if (recv >= 0 && rt == TY_POLY && sp_streq(name, "pack") && argc == 1 &&
+      !user_defines_or_reads(c, name)) {
     buf_puts(b, "sp_poly_pack("); emit_expr(c, recv, b);
     buf_puts(b, ", "); emit_expr(c, argv[0], b); buf_puts(b, ")");
     return 1;
