@@ -408,6 +408,14 @@ static inline void sp_mark_rbval(sp_RbVal v) {
 static inline void sp_cell_scan_str(void *p) { sp_mark_string(*(const char **)p); }
 static inline void sp_cell_scan_ptr(void *p) { sp_gc_mark(*(void **)p); }
 static inline void sp_cell_scan_rbval(void *p) { sp_mark_rbval(*(sp_RbVal *)p); }
+/* A captured Proc rides in an sp_int cell as (sp_int)(uintptr_t)ptr -- the cell
+   is an integer slot, but what it holds is a collectable object, and without a
+   scan the capture kept the CELL alive and nothing kept the proc. A nested
+   `proc { |v| two.call(v, v) }` then called through freed memory (#4077). */
+static inline void sp_cell_scan_procint(void *p) {
+  sp_int v = *(sp_int *)p;
+  if (v) sp_gc_mark((void *)(uintptr_t)v);
+}
 /* A low-bit-tagged root entry is an sp_RbVal* (see SP_GC_ROOT_RBVAL);
    an untagged entry is a plain void** to a direct GC pointer. */
 static inline void sp_gc_mark_root_entry(void **e) {

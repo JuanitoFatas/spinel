@@ -681,6 +681,10 @@ void emit_block_locals_reset(Compiler *c, int blk, Buf *b, int indent) {
             emit_ctype(c, lv->type, b);
             buf_printf(b, "), NULL, %s); *_cell_%s = NULL;\n", cell_scan, rn2);
           }
+          else if (lv->type == TY_PROC) {
+            /* an int cell holding a collectable Proc still needs a scan (#4077) */
+            buf_printf(b, "_cell_%s = (sp_int *)sp_gc_alloc(sizeof(sp_int), NULL, sp_cell_scan_procint); *_cell_%s = 0;\n", rn2, rn2);
+          }
           else {
             buf_printf(b, "_cell_%s = (sp_int *)sp_gc_alloc(sizeof(sp_int), NULL, NULL); *_cell_%s = 0;\n", rn2, rn2);
           }
