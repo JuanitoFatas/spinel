@@ -975,9 +975,18 @@ int emit_array_call(Compiler *c, int id, Buf *b) {
      array read out of a container (a transpose row, a nested element):
      coerce to a poly array and re-enter the array fold emitter with the
      receiver overridden (#3312). */
-  if (recv >= 0 && rt == TY_POLY && nt_ref(nt, id, "block") >= 0 &&
+  /* The operator-SYMBOL form takes the same route: `reduce(:+)` and
+     `reduce(init, :+)` carry no block, and without this they fell through to
+     the Hash/Enumerable face, which converts the receiver to a hash and refuses
+     an Array at run time -- so a partitioned array answered NoMethodError
+     (#4079). */
+  int red_sym = (nt_ref(nt, id, "block") < 0 && argc >= 1 && argc <= 2 &&
+                 nt_type(nt, argv[argc - 1]) &&
+                 sp_streq(nt_type(nt, argv[argc - 1]), "SymbolNode"));
+  if (recv >= 0 && rt == TY_POLY &&
+      (nt_ref(nt, id, "block") >= 0 || red_sym) &&
       (sp_streq(name, "reduce") || sp_streq(name, "inject")) &&
-      argc <= 1 && g_n_argov < MAX_ARG_OVERRIDE) {
+      (argc <= 1 || red_sym) && g_n_argov < MAX_ARG_OVERRIDE) {
     int ta = ++g_tmp;
     Buf rb; memset(&rb, 0, sizeof rb); emit_expr(c, recv, &rb);
     emit_indent(g_pre, g_indent);
