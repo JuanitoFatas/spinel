@@ -212,6 +212,29 @@ void compute_reachable(Compiler *c) {
     }
   }
 
+  /* `reduce(:sym)` / `inject(seed, :sym)` names the method by Symbol, which is
+     not a CallNode, so the BFS above never
+     saw the name and the method was pruned -- the fold then fell through to
+     the unresolved-call raise, which reads as "undefined method '^' for an
+     instance of F" for a method the program plainly defines (#4069). Only a
+     method with no OTHER call site was affected, which is what made it look
+     like an operator problem rather than a reachability one. */
+  {
+    for (int id = 0; id < c->nt->count; id++) {
+      if (nt_kind(c->nt, id) != NK_CallNode) continue;
+      const char *nm = nt_str(c->nt, id, "name");
+      if (!nm) continue;
+      if (!sp_streq(nm, "reduce") && !sp_streq(nm, "inject")) continue;
+      int args = nt_ref(c->nt, id, "arguments");
+      int an = 0;
+      const int *av = args >= 0 ? nt_arr(c->nt, args, "arguments", &an) : NULL;
+      for (int k = 0; k < an; k++)
+        if (nt_kind(c->nt, av[k]) == NK_SymbolNode && nt_str(c->nt, av[k], "value"))
+          MARK_NAME(nt_str(c->nt, av[k], "value"));
+    }
+    while (qhead < qtail) { int s = queue[qhead++]; for (int ni = 0; ni < sc_n[s]; ni++) MARK_NAME(scope_calls[s][ni]); }
+  }
+
   /* case/in array and hash patterns may call a user object's #deconstruct /
      #deconstruct_keys, which have no explicit call site in the AST. If any such
      pattern exists, mark those methods reachable (dead ones are stripped). */
