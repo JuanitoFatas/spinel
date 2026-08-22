@@ -1639,47 +1639,11 @@ const char *mc(const char *name) {
   return buf;
 }
 
-/* The module prefixes the runtime's own symbols use: every `sp_` function in
-   lib/ is `sp_<prefix>_...`. A TOP-LEVEL Ruby method mangles to `sp_<name>`,
-   so one whose name starts with any of these can collide with a runtime
-   symbol -- `def str_hash` collided with sp_str_hash and the generated C did
-   not compile (#3973). Such a method is emitted with an `rb_` infix instead;
-   the name is internal, so renaming one that would not really have collided
-   costs nothing. Regenerate with:
-     grep -rhoE '\bsp_[a-z][a-z0-9]*_' lib/*.h lib/*.c | sort -u |
-       sed 's/^sp_//;s/_$//' */
-static const char *const SP_RT_PREFIXES[] = {
-  "abort", "active", "addrinfo", "alloc", "argf", "argv", "array", "at",
-  "backtrace", "bigint", "bm", "bound", "box", "brat", "brk", "bt",
-  "builtin", "bytes", "c", "callee", "caller", "case", "catch", "cell",
-  "char", "class", "cmperr", "complex", "convert", "crypto", "ctx", "cur",
-  "curry", "dir", "dyn", "encoding", "endless", "enum", "env", "exc",
-  "exit", "explicit", "ext", "fd", "ffi", "fiber", "file", "float", "fmod",
-  "fmt", "format", "frange", "fstr", "gc", "get", "glob", "hashproc",
-  "heap", "i64", "inflight", "inspect", "install", "int", "interrupt",
-  "io", "json", "kernel", "krand", "kwargs", "last", "lgamma", "loop",
-  "mar", "mark", "marshal", "marv", "math", "md", "method", "monotonic",
-  "mpz", "net", "nil", "nomethod", "num", "obj", "oom", "openstruct",
-  "pair", "pcg32", "pcg", "pending", "penum", "poly", "polyarr",
-  "polypoly", "pool", "preempt", "proc", "process", "program", "ptr",
-  "publish", "queue", "raise", "random", "range", "rat", "rational",
-  "rationalize", "rbs", "rbval", "re", "read", "real", "recompute",
-  "reraise", "rescue", "resolve", "round", "ruby", "safepoint", "sched",
-  "select", "sig", "signal", "simplest", "slurp", "snprintf", "sock",
-  "sockopt", "sort", "splat", "srange", "stage", "stat", "str", "strpoly",
-  "stw", "sweep", "sym", "sympoly", "sysmon", "system", "thread", "time",
-  "tls", "trap", "typed", "uc", "unbox", "unwind", "urandom", "user",
-  "utf8", "w", "wi", "with", "worker",
-  /* Bare runtime functions whose names a Ruby method can plausibly take:
-     `def gcd`, `def gets`, `def throw` all collided with one. They are here
-     because the list is hand-kept -- the set that actually matters is "every
-     bare sp_<word> the generated TU can see", and deriving it from the runtime
-     headers instead would stop the list going stale in the first place. */
-  "backtick", "bool", "ceildiv", "condvar", "fnmatch1", "fremainder", "gcd",
-  "gets", "idiv", "imod", "ipow10", "iremainder", "lcm", "mutex", "powmod",
-  "readlines", "sleep", "sprintf", "throw", "unsentinel",
-  NULL
-};
+/* The names a top-level Ruby method must not take: generated from the runtime
+   sources by the Makefile (build/csrc/sp_rt_names.h), because the set is a fact
+   about those sources and a hand-kept copy of it goes stale -- `def gcd` and
+   `def gets` collided with sp_gcd and sp_gets while the list said nothing. */
+#include "sp_rt_names.h"
 
 /* The mangled name of a top-level method: `mc(name)`, with an `rb_` infix when
    the plain form would sit in the runtime's own namespace.

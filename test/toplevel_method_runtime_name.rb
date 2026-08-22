@@ -46,6 +46,24 @@ p mutex(8)
 p backtick(9)
 p idiv(10, 11)
 
+# names only the generated set carries: the reserved set is read from the
+# runtime sources now, so a name that exists there is covered whether or not
+# anyone remembered to list it
+def ceildiv(a, b) = "ceildiv:#{a}:#{b}"
+def powmod(v) = "powmod:#{v}"
+def unsentinel(v) = "unsentinel:#{v}"
+def condvar(v) = "condvar:#{v}"
+
+p ceildiv(1, 2)
+p powmod(3)
+p unsentinel(4)
+p condvar(5)
+
+# an infixed name and a user name that already spells the infix stay apart
+def rb_sym(v) = "rb_sym:#{v}"
+p sym(90)
+p rb_sym(91)
+
 # and the mangling does not leak into Ruby: the names still call each other
 def outer(v) = sym(v) + "/" + int(v)
 p outer(11)

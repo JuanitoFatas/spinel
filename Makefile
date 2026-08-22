@@ -171,6 +171,28 @@ build/csrc/spinel_rev.h: FORCE | build/csrc
 
 build/csrc/main.o: build/csrc/spinel_rev.h
 
+# The names a top-level Ruby method must not take: every first segment of an
+# sp_* identifier the runtime owns. Hand-keeping this list is what let `def gcd`
+# and `def gets` collide with sp_gcd / sp_gets -- the set is a fact about the
+# runtime sources, so read it from them. Deliberately over-inclusive: an extra
+# name only means one more method carries the rb_ infix, while a missing one is
+# a C redeclaration in generated code. `rb` itself is in so a user `def rb_x`
+# cannot land on the same symbol as an infixed `def x`. cmp-guarded like
+# spinel_rev.h, so only a real change recompiles.
+SP_RT_NAME_SRC = $(wildcard lib/*.h lib/*.c packages/*/*.h packages/*/*.c)
+
+build/csrc/sp_rt_names.h: $(SP_RT_NAME_SRC) | build/csrc
+	@t=$@.tmp.$$$$; \
+	{ echo "/* generated from the runtime sources; see the Makefile rule */"; \
+	  echo "static const char *const SP_RT_PREFIXES[] = {"; \
+	  { grep -hoE '\bsp_[a-z][a-z0-9_]*' $(SP_RT_NAME_SRC) 2>/dev/null \
+	    | sed 's/^sp_//' | cut -d_ -f1; echo rb; } \
+	    | sort -u | sed 's/.*/  "&",/'; \
+	  echo "  NULL"; echo "};"; } > $$t; \
+	if cmp -s $$t $@; then rm -f $$t; else mv $$t $@; fi
+
+build/csrc/codegen_util.o: build/csrc/sp_rt_names.h
+
 FORCE:
 
 build/csrc/sp_parse_lib.o: src/spinel_parse.c $(PRISM_LIB) | build/csrc
