@@ -1,5 +1,9 @@
 #include "codegen_internal.h"
 
+/* The call whose poly-hash face is being re-emitted, so the arm that installs
+   the face does not fire again on its own substituted receiver. */
+static int g_pp_hash_node = -1;
+
 const int *call_args(const NodeTable *nt, int id, int *argc) {
   *argc = 0;
   int args = nt_ref(nt, id, "arguments");
@@ -11354,23 +11358,56 @@ int emit_unresolved_call(Compiler *c, int id, Buf *b) {
         free(fpp.p);
       }
     }
-    if (grt == TY_POLY && ty_poly_hash_face_name(nt_str(nt, id, "name")) &&
+    /* The re-entry below used to be guarded only by retyping the receiver node,
+       and a type cache is not a recursion guard: anything under emit_call that
+       asks the inference re-establishes the node's own type, the arm fires
+       again on its own substituted receiver, and it converts the conversion --
+       `v&.entries` on a nilable hash emitted sp_poly_as_pp_hash 63 times, each
+       applied to the last. Guard on the node id, like the safe-navigation
+       re-entry does. */
+    if (grt == TY_POLY && g_pp_hash_node != id &&
+        ty_poly_hash_face_name(nt_str(nt, id, "name")) &&
         g_n_argov < MAX_ARG_OVERRIDE) {
       const char *hnm = nt_str(nt, id, "name");
       int thv = ++g_tmp;
       Buf hrb; memset(&hrb, 0, sizeof hrb); emit_boxed(c, recv, &hrb);
-      emit_indent(g_pre, g_indent);
-      buf_printf(g_pre, "sp_PolyPolyHash *_t%d = sp_poly_as_pp_hash(%s, \"%s\"); SP_GC_ROOT(_t%d);\n",
-                 thv, hrb.p ? hrb.p : "sp_box_nil()", hnm, thv);
+      /* Inside a safe-navigation value arm the conversion must NOT go to the
+         statement prelude: that lands in front of the nil guard, and
+         sp_poly_as_pp_hash raises on the nil the guard exists to catch. Keep it
+         inline there, in a statement expression around the re-emitted call. */
+      int hinl = (g_sn_skip >= 0);
+      Buf hib; memset(&hib, 0, sizeof hib);
+      if (hinl)
+        buf_printf(&hib, "({ sp_PolyPolyHash *_t%d = sp_poly_as_pp_hash(%s, \"%s\"); SP_GC_ROOT(_t%d); ",
+                   thv, hrb.p ? hrb.p : "sp_box_nil()", hnm, thv);
+      else {
+        emit_indent(g_pre, g_indent);
+        buf_printf(g_pre, "sp_PolyPolyHash *_t%d = sp_poly_as_pp_hash(%s, \"%s\"); SP_GC_ROOT(_t%d);\n",
+                   thv, hrb.p ? hrb.p : "sp_box_nil()", hnm, thv);
+      }
       free(hrb.p);
       g_argov_node[g_n_argov] = recv;
       snprintf(g_argov_text[g_n_argov], sizeof g_argov_text[0], "_t%d", thv);
       g_n_argov++;
       TyKind svh = c->ntype[recv]; c->ntype[recv] = TY_POLY_POLY_HASH;
+      /* and pin it for the inference too: the cached type alone does not hold,
+         because anything under the re-emission that asks re-establishes it and
+         the re-dispatch then finds no arm for a poly receiver (#4070 follow-up
+         -- `v&.entries` raised NoMethodError with the conversion already made) */
+      int sv_face = an_hash_face_node(); an_set_hash_face_node(recv);
       int hren = sp_streq(hnm, "each_entry");   /* same yield as each_pair */
       if (hren) nt_node_set_str((NodeTable *)nt, id, "name", "each_pair");
-      emit_call(c, id, b);
+      int sv_pp = g_pp_hash_node; g_pp_hash_node = id;
+      if (hinl) {
+        emit_call(c, id, &hib);
+        buf_puts(&hib, "; })");
+        buf_puts(b, hib.p ? hib.p : "");
+      }
+      else emit_call(c, id, b);
+      free(hib.p);
+      g_pp_hash_node = sv_pp;
       if (hren) nt_node_set_str((NodeTable *)nt, id, "name", "each_entry");
+      an_set_hash_face_node(sv_face);
       c->ntype[recv] = svh;
       g_n_argov--;
       return 1;
@@ -13449,7 +13486,33 @@ static void emit_call_body(Compiler *c, int id, Buf *b) {
           g_argov_node[slot2] = recv;
           snprintf(g_argov_text[slot2], sizeof g_argov_text[0], "_sn%d", tsn);
           int sv_skip = g_sn_skip; g_sn_skip = id;
+          /* The call is typed poly but its natural answer may render as a C
+             pointer (a poly-hash face answering an array): box the text under
+             that type, or the guard's two arms disagree (#4070 follow-up). */
+          TyKind natg = ret2 == TY_POLY ? infer_uncached(c, id) : ret2;
+          /* A Hash/Enumerable face name answers what it would under the face
+             the arm below installs -- ask with the same pin, or the answer
+             comes back poly while the value arm renders that face's C type. */
+          if (ret2 == TY_POLY && natg == TY_POLY &&
+              ty_poly_hash_face_name(nt_str(nt, id, "name"))) {
+            int svf = an_hash_face_node(); an_set_hash_face_node(recv);
+            TyKind fac = infer_uncached(c, id);
+            an_set_hash_face_node(svf);
+            /* only the array answers: a face that answers another hash boxes
+               through a different entry point than emit_boxed_text picks */
+            if (ty_is_array(fac)) natg = fac;
+          }
+          int gbox = (!sn_ptr && ret2 == TY_POLY && natg != TY_POLY &&
+                      natg != TY_UNKNOWN && natg != TY_VOID);
           if (sn_ptr) emit_expr(c, id, b);
+          else if (gbox) {
+            Buf gvb; memset(&gvb, 0, sizeof gvb);
+            TyKind sv_g = comp_sn_retype(c, id, natg);
+            emit_expr(c, id, &gvb);
+            comp_sn_retype(c, id, sv_g);
+            emit_boxed_text(c, natg, gvb.p ? gvb.p : "", b);
+            free(gvb.p);
+          }
           else emit_boxed(c, id, b);
           g_sn_skip = sv_skip;
           g_n_argov--;

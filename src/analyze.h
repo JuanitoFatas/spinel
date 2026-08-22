@@ -88,6 +88,10 @@ extern int g_ret_no_new_poly;
 /* Recompute a node's type without consulting the cache (used by the break
    wrapper with g_infer_ignore_brk set to recover the normal result type). */
 TyKind infer_uncached(Compiler *c, int id);
+/* Pin/read the node the inference should answer as the general boxed hash
+   (see an_set_hash_face_node). -1 clears the pin. */
+void an_set_hash_face_node(int node);
+int  an_hash_face_node(void);
 /* Name of a block's idx-th required parameter, or NULL. */
 const char *block_param_name(Compiler *c, int block, int idx);
 /* Name of a block's trailing rest parameter (`|*a|`), or NULL. */

@@ -21,6 +21,12 @@ TyKind ivar_value_ty(ClassInfo *ci, int iv) {
 }
 
 static int g_hash_face_node = -1;
+/* Codegen normalizes a boxed receiver to the general hash before re-dispatching
+   its Hash/Enumerable face, and needs the inference to answer the same way for
+   the duration -- poking the node's cached type does not survive, because
+   anything under the re-emission that asks re-establishes it. */
+void an_set_hash_face_node(int node) { g_hash_face_node = node; }
+int an_hash_face_node(void) { return g_hash_face_node; }
 #define SP_NMEMO_SZ 16384
 static unsigned g_narrow_gen = 1;
 static struct { unsigned gen; long key; signed char val; } g_nmemo[SP_NMEMO_SZ];
@@ -3988,8 +3994,13 @@ else {
          their C type (an sp_RbVal nil against an sp_PolyArray *) (#3461). */
       {
         const char *call_op = nt_str(nt, id, "call_operator");
+        /* The array-returning names: they lower to a C pointer, for which NULL
+           already reads as nil, so widening the whole expression to poly left
+           the guard's two arms disagreeing (#3461). `entries` is `to_a` under
+           another name and was missing, which is the hazard of listing names
+           for what is really a property of the answer's C type. */
         int sn_arr = (sp_streq(name, "keys") || sp_streq(name, "values") ||
-                      sp_streq(name, "to_a")) && argc == 0;
+                      sp_streq(name, "to_a") || sp_streq(name, "entries")) && argc == 0;
         if (recv >= 0 && call_op && sp_streq(call_op, "&.") && !sn_arr) return TY_POLY;
       }
       if (sp_streq(name, "to_s") || sp_streq(name, "inspect")) return TY_STRING;
