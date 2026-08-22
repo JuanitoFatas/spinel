@@ -5004,9 +5004,12 @@ static int emit_poly_method_dispatch(Compiler *c, int id, Buf *b) {
         else buf_printf(b, "(sp_int)(uintptr_t)_t%d", tg2);
         buf_puts(b, "; }\nelse ");
       }
-      /* include? on a TAG_STR receiver: check tag before entering cls_id switch */
+      /* include? on a TAG_STR receiver: check tag before entering cls_id switch.
+         Boxed when a user arm widened the dispatch result to poly (#4072). */
       if (is_include && infer_type(c, argv[0]) == TY_STRING)
-        buf_printf(b, "if (_t%d.tag == SP_TAG_STR) { _t%d = sp_str_include(_t%d.v.s, _t%d); }\nelse ", tv, tr, tv, atmp[0]);
+        buf_printf(b, "if (_t%d.tag == SP_TAG_STR) { _t%d = %ssp_str_include(_t%d.v.s, _t%d)%s; }\nelse ",
+                   tv, tr, ret == TY_POLY ? "sp_box_bool(" : "", tv, atmp[0],
+                   ret == TY_POLY ? ")" : "");
       /* delete(chars) on a TAG_STR receiver: String#delete, boxed when the
          dispatch result stays poly. */
       if (is_strdel && (ret == TY_POLY || ret == TY_STRING)) {
@@ -5382,6 +5385,11 @@ else {
         free(jb.p);
       }
       if (is_include) {
+        /* The builtin arms answer a C bool. When a user class's own include?
+           answers something else the call widened to poly (#4072), so the
+           accumulator is an sp_RbVal and these have to box. */
+        const char *ibo = (ret == TY_POLY) ? "sp_box_bool(" : "";
+        const char *ibc = (ret == TY_POLY) ? ")" : "";
         /* a user Enumerable read out of a container answers from its elements;
            -1 means "not one", and the arms below still decide (#3761) */
         { Buf ab5; memset(&ab5, 0, sizeof ab5);
@@ -5391,25 +5399,25 @@ else {
           /* not a user Enumerable -> the answer the switch used to fall
              through to (false), so no other receiver changes */
           buf_printf(b, " default: { int _ui%d = sp_poly_user_include(_t%d, %s);"
-                        " _t%d = _ui%d > 0; break; }",
-                     tv, tv, ab5.p ? ab5.p : "sp_box_nil()", tr, tv);
+                        " _t%d = %s_ui%d > 0%s; break; }",
+                     tv, tv, ab5.p ? ab5.p : "sp_box_nil()", tr, ibo, tv, ibc);
           free(ab5.p); }
         TyKind at = infer_type(c, argv[0]);
         if (at == TY_INT) {
-          buf_printf(b, " case SP_BUILTIN_INT_ARRAY: _t%d = sp_IntArray_include((sp_IntArray *)_t%d.v.p, _t%d); break;", tr, tv, atmp[0]);
-          buf_printf(b, " case SP_BUILTIN_RANGE: _t%d = sp_range_include((sp_Range *)_t%d.v.p, _t%d); break;", tr, tv, atmp[0]);
-          buf_printf(b, " case SP_BUILTIN_FLOAT_RANGE: _t%d = sp_frange_cover(*(sp_FloatRange *)_t%d.v.p, (sp_float)_t%d); break;", tr, tv, atmp[0]);
+          buf_printf(b, " case SP_BUILTIN_INT_ARRAY: _t%d = %ssp_IntArray_include((sp_IntArray *)_t%d.v.p, _t%d)%s; break;", tr, ibo, tv, atmp[0], ibc);
+          buf_printf(b, " case SP_BUILTIN_RANGE: _t%d = %ssp_range_include((sp_Range *)_t%d.v.p, _t%d)%s; break;", tr, ibo, tv, atmp[0], ibc);
+          buf_printf(b, " case SP_BUILTIN_FLOAT_RANGE: _t%d = %ssp_frange_cover(*(sp_FloatRange *)_t%d.v.p, (sp_float)_t%d)%s; break;", tr, ibo, tv, atmp[0], ibc);
         }
         else if (at == TY_STRING) {
-          buf_printf(b, " case SP_BUILTIN_STR_ARRAY: _t%d = sp_StrArray_include((sp_StrArray *)_t%d.v.p, _t%d); break;", tr, tv, atmp[0]);
-          buf_printf(b, " case SP_BUILTIN_STR_INT_HASH: _t%d = sp_StrIntHash_has_key((sp_StrIntHash *)_t%d.v.p, _t%d); break;", tr, tv, atmp[0]);
-          buf_printf(b, " case SP_BUILTIN_STR_STR_HASH: _t%d = sp_StrStrHash_has_key((sp_StrStrHash *)_t%d.v.p, _t%d); break;", tr, tv, atmp[0]);
-          buf_printf(b, " case SP_BUILTIN_STR_POLY_HASH: _t%d = sp_StrPolyHash_has_key((sp_StrPolyHash *)_t%d.v.p, _t%d); break;", tr, tv, atmp[0]);
+          buf_printf(b, " case SP_BUILTIN_STR_ARRAY: _t%d = %ssp_StrArray_include((sp_StrArray *)_t%d.v.p, _t%d)%s; break;", tr, ibo, tv, atmp[0], ibc);
+          buf_printf(b, " case SP_BUILTIN_STR_INT_HASH: _t%d = %ssp_StrIntHash_has_key((sp_StrIntHash *)_t%d.v.p, _t%d)%s; break;", tr, ibo, tv, atmp[0], ibc);
+          buf_printf(b, " case SP_BUILTIN_STR_STR_HASH: _t%d = %ssp_StrStrHash_has_key((sp_StrStrHash *)_t%d.v.p, _t%d)%s; break;", tr, ibo, tv, atmp[0], ibc);
+          buf_printf(b, " case SP_BUILTIN_STR_POLY_HASH: _t%d = %ssp_StrPolyHash_has_key((sp_StrPolyHash *)_t%d.v.p, _t%d)%s; break;", tr, ibo, tv, atmp[0], ibc);
         }
         else if (at == TY_SYMBOL) {
           /* sym array is stored as IntArray (sp_sym == sp_int) */
-          buf_printf(b, " case SP_BUILTIN_SYM_ARRAY: _t%d = sp_IntArray_include((sp_IntArray *)_t%d.v.p, _t%d); break;", tr, tv, atmp[0]);
-          buf_printf(b, " case SP_BUILTIN_SYM_POLY_HASH: _t%d = sp_SymPolyHash_has_key((sp_SymPolyHash *)_t%d.v.p, _t%d); break;", tr, tv, atmp[0]);
+          buf_printf(b, " case SP_BUILTIN_SYM_ARRAY: _t%d = %ssp_IntArray_include((sp_IntArray *)_t%d.v.p, _t%d)%s; break;", tr, ibo, tv, atmp[0], ibc);
+          buf_printf(b, " case SP_BUILTIN_SYM_POLY_HASH: _t%d = %ssp_SymPolyHash_has_key((sp_SymPolyHash *)_t%d.v.p, _t%d)%s; break;", tr, ibo, tv, atmp[0], ibc);
         }
         else if (at == TY_POLY) {
           /* promote: the include? arg widened to poly. A Range receiver
@@ -5418,11 +5426,11 @@ else {
              container cases. Typed arrays match only when the boxed arg's tag
              fits the element type (a Set difference against an Array literal
              reaches these; a mismatched tag is simply not a member). */
-          buf_printf(b, " case SP_BUILTIN_RANGE: _t%d = sp_range_include((sp_Range *)_t%d.v.p, sp_poly_to_i(_t%d)); break;", tr, tv, atmp[0]);
-          buf_printf(b, " case SP_BUILTIN_FLOAT_RANGE: _t%d = sp_frange_cover(*(sp_FloatRange *)_t%d.v.p, sp_poly_to_f(_t%d)); break;", tr, tv, atmp[0]);
-          buf_printf(b, " case SP_BUILTIN_INT_ARRAY: _t%d = _t%d.tag == SP_TAG_INT && sp_IntArray_include((sp_IntArray *)_t%d.v.p, _t%d.v.i); break;", tr, atmp[0], tv, atmp[0]);
-          buf_printf(b, " case SP_BUILTIN_FLT_ARRAY: _t%d = _t%d.tag == SP_TAG_FLT && sp_FloatArray_include((sp_FloatArray *)_t%d.v.p, _t%d.v.f); break;", tr, atmp[0], tv, atmp[0]);
-          buf_printf(b, " case SP_BUILTIN_STR_ARRAY: _t%d = _t%d.tag == SP_TAG_STR && sp_StrArray_include((sp_StrArray *)_t%d.v.p, _t%d.v.s); break;", tr, atmp[0], tv, atmp[0]);
+          buf_printf(b, " case SP_BUILTIN_RANGE: _t%d = %ssp_range_include((sp_Range *)_t%d.v.p, sp_poly_to_i(_t%d))%s; break;", tr, ibo, tv, atmp[0], ibc);
+          buf_printf(b, " case SP_BUILTIN_FLOAT_RANGE: _t%d = %ssp_frange_cover(*(sp_FloatRange *)_t%d.v.p, sp_poly_to_f(_t%d))%s; break;", tr, ibo, tv, atmp[0], ibc);
+          buf_printf(b, " case SP_BUILTIN_INT_ARRAY: _t%d = %s_t%d.tag == SP_TAG_INT && sp_IntArray_include((sp_IntArray *)_t%d.v.p, _t%d.v.i)%s; break;", tr, ibo, atmp[0], tv, atmp[0], ibc);
+          buf_printf(b, " case SP_BUILTIN_FLT_ARRAY: _t%d = %s_t%d.tag == SP_TAG_FLT && sp_FloatArray_include((sp_FloatArray *)_t%d.v.p, _t%d.v.f)%s; break;", tr, ibo, atmp[0], tv, atmp[0], ibc);
+          buf_printf(b, " case SP_BUILTIN_STR_ARRAY: _t%d = %s_t%d.tag == SP_TAG_STR && sp_StrArray_include((sp_StrArray *)_t%d.v.p, _t%d.v.s)%s; break;", tr, ibo, atmp[0], tv, atmp[0], ibc);
         }
         /* PolyArray: box the arg for runtime comparison */
         {
@@ -5430,7 +5438,7 @@ else {
           buf_printf(b, " case SP_BUILTIN_POLY_ARRAY: { sp_RbVal _t%d = ", tbox);
           char tn[32]; snprintf(tn, sizeof tn, "_t%d", atmp[0]);
           emit_boxed_text(c, at, tn, b);
-          buf_printf(b, "; _t%d = sp_PolyArray_include((sp_PolyArray *)_t%d.v.p, _t%d); break; }", tr, tv, tbox);
+          buf_printf(b, "; _t%d = %ssp_PolyArray_include((sp_PolyArray *)_t%d.v.p, _t%d)%s; break; }", tr, ibo, tv, tbox, ibc);
         }
         /* PolyPolyHash: keys are boxed sp_RbVal */
         {
@@ -5438,7 +5446,7 @@ else {
           buf_printf(b, " case SP_BUILTIN_POLY_POLY_HASH: { sp_RbVal _t%d = ", tbox);
           char tn[32]; snprintf(tn, sizeof tn, "_t%d", atmp[0]);
           emit_boxed_text(c, at, tn, b);
-          buf_printf(b, "; _t%d = sp_PolyPolyHash_has_key((sp_PolyPolyHash *)_t%d.v.p, _t%d); break; }", tr, tv, tbox);
+          buf_printf(b, "; _t%d = %ssp_PolyPolyHash_has_key((sp_PolyPolyHash *)_t%d.v.p, _t%d)%s; break; }", tr, ibo, tv, tbox, ibc);
         }
       }
       if (is_arr_index) {

@@ -906,6 +906,22 @@ static TyKind an_user_read_ty(Compiler *c, const char *name, int argc) {
    enclosing class's own chain answers. The class sits ABOVE Kernel, so the
    builtin arms below must stand down for it, or the two halves of the compiler
    name different methods for the same call. */
+/* 1 when a user class defines `name` as an instance method whose return is not
+   `want`. The poly dispatch emits that class's arm beside the builtin ones and
+   accumulates them all in one C temp, so the call's type has to be one both can
+   hold: `Tags#include?` answering an index came back through an sp_bool slot as
+   true/false, and `0` -- truthy in Ruby -- arrived as false (#4072). */
+static int an_user_ret_disagrees(Compiler *c, const char *name, TyKind want) {
+  if (!name) return 0;
+  for (int k = 0; k < c->nclasses; k++) {
+    int mi = comp_method_in_chain(c, k, name, NULL);
+    if (mi < 0 || mi >= c->nscopes) continue;
+    TyKind r = (TyKind)c->scopes[mi].ret;
+    if (r != want && r != TY_UNKNOWN) return 1;
+  }
+  return 0;
+}
+
 static int an_bare_call_class_owned(Compiler *c, int id) {
   const NodeTable *nt = c->nt;
   if (nt_ref(nt, id, "receiver") >= 0) return 0;
@@ -3943,6 +3959,9 @@ else {
        not infer the enclosing Money type). */
     if (argc == 0 && (sp_streq(name, "-@") || sp_streq(name, "+@"))) return TY_POLY;
     if (argc == 0 && sp_streq(name, "~")) return TY_INT;
+    if ((sp_streq(name, "include?") || sp_streq(name, "member?")) &&
+        an_user_ret_disagrees(c, name, TY_BOOL))
+      return TY_POLY;   /* the user arm answers something a bool cannot hold */
     if (sp_streq(name, "<") || sp_streq(name, ">") || sp_streq(name, "<=") ||
         sp_streq(name, ">=") || sp_streq(name, "==") || sp_streq(name, "!=") ||
         sp_streq(name, "nil?") || sp_streq(name, "is_a?") || sp_streq(name, "kind_of?") ||
