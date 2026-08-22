@@ -3738,6 +3738,27 @@ int infer_param_types(Compiler *c) {
         if (bound) continue;
       }
     }
+    /* `target.seen(x)` where `target` is a Class VALUE the analysis cannot pin
+       to one class -- a parameter, an element, an untyped slot. At run time the
+       dispatch reaches every class method of that name, so every one of them
+       has this call as a caller. Binding none of them let the OTHER callers
+       settle the parameter alone, and this call was then read at that type:
+       an object arrived as a String (answering with its bytes) and an Integer
+       segfaulted, with nothing said at compile time (#4066). */
+    {
+      const char *rty0 = nt_type(nt, recv);
+      int static_cls = rty0 && (sp_streq(rty0, "ConstantReadNode") ||
+                                sp_streq(rty0, "ConstantPathNode"));
+      if (!static_cls && class_var_static_ci(c, recv) >= 0) static_cls = 1;
+      if (!static_cls && infer_type(c, recv) == TY_CLASS) {
+        int bound_any = 0;
+        for (int k = 0; k < c->nclasses; k++) {
+          int cmi = comp_cmethod_in_class(c, k, name);
+          if (cmi >= 0) { changed |= bind_call_params(c, id, cmi); bound_any = 1; }
+        }
+        if (bound_any) continue;
+      }
+    }
     /* Class.new -> initialize params; Class.cmethod -> cmethod params */
     {
       const char *rty = nt_type(nt, recv);
