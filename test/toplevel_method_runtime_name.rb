@@ -25,6 +25,27 @@ p safepoint(8)
 p sym_x(9)
 p plain(10)
 
+# names the list did not carry: a bare runtime function is just as much a
+# collision as a runtime typedef, and `gcd` / `gets` / `readlines` are names a
+# program writes without a second thought
+def gcd(a, b) = "gcd:#{a}:#{b}"
+def lcm(a, b) = "lcm:#{a}:#{b}"
+def gets(v) = "gets:#{v}"
+def readlines(v) = "readlines:#{v}"
+def bool(v) = "bool:#{v}"
+def mutex(v) = "mutex:#{v}"
+def backtick(v) = "backtick:#{v}"
+def idiv(a, b) = "idiv:#{a}:#{b}"
+
+p gcd(1, 2)
+p lcm(3, 4)
+p gets(5)
+p readlines(6)
+p bool(7)
+p mutex(8)
+p backtick(9)
+p idiv(10, 11)
+
 # and the mangling does not leak into Ruby: the names still call each other
 def outer(v) = sym(v) + "/" + int(v)
 p outer(11)

@@ -1670,6 +1670,14 @@ static const char *const SP_RT_PREFIXES[] = {
   "stw", "sweep", "sym", "sympoly", "sysmon", "system", "thread", "time",
   "tls", "trap", "typed", "uc", "unbox", "unwind", "urandom", "user",
   "utf8", "w", "wi", "with", "worker",
+  /* Bare runtime functions whose names a Ruby method can plausibly take:
+     `def gcd`, `def gets`, `def throw` all collided with one. They are here
+     because the list is hand-kept -- the set that actually matters is "every
+     bare sp_<word> the generated TU can see", and deriving it from the runtime
+     headers instead would stop the list going stale in the first place. */
+  "backtick", "bool", "ceildiv", "condvar", "fnmatch1", "fremainder", "gcd",
+  "gets", "idiv", "imod", "ipow10", "iremainder", "lcm", "mutex", "powmod",
+  "readlines", "sleep", "sprintf", "throw", "unsentinel",
   NULL
 };
 
