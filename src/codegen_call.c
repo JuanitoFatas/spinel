@@ -11939,6 +11939,34 @@ static void emit_call_body(Compiler *c, int id, Buf *b) {
                   " : sp_String_new_shared(_v%d); })", tvD);
     return;
   }
+
+  /* A bare call resolves the way CRuby's ancestry does: the enclosing class's
+     own chain, then Object -- where a top-level `def` lands -- and only then a
+     Kernel builtin. The Kernel arms below are reached by POSITION, so an
+     unguarded one used to answer first: `def puts(v)` was emitted and never
+     called, and `def raise(v)` did not even build. Asking here, in front of
+     them, is what puts Object above Kernel. The twin in analyze_infer.c asks
+     the same question, so the two halves name the same method -- they did not,
+     and `x = loop(1)` declared x an Enumerator and assigned it a String.
+
+     Two shapes stay with the arm further down, which is what establishes them:
+     a block-carrying call, and a callee that yields (its C signature grows a
+     block parameter). */
+  {
+    const char *bn0 = nt_str(c->nt, id, "name");
+    int bmi0 = bn0 ? comp_method_index(c, bn0) : -1;
+    if (bmi0 >= 0 && nt_ref(c->nt, id, "receiver") < 0 &&
+        nt_ref(c->nt, id, "block") < 0 &&
+        !(bmi0 < c->nscopes && c->scopes[bmi0].yields)) {
+      Scope *esc0 = comp_scope_of(c, id);
+      int ecls0 = esc0 ? esc0->class_id : -1;
+      int shad0 = ecls0 >= 0 && ecls0 < c->nclasses &&
+                  (esc0->is_cmethod ? comp_cmethod_in_chain(c, ecls0, bn0, NULL) >= 0
+                                    : (comp_method_in_chain(c, ecls0, bn0, NULL) >= 0 ||
+                                       comp_is_reader(&c->classes[ecls0], bn0)));
+      if (!shad0) { emit_method_call(c, id, b); return; }
+    }
+  }
   const NodeTable *nt = c->nt;
   /* A provably wrong argument count raises before any type guard, as CRuby
      checks arity at dispatch (defined above). */

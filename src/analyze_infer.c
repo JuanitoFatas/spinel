@@ -926,6 +926,34 @@ TyKind infer_call(Compiler *c, int id) {
   if (args >= 0) argv = nt_arr(nt, args, "arguments", &argc);
   if (!name) return TY_UNKNOWN;
 
+  /* A call with NO receiver resolves the way CRuby's ancestry does: the
+     enclosing scope's own chain first, then Object -- where a top-level `def`
+     lands -- and only then a Kernel builtin. The user-method arm further down
+     said the second part already, but the Kernel arms are reached by POSITION
+     and several sit above it, so `caller`, `p`, `puts` and `loop` were typed
+     from the builtin while codegen called the user's method: the local was
+     declared sp_StrArray * and assigned a const char *. One rule, asked before
+     any builtin arm, keeps the two halves of the compiler on the same method. */
+  if (recv < 0 && nt_ref(nt, id, "block") < 0 &&
+      !nt_int(nt, id, "vis_enforce", 0)) {
+    int bmi = comp_method_index(c, name);
+    if (bmi < 0) bmi = comp_included_method_index(c, name);
+    if (bmi >= 0) {
+      Scope *bsc = comp_scope_of(c, id);
+      int bcls = bsc ? bsc->class_id : -1;
+      int shadowed = bcls >= 0 && bcls < c->nclasses &&
+                     (bsc->is_cmethod
+                        ? comp_cmethod_in_chain(c, bcls, name, NULL) >= 0
+                        : (comp_method_in_chain(c, bcls, name, NULL) >= 0 ||
+                           comp_is_reader(&c->classes[bcls], name)));
+      /* A callee that yields carries a block parameter in its C signature,
+         which the arm below is what establishes: answering here left the call
+         site and the definition disagreeing about the signature. */
+      if (!shadowed && !(bmi < c->nscopes && c->scopes[bmi].yields))
+        return method_call_ret(c, bmi, id);
+    }
+  }
+
   /* the accessors every exception carries, on an instance of a user subclass
      (#3732): #exception is self, #cause another exception, #backtrace the
      frames, and the two message renderings strings */
