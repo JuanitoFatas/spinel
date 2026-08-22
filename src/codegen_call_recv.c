@@ -11825,8 +11825,12 @@ int emit_poly_call(Compiler *c, int id, Buf *b) {
       }
     }
   }
-  /* poly receiver: join */
-  if (recv >= 0 && rt == TY_POLY && sp_streq(name, "join")) {
+  /* poly receiver: join. Stands down for a user class that defines the name --
+     the arm answered the receiver's #to_s where CRuby entered the method, and
+     nothing was reported (#4071). The dispatch below builds the cls_id switch
+     with an arm for the class and keeps a builtin one for the arrays. */
+  if (recv >= 0 && rt == TY_POLY && sp_streq(name, "join") &&
+      !user_defines_or_reads(c, name)) {
     buf_puts(b, "sp_poly_join("); emit_expr(c, recv, b);
     buf_puts(b, ", "); if (argc >= 1) emit_str_expr_nilable(c, argv[0], b); else buf_puts(b, "sp_str_empty");
     buf_puts(b, ")"); return 1;

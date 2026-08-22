@@ -4762,6 +4762,21 @@ static int emit_poly_method_dispatch(Compiler *c, int id, Buf *b) {
         buf_puts(b, "; break;");
         obj_default_done = 1;
       }
+      /* Same shape one step on: `join` reaches this dispatch only because a
+         user class owns the name, and a builtin array receiver still has to be
+         joined rather than told it has no such method (#4071). Named arms, not
+         the default: an OBJECT of a class whose `join` takes an argument is an
+         arity error, which the raise below words. */
+      if (argc == 0 && sp_streq(name, "join")) {
+        char jv[80];
+        snprintf(jv, sizeof jv, "sp_poly_join(_t%d, sp_str_empty)", tv);
+        buf_puts(b, " case SP_BUILTIN_INT_ARRAY: case SP_BUILTIN_STR_ARRAY:"
+                    " case SP_BUILTIN_FLT_ARRAY: case SP_BUILTIN_POLY_ARRAY: ");
+        buf_printf(b, "_t%d = ", tr);
+        if (ret == TY_POLY) emit_boxed_text(c, TY_STRING, jv, b);
+        else buf_puts(b, jv);
+        buf_puts(b, "; break;");
+      }
       if (!obj_default_done)
         buf_printf(b, " default: sp_raise_nomethod(sp_nomethod_msg(\"%s\", _t%d)); break;", name, tv);
       buf_printf(b, " } _t%d; })", tr);
@@ -4892,9 +4907,14 @@ static int emit_poly_method_dispatch(Compiler *c, int id, Buf *b) {
        positional. */
     int is_pmerge = sp_streq(name, "merge") && nt_ref(nt, id, "block") < 0 &&
                     !has_splat_arg && (pos_argc >= 1 || kwh >= 0);
+    /* join on a poly value that is a builtin array, alongside the user arms.
+       The dedicated poly-join arm stands down when a user class owns the name
+       (#4071), so without this the Array case reached the raise. */
+    int is_pjoin = sp_streq(name, "join") && argc <= 1 && !has_splat_arg &&
+                   nt_ref(nt, id, "block") < 0;
     int is_cover = sp_streq(name, "cover?") && argc == 1 && !diag_user_defines(c, name);
     int is_gcdlcm = sp_streq(name, "gcdlcm") && argc == 1 && !diag_user_defines(c, name);
-    if (ncand > 0 || is_index || is_pdelete || is_pdig || is_pvalues_at || is_pfirstn || is_include || is_fetch || is_push || is_pred || is_strftime || is_intersect || is_arr_index || is_cover || is_gcdlcm || is_pmerge) {
+    if (ncand > 0 || is_index || is_pdelete || is_pdig || is_pvalues_at || is_pfirstn || is_include || is_fetch || is_push || is_pjoin || is_pred || is_strftime || is_intersect || is_arr_index || is_cover || is_gcdlcm || is_pmerge) {
       TyKind ret = comp_ntype(c, id);
       int tv = ++g_tmp, tr = ++g_tmp;
       int *atmp = malloc(sizeof(int) * argc);
@@ -5344,6 +5364,22 @@ else {
         }
         if (ret == TY_POLY) buf_printf(b, " _t%d = _t%d;", tr, tv);
         buf_puts(b, " break;");
+      }
+      if (is_pjoin) {
+        /* every array kind joins through the same runtime helper; the separator
+           is the call's own argument (absent means "") */
+        buf_puts(b, " case SP_BUILTIN_INT_ARRAY: case SP_BUILTIN_STR_ARRAY:"
+                    " case SP_BUILTIN_FLT_ARRAY: case SP_BUILTIN_POLY_ARRAY: ");
+        Buf jb; memset(&jb, 0, sizeof jb);
+        buf_printf(&jb, "sp_poly_join(_t%d, ", tv);
+        if (argc >= 1) buf_printf(&jb, "_t%d", atmp[0]);
+        else buf_puts(&jb, "sp_str_empty");
+        buf_puts(&jb, ")");
+        buf_printf(b, "_t%d = ", tr);
+        if (ret == TY_POLY) emit_boxed_text(c, TY_STRING, jb.p ? jb.p : "", b);
+        else buf_puts(b, jb.p ? jb.p : "");
+        buf_puts(b, "; break;");
+        free(jb.p);
       }
       if (is_include) {
         /* a user Enumerable read out of a container answers from its elements;
