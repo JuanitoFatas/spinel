@@ -325,8 +325,20 @@ pike_vm(const mrb_regexp_pattern *pat,
 
   /* Use cached VM state if available (avoids malloc per call) */
   mrb_regexp_pattern *mpat = (mrb_regexp_pattern*)pat;  /* for cache_in_use flag */
+  /* The claim has to be atomic where threads are real: the cached VM state
+     lives on the compiled PATTERN, and a pattern is shared by every thread
+     matching against it. Two threads both read the flag as clear, both took the
+     same visited array and thread lists, and corrupted each other's match --
+     `scan` came back fragmented or short (#4082). The loser takes the malloc
+     path that already exists for re-entrancy. The single-threaded build keeps
+     the plain read/write it always had. */
+#ifdef SP_THREADS
+  mrb_bool use_cache = mpat->cached_visited != NULL &&
+                       !__atomic_exchange_n(&mpat->cache_in_use, (mrb_bool)TRUE, __ATOMIC_ACQUIRE);
+#else
   mrb_bool use_cache = !mpat->cache_in_use && mpat->cached_visited != NULL;
   if (use_cache) mpat->cache_in_use = TRUE;
+#endif
 
   pike_state s;
   s.pat = pat;
@@ -519,7 +531,11 @@ pike_vm(const mrb_regexp_pattern *pat,
   }
 
   if (use_cache) {
+#ifdef SP_THREADS
+    __atomic_store_n(&mpat->cache_in_use, (mrb_bool)FALSE, __ATOMIC_RELEASE);
+#else
     mpat->cache_in_use = FALSE;
+#endif
   }
   else {
     free(curr.threads);
