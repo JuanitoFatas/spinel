@@ -7942,6 +7942,36 @@ static int mark_empty_hash_key_ctx(Compiler *c) {
   int changed = 0;
   if (!c->hash_want) return 0;
   const NodeTable *nt = c->nt;
+  /* The `tap` / `then` / `yield_self` block parameters, collected once. The hop
+     loop below follows a key operation written on such a parameter back to the
+     call's own receiver (#4026), and it asked by scanning the whole node table
+     -- per key site, per hop, and this pass runs on every fixpoint iteration.
+     Ascending id order is the order the scan visited in, so the first match
+     here is the match it found. */
+  int tp_n = 0, ncall = 0;
+  const char **tp_name = NULL;
+  int *tp_recv = NULL;
+  (void)nt_nodes_of_kind(nt, NK_CallNode, &ncall);
+  if (ncall > 0) {
+    /* One CallNode is the most entries this can take, so size to that and fill
+       in a single walk: no growth step to get an allocation failure half way
+       through, which would leave SOME blocks followed and the rest not. */
+    tp_name = (const char **)malloc(sizeof(*tp_name) * (size_t)ncall);
+    tp_recv = (int *)malloc(sizeof(*tp_recv) * (size_t)ncall);
+    if (!tp_name || !tp_recv) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+    NT_FOREACH_KIND(nt, NK_CallNode, tcid) {
+      const char *cn = nt_str(nt, tcid, "name");
+      if (!cn || (!sp_streq(cn, "tap") && !sp_streq(cn, "then") &&
+                  !sp_streq(cn, "yield_self"))) continue;
+      int blk = nt_ref(nt, tcid, "block");
+      if (blk < 0 || nt_kind(nt, blk) != NK_BlockNode) continue;
+      const char *pn = block_param_name(c, blk, 0);
+      if (!pn) continue;
+      tp_name[tp_n] = pn;
+      tp_recv[tp_n] = nt_ref(nt, tcid, "receiver");
+      tp_n++;
+    }
+  }
   for (int id = 0; id < nt->count; id++) {
     NodeKind idk = nt_kind(nt, id);
     /* `h[k] ||= v` and friends select a variant by their key exactly like a
@@ -7968,18 +7998,8 @@ static int mark_empty_hash_key_ctx(Compiler *c) {
       const char *rn2 = nt_str(nt, recv, "name");
       if (!rn2) break;
       int outer = -1;
-      for (int cid2 = 0; cid2 < nt->count; cid2++) {
-        if (nt_kind(nt, cid2) != NK_CallNode) continue;
-        const char *cn2 = nt_str(nt, cid2, "name");
-        if (!cn2 || (!sp_streq(cn2, "tap") && !sp_streq(cn2, "then") &&
-                     !sp_streq(cn2, "yield_self"))) continue;
-        int blk2 = nt_ref(nt, cid2, "block");
-        if (blk2 < 0 || nt_kind(nt, blk2) != NK_BlockNode) continue;
-        const char *p0n = block_param_name(c, blk2, 0);
-        if (!p0n || !sp_streq(p0n, rn2)) continue;
-        outer = nt_ref(nt, cid2, "receiver");
-        break;
-      }
+      for (int t = 0; t < tp_n; t++)
+        if (sp_streq(tp_name[t], rn2)) { outer = tp_recv[t]; break; }
       if (outer < 0) break;
       recv = outer;
     }
@@ -8130,6 +8150,8 @@ static int mark_empty_hash_key_ctx(Compiler *c) {
       }
     }
   }
+  free((void *)tp_name);
+  free(tp_recv);
   return changed;
 }
 /* `TBL = {}` followed by `TBL[k] = v` elsewhere: an empty literal bound to a
