@@ -268,8 +268,11 @@ int infer_numeric_call(Compiler *c, int id, TyKind rt, TyKind *out) {
   if (rt == TY_PROC && sp_streq(name, "curry")) { *out = TY_CURRY; return 1; }
   if (rt == TY_CURRY && (sp_streq(name, "[]") || sp_streq(name, "call") || sp_streq(name, "()"))) {
     int complete = 0; TyKind cret = TY_UNKNOWN;
-    if (curry_apply_info(c, id, &complete, &cret) && complete)
-      { *out = cret == TY_INT ? TY_INT : TY_POLY; return 1; }   /* boxed realization otherwise */
+    int traced = curry_apply_info(c, id, &complete, &cret);
+    /* an untraceable base saturates (or not) at RUN time, so the call answers
+       either the realized value or another curry: poly holds both (#4068) */
+    if (!traced) { *out = TY_POLY; return 1; }
+    if (complete) { *out = cret == TY_INT ? TY_INT : TY_POLY; return 1; }
     { *out = TY_CURRY; return 1; }
   }
   /* A curried proc reports as a lambda Proc (#2651). */
