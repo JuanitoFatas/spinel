@@ -17467,7 +17467,22 @@ else { memcpy(dir, sf, n); dir[n] = 0; } }
     }
   }
 
-  if (recv < 0 && comp_method_index(c, name) >= 0) { emit_method_call(c, id, b); return; }
+  /* A bare call inside a method: the enclosing class's own chain answers it
+     before the top-level table does. A top-level `def` lands on Object, which
+     is BELOW the class in the ancestry, so a class method of the same name
+     shadows it -- spinel kept top-level defs in a flat table consulted here
+     and picked the top-level one, so a `log` helper in a class lost to a `log`
+     helper beside it. Fall through to the class-member resolution instead. */
+  if (recv < 0 && comp_method_index(c, name) >= 0) {
+    Scope *esc = comp_scope_of(c, id);
+    int ecls = esc ? esc->class_id : -1;
+    int shadowed = ecls >= 0 && ecls < c->nclasses &&
+                   (esc->is_cmethod
+                      ? comp_cmethod_in_chain(c, ecls, name, NULL) >= 0
+                      : (comp_method_in_chain(c, ecls, name, NULL) >= 0 ||
+                         comp_is_reader(&c->classes[ecls], name)));
+    if (!shadowed) { emit_method_call(c, id, b); return; }
+  }
   /* bare call to a sibling class method (inside def self.foo, calling bar()) */
   if (recv < 0) {
     Scope *encl = comp_scope_of(c, id);
