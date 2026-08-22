@@ -4466,7 +4466,9 @@ else if (orecv >= 0 && onm) {
     LocalVar *lv = p ? scope_local(bs, p) : NULL;
     if (!lv || !lv->is_cell) continue;
     if (lv->type == TY_PROC) {
-      buf_printf(pb, "    sp_int *_cell_%s = (sp_int *)sp_gc_alloc(sizeof(sp_int), NULL, NULL);"
+      /* the int slot holds a collectable Proc: it needs a scan, like the
+         method prologue's (#4077 -- this third copy of the shape was missed) */
+      buf_printf(pb, "    sp_int *_cell_%s = (sp_int *)sp_gc_alloc(sizeof(sp_int), NULL, sp_cell_scan_procint);"
                      " SP_GC_ROOT(_cell_%s); *_cell_%s = (sp_int)(uintptr_t)lv_%s;%c", p, p, p, p, 10);
     }
     else if (lv->type == TY_FLOAT) {
