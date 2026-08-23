@@ -601,6 +601,10 @@ const char *nil_value(TyKind t) {
   }
 }
 
+static int subtree_has_param_named(const NodeTable *nt, int id, const char *nm);
+int subtree_has_param_named_pub(const NodeTable *nt, int id, const char *nm) {
+  return subtree_has_param_named(nt, id, nm);
+}
 static int subtree_has_param_named(const NodeTable *nt, int id, const char *nm) {
   if (id < 0) return 0;
   const char *ty = nt_type(nt, id);

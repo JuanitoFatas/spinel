@@ -3978,6 +3978,24 @@ static const char *param_public_name(const char *n) {
    standalone `static sp_int _proc_N(void *cap, sp_int argc, sp_int *args)`
    (sp_proc_call's ABI) into g_procs, and emit the boxing `sp_proc_new_meta(...)`
    value into `b`. */
+/* 1 when `nm` is a local the BLOCK ITSELF declares -- Prism lists exactly those
+   in the node's `locals`, params included, so params are asked separately. A
+   name the block only READS from the enclosing scope is not there. */
+static int proc_owns_local(Compiler *c, int create, const char *nm) {
+  const char *locs = nt_str(c->nt, create, "locals");
+  if (!locs || !*locs || !nm) return 0;
+  size_t nl = strlen(nm);
+  for (const char *p = locs; *p; ) {
+    const char *e = strchr(p, ',');
+    size_t l = e ? (size_t)(e - p) : strlen(p);
+    if (l == nl && memcmp(p, nm, nl) == 0)
+      return !subtree_has_param_named_pub(c->nt, nt_ref(c->nt, create, "parameters"), nm);
+    if (!e) break;
+    p = e + 1;
+  }
+  return 0;
+}
+
 void emit_proc_literal(Compiler *c, int create, Buf *b) {
   const NodeTable *nt = c->nt;
   const char *cty = nt_type(nt, create);
@@ -4060,6 +4078,12 @@ void emit_proc_literal(Compiler *c, int create, Buf *b) {
     const char *nm = used.v[u];
     if (nameset_has(&params, nm)) continue;
     LocalVar *lv = scope_local(bs, nm);
+    /* A local the BLOCK declares is this frame's own, not the enclosing
+       frame's: capturing it made the outer frame's cell the one every
+       invocation shared (so per-iteration closures all saw the last value),
+       and the block-local reset then assigned a `_cell_x` no function here
+       declared -- the C build stopped (#4087). The prologue declares it. */
+    if (lv && lv->is_cell && proc_owns_local(c, create, nm)) { nameset_add(&locals, nm); continue; }
     if (lv && lv->is_cell) {
       int ptr_cell = proc_slot_is_ptr(lv->type) && !comp_ty_value_obj(c, lv->type);
       /* Float captures ride the capture struct (a real sp_float field), not the
@@ -4649,6 +4673,52 @@ else if (orecv >= 0 && onm) {
                      " SP_GC_ROOT(_cell_%s); *_cell_%s = lv_%s;%c", p, p, p, p, 10);
     }
   }
+  /* A celled BODY-local: the block declares the name and an inner proc
+     captures it, so this frame owns the cell. Declare it here and let the
+     block-local reset at the top of the body allocate a fresh one per
+     invocation -- that reset assigns `_cell_x`, and with the declaration in
+     the CALLER (the capture path this local no longer takes) there was
+     nothing here to assign to (#4087). */
+  { const char *blocs = nt_str(nt, create, "locals");
+    char nbuf[128];
+    for (const char *q = blocs ? blocs : ""; *q; ) {
+      const char *e = strchr(q, ',');
+      size_t l = e ? (size_t)(e - q) : strlen(q);
+      if (l && l < sizeof nbuf) {
+        memcpy(nbuf, q, l); nbuf[l] = 0;
+        LocalVar *lv = scope_local(bs, nbuf);
+        if (lv && lv->is_cell && !subtree_has_param_named_pub(nt, nt_ref(nt, create, "parameters"), nbuf)) {
+          /* Allocate here, not just declare: the block-local reset that would
+             otherwise fill it runs only where emit_stmts sees this body as a
+             BlockNode, and a proc reached through the poly enumerator never
+             gets there -- the body then dereferenced a NULL cell. Each proc
+             invocation is a fresh frame, so allocating in the prologue IS the
+             per-invocation freshness; a reset that does run re-allocates on
+             top, which stays correct. */
+          const char *vs = cell_value_struct(lv->type);
+          buf_puts(pb, "    ");
+          emit_cell_elem_type(c, lv, pb);
+          buf_printf(pb, " *_cell_%s = (", nbuf);
+          emit_cell_elem_type(c, lv, pb);
+          buf_puts(pb, " *)sp_gc_alloc(sizeof(");
+          emit_cell_elem_type(c, lv, pb);
+          buf_puts(pb, "), NULL, ");
+          if (lv->type == TY_PROC) buf_puts(pb, "sp_cell_scan_procint");
+          else if (lv->type == TY_POLY) buf_puts(pb, "sp_cell_scan_rbval");
+          else if (lv->type != TY_FLOAT && !vs && cell_is_typed_ptr(c, lv)) buf_puts(pb, cell_scan_fn(lv->type));
+          else buf_puts(pb, "NULL");
+          buf_printf(pb, "); SP_GC_ROOT(_cell_%s); *_cell_%s = ", nbuf, nbuf);
+          if (lv->type == TY_FLOAT) buf_puts(pb, "0.0");
+          else if (lv->type == TY_POLY) buf_puts(pb, "sp_box_nil()");
+          else if (vs) buf_puts(pb, cell_value_struct_empty(lv->type));
+          else if (lv->type != TY_PROC && cell_is_typed_ptr(c, lv)) buf_puts(pb, "NULL");
+          else buf_puts(pb, "0");
+          buf_puts(pb, ";\n");
+        }
+      }
+      if (!e) break;
+      q = e + 1;
+    } }
   /* Splat rest and trailing post params. Both read the boxed side-channel:
      every call path now publishes all args boxed (yield's lean ABI was
      retired for this), so any position is recoverable regardless of the
