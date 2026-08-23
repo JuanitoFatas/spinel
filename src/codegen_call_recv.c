@@ -6000,6 +6000,56 @@ static int str_needle_p(Compiler *c, int a) {
   return t == TY_STRING || t == TY_STRBUF || t == TY_POLY;
 }
 
+/* The names CRuby's nil answers: NilClass's own methods plus the Object /
+   Kernel surface every object carries. Everything else on a nil receiver is a
+   NoMethodError, which is what makes this a list of exceptions rather than a
+   list of rules -- a name missing from here raises, the safe direction. */
+/* Can this expression hand back the nil sentinel? call_returns_nullable_int is
+   the boxing side's answer and is deliberately narrow -- widening it would put
+   sp_box_int_or_nil on optcarrot's pixel path -- so a container read is asked
+   here instead. A miss on a specialized Array or Hash answers the element
+   type's own C nil (#4070), which is exactly the shape the receiver guard is
+   for. */
+int recv_may_be_sentinel(Compiler *c, int node) {
+  if (node < 0) return 0;
+  if (call_returns_nullable_int(c, node)) return 1;
+  const NodeTable *nt = c->nt;
+  const char *nty = nt_type(nt, node);
+  if (!nty || !sp_streq(nty, "CallNode")) return 0;
+  const char *nm = nt_str(nt, node, "name");
+  if (!nm) return 0;
+  int rr = nt_ref(nt, node, "receiver");
+  if (rr < 0) return 0;
+  TyKind rrt = comp_ntype(c, rr);
+  if (!ty_is_array(rrt) && !ty_is_hash(rrt)) return 0;
+  int aa = 0; (void)call_args(nt, node, &aa);
+  /* fetch(k, default) and dig with a default never miss into nil */
+  if (sp_streq(nm, "[]") || sp_streq(nm, "at") || sp_streq(nm, "dig") ||
+      sp_streq(nm, "first") || sp_streq(nm, "last") ||
+      sp_streq(nm, "find") || sp_streq(nm, "detect") ||
+      (sp_streq(nm, "fetch") && aa == 1))
+    return 1;
+  return 0;
+}
+
+int nil_answers_name(const char *n) {
+  static const char *const names[] = {
+    "to_s", "inspect", "to_i", "to_f", "to_r", "to_c", "to_a", "to_h",
+    "nil?", "hash", "class", "object_id", "frozen?", "dup", "clone", "freeze",
+    "itself", "tap", "then", "yield_self", "display",
+    "==", "!=", "===", "eql?", "equal?", "=~", "!",
+    "is_a?", "kind_of?", "instance_of?", "respond_to?",
+    "&", "|", "^",
+    "send", "__send__", "public_send", "method", "methods",
+    "instance_variables", "instance_variable_get", "instance_variable_set",
+    "instance_variable_defined?", "singleton_class", "define_singleton_method",
+    "extend", "enum_for", "to_enum", "pretty_print",
+  };
+  for (size_t i = 0; i < sizeof names / sizeof names[0]; i++)
+    if (sp_streq(n, names[i])) return 1;
+  return 0;
+}
+
 int emit_scalar_call(Compiler *c, int id, Buf *b) {
   /* Shared-mutable shim (#3227): setbyte on a strbuf local -- shadow-copy
      re-entry, same as emit_array_call's. */
@@ -6069,6 +6119,32 @@ int emit_scalar_call(Compiler *c, int id, Buf *b) {
        sp_RbVal into a const char* string op. */
     else if (rt == TY_STRING && strncmp(r, "sp_raise_nomethod(", 18) == 0) {
       Buf cb; memset(&cb, 0, sizeof cb); buf_printf(&cb, "sp_poly_to_s(%s)", r); r = cb.p ? cb.p : r;
+    }
+    /* A receiver that can carry the nil sentinel IS nil, and CRuby's nil
+       answers only the names NilClass defines -- every other name is a
+       NoMethodError. The arms below read the sentinel as an ordinary value, so
+       `h["zz"].succ` answered -9223372036854775807 and `h["zz"].bit_length`
+       answered 63, silently. #4070 spelled the check out per name (to_s,
+       inspect, to_i, to_f) and the names it did not reach kept the old
+       behaviour; this asks once, in front of all of them. Only a receiver the
+       compiler already knows to be nullable pays for the test, so the hot int
+       path is unchanged, and a safe-navigation call is left alone -- there the
+       nil arm is the point. */
+    Buf gbody; memset(&gbody, 0, sizeof gbody);
+    Buf *g_outer_b = NULL; int g_tmpid = 0; char g_rname[24];
+    if ((rt == TY_INT || rt == TY_STRING) && name && recv >= 0 && !nil_answers_name(name) &&
+        recv_may_be_sentinel(c, recv)) {
+      const char *sop_g = nt_str(nt, id, "call_operator");
+      if (!(sop_g && sp_streq(sop_g, "&."))) {
+        /* Bind the receiver once and let every arm below read the temp: some
+           of them fold the call to a constant (`size` is sizeof(sp_int)) or to
+           the receiver itself (`numerator`) and never render the receiver
+           text at all, so a guard spliced into that text would vanish. The
+           arms emit into gbody and the guard wraps whatever they produced. */
+        g_tmpid = ++g_tmp;
+        snprintf(g_rname, sizeof g_rname, "_t%d", g_tmpid);
+        g_outer_b = b; b = &gbody; r = g_rname;
+      }
     }
     int handled = 1;
 
@@ -7811,6 +7887,22 @@ int emit_scalar_call(Compiler *c, int id, Buf *b) {
         }
       }
       else handled = 0;
+    }
+    if (g_outer_b) {
+      Buf *ib = b; b = g_outer_b;
+      if (handled) {
+        /* the string sentinel is the NULL pointer, the int's is SP_INT_NIL */
+        buf_printf(b, "({ %s _t%d = (%s); if (%s_t%d%s)"
+                      " sp_raise_nomethod(sp_nomethod_msg(\"%s\", sp_box_nil())); ",
+                   rt == TY_STRING ? "const char *" : "sp_int", g_tmpid,
+                   rs.p ? rs.p : "",
+                   rt == TY_STRING ? "!" : "", g_tmpid,
+                   rt == TY_STRING ? "" : " == SP_INT_NIL", name);
+        if (ib->p) buf_puts(b, ib->p);
+        buf_puts(b, "; })");
+      }
+      else if (ib->p) buf_puts(b, ib->p);
+      free(gbody.p);
     }
     free(rs.p);
     if (handled) return 1;

@@ -696,7 +696,7 @@ int emit_unresolved_coerced(Compiler *c, int node, TyKind target, Buf *b) {
    `.should` receiver) would carry the sentinel as a truthy integer, so `== nil`
    fails. Box these through sp_box_int_or_nil. Kept to the specific nullable
    builtins so the hot int-into-poly path (optcarrot's pixels) stays sp_box_int. */
-static int call_returns_nullable_int(Compiler *c, int node) {
+int call_returns_nullable_int(Compiler *c, int node) {
   const NodeTable *nt = c->nt;
   const char *nty = nt_type(nt, node);
   /* The analyzer's own answer, which knows the shapes only whole-program

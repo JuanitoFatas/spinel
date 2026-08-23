@@ -3132,19 +3132,49 @@ static int emit_complex_rational_call(Compiler *c, int id, Buf *b) {
       emit_expr(c, recv, b); buf_puts(b, "), 1), "); emit_expr(c, argv[0], b); buf_puts(b, "))");
       return 1;
     }
-    /* An Integer viewed as a Rational: numerator is self, denominator is 1. */
+    /* An Integer viewed as a Rational: numerator is self, denominator is 1.
+       These arms resolve BEFORE the int-receiver section that guards the nil
+       sentinel, so they ask the same two questions themselves: nil refuses
+       numerator and denominator, and answers to_r as (0/1). */
     if (crt == TY_INT && sp_streq(name, "numerator") && argc == 0) {
+      if (recv_may_be_sentinel(c, recv)) {
+        int t = ++g_tmp;
+        buf_printf(b, "({ sp_int _t%d = (", t); emit_expr(c, recv, b);
+        buf_printf(b, "); if (_t%d == SP_INT_NIL) sp_raise_nomethod("
+                      "sp_nomethod_msg(\"numerator\", sp_box_nil())); _t%d; })", t, t);
+        return 1;
+      }
       buf_puts(b, "("); emit_expr(c, recv, b); buf_puts(b, ")"); return 1;
     }
     if (crt == TY_INT && sp_streq(name, "denominator") && argc == 0) {
+      if (recv_may_be_sentinel(c, recv)) {
+        int t = ++g_tmp;
+        buf_printf(b, "({ sp_int _t%d = (", t); emit_expr(c, recv, b);
+        buf_printf(b, "); if (_t%d == SP_INT_NIL) sp_raise_nomethod("
+                      "sp_nomethod_msg(\"denominator\", sp_box_nil())); (sp_int)1; })", t);
+        return 1;
+      }
       buf_puts(b, "((void)("); emit_expr(c, recv, b); buf_puts(b, "), 1)"); return 1;
     }
     if (crt == TY_INT && (sp_streq(name, "to_r") ||
         (sp_streq(name, "rationalize") && argc <= 1)) && argc <= 1) {
+      if (recv_may_be_sentinel(c, recv)) {
+        int t = ++g_tmp;
+        buf_printf(b, "({ sp_int _t%d = (", t); emit_expr(c, recv, b);
+        buf_printf(b, "); sp_rational_new(_t%d == SP_INT_NIL ? 0 : _t%d, 1); })", t, t);
+        return 1;
+      }
       buf_puts(b, "sp_rational_new((sp_int)("); emit_expr(c, recv, b); buf_puts(b, "), 1)"); return 1;
     }
     /* n.to_c is Complex(n, 0) for an Integer or Float receiver. */
     if ((crt == TY_INT || crt == TY_FLOAT) && sp_streq(name, "to_c") && argc == 0) {
+      /* nil.to_c is (0+0i), so a sentinel receiver must not be cast through */
+      if (crt == TY_INT && recv_may_be_sentinel(c, recv)) {
+        int t = ++g_tmp;
+        buf_printf(b, "({ sp_int _t%d = (", t); emit_expr(c, recv, b);
+        buf_printf(b, "); (sp_Complex){(sp_float)(_t%d == SP_INT_NIL ? 0 : _t%d), 0, 0}; })", t, t);
+        return 1;
+      }
       buf_puts(b, "((sp_Complex){(sp_float)("); emit_expr(c, recv, b);
       buf_printf(b, "), 0, %d})", crt == TY_FLOAT ? 1 : 0); return 1;
     }
