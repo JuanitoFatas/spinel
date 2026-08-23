@@ -690,7 +690,7 @@ Where Spinel returns `nil` but CRuby returns a label:
 | `{a: 1}`, `1..3` (hash/range and other general expressions) | `"expression"` | `nil` |
 | `x = 1` (assignment) | `"assignment"` | `nil` |
 | `yield`, `super` | `"yield"` / `"super"` | `nil` |
-| Multi-encoding strings | Strings are UTF-8, always: `Encoding` conversion tables, `force_encoding` to non-UTF-8 encodings, and per-string encoding state are out of scope. A compiled binary's string paths (indexing, regexp, hashing) assume one encoding, and that assumption is load-bearing for their performance | write UTF-8; transcode at the boundary before the data enters the program |
+| Multi-encoding strings | Strings are UTF-8 or ASCII-8BIT: `Encoding` conversion tables and `force_encoding` to a third encoding are out of scope. A string carries one bit, not an encoding object -- `pack` and `String#b` set it, and `#length`, `#[]`, `#inspect`, `#encoding` and the comparisons read it. A compiled binary's string paths (indexing, regexp, hashing) assume those two share a byte representation, and that assumption is load-bearing for their performance | write UTF-8; transcode at the boundary before the data enters the program |
 
 Two forms report a label where CRuby would report `nil`, because the check is
 syntactic rather than runtime:
@@ -757,6 +757,42 @@ between its two endpoints): `puts i if (i == 3)..(i == 5)`. This is a rarely use
 feature with surprising hidden per-site state, and Spinel does not support it; a
 program using it fails to compile rather than running with wrong behavior. Use an
 explicit boolean state variable instead.
+
+#### No `Encoding::CompatibilityError`
+
+CRuby raises `Encoding::CompatibilityError` when a two-string operation
+(`include?`, `index`, `+`, `sub`, `start_with?`, ...) is handed operands whose
+encodings are incompatible and whose bytes are not all ASCII:
+
+```ruby
+"café".include?("é".b)   # CRuby: Encoding::CompatibilityError
+                         # Spinel: true
+```
+
+The error guards against a byte match that is not a character match, which is
+a real hazard when the two operands are, say, Shift_JIS and UTF-8: the same
+bytes mean different characters. Spinel has two encodings, UTF-8 and
+ASCII-8BIT, and they share one byte representation -- ASCII-8BIT is bytes with
+no character interpretation at all, so there is no second interpretation for
+the first one to disagree with. The failure the error exists to prevent cannot
+happen here, so Spinel answers the byte question instead of refusing it.
+
+Where CRuby produces a *value* rather than an error, Spinel matches it.
+`String#==`, `#eql?`, `#<=>` and `#hash` follow CRuby's `rb_str_comparable`:
+equal bytes are equal strings only when the encodings are comparable -- the
+same encoding, or both operands ASCII only. That matters beyond the comparison
+itself, because it decides whether a Hash keeps a binary blob and a text
+string as one key or two.
+
+The visible consequence of drawing the line there is an asymmetry:
+
+```ruby
+"café".include?("café".b)   # true  -- a byte search
+"café" == "café".b          # false -- CRuby's answer, and the Hash-key rule
+```
+
+CRuby has the same pair; it just answers the first with an exception rather
+than with `true`.
 
 ---
 
