@@ -17,6 +17,31 @@
    used by the sub_range helpers that live in this file. */
 static char sp_char_cache[256][3];
 static int sp_char_cache_init = 0;
+/* The same table for a BINARY receiver, where the slice has to keep the tag.
+   The tag lives in an sp_str_hdr, and the 0xff entries above have none -- so
+   these entries carry one, under the 0xfb marker (static storage WITH a
+   header). The header also gives a real length, so byte 0 is representable
+   here where strlen makes it the empty string above. Built once; never
+   allocated, never swept, never mutated in place (0xfb is not in the
+   heap-string group any of those paths test for). */
+typedef struct { sp_str_hdr h; char m; char d[2]; } sp_bin_char_ent;
+static sp_bin_char_ent sp_bin_char_cache[256];
+static int sp_bin_char_cache_init = 0;
+static const char *sp_bin_char(unsigned char c) {
+  if (!sp_bin_char_cache_init) {
+    for (int i = 0; i < 256; i++) {
+      sp_bin_char_cache[i].h.next = NULL;
+      sp_bin_char_cache[i].h.size = SP_STR_SIZE_BINARY;
+      sp_bin_char_cache[i].h.len = 1;
+      sp_bin_char_cache[i].h.hash = 0;
+      sp_bin_char_cache[i].m = (char)0xfb;
+      sp_bin_char_cache[i].d[0] = (char)i;
+      sp_bin_char_cache[i].d[1] = 0;
+    }
+    sp_bin_char_cache_init = 1;
+  }
+  return sp_bin_char_cache[c].d;
+}
 
 /* Hex-digit value, used by sp_str_undump's \xNN / \uNNNN unescape. */
 static int _sp_hexval(unsigned char d){return (d<='9')?(d-'0'):(tolower(d)-'a'+10);}
@@ -977,11 +1002,11 @@ sp_int sp_str_byterindex_from(const char*s,const char*sub,sp_int pos){if(!s)sp_n
    (or before -length) and a negative len return NULL; start == length and
    len == 0 return "". A single-char ASCII result aliases the per-process
    sp_char_cache so common indexing avoids an allocation. */
-const char*sp_str_sub_range(const char*s,sp_int start,sp_int len){SP_GC_ROOT_STR(s);if(!s)sp_nil_recv("[]");size_t _fb;int fixed=sp_str_fixed_width(s,&_fb);sp_int cl=fixed?(sp_int)_fb:sp_str_length(s);if(start<0)start+=cl;if(start<0||start>cl||len<0)return NULL;if(start==cl||len==0){return &("\xff" "")[1];}if(len>cl-start)len=cl-start;int bin=fixed?sp_str_is_binary(s):0;size_t boff=fixed?(size_t)start:sp_utf8_byte_offset(s,start);size_t blen_total=fixed?_fb:sp_str_byte_len(s);size_t bp=boff;sp_int rem=len;while(rem>0&&bp<blen_total){bp+=fixed?1:sp_utf8_advance(s+bp);rem--;}if(bp>blen_total)bp=blen_total;size_t bend=bp;size_t blen=bend-boff;if(!bin&&len==1&&blen==1){unsigned char c=(unsigned char)s[boff];if(c!=0){if(!sp_char_cache_init){for(int i=0;i<256;i++){sp_char_cache[i][0]=(char)0xff;sp_char_cache[i][1]=(char)i;sp_char_cache[i][2]=0;}sp_char_cache_init=1;}return &sp_char_cache[c][1];}}char*r=sp_str_alloc_raw(blen+1);memcpy(r,s+boff,blen);r[blen]=0;sp_str_set_len(r,blen);if(bin)sp_str_mark_binary(r);return r;}
+const char*sp_str_sub_range(const char*s,sp_int start,sp_int len){SP_GC_ROOT_STR(s);if(!s)sp_nil_recv("[]");size_t _fb;int fixed=sp_str_fixed_width(s,&_fb);sp_int cl=fixed?(sp_int)_fb:sp_str_length(s);if(start<0)start+=cl;if(start<0||start>cl||len<0)return NULL;if(start==cl||len==0){return &("\xff" "")[1];}if(len>cl-start)len=cl-start;int bin=fixed?sp_str_is_binary(s):0;size_t boff=fixed?(size_t)start:sp_utf8_byte_offset(s,start);size_t blen_total=fixed?_fb:sp_str_byte_len(s);size_t bp=boff;sp_int rem=len;while(rem>0&&bp<blen_total){bp+=fixed?1:sp_utf8_advance(s+bp);rem--;}if(bp>blen_total)bp=blen_total;size_t bend=bp;size_t blen=bend-boff;if(bin&&len==1&&blen==1)return sp_bin_char((unsigned char)s[boff]);if(!bin&&len==1&&blen==1){unsigned char c=(unsigned char)s[boff];if(c!=0){if(!sp_char_cache_init){for(int i=0;i<256;i++){sp_char_cache[i][0]=(char)0xff;sp_char_cache[i][1]=(char)i;sp_char_cache[i][2]=0;}sp_char_cache_init=1;}return &sp_char_cache[c][1];}}char*r=sp_str_alloc_raw(blen+1);memcpy(r,s+boff,blen);r[blen]=0;sp_str_set_len(r,blen);if(bin)sp_str_mark_binary(r);return r;}
 /* Single-character `s[i]`. Returns NULL on out-of-bounds so the caller can
    yield CRuby's `"hello"[20] -> nil`. */
 const char*sp_str_char_at_or_nil(const char*s,sp_int i){SP_GC_ROOT_STR(s);if(!s)sp_nil_recv("[]");sp_int cl=sp_str_length(s);if(i<0)i+=cl;if(i<0||i>=cl)return NULL;return sp_str_sub_range(s,i,1);}
-const char*sp_str_sub_range_len(const char*s,sp_int cl,sp_int start,sp_int len){SP_GC_ROOT_STR(s);if(start<0)start+=cl;if(start<0||start>cl||len<0)return NULL;if(start==cl||len==0){return &("\xff" "")[1];}if(len>cl-start)len=cl-start;size_t _fb;int fixed=sp_str_fixed_width(s,&_fb);int bin=fixed?sp_str_is_binary(s):0;size_t boff=fixed?(size_t)start:sp_utf8_byte_offset(s,start);size_t blen_total=fixed?_fb:sp_str_byte_len(s);size_t bp=boff;sp_int rem=len;while(rem>0&&bp<blen_total){bp+=fixed?1:sp_utf8_advance(s+bp);rem--;}if(bp>blen_total)bp=blen_total;size_t bend=bp;size_t blen=bend-boff;if(!bin&&len==1&&blen==1){unsigned char c=(unsigned char)s[boff];if(c!=0){if(!sp_char_cache_init){for(int i=0;i<256;i++){sp_char_cache[i][0]=(char)0xff;sp_char_cache[i][1]=(char)i;sp_char_cache[i][2]=0;}sp_char_cache_init=1;}return &sp_char_cache[c][1];}}char*r=sp_str_alloc_raw(blen+1);memcpy(r,s+boff,blen);r[blen]=0;sp_str_set_len(r,blen);if(bin)sp_str_mark_binary(r);return r;}
+const char*sp_str_sub_range_len(const char*s,sp_int cl,sp_int start,sp_int len){SP_GC_ROOT_STR(s);if(start<0)start+=cl;if(start<0||start>cl||len<0)return NULL;if(start==cl||len==0){return &("\xff" "")[1];}if(len>cl-start)len=cl-start;size_t _fb;int fixed=sp_str_fixed_width(s,&_fb);int bin=fixed?sp_str_is_binary(s):0;size_t boff=fixed?(size_t)start:sp_utf8_byte_offset(s,start);size_t blen_total=fixed?_fb:sp_str_byte_len(s);size_t bp=boff;sp_int rem=len;while(rem>0&&bp<blen_total){bp+=fixed?1:sp_utf8_advance(s+bp);rem--;}if(bp>blen_total)bp=blen_total;size_t bend=bp;size_t blen=bend-boff;if(bin&&len==1&&blen==1)return sp_bin_char((unsigned char)s[boff]);if(!bin&&len==1&&blen==1){unsigned char c=(unsigned char)s[boff];if(c!=0){if(!sp_char_cache_init){for(int i=0;i<256;i++){sp_char_cache[i][0]=(char)0xff;sp_char_cache[i][1]=(char)i;sp_char_cache[i][2]=0;}sp_char_cache_init=1;}return &sp_char_cache[c][1];}}char*r=sp_str_alloc_raw(blen+1);memcpy(r,s+boff,blen);r[blen]=0;sp_str_set_len(r,blen);if(bin)sp_str_mark_binary(r);return r;}
 const char*sp_str_sub_range_r(const char*s,sp_int start,sp_int end_,sp_int excl){SP_GC_ROOT_STR(s);if(!s)sp_nil_recv("[]");sp_int cl=sp_str_length(s);if(end_<0)end_+=cl;if(start<0)start+=cl;sp_int n=end_-start+(excl?0:1);if(n<0||start<0)n=0;return sp_str_sub_range_len(s,cl,start,n);}
 const char*sp_str_sub_range_len_r(const char*s,sp_int cl,sp_int start,sp_int end_,sp_int excl){SP_GC_ROOT_STR(s);if(end_<0)end_+=cl;if(start<0)start+=cl;sp_int n=end_-start+(excl?0:1);if(n<0||start<0)n=0;return sp_str_sub_range_len(s,cl,start,n);}
 /* walks by INDEX to the header length: `while(*p)` stopped at an embedded NUL

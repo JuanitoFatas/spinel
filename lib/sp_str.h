@@ -32,7 +32,7 @@ static inline int sp_utf8_encode(uint32_t cp,char*out){if(cp<0x80){out[0]=(char)
    it a scan loop over a built-up string rewalked the whole buffer per index. */
 static inline int sp_str_cacheable(const char *s) {
   unsigned char m = ((const unsigned char *)s)[-1];
-  return m == 0xfe || m == 0xfc || m == 0xff || m == 0xf1 || m == 0xfd;
+  return m == 0xfe || m == 0xfc || m == 0xff || m == 0xf1 || m == 0xfd || m == 0xfb;
 }
 /* Byte-exact comparison of two heap strings. strcmp stops at the first NUL,
    so two strings that differ only after one compared equal and sorted equal --
