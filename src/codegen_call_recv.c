@@ -6705,10 +6705,14 @@ int emit_scalar_call(Compiler *c, int id, Buf *b) {
       else if (sp_streq(name, "b") && argc == 0) {
         /* a fresh copy, not the receiver: CRuby's #b is never frozen, and
            handing back a frozen literal made `s.b << x` raise FrozenError */
-        buf_printf(b, "sp_str_dup(%s)", r);
+        buf_printf(b, "sp_str_b(%s)", r);
       }
       else if ((sp_streq(name, "b") || sp_streq(name, "encode")) && argc <= 2) buf_printf(b, "(%s)", r);
-      else if (sp_streq(name, "encoding") && argc == 0) buf_printf(b, "((void)(%s), sp_box_encoding(sp_encoding_utf8()))", r);
+      /* the answer is the receiver's own tag, not the constant UTF-8 this arm
+         used to fold to while discarding the receiver: pack and String#b tag
+         their answer BINARY, and every other reader of that tag agreed */
+      else if (sp_streq(name, "encoding") && argc == 0)
+        buf_printf(b, "sp_box_encoding(sp_str_is_binary(%s) ? sp_encoding_binary() : sp_encoding_utf8())", r);
       else if (sp_streq(name, "dump") && argc == 0) buf_printf(b, "sp_str_dump(%s)", r);
       else if (sp_streq(name, "undump") && argc == 0) buf_printf(b, "sp_str_undump(%s)", r);
       else if ((sp_streq(name, "casecmp") || sp_streq(name, "casecmp?")) && argc == 1 &&

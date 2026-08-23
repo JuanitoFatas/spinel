@@ -113,6 +113,7 @@ const char *sp_str_crypt(const char *s, const char *salt);
 const char*sp_str_lstrip(const char*s);
 const char*sp_str_rstrip(const char*s);
 const char*sp_str_dup(const char*s);
+const char*sp_str_b(const char*s);
 
 /* ---- utf8-dependent cold transforms (lib/sp_str.c) ---- */
 /* nil-receiver raise: a nullable string carries nil as NULL, and CRuby

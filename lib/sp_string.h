@@ -11,7 +11,10 @@
 #include "sp_alloc.h"   /* sp_gc_alloc, sp_gc_bytes/hdr, sp_str_hdr, sp_str_byte_len, sp_raise_cls */
 #include <string.h>
 
-typedef struct { char *data; int64_t len; int64_t cap; } sp_String;
+/* `binary` is the ASCII-8BIT tag, kept on the HANDLE: sp_fd_setup zeroes the
+   payload header on every grow, so the tag has to be re-stamped after each
+   mutation rather than living only in the bytes. */
+typedef struct { char *data; int64_t len; int64_t cap; unsigned binary; } sp_String;
 
 /* Per-mutable-string freeze flag rides in the GC header alongside `marked`. */
 static inline sp_bool sp_String_is_frozen(sp_String*s){if(!s)return TRUE;sp_gc_hdr*h=(sp_gc_hdr*)((char*)s-sizeof(sp_gc_hdr));return h->frozen;}
@@ -46,6 +49,7 @@ static inline void sp_fd_own(sp_String *s){
 static inline void sp_fd_publish(sp_String *s){
   sp_str_hdr *h = (sp_str_hdr *)sp_fd_base(s->data);
   h->len = (uint32_t)s->len; h->hash = 0;
+  if (s->binary) h->size |= SP_STR_SIZE_BINARY;
   sp_str_lcache_drop(s->data);
 }
 static inline int sp_fd_grow(sp_String *s, int64_t need){
@@ -71,7 +75,7 @@ static inline sp_String*sp_String_new(const char*s){
   char*data=sp_fd_setup(raw);
   memcpy(data,s,len);data[len]=0;
   sp_String*r=(sp_String*)sp_gc_alloc(sizeof(sp_String),sp_String_fin,NULL);
-  r->len=len;r->cap=cap;r->data=data;sp_fd_own(r);
+  r->len=len;r->cap=cap;r->data=data;r->binary=0;sp_fd_own(r);
   {sp_gc_hdr*h=(sp_gc_hdr*)((char*)r-sizeof(sp_gc_hdr));h->size+=r->cap+SP_FD_OVH;sp_gc_bytes_add(r->cap+SP_FD_OVH);}
   sp_fd_publish(r);
   return r;
@@ -95,6 +99,10 @@ static inline void sp_String_append_bin(sp_String*s,const char*t){if(!s||!t)retu
 static inline sp_String*sp_String_new_shared(const char*s){
   sp_String*r=sp_String_new(s);
   if(((const unsigned char*)s)[-1]==0xf1){sp_gc_hdr*h=(sp_gc_hdr*)((char*)r-sizeof(sp_gc_hdr));h->frozen=1;}
+  /* the ASCII-8BIT tag is inherited too, not just the frozen bit: a pack /
+     String#b result captured by a block becomes one of these handles, and
+     dropping the tag put its bytes back on the character-counting path */
+  if(sp_str_is_binary(s)){r->binary=1;sp_fd_publish(r);}
   return r;
 }
 static inline const char*sp_String_cstr(sp_String*s){return s->data;}
