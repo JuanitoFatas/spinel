@@ -6592,8 +6592,14 @@ int infer_block_params(Compiler *c) {
              a container at run time, through the dispatch's builtin arm. The
              adopted method's yield types describe only the user arm, so a
              block typed from them binds the wrong thing on the other one
-             (a String element into an Integer slot). Widen instead (#3409). */
-          if (mi >= 0 && poly_enum_op_for(name)) {
+             (a String element into an Integer slot). Widen instead (#3409).
+             This does not depend on a class having been ADOPTED: with two or
+             more candidates nothing is adopted and the widening was skipped,
+             so the param kept whatever an earlier round had guessed. A second
+             Struct in the file was enough to change the answer, because every
+             Struct defines `each` (#4086). More candidates is a stronger case
+             for poly, not a weaker one. */
+          if (ndef > 0 && poly_enum_op_for(name)) {
             Scope *bs2 = comp_scope_of(c, block);
             for (int k = 0; ; k++) {
               const char *bp2 = block_param_name(c, block, k);
