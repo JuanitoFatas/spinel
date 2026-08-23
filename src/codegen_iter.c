@@ -1826,6 +1826,15 @@ int emit_iter_value_expr(Compiler *c, int id, Buf *b) {
   const NodeTable *nt = c->nt;
   const char *name = nt_str(nt, id, "name");
   if (!name) return 0;
+  /* A `&.` call has to reach the safe-nav guard first: this lowering answers
+     the receiver and never looks at the operator, so `v&.each { }` walked a
+     nil receiver and raised where CRuby answers nil. Stand down only BEFORE
+     the guard runs -- it re-enters this emission on the guarded temp with
+     g_sn_skip set, and that pass has to lower normally. */
+  { const char *sop = nt_str(nt, id, "call_operator");
+    int sn_recv = nt_ref(nt, id, "receiver");
+    if (sop && sp_streq(sop, "&.") && g_sn_skip != id &&
+        sn_recv >= 0 && comp_ntype(c, sn_recv) == TY_POLY) return 0; }
   if (!(sp_streq(name, "each") || sp_streq(name, "each_value") ||
         sp_streq(name, "each_key") || sp_streq(name, "each_pair") ||
         sp_streq(name, "each_with_index") || sp_streq(name, "reverse_each") ||
@@ -1900,6 +1909,14 @@ int emit_iteration_stmt(Compiler *c, int id, Buf *b, int indent) {
   const char *name = nt_str(nt, id, "name");
   int recv = nt_ref(nt, id, "receiver");
   if (!name) return 0;
+  /* A `&.` call has to reach the safe-nav guard first: this lowering walks the
+     receiver and never looks at the operator, so `v&.each { }` handed a nil to
+     sp_poly_iter_check and raised where CRuby answers nil. Stand down only
+     BEFORE the guard runs -- it re-enters this emission on the guarded temp
+     with g_sn_skip set, and that pass has to lower normally. */
+  { const char *sop = nt_str(nt, id, "call_operator");
+    if (sop && sp_streq(sop, "&.") && g_sn_skip != id &&
+        recv >= 0 && comp_ntype(c, recv) == TY_POLY) return 0; }
   /* CRuby checks arity and argument classes at dispatch, before the
      iteration starts: a loop emitted here never reaches emit_call, so both
      guards run here too (3.step(4, 1, 2) { } ran the loop with the extra

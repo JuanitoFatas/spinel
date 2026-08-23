@@ -13569,7 +13569,18 @@ static void emit_call_body(Compiler *c, int id, Buf *b) {
         buf_printf(g_pre, "sp_RbVal _sn%d = %s; SP_GC_ROOT_RBVAL(_sn%d);\n",
                    tsn, rsn.p ? rsn.p : "sp_box_nil()", tsn);
         free(rsn.p);
-        buf_printf(b, "(_sn%d.tag == SP_TAG_NIL ? ", tsn);
+        /* The value arm is emitted into its own buffer with g_pre redirected:
+           a lowering that hoists STATEMENTS (the comprehension family --
+           select, reject, reduce, chunk_while -- builds a loop) would
+           otherwise put them in front of the guard, where they run on the very
+           nil the guard exists to stop. When that happens the guard becomes a
+           statement `if` instead of a ternary. */
+        Buf nb; memset(&nb, 0, sizeof nb);
+        Buf vb2; memset(&vb2, 0, sizeof vb2);
+        Buf preb; memset(&preb, 0, sizeof preb);
+        Buf *sv_pre = g_pre;
+        Buf *b_sv = b;
+        b = &nb;
         /* an array-typed result lowers to a C pointer, whose NULL is nil */
         int sn_ptr = (ret2 == TY_INT || ret2 == TY_FLOAT || ret2 == TY_STRING ||
                       ty_is_array(ret2));
@@ -13581,7 +13592,8 @@ static void emit_call_body(Compiler *c, int id, Buf *b) {
           buf_printf(b, "((sp_%sArray *)NULL)", ak ? ak : "Poly");
         }
         else buf_puts(b, "sp_box_nil()");
-        buf_puts(b, " : (");
+        b = &vb2;
+        g_pre = &preb;
         if (g_n_argov < MAX_ARG_OVERRIDE) {
           int slot2 = g_n_argov++;
           g_argov_node[slot2] = recv;
@@ -13619,7 +13631,36 @@ static void emit_call_body(Compiler *c, int id, Buf *b) {
           g_n_argov--;
         }
         else emit_expr(c, recv, b);  /* override table full: degrade to unguarded */
-        buf_puts(b, "))");
+        g_pre = sv_pre;
+        b = b_sv;
+        if (!preb.p || !preb.p[0]) {
+          buf_printf(b, "(_sn%d.tag == SP_TAG_NIL ? %s : (%s))",
+                     tsn, nb.p ? nb.p : "sp_box_nil()", vb2.p ? vb2.p : "");
+        }
+        else {
+          int rsv = ++g_tmp;
+          emit_indent(g_pre, g_indent);
+          /* Both arms are BOXED unless the answer has a C nil of its own, so
+             the holding slot is sp_RbVal then -- not ret2, which names what the
+             value would be before boxing (a poly-hash answer declared its slot
+             sp_PolyPolyHash * and took sp_box_nil()). */
+          if (sn_ptr) emit_ctype(c, ret2, g_pre);
+          else buf_puts(g_pre, "sp_RbVal");
+          buf_printf(g_pre, " _snr%d = %s;\n", rsv, nb.p ? nb.p : "sp_box_nil()");
+          emit_indent(g_pre, g_indent);
+          if (!sn_ptr) buf_printf(g_pre, "SP_GC_ROOT_RBVAL(_snr%d);\n", rsv);
+          else if (ret2 == TY_STRING || ty_is_array(ret2)) buf_printf(g_pre, "SP_GC_ROOT(_snr%d);\n", rsv);
+          else buf_printf(g_pre, "(void)_snr%d;\n", rsv);
+          emit_indent(g_pre, g_indent);
+          buf_printf(g_pre, "if (_sn%d.tag != SP_TAG_NIL) {\n", tsn);
+          buf_puts(g_pre, preb.p);
+          emit_indent(g_pre, g_indent);
+          buf_printf(g_pre, "  _snr%d = (%s);\n", rsv, vb2.p ? vb2.p : "");
+          emit_indent(g_pre, g_indent);
+          buf_puts(g_pre, "}\n");
+          buf_printf(b, "_snr%d", rsv);
+        }
+        free(nb.p); free(vb2.p); free(preb.p);
         return;
       }
       /* A concretely-typed OBJECT receiver is still a nullable C pointer
