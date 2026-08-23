@@ -78,6 +78,7 @@ int an_user_defines_or_reads(Compiler *c, const char *name);
    `want`: the poly dispatch accumulates its arm beside the builtin ones in one
    C temp, so the call must be typed for what both can hold. */
 int an_user_ret_disagrees(Compiler *c, const char *name, TyKind want);
+int an_ty_holds_nil(TyKind t);
 int an_re_has_captures(const char *src);
 const char *an_regex_lit_src(Compiler *c, int nid);
 int str_in(const char *s, const char *const *set);

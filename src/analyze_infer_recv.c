@@ -1657,11 +1657,15 @@ int infer_poly_call(Compiler *c, int id, TyKind rt, TyKind *out) {
     { *out = TY_STRING; return 1; }
   }
   /* `poly.empty?`: the dispatch carries builtin String / Array / Hash arms, so
-     the call answers a boolean even when a user class defines the name too.
-     Without a type the enclosing method came out void and the value was nil. */
+     the call answers a boolean even when a user class defines the name too --
+     without a type the enclosing method came out void and the value was nil.
+     What it must NOT do is pin the C temp to a bool when that user arm answers
+     something a bool cannot hold: `def empty? = 0` came back as false, and 0
+     is truthy in Ruby (#4083). Poly holds both, and the method still has a
+     type, which was the point. */
   if (recv >= 0 && rt == TY_POLY && sp_streq(name, "empty?") && argc == 0 &&
       nt_ref(nt, id, "block") < 0)
-    { *out = TY_BOOL; return 1; }
+    { *out = an_user_ret_disagrees(c, name, TY_BOOL) ? TY_POLY : TY_BOOL; return 1; }
   /* poly.merge(other) { |k, old, new| } -- a Hash reached through a container.
      The conflict-block form builds the same general boxed-key/value hash the
      blockless one does; without a type it stayed unresolved. */

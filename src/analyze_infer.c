@@ -928,6 +928,42 @@ int an_user_ret_disagrees(Compiler *c, const char *name, TyKind want) {
   return 0;
 }
 
+/* Can this type's C slot hold a nil of its own? Integer and Float have their
+   sentinels; String, the arrays and every reference object have NULL. A bool, a
+   Symbol, a Class, a Rational and a Complex have no such value, so a nil in one
+   of those slots has to be boxed. Stated once: the `&.` widening below asks the
+   same question, and the two copies would drift. */
+int an_ty_holds_nil(TyKind t) {
+  return !(t == TY_BOOL || t == TY_CLASS || t == TY_SYMBOL ||
+           t == TY_RATIONAL || t == TY_COMPLEX);
+}
+
+/* The answer the poly-receiver section reaches, filtered through the question
+   above. Every concrete type that section returns becomes the C type of the ONE
+   temp the dispatch accumulates into, and a user class's arm writes its own
+   return into that same temp -- so a disagreeing return reads back through the
+   wrong union member. `Chain#join` answering a Chain came back through the
+   builtin's `const char *` as `.v.s` and printed "" (#4083); `Tags#include?`
+   answering an index came back through an sp_bool (#4072). Three arms in that
+   section had thought to ask; the rest had not, which is why the answer
+   depended on which name you picked. Ask once, on the way out. */
+static TyKind an_poly_concrete(Compiler *c, const char *name, TyKind t) {
+  if (t == TY_POLY || t == TY_UNKNOWN || !name) return t;
+  for (int k = 0; k < c->nclasses; k++) {
+    int mi = comp_method_in_chain(c, k, name, NULL);
+    if (mi < 0 || mi >= c->nscopes) continue;
+    TyKind r = (TyKind)c->scopes[mi].ret;
+    if (r == t || r == TY_UNKNOWN || r == TY_VOID) continue;
+    /* A nil answer FITS a slot that has a nil of its own -- a NULL array is
+       nil, and that is exactly why the array trio may stay concrete (#3461).
+       Widening those would leave the builtin arm's sp_PolyArray * meeting an
+       sp_RbVal, which is the shape #3461 fixed. */
+    if (r == TY_NIL && an_ty_holds_nil(t)) continue;
+    return TY_POLY;
+  }
+  return t;
+}
+
 static int an_bare_call_class_owned(Compiler *c, int id) {
   const NodeTable *nt = c->nt;
   if (nt_ref(nt, id, "receiver") >= 0) return 0;
@@ -4001,11 +4037,11 @@ else {
            for what is really a property of the answer's C type. */
         int sn_arr = (sp_streq(name, "keys") || sp_streq(name, "values") ||
                       sp_streq(name, "to_a") || sp_streq(name, "entries")) && argc == 0;
-        if (recv >= 0 && call_op && sp_streq(call_op, "&.") && !sn_arr) return TY_POLY;
+        if (recv >= 0 && call_op && sp_streq(call_op, "&.") && !sn_arr) return an_poly_concrete(c, name, TY_POLY);
       }
-      if (sp_streq(name, "to_s") || sp_streq(name, "inspect")) return TY_STRING;
-      if ((sp_streq(name, "gsub") || sp_streq(name, "sub")) && argc == 2) return TY_STRING;
-      if (sp_streq(name, "join")) return TY_STRING;
+      if (sp_streq(name, "to_s") || sp_streq(name, "inspect")) return an_poly_concrete(c, name, TY_STRING);
+      if ((sp_streq(name, "gsub") || sp_streq(name, "sub")) && argc == 2) return an_poly_concrete(c, name, TY_STRING);
+      if (sp_streq(name, "join")) return an_poly_concrete(c, name, TY_STRING);
       /* A length-like read answers an Integer -- unless a user class owns the
          name and answers something else, in which case the call's value is
          that union. The dispatch ALWAYS emits the builtin length arms (a
@@ -4017,10 +4053,10 @@ else {
       if (sp_streq(name, "to_i") || sp_streq(name, "length") || sp_streq(name, "size")) {
         TyKind ur = an_user_read_ty(c, name, argc);
         if (sp_streq(name, "to_i") || ur == TY_UNKNOWN || ur == TY_INT || ur == TY_VOID)
-          return TY_INT;
-        return TY_POLY;
+          return an_poly_concrete(c, name, TY_INT);
+        return an_poly_concrete(c, name, TY_POLY);
       }
-      if (sp_streq(name, "to_f")) return TY_FLOAT;
+      if (sp_streq(name, "to_f")) return an_poly_concrete(c, name, TY_FLOAT);
       /* Hash#keys / #values on a poly hash -> a poly array (boxed elements).
          to_a on a poly value follows the same rule: nil -> [], arrays and
          hashes materialize, anything else raises (sp_poly_to_a_arr). A user
@@ -4032,9 +4068,9 @@ else {
         if (!an_builtin_only)
         for (int k = 0; k < c->nclasses && !has_user; k++)
           if (comp_method_in_chain(c, k, name, NULL) >= 0) has_user = 1;
-        if (!has_user) return TY_POLY_ARRAY;
+        if (!has_user) return an_poly_concrete(c, name, TY_POLY_ARRAY);
       }
-      if (sp_streq(name, "clamp")) return TY_POLY;  /* boxed numeric clamp -> poly */
+      if (sp_streq(name, "clamp")) return an_poly_concrete(c, name, TY_POLY);  /* boxed numeric clamp -> poly */
       /* nil-aware conversions (a nil local widens to poly): boxed results */
       if (argc == 0 && nt_ref(nt, id, "block") < 0 &&
           (sp_streq(name, "to_a") || sp_streq(name, "to_h") ||
@@ -4047,14 +4083,14 @@ else {
         if (!has_user) {
           /* concrete result types, matching the TY_NIL receiver arm so a
              local settled on an early (pre-widening) pass stays consistent */
-          if (sp_streq(name, "to_a")) return TY_POLY_ARRAY;
+          if (sp_streq(name, "to_a")) return an_poly_concrete(c, name, TY_POLY_ARRAY);
           /* Hash#to_h is the identity, so a boxed receiver keeps whatever
              variant it really holds: narrowing to the symbol-keyed one made
              `opts.to_h` on a String-keyed hash raise (#3972). nil.to_h is the
              empty hash, which the boxed answer covers too. */
-          if (sp_streq(name, "to_h")) return TY_POLY;
-          if (sp_streq(name, "to_r") || sp_streq(name, "rationalize")) return TY_RATIONAL;
-          return TY_COMPLEX;
+          if (sp_streq(name, "to_h")) return an_poly_concrete(c, name, TY_POLY);
+          if (sp_streq(name, "to_r") || sp_streq(name, "rationalize")) return an_poly_concrete(c, name, TY_RATIONAL);
+          return an_poly_concrete(c, name, TY_COMPLEX);
         }
       }
       if (argc == 1 && sp_streq(name, "===")) {
@@ -4065,21 +4101,21 @@ else {
         /* A boxed receiver can be a Proc, whose #=== answers the proc's
            return value rather than a boolean (#3818); a poly slot holds the
            booleans every other kind answers just as well. */
-        if (!has_user) return TY_POLY;
+        if (!has_user) return an_poly_concrete(c, name, TY_POLY);
       }
       /* & | ^ on a poly receiver dispatch on the runtime tag (nil/bool take
          the boolean ops, ints the bitwise ones) via sp_poly_bitop, whose
          result is a boxed value -- so the static type stays poly (#2401). */
       if (argc == 1 && (sp_streq(name, "&") || sp_streq(name, "|") || sp_streq(name, "^")))
-        return TY_POLY;
+        return an_poly_concrete(c, name, TY_POLY);
       /* poly.arity on a Method read out of a container: the stamped arity, an
          Integer (#3231). */
-      if (argc == 0 && sp_streq(name, "arity")) return TY_INT;
+      if (argc == 0 && sp_streq(name, "arity")) return an_poly_concrete(c, name, TY_INT);
       /* the rest of the Proc face on a value read out of a container (#3685) */
-      if (argc == 0 && sp_streq(name, "lambda?")) return TY_BOOL;
-      if (argc == 0 && sp_streq(name, "parameters")) return TY_POLY_ARRAY;
-      if (argc == 0 && sp_streq(name, "curry")) return TY_CURRY;
-      if (argc == 0 && sp_streq(name, "to_proc")) return TY_POLY;
+      if (argc == 0 && sp_streq(name, "lambda?")) return an_poly_concrete(c, name, TY_BOOL);
+      if (argc == 0 && sp_streq(name, "parameters")) return an_poly_concrete(c, name, TY_POLY_ARRAY);
+      if (argc == 0 && sp_streq(name, "curry")) return an_poly_concrete(c, name, TY_CURRY);
+      if (argc == 0 && sp_streq(name, "to_proc")) return an_poly_concrete(c, name, TY_POLY);
       /* String transforms on a boxed value: emit_poly_call routes these
          through sp_poly_to_s and re-boxes the result, so the value stays
          poly (mirrors the codegen list in codegen_call_recv.c). */
@@ -4090,24 +4126,24 @@ else {
            sp_streq(name, "chomp") || sp_streq(name, "chop") ||
            sp_streq(name, "succ") || sp_streq(name, "next") ||
            sp_streq(name, "chr")))
-        return TY_POLY;
+        return an_poly_concrete(c, name, TY_POLY);
       /* poly.ljust/rjust/center(width[, pad]): a String read from a container
          widened to poly; emit_poly_call pads via sp_poly_to_s and re-boxes, so
          the result stays poly (#3222). */
       if ((sp_streq(name, "ljust") || sp_streq(name, "rjust") || sp_streq(name, "center")) &&
           (argc == 1 || argc == 2))
-        return TY_POLY;
+        return an_poly_concrete(c, name, TY_POLY);
       /* poly.bytes / poly.codepoints on a value that is really a String (a
          binary lump read whose method widened to poly): a concrete int array,
          emitted via sp_str_bytes(sp_poly_to_s(...)) with no boxing. */
       if ((sp_streq(name, "bytes") || sp_streq(name, "codepoints")) && argc == 0 &&
           nt_ref(nt, id, "block") < 0) {
-        if (!an_user_defines_or_reads(c, name)) return TY_INT_ARRAY;
+        if (!an_user_defines_or_reads(c, name)) return an_poly_concrete(c, name, TY_INT_ARRAY);
         /* A user class owns the name too, so the value may be a String (an int
            array) or that class's member (whatever it holds). One C slot cannot
            be both, and letting the member's type win made the String answer 0.
            Box it: the codegen's tag pre-arm fills either side (#3380). */
-        return TY_POLY;
+        return an_poly_concrete(c, name, TY_POLY);
       }
       /* poly.unpack1(fmt): String#unpack1 on a value that widened to poly
          (pervasive in doom's binary WAD parsing). Mirrors the rt==TY_STRING
@@ -4134,19 +4170,19 @@ else {
            and answered a substring of its inspect text (#3806). The container
            check below stays as documentation of the same conclusion. */
         (void)poly_expr_flows_container;
-        return TY_POLY;
+        return an_poly_concrete(c, name, TY_POLY);
       }
-      if (sp_streq(name, "[]") && argc == 1) return TY_POLY;  /* boxed array element access */
-      if (sp_streq(name, "[]") && argc == 2) return TY_POLY;  /* 2-arg poly slice */
+      if (sp_streq(name, "[]") && argc == 1) return an_poly_concrete(c, name, TY_POLY);  /* boxed array element access */
+      if (sp_streq(name, "[]") && argc == 2) return an_poly_concrete(c, name, TY_POLY);  /* 2-arg poly slice */
       /* fetch on a poly Hash yields a boxed (poly) value, like `[]` -- the
          hash-value type is not statically known through the poly widening. Type
          it here so the boxed dispatch result is not discarded as nil (without
          this, `fetch` fell through to the non-hash `fetch(k, default)` rule or
          to nil, and its value-position result was dropped). */
-      if (sp_streq(name, "fetch") && (argc == 1 || argc == 2)) return TY_POLY;
+      if (sp_streq(name, "fetch") && (argc == 1 || argc == 2)) return an_poly_concrete(c, name, TY_POLY);
       /* []= on a poly receiver yields the assigned value, emitted boxed */
-      if (sp_streq(name, "[]=") && (argc == 2 || argc == 3)) return TY_POLY;
-      if (sp_streq(name, "dig") && argc >= 1) return TY_POLY;
+      if (sp_streq(name, "[]=") && (argc == 2 || argc == 3)) return an_poly_concrete(c, name, TY_POLY);
+      if (sp_streq(name, "dig") && argc >= 1) return an_poly_concrete(c, name, TY_POLY);
       {
         int blk = nt_ref(nt, id, "block");
         if (blk >= 0 && (ty_iter_shape(name) == TY_ITER_MAP)) {
@@ -4205,7 +4241,7 @@ else {
          whether that produces an array pointer or a boxed value. */
       if (found && !an_builtin_only && poly_container_read_p(name) &&
           nt_ref(nt, id, "block") < 0 && poly_expr_flows_container(c, recv)) {
-        return TY_POLY;
+        return an_poly_concrete(c, name, TY_POLY);
       }
       /* Nor do the blockless ENUMERATOR producers: a boxed receiver can always
          be an Array, which answers them with an Enumerator. A Struct gets one
@@ -4217,8 +4253,8 @@ else {
            C temp. Typed from the builtin alone, its answer was crammed into an
            sp_Enumerator * -- so when the two disagree the call is poly, which
            is the only thing that holds either. */
-        if (an_user_ret_disagrees(c, name, TY_ENUMERATOR)) return TY_POLY;
-        return TY_ENUMERATOR;
+        if (an_user_ret_disagrees(c, name, TY_ENUMERATOR)) return an_poly_concrete(c, name, TY_POLY);
+        return an_poly_concrete(c, name, TY_ENUMERATOR);
       }
       /* `merge` needs no container precondition either: a boxed receiver can
          always be a Hash, and the dispatch ends in the runtime merge that lets
@@ -4228,12 +4264,12 @@ else {
          answered its zero initializer (#4033). */
       if (found && !an_builtin_only && sp_streq(name, "merge") &&
           nt_ref(nt, id, "block") < 0 && argc >= 1)
-        return TY_POLY;
+        return an_poly_concrete(c, name, TY_POLY);
       /* the numeric surface needs no container precondition: a boxed receiver
          can always be a number (#4012) */
       if (found && !an_builtin_only && argc == 0 && poly_numeric_read_p(name) &&
           nt_ref(nt, id, "block") < 0) {
-        return TY_POLY;
+        return an_poly_concrete(c, name, TY_POLY);
       }
       /* A binary operator on a boxed receiver is lowered to sp_poly_<op>,
          whose value is boxed however the runtime dispatches it. Taking the
@@ -4242,7 +4278,22 @@ else {
       if (found && argc == 1 &&
           (is_arith_op(name) || sp_streq(name, "<<") || sp_streq(name, ">>") ||
            sp_streq(name, "&") || sp_streq(name, "|") || sp_streq(name, "^")))
-        return TY_POLY;
+        return an_poly_concrete(c, name, TY_POLY);
+      /* The user arms agreed on `r`, and the dispatch writes them into one C
+         temp -- but it also emits whatever the BUILTIN surface answers for the
+         name, into that same temp. Ask what that would be. `Box#index`
+         answering a String pinned the temp to `const char *` while the Array
+         and String arms boxed their answers, and the build stopped (#4083).
+         The rules above name the cases someone hit one at a time; this asks
+         for every name, which is the same question an_poly_concrete asks from
+         the other side. */
+      if (found && !an_builtin_only && r != TY_POLY && r != TY_UNKNOWN &&
+          recv >= 0 && an_user_defines_or_reads(c, name)) {
+        an_builtin_only = 1;
+        TyKind bt = infer_call(c, id);
+        an_builtin_only = 0;
+        if (bt != TY_UNKNOWN && bt != TY_VOID && bt != r) return TY_POLY;
+      }
       if (found) return r;
       /* Numeric queries / rounding on a boxed value: the sp_poly_* helpers
          dispatch on the runtime tag (a non-numeric tag raises CRuby's
@@ -4251,29 +4302,29 @@ else {
       if (argc == 0) {
         if (sp_streq(name, "nan?") || sp_streq(name, "finite?") ||
             sp_streq(name, "zero?") || sp_streq(name, "positive?") ||
-            sp_streq(name, "negative?")) return TY_BOOL;
+            sp_streq(name, "negative?")) return an_poly_concrete(c, name, TY_BOOL);
         if (sp_streq(name, "abs") || sp_streq(name, "infinite?") ||
             sp_streq(name, "floor") || sp_streq(name, "ceil") ||
             sp_streq(name, "round") || sp_streq(name, "truncate") ||
             sp_streq(name, "conjugate") || sp_streq(name, "conj") ||
-            sp_streq(name, "abs2") || sp_streq(name, "magnitude")) return TY_POLY;
+            sp_streq(name, "abs2") || sp_streq(name, "magnitude")) return an_poly_concrete(c, name, TY_POLY);
         if (sp_streq(name, "bytesize") || sp_streq(name, "ord") ||
             sp_streq(name, "bit_length") ||
             sp_streq(name, "numerator") || sp_streq(name, "denominator") ||
-            sp_streq(name, "begin") || sp_streq(name, "end")) return TY_INT;
+            sp_streq(name, "begin") || sp_streq(name, "end")) return an_poly_concrete(c, name, TY_INT);
       }
       /* Numeric#round(ndigits) on a boxed value: Float when n > 0, Integer
          when n <= 0 -- either way a boxed poly (sp_poly_round_n). */
-      if (argc == 1 && sp_streq(name, "round")) return TY_POLY;
+      if (argc == 1 && sp_streq(name, "round")) return an_poly_concrete(c, name, TY_POLY);
       /* divmod answers a pair, modulo and quo a number whose class follows the
          operands. Without a type here the emitted call was evaluated for
          effect and its value dropped (#3512). */
       if (argc == 1 && (sp_streq(name, "divmod") || sp_streq(name, "modulo") ||
                         sp_streq(name, "quo") || sp_streq(name, "div") ||
                         sp_streq(name, "remainder") || sp_streq(name, "coerce")))
-        return TY_POLY;
+        return an_poly_concrete(c, name, TY_POLY);
       /* String#getbyte on a boxed value: int byte or nil on out-of-range. */
-      if (argc == 1 && sp_streq(name, "getbyte")) return TY_POLY;
+      if (argc == 1 && sp_streq(name, "getbyte")) return an_poly_concrete(c, name, TY_POLY);
       /* The count-taking Array reads on a boxed array. Their value is a new
          array; without a rule they typed nil/void and the call emitted as a
          discarded statement (#3464). rotate's count is optional. */
@@ -4287,14 +4338,14 @@ else {
         for (int k = 0; k < c->nclasses && !has_user; k++)
           if (comp_method_in_chain(c, k, name, NULL) >= 0 ||
               comp_reader_in_chain(c, k, name, NULL)) has_user = 1;
-        if (!has_user) return TY_POLY_ARRAY;
+        if (!has_user) return an_poly_concrete(c, name, TY_POLY_ARRAY);
       }
       if (argc >= 1 && sp_streq(name, "values_at") && nt_ref(nt, id, "block") < 0) {
         int has_user = 0;
         if (!an_builtin_only)
         for (int k = 0; k < c->nclasses && !has_user; k++)
           if (comp_method_in_chain(c, k, name, NULL) >= 0) has_user = 1;
-        if (!has_user) return TY_POLY_ARRAY;
+        if (!has_user) return an_poly_concrete(c, name, TY_POLY_ARRAY);
       }
       /* Array-reduction methods on a boxed array element (a run from
          chunk_while etc.): the concrete element type is erased to poly, so the
@@ -4302,29 +4353,29 @@ else {
       if (argc == 0 &&
           (sp_streq(name, "sum") || sp_streq(name, "min") || sp_streq(name, "max") ||
            sp_streq(name, "first") || sp_streq(name, "last") || sp_streq(name, "sample")))
-        return TY_POLY;
+        return an_poly_concrete(c, name, TY_POLY);
       /* Block iterators on a poly value that holds an array at runtime (a
          recursive param, a `case` whose arms mix arrays and scalars): the result
          is a poly array. codegen coerces the receiver via sp_poly_to_poly_array. */
       if (nt_ref(nt, id, "block") >= 0 &&
           (sp_streq(name, "flat_map") || sp_streq(name, "collect_concat")))
-        return TY_POLY_ARRAY;
+        return an_poly_concrete(c, name, TY_POLY_ARRAY);
       /* Fiber/Thread/IO/File instance methods: fallback when no user class defines `name`. */
       if (sp_streq(name, "resume") || sp_streq(name, "value") || sp_streq(name, "join"))
-        return TY_POLY;
+        return an_poly_concrete(c, name, TY_POLY);
       if (sp_streq(name, "alive?") || sp_streq(name, "dead?") || sp_streq(name, "closed?") ||
           sp_streq(name, "eof?") || sp_streq(name, "tty?") || sp_streq(name, "isatty"))
-        return TY_BOOL;
+        return an_poly_concrete(c, name, TY_BOOL);
       /* IO#winsize on a poly-carried handle: [rows, cols], same as the TY_IO
          arm. Without this the call falls through to a plain poly result and the
          `size[0]` that follows reads it as an untyped value. */
       if (sp_streq(name, "winsize") && sp_feature_enabled("io/console"))
-        return TY_INT_ARRAY;
+        return an_poly_concrete(c, name, TY_INT_ARRAY);
       if (sp_streq(name, "read") || sp_streq(name, "gets") ||
-          sp_streq(name, "readline")) return TY_STRING;
-      if (sp_streq(name, "write")) return TY_INT;   /* IO#write: the byte count */
-      if (sp_streq(name, "close") || sp_streq(name, "flush")) return TY_NIL;
-      if (sp_streq(name, "fileno")) return TY_INT;
+          sp_streq(name, "readline")) return an_poly_concrete(c, name, TY_STRING);
+      if (sp_streq(name, "write")) return an_poly_concrete(c, name, TY_INT);   /* IO#write: the byte count */
+      if (sp_streq(name, "close") || sp_streq(name, "flush")) return an_poly_concrete(c, name, TY_NIL);
+      if (sp_streq(name, "fileno")) return an_poly_concrete(c, name, TY_INT);
       if (sp_streq(name, "synchronize")) {
         int blk_id = nt_ref(nt, id, "block");
         if (blk_id >= 0) {
@@ -4332,7 +4383,7 @@ else {
           int bbn = 0; const int *bbb = bdy >= 0 ? nt_arr(nt, bdy, "body", &bbn) : NULL;
           if (bbn > 0) return infer_type(c, bbb[bbn - 1]);
         }
-        return TY_NIL;
+        return an_poly_concrete(c, name, TY_NIL);
       }
     }
   }
@@ -6316,9 +6367,7 @@ TyKind infer_type(Compiler *c, int id) {
      receiver and answered `false` where CRuby answers nil (#4070). `&.` is
      the program saying nil is possible; the answer has to be able to hold
      one. */
-  if ((t == TY_BOOL || t == TY_CLASS || t == TY_SYMBOL ||
-       t == TY_RATIONAL || t == TY_COMPLEX) &&
-      nt_kind(c->nt, id) == NK_CallNode) {
+  if (!an_ty_holds_nil(t) && nt_kind(c->nt, id) == NK_CallNode) {
     const char *sn_op = nt_str(c->nt, id, "call_operator");
     int sn_recv = nt_ref(c->nt, id, "receiver");
     if (sn_op && sp_streq(sn_op, "&.") && sn_recv >= 0) t = TY_POLY;
