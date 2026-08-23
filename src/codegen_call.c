@@ -2479,16 +2479,16 @@ static int emit_complex_rational_call(Compiler *c, int id, Buf *b) {
     if (soft_convert && argc == 1 && comp_ntype(c, argv[0]) == TY_STRING) {
       int tc9 = ++g_tmp;
       buf_printf(b, "({ sp_convert_soft = 1; sp_convert_failed = 0;"
-                    " sp_Complex _t%d = sp_str_to_c(", tc9);
+                    " sp_Complex _t%d = sp_str_to_c_strict(", tc9);
       emit_expr(c, argv[0], b);
       buf_printf(b, "); sp_convert_soft = 0;"
                     " sp_convert_failed ? sp_box_nil() : sp_box_complex(_t%d); })", tc9);
       return 1;
     }
-    /* Complex("2+3i"): parse like String#to_c */
+    /* Complex("2+3i"): the WHOLE string must parse, unlike String#to_c */
     if (argc == 1 && comp_ntype(c, argv[0]) == TY_STRING) {
       Buf sb = expr_buf(c, argv[0]);
-      buf_printf(b, "sp_str_to_c(%s)", sb.p ? sb.p : "\"\"");
+      buf_printf(b, "sp_str_to_c_strict(%s)", sb.p ? sb.p : "\"\"");
       free(sb.p);
       return 1;
     }

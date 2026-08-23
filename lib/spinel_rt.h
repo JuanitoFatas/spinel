@@ -2247,6 +2247,7 @@ static sp_float sp_poly_to_f_opt(sp_RbVal v) { return v.tag == SP_TAG_NIL ? sp_f
    optional [+-]imag i tail, or a bare "Ni"; unparseable input is (0+0i). */
 /* sp_str_to_c: moved to lib/sp_cold.c */
 sp_Complex sp_str_to_c(const char *s);
+sp_Complex sp_str_to_c_strict(const char *s);
 /* lib/sp_cold.c: while sp_convert_soft is set, an unparseable Complex/Rational
    string sets sp_convert_failed instead of raising (Kernel's exception: false). */
 extern sp_bool sp_convert_soft;
@@ -6845,6 +6846,12 @@ static sp_RbVal sp_poly_to_r_m(sp_RbVal v) {
     return sp_box_rational(sp_rational_new((sp_int)t->tv_sec * 1000000000 + t->tv_nsec,
                                            1000000000));
   }
+  /* String#to_r reads a leading rational and answers (0/1) when there is
+     none. sp_poly_to_c_m has carried the matching String arm all along; this
+     one raised NoMethodError for a String the receiver happened to widen to
+     poly, and `v&.to_r` is exactly that shape. */
+  if (v.tag == SP_TAG_STR) return sp_box_rational(sp_str_to_r(v.v.s ? v.v.s : sp_str_empty));
+  if (sp_poly_is_strbuf(v)) return sp_poly_to_r_m(sp_poly_strbuf_deref(v));
   sp_raise_cls("NoMethodError", sp_sprintf("undefined method 'to_r' for %s", sp_poly_class_name(v)));
 }
 static sp_RbVal sp_poly_to_c_m(sp_RbVal v) {

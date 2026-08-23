@@ -269,7 +269,7 @@ const char *sp_file_readlink(const char *path) {SP_GC_ROOT_STR(path);
    raising while it is on; the caller reads it back and answers nil (#3893). */
 sp_bool sp_convert_soft = 0;
 sp_bool sp_convert_failed = 0;
-sp_Complex sp_str_to_c(const char *s) {
+static sp_Complex sp_str_to_c_impl(const char *s, int strict) {
   double re = 0, im = 0;
   int parsed = 0;
   const char *fin = s;   /* first byte NOT consumed by the parse */
@@ -299,16 +299,25 @@ sp_Complex sp_str_to_c(const char *s) {
     else if (*p == 'i') { im = 1; parsed = 1; fin = p + 1; }
     else if ((*p == '+' || *p == '-') && p[1] == 'i') { im = (*p == '-') ? -1.0 : 1.0; parsed = 1; fin = p + 2; }
   }
-  /* the whole string must be consumed (only trailing whitespace allowed): an
-     incomplete form like "1+" is invalid, not silently (1+0i) (#2617). */
-  if (parsed) { while (*fin == ' ' || *fin == '\t') fin++; if (*fin != '\0') parsed = 0; }
-  /* an unparseable string (or nil) is not a valid Complex value */
+  /* Kernel#Complex(str) must consume the whole string (only trailing
+     whitespace allowed): an incomplete form like "1+" is invalid, not silently
+     (1+0i) (#2617). String#to_c does the opposite -- it reads a leading
+     complex and ignores the rest, and answers (0+0i) when nothing parses.
+     String#to_r has had that pair (sp_str_to_r / sp_str_to_r_strict) all
+     along; to_c had only the strict half, and #to_c was pointed at it, so
+     `"abc".to_c` raised where CRuby answers (0+0i). */
+  if (parsed && strict) { while (*fin == ' ' || *fin == '\t') fin++; if (*fin != '\0') parsed = 0; }
   if (!parsed) {
+    if (!strict) return (sp_Complex){ 0.0, 0.0 };
     if (sp_convert_soft) { sp_convert_failed = 1; return (sp_Complex){ 0.0, 0.0 }; }
     sp_raise_cls("ArgumentError", "invalid value for convert(): ");
   }
   return (sp_Complex){ (sp_float)re, (sp_float)im };
 }
+/* String#to_c: a leading complex, the rest ignored, (0+0i) when none. */
+sp_Complex sp_str_to_c(const char *s) { return sp_str_to_c_impl(s, 0); }
+/* Kernel#Complex(String): the whole string or an ArgumentError. */
+sp_Complex sp_str_to_c_strict(const char *s) { return sp_str_to_c_impl(s, 1); }
 
 /* FNM_DOTMATCH mode for the walk below: hidden entries (and ".") match a
    non-dot pattern; ".." never does, as CRuby's glob. Set by the _dot wrapper. */
