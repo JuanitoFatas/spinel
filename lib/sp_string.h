@@ -49,6 +49,7 @@ static inline void sp_fd_own(sp_String *s){
 static inline void sp_fd_publish(sp_String *s){
   sp_str_hdr *h = (sp_str_hdr *)sp_fd_base(s->data);
   h->len = (uint32_t)s->len; h->hash = 0;
+  h->size &= ~SP_STR_SIZE_ASCII7;   /* the bytes just changed */
   if (s->binary) h->size |= SP_STR_SIZE_BINARY;
   sp_str_lcache_drop(s->data);
 }

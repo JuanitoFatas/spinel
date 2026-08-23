@@ -129,10 +129,30 @@ static inline unsigned sp_str_lcache_slot(const char *s) {
   return (unsigned)((k ^ (k >> 4) ^ (k >> 12)) & ((1u << SP_STR_LCACHE_BITS) - 1))
          * SP_STR_LCACHE_WAYS;
 }
+/* The markers that carry a real sp_str_hdr in front of the bytes; a raw C
+   string (a bare literal, a getenv result) has none and answers "not binary". */
+static inline int sp_str_has_hdr(const char *s) {
+  unsigned char m = ((const unsigned char *)s)[-1];
+  return m == 0xfe || m == 0xfc || m == 0xfd || m == 0xf1;
+}
+/* "Every byte of this string is below 0x80", verified once and remembered.
+   A 7-bit string indexes at fixed width, so #length is its byte length and
+   `s[i]` is the byte at i -- no walk, and no probe of the pointer-keyed length
+   cache either, which is what the walk had already been folded into. The bit
+   is a HINT: set only after a scan proved it, cleared whenever the bytes may
+   change, and every reader falls back to the cache when it is off. It says
+   nothing about the string's encoding -- US-ASCII and UTF-8 are compatible and
+   spinel does not distinguish them (docs/limitations.md). */
+#define SP_STR_SIZE_ASCII7 0x40000000u
+static inline void sp_str_ascii7_clear(const char *s) {
+  if (!s || !sp_str_has_hdr(s)) return;
+  (((sp_str_hdr *)(s - 1)) - 1)->size &= ~SP_STR_SIZE_ASCII7;
+}
 /* Forget what we know about `s`: its bytes are about to change, or its buffer
    is about to be freed and the address handed to something else. */
 static inline void sp_str_lcache_drop(const char *s) {
   if (!s) return;
+  sp_str_ascii7_clear(s);
   unsigned h = sp_str_lcache_slot(s);
   for (unsigned w = 0; w < SP_STR_LCACHE_WAYS; w++)
     if (sp_str_lcache[h + w].s == s) sp_str_lcache[h + w].s = NULL;
@@ -183,7 +203,10 @@ void sp_alloc_report_tag(void *scan, const char *name);
    it. It rides in the top bit of the header's `size` (the allocation total,
    far below 2GB), so no string grows by a byte. */
 #define SP_STR_SIZE_BINARY 0x80000000u
-#define SP_STR_SIZE_MASK   0x7FFFFFFFu
+/* bit 30 is SP_STR_SIZE_ASCII7 (declared above, with the length cache it
+   short-circuits); the allocation total keeps the low 30, so a single string
+   is bounded at 1GB rather than 2. Every reader of `size` masks. */
+#define SP_STR_SIZE_MASK   0x3FFFFFFFu
 
 static inline char *sp_str_alloc(size_t len) {
   size_t total = sizeof(sp_str_hdr) + 1 + len + 1;
@@ -302,12 +325,6 @@ static inline char *sp_str_alloc_raw(size_t total_with_null) {
   return s;
 }
 
-/* The markers that carry a real sp_str_hdr in front of the bytes; a raw C
-   string (a bare literal, a getenv result) has none and answers "not binary". */
-static inline int sp_str_has_hdr(const char *s) {
-  unsigned char m = ((const unsigned char *)s)[-1];
-  return m == 0xfe || m == 0xfc || m == 0xfd || m == 0xf1;
-}
 static inline int sp_str_is_binary(const char *s) {
   if (!s || !sp_str_has_hdr(s)) return 0;
   return (((const sp_str_hdr *)(s - 1)) - 1)->size & SP_STR_SIZE_BINARY ? 1 : 0;
@@ -315,6 +332,30 @@ static inline int sp_str_is_binary(const char *s) {
 static inline void sp_str_mark_binary(char *s) {
   if (!s || !sp_str_has_hdr(s)) return;
   (((sp_str_hdr *)(s - 1)) - 1)->size |= SP_STR_SIZE_BINARY;
+}
+/* Fixed-width in ONE header decode: answers the byte length through *out and
+   returns 1 when indexing this string is byte indexing (BINARY, or a scan has
+   proved it 7-bit). Asking is_binary, then is_ascii7, then byte_len re-read the
+   marker and the header three times over -- 66 instructions where the answer is
+   two loads. */
+static inline int sp_str_fixed_width(const char *s, size_t *out) {
+  if (!s) { *out = 0; return 0; }
+  unsigned char m = ((const unsigned char *)s)[-1];
+  if (m == 0xfe || m == 0xfc || m == 0xfd || m == 0xf1) {
+    const sp_str_hdr *h = ((const sp_str_hdr *)(s - 1)) - 1;
+    if (h->len != SP_STR_LEN_UNSET &&
+        (h->size & (SP_STR_SIZE_BINARY | SP_STR_SIZE_ASCII7))) { *out = h->len; return 1; }
+  }
+  *out = 0;
+  return 0;
+}
+static inline int sp_str_is_ascii7(const char *s) {
+  if (!s || !sp_str_has_hdr(s)) return 0;
+  return (((const sp_str_hdr *)(s - 1)) - 1)->size & SP_STR_SIZE_ASCII7 ? 1 : 0;
+}
+static inline void sp_str_mark_ascii7(const char *s) {
+  if (!s || !sp_str_has_hdr(s)) return;
+  (((sp_str_hdr *)(s - 1)) - 1)->size |= SP_STR_SIZE_ASCII7;
 }
 
 static inline size_t sp_str_byte_len(const char *s) {
@@ -337,6 +378,7 @@ static inline void sp_str_set_len(char *s, size_t len) {
     sp_str_hdr *hd = ((sp_str_hdr *)(s - 1)) - 1;
     hd->len = (uint32_t)len;
     hd->hash = 0;  /* length change implies content change: invalidate cached hash */
+    hd->size &= ~SP_STR_SIZE_ASCII7;   /* ...and the verified-7-bit answer */
   }
 }
 
