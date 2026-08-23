@@ -51,3 +51,39 @@ v = String.new("café")
 3.times { v << "y" }
 p v.length
 p v.encoding.to_s
+
+# The seventh reader: comparison. CRuby'"'"'s rb_str_comparable says equal bytes are
+# equal strings only when the encodings are comparable -- the same encoding, or
+# both operands ASCII only. So "abc".b == "abc" but "café".b != "café", and
+# <=> falls back to the encoding index (ASCII-8BIT sorts first) while hash has
+# to separate the two so a Hash keeps them apart.
+p("abc".b == "abc")
+p("abc".b.eql?("abc"))
+p("abc".b <=> "abc")
+p("abc".b.hash == "abc".hash)
+p("café".b == "café")
+p("café".b.eql?("café"))
+p("café".b <=> "café")
+p("café" <=> "café".b)
+p("café".b.hash == "café".hash)
+p("café".b == "café".b)
+p("café" == "café")
+p("abc".b == "abd")
+p([200, 300].pack("C*") == [200, 300].pack("C*"))
+
+# and as Hash keys, which is where the answer actually shows
+h = {}
+h["café"] = 1
+h["café".b] = 2
+p h.size
+p h["café"]
+g = {}
+g["abc"] = 1
+g["abc".b] = 2
+p g.size
+p g["abc"]
+
+# sorting mixes them without collapsing them
+p ["café".b, "café", "abc"].sort.length
+p ["café".b, "café"].uniq.length
+p ["abc".b, "abc"].uniq.length

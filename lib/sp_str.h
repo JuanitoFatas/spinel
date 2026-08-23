@@ -44,7 +44,15 @@ static inline int sp_str_cmp_bytes(const char *a, const char *b) {
   size_t n = la < lb ? la : lb;
   int r = n ? memcmp(a, b, n) : 0;
   if (r) return r < 0 ? -1 : 1;
-  return la == lb ? 0 : (la < lb ? -1 : 1);
+  if (la != lb) return la < lb ? -1 : 1;
+  /* identical bytes: CRuby falls back to the encoding index when the two are
+     not comparable, and ASCII-8BIT sorts before UTF-8 (rb_str_cmp). Both
+     ASCII-only stays 0, the way sp_str_eq answers true for it. */
+  { int ba = sp_str_is_binary(a), bb = sp_str_is_binary(b);
+    if (ba == bb) return 0;
+    for (size_t i = 0; i < la; i++)
+      if ((unsigned char)a[i] >= 0x80) return ba ? -1 : 1;
+    return 0; }
 }
 static inline void sp_str_split_push(sp_StrArray*a,const char*p,size_t n){
   char*r=sp_str_alloc_raw(n+1);
@@ -200,7 +208,15 @@ static inline int sp_str_eq(const char*a,const char*b){
      an embedded NUL ("a\0b" vs "a"): confirm byte-exact equality. The
      miss path above stays a single strcmp. */
   size_t la=sp_str_byte_len(a);
-  return la==sp_str_byte_len(b)&&memcmp(a,b,la)==0;
+  if(la!=sp_str_byte_len(b)||memcmp(a,b,la)!=0)return 0;
+  /* CRuby's rb_str_comparable: equal bytes are equal strings only when the
+     encodings are comparable -- the same encoding, or both operands ASCII
+     only. spinel has two, so the question is the BINARY tag; the ASCII scan
+     runs only when the tags disagree about bytes that already matched, which
+     keeps every ordinary comparison at the two reads above. */
+  if(sp_str_is_binary(a)==sp_str_is_binary(b))return 1;
+  for(size_t i=0;i<la;i++)if((unsigned char)a[i]>=0x80)return 0;
+  return 1;
 }
 /* Compare a spinel string against a PLAIN C string (a stack buffer, a literal
    with no marker byte). sp_str_eq reads a marker in front of BOTH operands to
@@ -217,7 +233,21 @@ static inline sp_bool sp_str_eq_cstr(const char *marked, const char *plain) {
 /* String#valid_encoding? — walks the buffer and accepts pure ASCII
    or well-formed UTF-8 (RFC 3629 byte sequences with no overlong
    forms, no surrogate halves, code points <= U+10FFFF). */
-static inline uint64_t sp_str_hash_compute(const char*s){uint64_t h=14695981039346656037ULL;while(*s){h^=(unsigned char)*s++;h*=1099511628211ULL;}return h;}
+/* A BINARY string hashes apart from its UTF-8 twin, but only when it holds a
+   byte that makes them incomparable: "abc".b and "abc" are eql? in CRuby and
+   hash together, "caf\xC3\xA9" and "café" are neither. The high-byte question
+   is answered inside the walk the hash already makes, so this costs one
+   register. */
+static inline uint64_t sp_str_hash_bytes(const char*s,int*saw_high){
+  uint64_t h=14695981039346656037ULL;int hi=0;
+  while(*s){unsigned char c=(unsigned char)*s++;hi|=(c>=0x80);h^=c;h*=1099511628211ULL;}
+  *saw_high=hi;return h;
+}
+static inline uint64_t sp_str_hash_compute(const char*s){
+  int hi=0;uint64_t h=sp_str_hash_bytes(s,&hi);
+  if(hi&&sp_str_is_binary(s))h^=0x9e3779b97f4a7c15ULL;
+  return h;
+}
 /* Cold path: compute (and, for a heap/heap-frozen string, cache) the FNV
    hash. Kept out-of-line so sp_str_hash's inline fast path -- a cached-hash
    read -- stays tiny and doesn't bloat every call site's code layout. */
