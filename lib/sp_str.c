@@ -112,6 +112,19 @@ else if(c=='\f'){r[o++]='\\';r[o++]='f';}
 else if(c=='\r'){r[o++]='\\';r[o++]='r';}
 else if(c==0x1b){r[o++]='\\';r[o++]='e';}
 else if(c<0x20||c==0x7f){/* other control bytes render as \uNNNN (UTF-8 default, matching CRuby source-literal strings); a BINARY string -- what pack and Random#bytes answer -- renders \xNN as CRuby does for ASCII-8BIT (#3553) */if(sp_str_is_binary(s)){snprintf(r+o,5,"\\x%02X",c);o+=4;}else{snprintf(r+o,7,"\\u%04X",c);o+=6;}}
+/* A byte that is not part of a valid UTF-8 sequence escapes as \xNN, the way
+   CRuby renders it: `"a\x80b".inspect` is "a\x80b". Passing the raw byte
+   through made the inspect output itself invalid UTF-8, so a terminal drew
+   U+FFFD -- inspect lost the one thing it was being asked about. A BINARY
+   string escapes every high byte, as the control-byte arm above already does
+   for it. A valid sequence is copied through unchanged. */
+else if(c>=0x80){
+  int extra=(c&0xE0)==0xC0?1:(c&0xF0)==0xE0?2:(c&0xF8)==0xF0?3:-1;
+  int ok=extra>0&&!sp_str_is_binary(s)&&i+(size_t)extra<sl;
+  for(int k=1;ok&&k<=extra;k++)if(((unsigned char)s[i+(size_t)k]&0xC0)!=0x80)ok=0;
+  if(!ok){snprintf(r+o,5,"\\x%02X",c);o+=4;}
+  else{for(int k=0;k<=extra;k++)r[o++]=s[i+(size_t)k];i+=(size_t)extra;}
+}
 else{r[o++]=(char)c;}}r[o++]='"';r[o]=0;sp_str_set_len(r,o);return r;}
 /* A symbol prints without quotes when its name is a plain identifier (an
    @ivar / @@cvar / $gvar, or a bare name optionally ending in ? ! =) or a
