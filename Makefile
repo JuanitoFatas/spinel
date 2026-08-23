@@ -236,66 +236,19 @@ build/regexp/%.o: lib/regexp/%.c lib/regexp/re_internal.h lib/regexp/re_casefold
 	@mkdir -p build/regexp
 	$(CC) -c $(COPT) $(SEC_FLAGS) $(RE_CASE_FLAGS) -Ilib/regexp $< -o $@
 
-build/sp_bigint.o: lib/sp_bigint.c lib/sp_bigint.h lib/mruby_shim.h
-	@mkdir -p build
-	$(CC) -c $(COPT) -Wno-all $(SEC_FLAGS) -Ilib lib/sp_bigint.c -o build/sp_bigint.o
+RT_HDRS = $(wildcard lib/*.h lib/regexp/*.h)
 
-build/sp_crypto.o: lib/sp_crypto.c lib/sp_crypto.h
+# One rule for every lib/*.c object. The per-object header lists here used to be
+# written by hand and had drifted: build/sp_array.o never named lib/sp_str.h,
+# though sp_array.h includes it, so an edit to sp_str.h left a stale sp_array.o
+# in the archive while the generated TU -- which includes the header directly --
+# picked the change up. The two halves of one program then disagreed about an
+# inline function and nothing said so. The threaded variant below already
+# depended on the whole header set; this is the same answer for this half.
+build/%.o: lib/%.c $(RT_HDRS)
 	@mkdir -p build
-	$(CC) -c $(COPT) -Wno-all $(SEC_FLAGS) -Ilib lib/sp_crypto.c -o build/sp_crypto.o
+	$(CC) -c $(COPT) -Wno-all $(SEC_FLAGS) -Ilib $< -o $@
 
-build/sp_pack.o: lib/sp_pack.c lib/sp_alloc.h lib/sp_gc.h lib/sp_types.h
-	@mkdir -p build
-	$(CC) -c $(COPT) -Wno-all $(SEC_FLAGS) -Ilib lib/sp_pack.c -o build/sp_pack.o
-
-
-build/sp_time.o: lib/sp_time.c lib/sp_time.h lib/sp_alloc.h
-	@mkdir -p build
-	$(CC) -c $(COPT) -Wno-all $(SEC_FLAGS) -Ilib lib/sp_time.c -o build/sp_time.o
-
-build/sp_array.o: lib/sp_array.c lib/sp_array.h lib/sp_alloc.h lib/sp_gc.h lib/sp_types.h lib/sp_random.h
-	@mkdir -p build
-	$(CC) -c $(COPT) -Wno-all $(SEC_FLAGS) -Ilib lib/sp_array.c -o build/sp_array.o
-
-build/sp_str.o: lib/sp_str.c lib/sp_str.h lib/sp_array.h lib/sp_alloc.h lib/sp_crypto.h
-	@mkdir -p build
-	$(CC) -c $(COPT) -Wno-all $(SEC_FLAGS) -Ilib lib/sp_str.c -o build/sp_str.o
-
-build/sp_exc.o: lib/sp_exc.c lib/sp_exc.h lib/sp_types.h lib/sp_gc.h lib/sp_alloc.h
-	@mkdir -p build
-	$(CC) -c $(COPT) -Wno-all $(SEC_FLAGS) -Ilib lib/sp_exc.c -o build/sp_exc.o
-
-build/sp_proc.o: lib/sp_proc.c lib/sp_proc.h lib/sp_types.h lib/sp_gc.h lib/sp_alloc.h
-	@mkdir -p build
-	$(CC) -c $(COPT) -Wno-all $(SEC_FLAGS) -Ilib lib/sp_proc.c -o build/sp_proc.o
-
-build/sp_hash.o: lib/sp_hash.c lib/sp_hash.h lib/sp_types.h lib/sp_gc.h lib/sp_array.h lib/sp_str.h lib/sp_inspect.h lib/sp_string.h
-	@mkdir -p build
-	$(CC) -c $(COPT) -Wno-all $(SEC_FLAGS) -Ilib lib/sp_hash.c -o build/sp_hash.o
-
-build/sp_re.o: lib/sp_re.c lib/sp_re.h lib/sp_array.h lib/sp_str.h lib/sp_string.h lib/sp_inspect.h
-	@mkdir -p build
-	$(CC) -c $(COPT) -Wno-all $(SEC_FLAGS) -Ilib lib/sp_re.c -o build/sp_re.o
-
-build/sp_core.o: lib/sp_core.c lib/sp_core.h
-	@mkdir -p build
-	$(CC) -c $(COPT) -Wno-all $(SEC_FLAGS) -Ilib lib/sp_core.c -o build/sp_core.o
-
-build/sp_system.o: lib/sp_system.c lib/sp_system.h
-	@mkdir -p build
-	$(CC) -c $(COPT) -Wno-all $(SEC_FLAGS) -Ilib lib/sp_system.c -o build/sp_system.o
-
-build/sp_gc.o: lib/sp_gc.c lib/sp_gc.h lib/sp_types.h
-	@mkdir -p build
-	$(CC) -c $(COPT) -Wno-all $(SEC_FLAGS) -Ilib lib/sp_gc.c -o build/sp_gc.o
-
-build/sp_alloc.o: lib/sp_alloc.c lib/sp_alloc.h lib/sp_gc.h lib/sp_types.h lib/sp_dtoa.h
-	@mkdir -p build
-	$(CC) -c $(COPT) -Wno-all $(SEC_FLAGS) -Ilib lib/sp_alloc.c -o build/sp_alloc.o
-
-build/sp_dtoa.o: lib/sp_dtoa.c lib/sp_dtoa.h lib/sp_types.h
-	@mkdir -p build
-	$(CC) -c $(COPT) -Wno-all $(SEC_FLAGS) -Ilib lib/sp_dtoa.c -o build/sp_dtoa.o
 
 # Bundled carried-C spin packages (Path B): compiled standalone, NOT into the
 # runtime archive, and linked on demand only when the program requires them
@@ -308,10 +261,6 @@ packages/json/sp_json.o: packages/json/sp_json.c packages/json/sp_json.h \
 packages/json/sp_json_mt.o: packages/json/sp_json.c packages/json/sp_json.h \
                             lib/spinel/runtime.h lib/sp_alloc.h lib/sp_gc.h lib/sp_types.h
 	$(CC) -c $(COPT) -Wno-all $(SEC_FLAGS) $(PKG_MT_FLAGS) -Ilib -Ipackages/json packages/json/sp_json.c -o $@
-
-build/sp_format.o: lib/sp_format.c lib/sp_format.h lib/sp_alloc.h lib/sp_gc.h lib/sp_types.h
-	@mkdir -p build
-	$(CC) -c $(COPT) -Wno-all $(SEC_FLAGS) -Ilib lib/sp_format.c -o build/sp_format.o
 
 # stringio is a native-bound spin package (Path B typed object): the struct,
 # every method, and the header live in the package; the compiler knows it only
@@ -341,38 +290,6 @@ packages/base64/sp_base64_mt.o: packages/base64/sp_base64.c \
                                 lib/spinel/runtime.h lib/sp_alloc.h lib/sp_gc.h lib/sp_types.h
 	$(CC) -c $(COPT) -Wno-all $(SEC_FLAGS) $(PKG_MT_FLAGS) -Ilib packages/base64/sp_base64.c -o $@
 
-build/sp_string.o: lib/sp_string.c lib/sp_string.h lib/sp_alloc.h lib/sp_gc.h lib/sp_types.h
-	@mkdir -p build
-	$(CC) -c $(COPT) -Wno-all $(SEC_FLAGS) -Ilib lib/sp_string.c -o build/sp_string.o
-
-build/sp_inspect.o: lib/sp_inspect.c lib/sp_inspect.h lib/sp_string.h lib/sp_alloc.h lib/sp_gc.h lib/sp_types.h
-	@mkdir -p build
-	$(CC) -c $(COPT) -Wno-all $(SEC_FLAGS) -Ilib lib/sp_inspect.c -o build/sp_inspect.o
-
-build/sp_marshal.o: lib/sp_marshal.c lib/sp_marshal.h lib/sp_alloc.h lib/sp_gc.h lib/sp_types.h
-	@mkdir -p build
-	$(CC) -c $(COPT) -Wno-all $(SEC_FLAGS) -Ilib lib/sp_marshal.c -o build/sp_marshal.o
-
-build/sp_fiber.o: lib/sp_fiber.c lib/sp_fiber.h lib/sp_gc.h lib/sp_types.h
-	@mkdir -p build
-	$(CC) -c $(COPT) -Wno-all $(SEC_FLAGS) -Ilib lib/sp_fiber.c -o build/sp_fiber.o
-
-build/sp_sched.o: lib/sp_sched.c lib/sp_sched.h lib/sp_fiber.h lib/sp_alloc.h lib/sp_gc.h lib/sp_types.h
-	@mkdir -p build
-	$(CC) -c $(COPT) -Wno-all $(SEC_FLAGS) -Ilib lib/sp_sched.c -o build/sp_sched.o
-
-build/sp_net.o: lib/sp_net.c lib/sp_net.h
-	@mkdir -p build
-	$(CC) -c $(COPT) -Wno-all $(SEC_FLAGS) -Ilib lib/sp_net.c -o build/sp_net.o
-
-build/sp_io.o: lib/sp_io.c lib/sp_io.h lib/sp_gc.h lib/sp_types.h
-	@mkdir -p build
-	$(CC) -c $(COPT) -Wno-all $(SEC_FLAGS) -Ilib lib/sp_io.c -o build/sp_io.o
-
-build/sp_random.o: lib/sp_random.c lib/sp_random.h lib/sp_types.h
-	@mkdir -p build
-	$(CC) -c $(COPT) -Wno-all $(SEC_FLAGS) -Ilib lib/sp_random.c -o build/sp_random.o
-
 build/sp_cold.o: lib/sp_cold.c $(RT_HDRS)
 	@mkdir -p build
 	$(CC) -c $(COPT) -Wno-all $(SEC_FLAGS) -Ilib -Ilib/regexp lib/sp_cold.c -o build/sp_cold.o
@@ -394,7 +311,6 @@ $(SP_RT_LIB): $(RE_OBJ) $(addprefix build/,$(addsuffix .o,$(RT_MEMBERS)))
 # eventual per-worker TLS reads a single segment-relative load.
 SP_RT_MT_LIB = lib/libspinel_rt_mt.a
 MT_DEF = -DSP_THREADS -ftls-model=initial-exec
-RT_HDRS = $(wildcard lib/*.h lib/regexp/*.h)
 
 # Specific rule before generic: GNU Make 3.81 (macOS system make) picks the
 # first matching pattern rule, not the shortest-stem one (3.82+).
