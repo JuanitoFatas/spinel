@@ -1345,13 +1345,14 @@ void emit_scope_decls(Compiler *c, Scope *s, Buf *b) {
          not. Without a cell of its own a captured class variable hit the
          "non-integer capture" reject: `k = Struct.new(:x); a.each { k.new }`
          over a boxed receiver, where the block is a real closure (#3995). */
-      if (lv->type == TY_CLASS) {
-        buf_printf(b, "    sp_Class *_cell_%s = (sp_Class *)sp_gc_alloc(sizeof(sp_Class), NULL, NULL);\n", lv->name);
-        buf_printf(b, "    SP_GC_ROOT(_cell_%s);\n", lv->name);
-        if (lv->is_param) buf_printf(b, "    *_cell_%s = lv_%s;\n", lv->name, lv->name);
-        else buf_printf(b, "    *_cell_%s = ((sp_Class){-1, NULL});\n", lv->name);
-        continue;
-      }
+      { const char *vs = cell_value_struct(lv->type);
+        if (vs) {
+          buf_printf(b, "    %s *_cell_%s = (%s *)sp_gc_alloc(sizeof(%s), NULL, NULL);\n", vs, lv->name, vs, vs);
+          buf_printf(b, "    SP_GC_ROOT(_cell_%s);\n", lv->name);
+          if (lv->is_param) buf_printf(b, "    *_cell_%s = lv_%s;\n", lv->name, lv->name);
+          else buf_printf(b, "    *_cell_%s = %s;\n", lv->name, cell_value_struct_empty(lv->type));
+          continue;
+        } }
       if (lv->type == TY_POLY) {
         buf_printf(b, "    sp_RbVal *_cell_%s = (sp_RbVal *)sp_gc_alloc(sizeof(sp_RbVal), NULL, sp_cell_scan_rbval);\n", lv->name);
         buf_printf(b, "    SP_GC_ROOT(_cell_%s);\n", lv->name);
@@ -3104,6 +3105,39 @@ const char *cell_scan_fn(TyKind t) {
   return (t == TY_STRING) ? "sp_cell_scan_str" : "sp_cell_scan_ptr";
 }
 
+/* Types that ride a cell of their own C struct instead of laundering through
+   the sp_int slot: a small by-value struct with no GC pointer in it, so the
+   cell needs no scan. Float and poly keep hand-written arms (their reset values
+   and their scans differ); these share one shape, so they share one arm rather
+   than a fourth copy in each of the three cell prologues. #3995 gave a captured
+   class its cell but stopped at TY_CLASS, leaving Range / Rational / Complex on
+   the "non-integer capture" reject. */
+const char *cell_value_struct(TyKind t) {
+  switch (t) {
+    case TY_CLASS:       return "sp_Class";
+    case TY_RANGE:       return "sp_Range";
+    case TY_FLOAT_RANGE: return "sp_FloatRange";
+    case TY_RATIONAL:    return "sp_Rational";
+    case TY_COMPLEX:     return "sp_Complex";
+    default: break;
+  }
+  return NULL;
+}
+
+/* The empty value a value-struct cell resets to. A class has no zero cls_id, so
+   it uses the -1 sentinel the class arm has always used. */
+const char *cell_value_struct_empty(TyKind t) {
+  switch (t) {
+    case TY_CLASS:       return "((sp_Class){-1, NULL})";
+    case TY_RANGE:       return "((sp_Range){0})";
+    case TY_FLOAT_RANGE: return "((sp_FloatRange){0})";
+    case TY_RATIONAL:    return "((sp_Rational){0})";
+    case TY_COMPLEX:     return "((sp_Complex){0})";
+    default: break;
+  }
+  return NULL;
+}
+
 int cell_is_typed_ptr(Compiler *c, LocalVar *lv) {
   return lv && proc_slot_is_ptr(lv->type) && !comp_ty_value_obj(c, lv->type);
 }
@@ -3114,7 +3148,8 @@ int cell_is_typed_ptr(Compiler *c, LocalVar *lv) {
 void emit_cell_elem_type(Compiler *c, LocalVar *lv, Buf *b) {
   if (lv && lv->type == TY_FLOAT) { buf_puts(b, "sp_float"); return; }
   if (lv && lv->type == TY_POLY) { buf_puts(b, "sp_RbVal"); return; }
-  if (lv && lv->type == TY_CLASS) { buf_puts(b, "sp_Class"); return; }
+  { const char *vs = lv ? cell_value_struct(lv->type) : NULL;
+    if (vs) { buf_puts(b, vs); return; } }
   if (cell_is_typed_ptr(c, lv)) { emit_ctype(c, lv->type, b); return; }
   buf_puts(b, "sp_int");
 }
@@ -3920,9 +3955,10 @@ void emit_proc_literal(Compiler *c, int create, Buf *b) {
          side-channel (sp_box_float / sp_poly_to_f), not the truncating slot. */
       int float_cell = lv->type == TY_FLOAT;
       int poly_cell = lv->type == TY_POLY;
-      /* a class value rides its own cell, like a float: a cls_id and a rodata
-         name, with no GC pointer of its own (#3995) */
-      int class_cell = lv->type == TY_CLASS;
+      /* a by-value struct rides its own cell, like a float: scalar fields with
+         no GC pointer of its own (#3995 for the class; the Range / Rational /
+         Complex siblings were left on the reject) */
+      int class_cell = cell_value_struct(lv->type) != NULL;
       if (lv->type != TY_INT && lv->type != TY_BOOL && lv->type != TY_SYMBOL &&
           lv->type != TY_UNKNOWN &&
           lv->type != TY_PROC && !float_cell && !ptr_cell && !poly_cell && !class_cell) {
@@ -4480,9 +4516,10 @@ else if (orecv >= 0 && onm) {
       buf_printf(pb, "    sp_RbVal *_cell_%s = (sp_RbVal *)sp_gc_alloc(sizeof(sp_RbVal), NULL, sp_cell_scan_rbval);"
                      " SP_GC_ROOT(_cell_%s); *_cell_%s = lv_%s;%c", p, p, p, p, 10);
     }
-    else if (lv->type == TY_CLASS) {
-      buf_printf(pb, "    sp_Class *_cell_%s = (sp_Class *)sp_gc_alloc(sizeof(sp_Class), NULL, NULL);"
-                     " SP_GC_ROOT(_cell_%s); *_cell_%s = lv_%s;%c", p, p, p, p, 10);
+    else if (cell_value_struct(lv->type)) {
+      const char *vs = cell_value_struct(lv->type);
+      buf_printf(pb, "    %s *_cell_%s = (%s *)sp_gc_alloc(sizeof(%s), NULL, NULL);"
+                     " SP_GC_ROOT(_cell_%s); *_cell_%s = lv_%s;%c", vs, p, vs, vs, p, p, p, 10);
     }
     else if (proc_slot_is_ptr(lv->type) && !comp_ty_value_obj(c, lv->type)) {
       buf_puts(pb, "    ");

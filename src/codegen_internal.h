@@ -433,6 +433,8 @@ int proc_slot_is_ptr(TyKind t);
 int proc_slot_via_poly(Compiler *c, TyKind t);
 int cell_is_typed_ptr(Compiler *c, LocalVar *lv);
 const char *cell_scan_fn(TyKind t);
+const char *cell_value_struct(TyKind t);
+const char *cell_value_struct_empty(TyKind t);
 void emit_cell_elem_type(Compiler *c, LocalVar *lv, Buf *b);
 void emit_proc_call_args(Compiler *c, int argc, const int *argv, Buf *b, int force_poly);
 /* Unbox the boxed proc result (_sp_proc_poly_ret) to a call's inferred type. */

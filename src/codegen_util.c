@@ -673,6 +673,14 @@ void emit_block_locals_reset(Compiler *c, int blk, Buf *b, int indent) {
           else if (lv->type == TY_POLY) {
             buf_printf(b, "_cell_%s = (sp_RbVal *)sp_gc_alloc(sizeof(sp_RbVal), NULL, sp_cell_scan_rbval); *_cell_%s = sp_box_nil();\n", rn2, rn2);
           }
+          else if (cell_value_struct(lv->type)) {
+            /* a by-value struct rides a cell of its own type, as the two cell
+               prologues already say; without this arm the reset fell through to
+               the sp_int else and assigned an sp_int * to an sp_Class * */
+            const char *vs = cell_value_struct(lv->type);
+            buf_printf(b, "_cell_%s = (%s *)sp_gc_alloc(sizeof(%s), NULL, NULL); *_cell_%s = %s;\n",
+                       rn2, vs, vs, rn2, cell_value_struct_empty(lv->type));
+          }
           else if (lv->type != TY_PROC && lv->type != TY_INT && lv->type != TY_BOOL &&
                    lv->type != TY_SYMBOL && lv->type != TY_UNKNOWN && cell_is_typed_ptr(c, lv)) {
             const char *cell_scan = cell_scan_fn(lv->type);
