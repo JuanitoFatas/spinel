@@ -85,10 +85,41 @@ puts "before: #{say(q)}"
 q.extend(Loud)
 puts "after:  #{say(q)}"
 
-# NOTE: two modules extended onto ONE binding (m.extend(A1) then m.extend(B1),
-# both with super) does not compile, on master as well as here -- the transplant
-# builds a super chain the emitter cannot type. Left out rather than pinned to
-# the wrong answer.
+# Two modules on one binding. Each extended module gets its own link in the
+# binding's singleton chain, so they stack the way CRuby's ancestry does: a
+# later extend sits NEARER the object than an earlier one, and within a single
+# `extend(A, B)` the first argument ends up nearest.
+module A1
+  def tag = "a" + super
+end
+module B1
+  def tag = "b" + super
+end
+class Base1
+  def tag = "-"
+end
+
+m = Base1.new
+puts "chain none: #{m.tag}"
+m.extend(A1)
+puts "chain A1:   #{m.tag}"
+m.extend(B1)
+puts "chain B1:   #{m.tag}"
+puts "chain is_a? A1: #{m.is_a?(A1)}"
+puts "chain is_a? B1: #{m.is_a?(B1)}"
+puts "chain class:    #{m.class}"
+
+# one call, two modules: the first argument ends up nearest
+n = Base1.new
+n.extend(A1, B1)
+puts "both:       #{n.tag}"
+puts "both is_a?: #{n.is_a?(A1)} #{n.is_a?(B1)}"
+
+# a sibling with only one of them
+o = Base1.new
+o.extend(B1)
+puts "one only:   #{o.tag}"
+puts "one is_a?:  #{o.is_a?(A1)} #{o.is_a?(B1)}"
 
 # a CONSTANT binding takes the same three forms, and its dsm statement is the
 # one that emitted nothing at all (a class constant resolves to a class-method

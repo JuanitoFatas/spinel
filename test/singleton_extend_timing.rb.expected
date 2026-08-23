@@ -17,6 +17,16 @@ after new-name:  added
 still shown:     plain
 before: sh
 after:  !sh!
+chain none: -
+chain A1:   a-
+chain B1:   ba-
+chain is_a? A1: true
+chain is_a? B1: true
+chain class:    Base1
+both:       ab-
+both is_a?: true true
+one only:   b-
+one is_a?:  false true
 const before: sh
 const is_a?:  false
 const after:  !sh!

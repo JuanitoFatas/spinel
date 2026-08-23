@@ -1321,9 +1321,52 @@ static int sg_single_new_write(Compiler *c, const char *name, int is_const,
 /* wnode -> synthesized subclass index map, so every singleton def/extend on
    one binding shares one subclass. comp_class_index cannot be trusted mid-pass
    (its index excludes classes added during this pass). */
-typedef struct { int *wkey, *wci, n, cap; } SgMap;
-static int sg_get_or_make(Compiler *c, SgMap *m, int wnode, int parent_ci) {
+typedef struct { int *wkey, *wci, n, cap, seq; } SgMap;
+/* The subclass a binding currently ends at, or -1. */
+static int sg_map_last(SgMap *m, int wnode) {
   for (int i = 0; i < m->n; i++) if (m->wkey[i] == wnode) return m->wci[i];
+  return -1;
+}
+
+/* Add a LINK to the binding's singleton chain. Each extended module gets its
+   own link so the modules stack the way CRuby's ancestry does -- B1's `tag`
+   overrides A1's and its `super` reaches A1's, where one shared subclass kept
+   whichever module got there first and dropped the rest. `is_singleton_of`
+   keeps naming the ORIGINAL user class, which is what `class` and
+   `instance_of?` answer; `parent` is the previous link. */
+static int sg_chain_link(Compiler *c, SgMap *m, int wnode, int parent_ci) {
+  int prev = sg_map_last(m, wnode);
+  /* `parent_ci` is re-derived from the `.new` receiver, which an earlier link
+     already retargeted -- chase back to the class the PROGRAM wrote, which is
+     what `class` and `instance_of?` answer and what the names read from. */
+  int orig = parent_ci;
+  while (orig >= 0 && orig < c->nclasses && c->classes[orig].is_singleton_of)
+    orig = c->classes[orig].is_singleton_of - 1;
+  const NodeTable *nt = c->nt;
+  char snm[96];
+  snprintf(snm, sizeof snm, "%s__sg_%d_%d",
+           c->classes[orig].name ? c->classes[orig].name : "Obj", wnode, m->seq++);
+  ClassInfo *sc = comp_class_new(c, snm, wnode);
+  int newci = (int)(sc - c->classes);
+  sc->parent = prev >= 0 ? prev : orig;
+  sc->is_singleton_of = orig + 1;
+  /* the binding's type is the LAST link: retarget on every addition */
+  { int wval = nt_ref(nt, wnode, "value");
+    int wrecv = nt_ref(nt, wval, "receiver");
+    nt_node_set_str((NodeTable *)nt, wrecv, "name", snm); }
+  for (int i = 0; i < m->n; i++) if (m->wkey[i] == wnode) { m->wci[i] = newci; return newci; }
+  if (m->n >= m->cap) {
+    m->cap = m->cap ? m->cap * 2 : 8;
+    m->wkey = realloc(m->wkey, sizeof(int) * (size_t)m->cap);
+    m->wci = realloc(m->wci, sizeof(int) * (size_t)m->cap);
+  }
+  m->wkey[m->n] = wnode; m->wci[m->n] = newci; m->n++;
+  return newci;
+}
+
+static int sg_get_or_make(Compiler *c, SgMap *m, int wnode, int parent_ci) {
+  int cur = sg_map_last(m, wnode);
+  if (cur >= 0) return cur;
   const NodeTable *nt = c->nt;
   char snm[96];
   snprintf(snm, sizeof snm, "%s__sg_%d", c->classes[parent_ci].name ? c->classes[parent_ci].name : "Obj", wnode);
@@ -1509,9 +1552,17 @@ void register_singleton_defs(Compiler *c) {
             comp_class_index(c, nt_str(nt, args[j], "name")) < 0) { all_mods = 0; break; }
       }
       if (!all_mods) continue;
-      int newci = sg_get_or_make(c, &m, wnode, parent_ci);
-      for (int j = 0; j < an; j++)
+      /* One link per module, in argument order, so `extend(A, B)` leaves B
+         nearest the object -- CRuby's ancestry. The statement activates the
+         last link; the earlier ones are reached through it. */
+      /* `extend(A, B)` leaves A nearest the object (CRuby inserts the list so
+         the FIRST argument ends up closest), so build the links back to front:
+         the last one made is the one the binding points at. */
+      int newci = -1;
+      for (int j = an - 1; j >= 0; j--) {
+        newci = sg_chain_link(c, &m, wnode, parent_ci);
         sg_transplant_module(c, comp_class_index(c, nt_str(nt, args[j], "name")), newci);
+      }
       sg_mark_activation(nt, id, newci);
       continue;
     }

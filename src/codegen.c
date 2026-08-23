@@ -561,7 +561,18 @@ static void emit_str_expr_ex(Compiler *c, int node, int strict, Buf *b) {
   Buf tmp; memset(&tmp, 0, sizeof tmp);
   emit_expr(c, node, &tmp);
   const char *txt = tmp.p ? tmp.p : "";
-  if (strncmp(past_open_parens(txt), "sp_raise_nomethod(", 18) == 0)
+  /* Same shape from the OTHER raise emitter: a diverging `(sp_raise_cls(...),
+     V)` whose dead tail V is the poly placeholder raise_tail_value picks for an
+     UNKNOWN node. `def tag = "b" + super` in a module with no superclass emits
+     one, and its sp_RbVal met a const char * slot -- the guard above named one
+     raise token and the other went past it. Keyed on the placeholder rather
+     than on the token, so a third raise emitter is covered too. */
+  size_t tl = strlen(txt);
+  const char *nilt = ", sp_box_nil())";
+  size_t nl2 = strlen(nilt);
+  if (strncmp(past_open_parens(txt), "sp_raise_nomethod(", 18) == 0 ||
+      (tl > nl2 && strcmp(txt + tl - nl2, nilt) == 0 &&
+       strncmp(past_open_parens(txt), "sp_raise_", 9) == 0))
     buf_printf(b, "sp_poly_to_s(%s)", txt);
   else buf_puts(b, txt);
   free(tmp.p);
@@ -1968,7 +1979,10 @@ static int sg_delegate_scope(Compiler *c, Scope *s) {
   int sub = s->class_id;
   if (!c->classes[sub].is_singleton_of) return -1;
   if (c->classes[sub].is_value_type) return -1;
-  int par = c->classes[sub].is_singleton_of - 1;
+  /* the immediate parent LINK, not the original class: a binding can carry a
+     chain of them (one per extended module) and each body stands in front of
+     the next, which is what makes `super` stack */
+  int par = c->classes[sub].parent;
   int pm = comp_method_in_chain(c, par, s->name, NULL);
   if (pm < 0 || pm >= c->nscopes) return -1;
   Scope *ps = &c->scopes[pm];
@@ -2774,14 +2788,14 @@ void emit_method(Compiler *c, Scope *s, Buf *b) {
   if (s->class_id >= 0 && !s->is_cmethod && c->classes[s->class_id].is_singleton_of &&
       !c->classes[s->class_id].is_value_type) {
     int pm = sg_delegate_scope(c, s);
-    int sg_par = c->classes[s->class_id].is_singleton_of - 1;
+    int sg_par = c->classes[s->class_id].parent;
     if (pm < 0 && s->name && comp_method_in_chain(c, sg_par, s->name, NULL) < 0 &&
         !comp_reader_in_chain(c, sg_par, s->name, NULL) &&
         !comp_writer_in_chain(c, sg_par, s->name, NULL)) {
       /* the singleton ADDS a name the parent does not have: before its
          statement runs there is nothing to delegate to, and CRuby answers a
          NoMethodError there (#4084) */
-      buf_printf(b, "  if (self->cls_id != %d) { sp_raise_nomethod(sp_nomethod_msg(", s->class_id);
+      buf_printf(b, "  if (!sp_class_le((sp_Class){self->cls_id}, (sp_Class){%d})) { sp_raise_nomethod(sp_nomethod_msg(", s->class_id);
       emit_str_literal(b, s->name);
       buf_printf(b, ", sp_box_obj((void *)self, %d)));", sg_par);
       if (method_is_void(s)) buf_puts(b, " return; }\n");
@@ -2791,7 +2805,7 @@ void emit_method(Compiler *c, Scope *s, Buf *b) {
       Scope *ps = &c->scopes[pm];
       Buf cb; memset(&cb, 0, sizeof cb);
       emit_method_cname(c, ps, &cb);
-      buf_printf(&cb, "((sp_%s *)self", c->classes[c->classes[s->class_id].is_singleton_of - 1].c_name);
+      buf_printf(&cb, "((sp_%s *)self", c->classes[c->classes[s->class_id].parent].c_name);
       for (int i = 0; i < s->nparams; i++) {
         LocalVar *a = scope_local(s, s->pnames[i]);
         LocalVar *bp = scope_local(ps, ps->pnames[i]);
@@ -2803,7 +2817,12 @@ void emit_method(Compiler *c, Scope *s, Buf *b) {
       }
       if (s->blk_param && s->blk_param[0] && !s->yields) buf_printf(&cb, ", lv_%s", s->blk_param);
       buf_puts(&cb, ")");
-      buf_printf(b, "  if (self->cls_id != %d) %s", s->class_id,
+      /* Not an equality test: the binding may have grown FURTHER links since
+         (a second extend), and this body is still live for those -- the object
+         carries the newest link's id and every ancestor's method has to run.
+         "is my class an ancestor of the object's" is what sp_class_le answers,
+         and is_a? asks it the same way. */
+      buf_printf(b, "  if (!sp_class_le((sp_Class){self->cls_id}, (sp_Class){%d})) %s", s->class_id,
                  method_is_void(s) ? "{ " : "return ");
       if (method_is_void(s) || s->ret == ps->ret) buf_puts(b, cb.p ? cb.p : "");
       else if (s->ret == TY_POLY) emit_boxed_text(c, ps->ret, cb.p ? cb.p : "", b);
