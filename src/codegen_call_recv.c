@@ -7914,6 +7914,20 @@ int emit_scalar_call(Compiler *c, int id, Buf *b) {
   return 0;
 }
 
+/* The class operand for a hierarchy check on `recv`. A synthesized singleton
+   subclass is NOT the object's class until the extend / `def obj.m` that made
+   it has run, so read the id the object actually carries rather than folding
+   the static one (#4084). Everything else keeps the fold, with the receiver
+   evaluated for its effects. */
+static void emit_isa_self_class(Compiler *c, int recv, int cid, Buf *b) {
+  if (cid >= 0 && cid < c->nclasses && c->classes[cid].is_singleton_of &&
+      !c->classes[cid].is_value_type) {
+    buf_puts(b, "((sp_Class){("); emit_expr(c, recv, b); buf_puts(b, ")->cls_id})");
+    return;
+  }
+  buf_puts(b, "((void)("); emit_expr(c, recv, b); buf_printf(b, "), (sp_Class){%d})", cid);
+}
+
 int emit_object_call(Compiler *c, int id, Buf *b) {
   const NodeTable *nt = c->nt;
   const char *name = nt_str(nt, id, "name");
@@ -8078,8 +8092,9 @@ int emit_object_call(Compiler *c, int id, Buf *b) {
         }
         else {
           /* use sp_class_le_mod (via macro) so includes chain is checked */
-          buf_puts(b, "((void)("); emit_expr(c, recv, b);
-          buf_printf(b, "), sp_class_le(((sp_Class){%d}),((sp_Class){%d})))", cid, target);
+          buf_puts(b, "sp_class_le(");
+          emit_isa_self_class(c, recv, cid, b);
+          buf_printf(b, ",((sp_Class){%d}))", target);
         }
         return 1;
       }
@@ -8095,8 +8110,9 @@ int emit_object_call(Compiler *c, int id, Buf *b) {
            Data/Struct instance is_a? Data/Struct (#2662). */
         int bid = builtin_class_id(cn);
         if (!uni && !sp_streq(name, "instance_of?") && bid < 0) {
-          buf_puts(b, "((void)("); emit_expr(c, recv, b);
-          buf_printf(b, "), sp_class_le(((sp_Class){%d}),((sp_Class){%d})))", cid, bid);
+          buf_puts(b, "sp_class_le(");
+          emit_isa_self_class(c, recv, cid, b);
+          buf_printf(b, ",((sp_Class){%d}))", bid);
           return 1;
         }
         buf_puts(b, "(("); emit_expr(c, recv, b); buf_printf(b, "), %d)", uni);
@@ -8107,12 +8123,15 @@ int emit_object_call(Compiler *c, int id, Buf *b) {
     if (comp_ntype(c, argv[0]) == TY_CLASS) {
       int cid = ty_object_class(rt);
       int k = ++g_tmp;
-      buf_puts(b, "((void)("); emit_expr(c, recv, b); buf_printf(b, "), ");
       buf_printf(b, "({ sp_Class _t%d = ", k); emit_expr(c, argv[0], b); buf_printf(b, "; ");
-      if (sp_streq(name, "instance_of?"))
-        buf_printf(b, "((sp_Class){%d}).cls_id == _t%d.cls_id; }))", cid, k);
-      else
-        buf_printf(b, "sp_class_le(((sp_Class){%d}),_t%d); }))", cid, k);
+      if (sp_streq(name, "instance_of?")) {
+        buf_printf(b, "((sp_Class){%d}).cls_id == _t%d.cls_id; })", singleton_visible_ci(c, cid), k);
+      }
+      else {
+        buf_puts(b, "sp_class_le(");
+        emit_isa_self_class(c, recv, cid, b);
+        buf_printf(b, ",_t%d); })", k);
+      }
       return 1;
     }
   }

@@ -435,6 +435,8 @@ int cell_is_typed_ptr(Compiler *c, LocalVar *lv);
 int call_returns_nullable_int(Compiler *c, int node);
 int recv_may_be_sentinel(Compiler *c, int node);
 int nil_answers_name(const char *n);
+void emit_sg_activate(Compiler *c, int node, int recv, Buf *b, int indent);
+int sg_activates_ci(Compiler *c, int node);
 const char *cell_scan_fn(TyKind t);
 const char *cell_value_struct(TyKind t);
 const char *cell_value_struct_empty(TyKind t);

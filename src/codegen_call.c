@@ -12350,6 +12350,24 @@ static void emit_call_body(Compiler *c, int id, Buf *b) {
       TyKind crt = comp_ntype(c, crecv);
       if ((ty_is_object(crt) && c->classes[ty_object_class(crt)].is_singleton_of) ||
           nt_str(nt, id, "sg_resolved") != NULL) {
+        /* The transplant happened at compile time, but WHEN it takes effect is
+           a runtime fact: the object carries its parent's cls_id from
+           construction and this statement is where Ruby says the override
+           starts (#4084). Flip it here; the subclass's methods and is_a? read
+           it. A value-type receiver has no identity to flip, so it keeps the
+           old no-op. */
+        /* the node analyze stamped, not the receiver's type: a local that
+           also carries a `def obj.m` widens to poly (the reason sg_resolved
+           exists), and then the type says nothing about which subclass */
+        int sgci = sg_activates_ci(c, id);
+        if (sgci < 0 && ty_is_object(crt) && c->classes[ty_object_class(crt)].is_singleton_of &&
+            !c->classes[ty_object_class(crt)].is_value_type)
+          sgci = ty_object_class(crt);
+        if (sgci >= 0) {
+          buf_puts(b, "((void)(("); emit_expr(c, crecv, b);
+          buf_printf(b, ")->cls_id = %d))", sgci);
+          return;
+        }
         buf_puts(b, "((void)("); emit_expr(c, crecv, b); buf_puts(b, "))");
         return;
       }

@@ -1941,6 +1941,54 @@ static int method_inline_force(Compiler *c, Scope *s) {
   return g_fi_state[si] == 1;
 }
 
+/* The cls_id a fresh instance is stamped with. A synthesized singleton subclass
+   starts as its PARENT: the `extend` / `def obj.m` that created the subclass
+   has not run yet, and in Ruby the override takes effect from there rather than
+   from the object's construction (#4084). That statement flips the id, and the
+   subclass's own methods check it in their prologue. */
+static int ctor_cls_id(Compiler *c, int cid) {
+  if (cid < 0 || cid >= c->nclasses) return cid;
+  return c->classes[cid].is_singleton_of ? c->classes[cid].is_singleton_of - 1 : cid;
+}
+
+/* Two C slots the delegation can move a value between: identical, or one side
+   boxed. emit_boxed_text / emit_unbox_text do the conversion. */
+static int sg_slot_convertible(TyKind from, TyKind to) {
+  if (from == to) return 1;
+  if (from == TY_UNKNOWN || to == TY_UNKNOWN) return 0;
+  return from == TY_POLY || to == TY_POLY;
+}
+
+/* The parent method a singleton subclass's `name` stands in front of, or -1.
+   Only usable as a delegate when the C signature matches: same parameter count
+   and types, and a return the caller's slot can take. A mismatch keeps today's
+   behaviour rather than breaking the build. */
+static int sg_delegate_scope(Compiler *c, Scope *s) {
+  if (!s || s->class_id < 0 || s->is_cmethod || !s->name) return -1;
+  int sub = s->class_id;
+  if (!c->classes[sub].is_singleton_of) return -1;
+  if (c->classes[sub].is_value_type) return -1;
+  int par = c->classes[sub].is_singleton_of - 1;
+  int pm = comp_method_in_chain(c, par, s->name, NULL);
+  if (pm < 0 || pm >= c->nscopes) return -1;
+  Scope *ps = &c->scopes[pm];
+  if (ps->nparams != s->nparams) return -1;
+  if ((ps->blk_param && ps->blk_param[0]) != (s->blk_param && s->blk_param[0])) return -1;
+  if (method_is_void(ps) != method_is_void(s)) return -1;
+  /* The parent's own signature can be WIDER than the override's -- the
+     singleton bodies flowing through it are what widened it -- so accept a
+     poly on either side of any slot and convert at the boundary. Anything else
+     keeps today's behaviour rather than emitting C that does not compile. */
+  if (!sg_slot_convertible(s->ret, ps->ret)) return -1;
+  for (int i = 0; i < s->nparams; i++) {
+    LocalVar *a = scope_local(s, s->pnames[i]);
+    LocalVar *bp = scope_local(ps, ps->pnames[i]);
+    if (!a || !bp || a->byref_out || bp->byref_out) return -1;
+    if (!sg_slot_convertible(a->type, bp->type)) return -1;
+  }
+  return pm;
+}
+
 void emit_method_signature(Compiler *c, Scope *s, Buf *b) {
   /* In a debug build, give instance/class methods external linkage so
      -rdynamic exposes sp_<Class>_<method> to backtrace_symbols and the
@@ -2719,6 +2767,52 @@ void emit_method(Compiler *c, Scope *s, Buf *b) {
   emit_line_directive(c, s->def_node, b);
   emit_method_signature(c, s, b);
   buf_puts(b, " {\n");
+  /* The singleton override does not exist until the statement that created it
+     has run (#4084). The object carries its parent's cls_id until then, so a
+     call arriving early takes the parent's method -- emitted before SP_GC_SAVE
+     so the early return has no GC state to unwind. */
+  if (s->class_id >= 0 && !s->is_cmethod && c->classes[s->class_id].is_singleton_of &&
+      !c->classes[s->class_id].is_value_type) {
+    int pm = sg_delegate_scope(c, s);
+    int sg_par = c->classes[s->class_id].is_singleton_of - 1;
+    if (pm < 0 && s->name && comp_method_in_chain(c, sg_par, s->name, NULL) < 0 &&
+        !comp_reader_in_chain(c, sg_par, s->name, NULL) &&
+        !comp_writer_in_chain(c, sg_par, s->name, NULL)) {
+      /* the singleton ADDS a name the parent does not have: before its
+         statement runs there is nothing to delegate to, and CRuby answers a
+         NoMethodError there (#4084) */
+      buf_printf(b, "  if (self->cls_id != %d) { sp_raise_nomethod(sp_nomethod_msg(", s->class_id);
+      emit_str_literal(b, s->name);
+      buf_printf(b, ", sp_box_obj((void *)self, %d)));", sg_par);
+      if (method_is_void(s)) buf_puts(b, " return; }\n");
+      else buf_printf(b, " return %s; }\n", default_value(s->ret) ? default_value(s->ret) : "0");
+    }
+    if (pm >= 0) {
+      Scope *ps = &c->scopes[pm];
+      Buf cb; memset(&cb, 0, sizeof cb);
+      emit_method_cname(c, ps, &cb);
+      buf_printf(&cb, "((sp_%s *)self", c->classes[c->classes[s->class_id].is_singleton_of - 1].c_name);
+      for (int i = 0; i < s->nparams; i++) {
+        LocalVar *a = scope_local(s, s->pnames[i]);
+        LocalVar *bp = scope_local(ps, ps->pnames[i]);
+        char an[128]; snprintf(an, sizeof an, "lv_%s", s->pnames[i]);
+        buf_puts(&cb, ", ");
+        if (!a || !bp || a->type == bp->type) buf_puts(&cb, an);
+        else if (bp->type == TY_POLY) emit_boxed_text(c, a->type, an, &cb);
+        else emit_unbox_text(c, bp->type, an, &cb);
+      }
+      if (s->blk_param && s->blk_param[0] && !s->yields) buf_printf(&cb, ", lv_%s", s->blk_param);
+      buf_puts(&cb, ")");
+      buf_printf(b, "  if (self->cls_id != %d) %s", s->class_id,
+                 method_is_void(s) ? "{ " : "return ");
+      if (method_is_void(s) || s->ret == ps->ret) buf_puts(b, cb.p ? cb.p : "");
+      else if (s->ret == TY_POLY) emit_boxed_text(c, ps->ret, cb.p ? cb.p : "", b);
+      else emit_unbox_text(c, s->ret, cb.p ? cb.p : "", b);
+      buf_puts(b, ";");
+      buf_puts(b, method_is_void(s) ? " return; }\n" : "\n");
+      free(cb.p);
+    }
+  }
   size_t gc_save_off = b->len;
   buf_puts(b, "    SP_GC_SAVE();\n");
   size_t gc_save_len = b->len - gc_save_off;
@@ -5124,7 +5218,7 @@ void emit_class_new(Compiler *c, ClassInfo *ci, Buf *b) {
                 class_needs_scan(ci) ? "_scan" : "");
       buf_puts(b, "  memset(self, 0, sizeof(*self));\n");
       buf_puts(b, "  SP_GC_ROOT(self);\n");
-      buf_printf(b, "  self->cls_id = %d;\n", cid);
+      buf_printf(b, "  self->cls_id = %d;\n", ctor_cls_id(c, cid));
       emit_ivar_nil_inits(b, ci, "self->", "  ", ";\n");
       /* Call the initialize under the name of the class that actually defines
          it: when it is inherited from an ancestor the C symbol is
@@ -5179,7 +5273,7 @@ void emit_class_new(Compiler *c, ClassInfo *ci, Buf *b) {
               class_needs_scan(ci) ? "_scan" : "");
     buf_puts(b, "  memset(self, 0, sizeof(*self));\n");  /* recycled slots are not zeroed */
     buf_puts(b, "  SP_GC_ROOT(self);\n");
-    buf_printf(b, "  self->cls_id = %d;\n", cid);
+    buf_printf(b, "  self->cls_id = %d;\n", ctor_cls_id(c, cid));
     for (int i = 0; i < ci->nivars; i++)
       buf_printf(b, "  self->iv_%s = a%d;\n", iv_c(ci->ivars[i] + 1), i);  /* skip leading '@' */
     /* Data instances are frozen from construction (CRuby); Struct is mutable. */
@@ -5348,7 +5442,7 @@ void emit_class_new(Compiler *c, ClassInfo *ci, Buf *b) {
             class_needs_scan(ci) ? "_scan" : "");
   buf_puts(b, "  memset(self, 0, sizeof(*self));\n");  /* recycled slots are not zeroed */
   buf_printf(b, "  SP_GC_ROOT(self);\n");
-  buf_printf(b, "  self->cls_id = %d;\n", cid);
+  buf_printf(b, "  self->cls_id = %d;\n", ctor_cls_id(c, cid));
   /* memset zero-inits fields, but a poly ivar's zero pattern is not nil and an
      int ivar's nil is SP_INT_NIL, so seed them before initialize runs
      (read-only ivars stay nil; written ones are overwritten). */

@@ -5935,6 +5935,32 @@ static void emit_boxed_writer_arms(Compiler *c, const char *base, const char *nm
   }
 }
 
+/* The statement that brings a synthesized singleton subclass into being --
+   `def obj.m`, `class << obj`, `obj.extend(M)` -- is where Ruby dates the
+   override from. The object is stamped with its PARENT's cls_id at
+   construction (ctor_cls_id) and this flips it; the subclass's own methods and
+   is_a? read that id. Nothing to flip for a value-type receiver, which has no
+   identity of its own. */
+/* The subclass index analyze stamped on a singleton-creating node, or -1. */
+int sg_activates_ci(Compiler *c, int node) {
+  const char *v = node >= 0 ? nt_str(c->nt, node, "sg_activates") : NULL;
+  if (!v) return -1;
+  int ci = atoi(v);
+  if (ci < 0 || ci >= c->nclasses) return -1;
+  if (!c->classes[ci].is_singleton_of || c->classes[ci].is_value_type) return -1;
+  return ci;
+}
+
+void emit_sg_activate(Compiler *c, int node, int recv, Buf *b, int indent) {
+  if (recv < 0) return;
+  int ci = sg_activates_ci(c, node);
+  if (ci < 0) return;
+  if (!c->classes[ci].is_singleton_of || c->classes[ci].is_value_type) return;
+  emit_indent(b, indent);
+  buf_puts(b, "("); emit_expr(c, recv, b);
+  buf_printf(b, ")->cls_id = %d;\n", ci);
+}
+
 void emit_stmt_inner(Compiler *c, int id, Buf *b, int indent) {
   const NodeTable *nt = c->nt;
   const char *ty = nt_type(nt, id);
@@ -6015,7 +6041,14 @@ void emit_stmt_inner(Compiler *c, int id, Buf *b, int indent) {
       if (dsm_recv < 0) return;
       const char *dsm_rty = nt_type(nt, dsm_recv);
       if (dsm_rty && (sp_streq(dsm_rty, "SelfNode") || sp_streq(dsm_rty, "ConstantReadNode") ||
-                      sp_streq(dsm_rty, "ConstantPathNode"))) return;
+                      sp_streq(dsm_rty, "ConstantPathNode"))) {
+        /* A CLASS constant resolves to a class-method scope and emits nothing.
+           An INSTANCE constant (`B = Box.new`) matches the same node type but
+           is a singleton binding, and the statement is where its override
+           starts (#4084) -- a no-op for anything analyze did not mark. */
+        emit_sg_activate(c, id, dsm_recv, b, indent);
+        return;
+      }
     }
     /* `class_eval/module_eval { defs }` reopen: the block's def/define_method
        were registered as the target's methods at analyze time and are emitted
@@ -8732,7 +8765,10 @@ else {
        and are emitted from the method list, so the block is compile-time. */
     if (exty && (sp_streq(exty, "ConstantReadNode") || sp_streq(exty, "LocalVariableReadNode"))) {
       TyKind et = comp_ntype(c, sexpr);
-      if (ty_is_object(et) && c->classes[ty_object_class(et)].is_singleton_of) return;
+      if (ty_is_object(et) && c->classes[ty_object_class(et)].is_singleton_of) {
+        emit_sg_activate(c, id, sexpr, b, indent);
+        return;
+      }
     }
     unsupported(c, id, "singleton class on arbitrary object");
   }
@@ -9047,7 +9083,15 @@ else {
     return;
   }
   if (sp_streq(ty, "ReturnNode")) { emit_return(c, id, b, indent); return; }
-  if (sp_streq(ty, "DefNode"))    { return; } /* emitted separately */
+  if (sp_streq(ty, "DefNode")) {
+    /* `def obj.m` is emitted separately as a method -- but it is also the
+       STATEMENT where the singleton starts existing, and Ruby dates the
+       override from here rather than from the object's construction (#4084).
+       The object carries its parent's cls_id until this line runs. */
+    if (getenv("SP_DBG_SG")) { emit_indent(b, indent); buf_printf(b, "/* dbg DefNode recv=%d */\n", nt_ref(c->nt, id, "receiver")); }
+    emit_sg_activate(c, id, nt_ref(c->nt, id, "receiver"), b, indent);
+    return;
+  }
   if (sp_streq(ty, "UndefNode"))  { return; } /* resolved at scan time */
   if (sp_streq(ty, "AliasGlobalVariableNode")) { return; } /* resolved at scan time */
   if (sp_streq(ty, "PreExecutionNode") || sp_streq(ty, "PostExecutionNode")) { return; } /* hoisted separately */

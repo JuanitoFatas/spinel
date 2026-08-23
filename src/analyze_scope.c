@@ -1440,6 +1440,18 @@ static void sg_transplant_module(Compiler *c, int mod_ci, int newci) {
   }
 }
 
+/* Stamp the node that BRINGS a synthesized singleton subclass into being with
+   that subclass's index. Codegen emits the runtime activation there (the object
+   carries its parent's cls_id until then, #4084) and cannot re-derive which
+   subclass from the receiver: a `def obj.m` receiver is not an ordinary
+   expression and carries no inferred type, which is the same reason the dsm
+   call already needed its own mark. */
+static void sg_mark_activation(NodeTable *nt, int id, int newci) {
+  char buf[16];
+  snprintf(buf, sizeof buf, "%d", newci);
+  nt_node_set_str(nt, id, "sg_activates", buf);
+}
+
 void register_singleton_defs(Compiler *c) {
   /* not const: the pass marks a resolved dsm call on the node itself */
   NodeTable *nt = (NodeTable *)c->nt;
@@ -1500,9 +1512,11 @@ void register_singleton_defs(Compiler *c) {
       int newci = sg_get_or_make(c, &m, wnode, parent_ci);
       for (int j = 0; j < an; j++)
         sg_transplant_module(c, comp_class_index(c, nt_str(nt, args[j], "name")), newci);
+      sg_mark_activation(nt, id, newci);
       continue;
     }
     int newci = sg_get_or_make(c, &m, wnode, parent_ci);
+    sg_mark_activation(nt, id, newci);
     if (is_scls) {
       /* reattach every DefNode in the singleton-class body. The generic walk
          already created each as a (receiverless) scope; only class_id/is_cmethod
