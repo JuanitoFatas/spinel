@@ -1052,6 +1052,13 @@ def cmd_test(prj, files, regen)
   cmds = []
   tests.each_index do |i|
     next if cached[i]
+    # Drop the previous binary before compiling. A failed compile leaves it
+    # where it was, and the run phase below reads File.exist? as "it built":
+    # `spin test` printed the parse error, then ran the executable an OLDER
+    # source had produced, compared ITS output against the snapshot, and
+    # answered ok with exit 0 (#4085). What exists after this phase is now
+    # what this phase produced.
+    File.delete(bins[i]) if File.exist?(bins[i])
     cmds.push(compile_cmd(prj, File.join(prj.root, "test", tests[i]), bins[i], "-O 1"))
   end
   unless cmds.empty?

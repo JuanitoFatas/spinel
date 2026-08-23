@@ -102,6 +102,20 @@ printf 'puts "sib"\n' > test/sib_test.rb        # fresh: must actually compile
 expect "test (sibling spinel dir)" "1/1 passed" "$(PATH="$(dirname "$SPIN"):$PATH" "$WORK/sib/spin" test sib_test.rb 2>&1 | tail -1)"
 rm -rf "$WORK/sib"; rm -f test/sib_test.rb test/sib_test.rb.expected
 
+# a build that FAILS must not be reported ok by the run phase: a failed compile
+# leaves the previous binary where it was, and File.exist? read that as "it
+# built", so `spin test` printed the parse error and then ran the executable an
+# older source had produced (#4085).
+printf 'puts "first"\n' > test/stale_test.rb
+printf 'first\n' > test/stale_test.rb.expected
+expect "test (builds once)" "1/1 passed" "$("$SPIN" test stale_test.rb 2>&1 | tail -1)"
+printf 'def broken\n  puts "first"\n' > test/stale_test.rb   # no closing end
+out=$("$SPIN" test stale_test.rb 2>&1) && status=0 || status=$?
+expect "test (broken build is not ok)" "0/1 passed" "$(printf '%s\n' "$out" | tail -1)"
+case "$out" in *"ok   stale_test.rb"*) fail "broken build still reported ok" ;; esac
+if [ "$status" = "0" ]; then fail "broken build exited 0"; fi
+rm -f test/stale_test.rb test/stale_test.rb.expected
+
 # a large test/ directory: enumerating ~60 entries allocates enough to GC
 # mid-glob, which swept the unrooted result array (heap corruption before
 # any child spawned, #2178)
