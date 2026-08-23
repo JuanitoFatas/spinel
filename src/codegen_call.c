@@ -1239,11 +1239,13 @@ void emit_proc_ret_unbox(Compiler *c, TyKind rty, Buf *b) {
      object here is not the program indexing by an object and must not raise. */
   if (rty == TY_SYMBOL) { buf_puts(b, "(sp_sym)sp_poly_slot_i(_sp_proc_poly_ret)"); return; }
   if (proc_slot_is_direct(rty)) { buf_puts(b, "sp_poly_slot_i(_sp_proc_poly_ret)"); return; }  /* int/bool/nil */
-  if (rty == TY_STRING) { buf_puts(b, "_sp_proc_poly_ret.v.s"); return; }
-  if (rty == TY_RANGE)  { buf_puts(b, "(*(sp_Range *)_sp_proc_poly_ret.v.p)"); return; }
-  if (rty == TY_TIME)   { buf_puts(b, "(*(sp_Time *)_sp_proc_poly_ret.v.p)"); return; }
-  if (rty == TY_CLASS)  { buf_puts(b, "sp_unbox_class(_sp_proc_poly_ret)"); return; }
-  buf_puts(b, "("); emit_ctype(c, rty, b); buf_puts(b, ")_sp_proc_poly_ret.v.p");  /* array/hash/object */
+  /* Everything else unboxes the way the rest of the compiler does. The
+     by-value arms used to be listed again here and had drifted: Range, Time
+     and Class were named, Rational / Complex / the other Ranges were not, so
+     they took the generic pointer cast at the end -- casting a pointer to a
+     struct, which does not compile. The hash variants were missing too, and
+     those read another variant's layout silently (#3998). */
+  emit_unbox_text(c, rty, "_sp_proc_poly_ret", b);
 }
 
 /* Emit the `<argc>, (sp_int[16]){...}` argument tail of an sp_proc_call.
@@ -21701,8 +21703,7 @@ else { memcpy(dir, sf, n); dir[n] = 0; } }
             }
             buf_printf(b, "(sg_%s_%s = ", cn, base);
             if (argc >= 1) {
-              TyKind _at = comp_ntype(c, argv[0]);
-              emit_box_open(c, _at, b); emit_expr(c, argv[0], b); emit_box_close(c, _at, b);
+              emit_boxed(c, argv[0], b);
             }
             else buf_puts(b, "sp_box_nil()");
             buf_puts(b, ")");
@@ -21742,8 +21743,7 @@ else { memcpy(dir, sf, n); dir[n] = 0; } }
         if (comp_is_sg_writer(_sgcls, _base)) {
           buf_printf(b, "(sg_%s_%s = ", _sgcn, _base);
           if (argc >= 1) {
-            TyKind _at = comp_ntype(c, argv[0]);
-            emit_box_open(c, _at, b); emit_expr(c, argv[0], b); emit_box_close(c, _at, b);
+            emit_boxed(c, argv[0], b);
           }
           else buf_puts(b, "sp_box_nil()");
           buf_puts(b, ")");

@@ -4703,9 +4703,9 @@ int emit_hash_call(Compiler *c, int id, Buf *b) {
         /* Universal return ABI: publish the boxed value into _sp_proc_poly_ret
            for every value type; the .call site reads the slot back. */
         buf_puts(&g_procs, "  _sp_proc_poly_ret = ");
-        emit_box_open(c, vt, &g_procs);
-        buf_printf(&g_procs, "sp_%sHash_get(_h, %s)", hn, keyexpr);
-        emit_box_close(c, vt, &g_procs);
+        { char _ge[256];
+          snprintf(_ge, sizeof _ge, "sp_%sHash_get(_h, %s)", hn, keyexpr);
+          emit_boxed_text(c, vt, _ge, &g_procs); }
         buf_puts(&g_procs, ";\n  return 0;\n}\n");
         buf_printf(b, "sp_proc_new_meta((void *)_hashproc_%d, (void *)(", pn);
         emit_expr(c, recv, b);
