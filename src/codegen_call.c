@@ -572,6 +572,19 @@ int poly_block_call_needs_dispatch(Compiler *c, int id) {
   return 0;
 }
 
+/* Whether a `&.` call on a poly receiver has yet to pass through its nil
+   guard. The guard re-enters the emission with g_sn_skip set on the node, so
+   this answers false on that second pass. */
+int sn_guard_pending(Compiler *c, int id) {
+  const NodeTable *nt = c->nt;
+  if (g_sn_skip == id) return 0;
+  const char *op = nt_str(nt, id, "call_operator");
+  if (!op || !sp_streq(op, "&.")) return 0;
+  int recv = nt_ref(nt, id, "receiver");
+  return recv >= 0 && comp_ntype(c, recv) == TY_POLY;
+}
+
+
 /* Neither class is the other, nor an ancestor of the other. Such a pair has no
    conversion: their structs share no prefix by construction. */
 static int g_subdispatch_id = -1;   /* the call currently re-entered as poly (#4023) */
@@ -12692,7 +12705,13 @@ static void emit_call_body(Compiler *c, int id, Buf *b) {
      container, which answers empty when the value is the user object. Skip
      the whole chain and let the cls_id dispatch -- the only emitter with arms
      for both -- serve it (#3409). */
-  if (!poly_block_call_needs_dispatch(c, id)) {
+  /* A `&.` call on a poly receiver whose guard is still ahead of it: every
+     element-loop emitter below walks the receiver and never looks at the
+     operator, so it iterates the very nil the guard exists to stop. Stand the
+     whole chain down once here rather than in each emitter -- the guard
+     re-enters this same chain on the guarded temp with g_sn_skip set, and that
+     pass lowers normally. */
+  if (!poly_block_call_needs_dispatch(c, id) && !sn_guard_pending(c, id)) {
   if (emit_lazy_size_expr(c, id, b)) return;
   if (emit_lazy_class_expr(c, id, b)) return;
   if (emit_lazy_pipeline_expr(c, id, b)) return;

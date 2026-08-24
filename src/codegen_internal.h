@@ -608,6 +608,7 @@ void restore_lv_read_ntype(Compiler *c, int *saved_ids, TyKind *saved_tys, int n
 int emit_iter_autosplat(Compiler *c, int block, TyKind rt, const char *elem_src, int indent);
 int emit_iter_value_expr(Compiler *c, int id, Buf *b);
 int iter_value_answers_recv(Compiler *c, int id);
+int sn_guard_pending(Compiler *c, int id);
 int emit_takewhile_with_index(Compiler *c, int id, Buf *b);
 int emit_transform_hash_expr(Compiler *c, int id, Buf *b);
 int emit_bsearch_expr(Compiler *c, int id, Buf *b);

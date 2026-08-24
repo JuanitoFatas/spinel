@@ -4032,22 +4032,6 @@ else {
         an_builtin_only = 0;
         c->poly_builtin_ty[id] = bt;
       }
-      /* &. on a poly receiver may short-circuit to nil at runtime → always
-         poly. The array-returning trio below is the exception: those lower to
-         a C pointer, for which NULL already reads as nil, and calling the
-         whole expression poly left the guard's two arms disagreeing about
-         their C type (an sp_RbVal nil against an sp_PolyArray *) (#3461). */
-      {
-        const char *call_op = nt_str(nt, id, "call_operator");
-        /* The array-returning names: they lower to a C pointer, for which NULL
-           already reads as nil, so widening the whole expression to poly left
-           the guard's two arms disagreeing (#3461). `entries` is `to_a` under
-           another name and was missing, which is the hazard of listing names
-           for what is really a property of the answer's C type. */
-        int sn_arr = (sp_streq(name, "keys") || sp_streq(name, "values") ||
-                      sp_streq(name, "to_a") || sp_streq(name, "entries")) && argc == 0;
-        if (recv >= 0 && call_op && sp_streq(call_op, "&.") && !sn_arr) return an_poly_concrete(c, name, TY_POLY);
-      }
       if (sp_streq(name, "to_s") || sp_streq(name, "inspect")) return an_poly_concrete(c, name, TY_STRING);
       if ((sp_streq(name, "gsub") || sp_streq(name, "sub")) && argc == 2) return an_poly_concrete(c, name, TY_STRING);
       if (sp_streq(name, "join")) return an_poly_concrete(c, name, TY_STRING);
