@@ -690,7 +690,7 @@ Where Spinel returns `nil` but CRuby returns a label:
 | `{a: 1}`, `1..3` (hash/range and other general expressions) | `"expression"` | `nil` |
 | `x = 1` (assignment) | `"assignment"` | `nil` |
 | `yield`, `super` | `"yield"` / `"super"` | `nil` |
-| Multi-encoding strings | Strings are UTF-8 or ASCII-8BIT: `Encoding` conversion tables and `force_encoding` to a third encoding are out of scope. A string carries one bit, not an encoding object -- `pack` and `String#b` set it, and `#length`, `#[]`, `#inspect`, `#encoding` and the comparisons read it. A compiled binary's string paths (indexing, regexp, hashing) assume those two share a byte representation, and that assumption is load-bearing for their performance | write UTF-8; transcode at the boundary before the data enters the program |
+| Multi-encoding strings | Strings are UTF-8 or ASCII-8BIT, and one rule says which: a string is ASCII-8BIT when the program ASKED FOR BYTES (`pack`, `String#b`, `Marshal.dump`, `Random#bytes`, `binread`, `unpack`'s byte directives, `force_encoding` naming it). Everything else is UTF-8, including what CRuby calls US-ASCII (see below). A string carries one bit, not an encoding object; `#length`, `#[]`, `#inspect`, `#encoding` and the comparisons read it. A compiled binary's string paths (indexing, regexp, hashing) assume the two share a byte representation, and that assumption is load-bearing for their performance | write UTF-8; transcode at the boundary before the data enters the program |
 
 Two forms report a label where CRuby would report `nil`, because the check is
 syntactic rather than runtime:
@@ -757,6 +757,38 @@ between its two endpoints): `puts i if (i == 3)..(i == 5)`. This is a rarely use
 feature with surprising hidden per-site state, and Spinel does not support it; a
 program using it fails to compile rather than running with wrong behavior. Use an
 explicit boolean state variable instead.
+
+#### No `US-ASCII`
+
+CRuby has three encodings where spinel has two. A string CRuby generated from
+nothing -- `1.to_s`, `nil.to_s`, `:sym.to_s`, `1.chr`, `[1, 2].inspect`,
+`Time#to_s` -- is US-ASCII; one derived from source text inherits the source's
+encoding. Spinel calls both UTF-8.
+
+The reason this costs nothing is that US-ASCII carries exactly one fact, "these
+bytes are 7-bit", and nothing else. It is not needed for compatibility:
+`rb_enc_compatible` keys on the CONTENT being 7-bit, not on the encoding's
+identity, so an ASCII-only UTF-8 string concatenates with a Shift_JIS one
+exactly as a US-ASCII string does. Across the operations that can tell two
+same-byte strings apart -- `==`, `eql?`, `<=>`, `hash`, Hash keys, `length`,
+`[]`, `chars`, `bytes`, `upcase`, `include?`, `index`, `sub`, `split`, regexp
+matching, `to_sym`, `ascii_only?`, `valid_encoding?`, `encode`, `unpack`,
+`force_encoding`, concatenation in both directions -- US-ASCII and ASCII-only
+UTF-8 agree on every one. What differs:
+
+```ruby
+1.to_s.encoding      # CRuby: US-ASCII      Spinel: UTF-8
+(1.to_s + "x").encoding
+                     # CRuby: US-ASCII      Spinel: UTF-8
+1.chr.inspect        # CRuby: "\x01"        Spinel: "\u0001"
+```
+
+The encoding's NAME, and `inspect`'s escape form for a non-printable byte.
+CRuby needs the name because encodings are first-class objects and every string
+must report one; a program cannot name an encoding in spinel, so there is
+nothing for the third name to distinguish. The 7-bit fact itself is not lost --
+spinel keeps it as a bit in the string header, where it makes indexing O(1)
+rather than naming anything.
 
 #### No `Encoding::CompatibilityError`
 
