@@ -4071,6 +4071,10 @@ else {
         if (!has_user) return an_poly_concrete(c, name, TY_POLY_ARRAY);
       }
       if (sp_streq(name, "clamp")) return an_poly_concrete(c, name, TY_POLY);  /* boxed numeric clamp -> poly */
+      /* a boxed Encoding value, as the concrete String arm answers. Without a
+         type the call is UNKNOWN, and emit_boxed's untyped arm renders
+         `(expr, sp_box_nil())` -- it evaluates the answer and throws it away. */
+      if (sp_streq(name, "encoding") && argc == 0) return an_poly_concrete(c, name, TY_POLY);
       /* nil-aware conversions (a nil local widens to poly): boxed results */
       if (argc == 0 && nt_ref(nt, id, "block") < 0 &&
           (sp_streq(name, "to_a") || sp_streq(name, "to_h") ||

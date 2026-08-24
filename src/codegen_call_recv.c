@@ -11512,6 +11512,15 @@ int emit_poly_call(Compiler *c, int id, Buf *b) {
     if (sp_streq(name, "swapcase"))     { buf_puts(b, "sp_poly_case_conv("); emit_expr(c, recv, b); buf_puts(b, ", sp_str_swapcase, \"swapcase\")"); return 1; }
     if (sp_streq(name, "strip"))      { buf_puts(b, "sp_box_str(sp_str_strip(sp_poly_recv_s("); emit_expr(c, recv, b); buf_printf(b, ", \"strip\")))"); return 1; }
     if (sp_streq(name, "reverse"))    { buf_puts(b, "sp_poly_reverse("); emit_expr(c, recv, b); buf_puts(b, ")"); return 1; }
+    /* `encoding` on a boxed String: the concrete arm has answered it since
+       #723, and the poly dispatch had no entry -- so a String read out of a
+       poly array raised NoMethodError naming its own class. */
+    if (sp_streq(name, "encoding") && argc == 0) {
+      buf_puts(b, "sp_box_encoding(sp_str_is_binary(sp_poly_recv_s(");
+      emit_expr(c, recv, b);
+      buf_puts(b, ", \"encoding\")) ? sp_encoding_binary() : sp_encoding_utf8())");
+      return 1;
+    }
     if (sp_streq(name, "chomp"))      { buf_puts(b, "sp_box_str(sp_str_chomp(sp_poly_recv_s("); emit_expr(c, recv, b); buf_printf(b, ", \"chomp\")))"); return 1; }
     if (sp_streq(name, "chop"))       { buf_puts(b, "sp_box_str(sp_str_chop(sp_poly_recv_s("); emit_expr(c, recv, b); buf_printf(b, ", \"chop\")))"); return 1; }
     /* The one-String-argument transforms, which the table above covers only for
