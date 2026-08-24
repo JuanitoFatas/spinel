@@ -11,6 +11,9 @@ static void emit_native_object_protocol_text(Compiler *c, const char *name, TyKi
    layer applies (`[].m` -> poly array, `{}.m` -> str-keyed poly hash, the
    same C type the emitters build for the bare literals): comp_ntype answers
    UNKNOWN for them, which stranded direct calls like `{}.size`. */
+/* The node whose poly receiver is being re-dispatched as a poly array. */
+static int g_poly_redispatch_id = -1;
+
 TyKind comp_recv_type(Compiler *c, int recv) {
   TyKind t = recv >= 0 ? comp_ntype(c, recv) : TY_UNKNOWN;
   if (t != TY_UNKNOWN || recv < 0) return t;
@@ -1202,13 +1205,43 @@ int emit_array_call(Compiler *c, int id, Buf *b) {
      Enumerator, spinel materializes it, so re-dispatching as the array form
      gives the groups a later .map / .to_a can walk. */
   if (recv >= 0 && rt == TY_POLY && g_n_argov < MAX_ARG_OVERRIDE &&
+      g_poly_redispatch_id != id &&
       ((nt_ref(nt, id, "block") >= 0 &&
         (sp_streq(name, "sort_by") || sp_streq(name, "max_by") || sp_streq(name, "min_by"))) ||
        (nt_ref(nt, id, "block") < 0 && argc == 1 && !user_defines_or_reads(c, name) &&
         (sp_streq(name, "each_cons") || sp_streq(name, "each_slice") ||
-         sp_streq(name, "combination") || sp_streq(name, "permutation"))))) {
+         sp_streq(name, "combination") || sp_streq(name, "permutation"))) ||
+       /* and their BLOCK forms, which had no arm of their own and fell to the
+          loud NoMethodError -- the array emitters they re-dispatch to serve
+          the block and the blockless shape alike. */
+       (nt_ref(nt, id, "block") >= 0 && argc == 1 && !user_defines_or_reads(c, name) &&
+        (sp_streq(name, "cycle") || sp_streq(name, "zip") ||
+         /* each_slice / each_cons answer the receiver, and the wrapper that
+            hands it back re-enters this node -- which a pending safe-nav guard
+            re-enters too, and the two do not compose: the inner pass finds no
+            emitter and bakes a NoMethodError whose argument does not even
+            typecheck. Leave the guarded shape on its existing path (it raises
+            at run time, as it did before) rather than failing the build. */
+         ((sp_streq(name, "each_cons") || sp_streq(name, "each_slice")) &&
+          !(nt_str(nt, id, "call_operator") &&
+            sp_streq(nt_str(nt, id, "call_operator"), "&.")))))))  {
     int ta = ++g_tmp;
+    /* `each_slice(n) { }` / `each_cons(n) { }` answer the RECEIVER, and for a
+       Hash that is the hash itself, not the pairs the re-dispatch materializes
+       from it. Bind the receiver once, materialize from that binding, and hand
+       the binding back -- the same shape emit_iter_value_expr uses for a
+       receiver rewritten to `__enum_to_a`. */
+    int ret_recv = (nt_ref(nt, id, "block") >= 0 &&
+                    (sp_streq(name, "each_cons") || sp_streq(name, "each_slice")));
+    int tbox = ret_recv ? ++g_tmp : 0;
     Buf rb; memset(&rb, 0, sizeof rb); emit_expr(c, recv, &rb);
+    if (ret_recv) {
+      emit_indent(g_pre, g_indent);
+      buf_printf(g_pre, "sp_RbVal _t%d = %s; SP_GC_ROOT_RBVAL(_t%d);\n",
+                 tbox, rb.p ? rb.p : "sp_box_nil()", tbox);
+      free(rb.p); memset(&rb, 0, sizeof rb);
+      buf_printf(&rb, "_t%d", tbox);
+    }
     emit_indent(g_pre, g_indent);
     buf_printf(g_pre, "sp_PolyArray *_t%d = sp_poly_to_a_arr(%s); SP_GC_ROOT(_t%d);\n",
                ta, rb.p ? rb.p : "sp_box_nil()", ta);
@@ -1217,7 +1250,18 @@ int emit_array_call(Compiler *c, int id, Buf *b) {
     snprintf(g_argov_text[g_n_argov], sizeof g_argov_text[0], "_t%d", ta);
     g_n_argov++;
     TyKind sv = c->ntype[recv]; c->ntype[recv] = TY_POLY_ARRAY;
-    emit_call(c, id, b);
+    /* The re-entry below is the SAME node, and overriding the receiver's type
+       is not enough to stop it reaching this arm again: under a safe-nav guard
+       the answer is re-derived and comes back poly. Latch the node. */
+    int sv_rd = g_poly_redispatch_id; g_poly_redispatch_id = id;
+    if (ret_recv) {
+      Buf vb; memset(&vb, 0, sizeof vb);
+      emit_call(c, id, &vb);
+      buf_printf(b, "({ (void)(%s); _t%d; })", vb.p ? vb.p : "0", tbox);
+      free(vb.p);
+    }
+    else emit_call(c, id, b);
+    g_poly_redispatch_id = sv_rd;
     c->ntype[recv] = sv;
     g_n_argov--;
     return 1;

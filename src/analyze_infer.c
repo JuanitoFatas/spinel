@@ -1289,6 +1289,19 @@ TyKind infer_call(Compiler *c, int id) {
        sp_streq(name, "drop_while")) &&
       infer_type(c, recv) == TY_POLY)
     return TY_POLY_ARRAY;
+  /* `poly.each_slice(n) { }` / `each_cons(n) { }` answer the receiver, whatever
+     kind it turns out to be -- an Array for an Array, the Hash itself for a
+     Hash -- so the result rides boxed, like the filtering siblings above. */
+  if (recv >= 0 && nt_ref(nt, id, "block") >= 0 && argc == 1 &&
+      (sp_streq(name, "each_slice") || sp_streq(name, "each_cons")) &&
+      infer_type(c, recv) == TY_POLY)
+    return TY_POLY;
+  /* `poly.zip(other) { }` / `poly.cycle(n) { }` answer nil, as they do for a
+     typed receiver. */
+  if (recv >= 0 && nt_ref(nt, id, "block") >= 0 && argc == 1 &&
+      (sp_streq(name, "zip") || sp_streq(name, "cycle")) &&
+      infer_type(c, recv) == TY_POLY)
+    return TY_NIL;
   /* `poly.zip(other...)` on a value only known to be an array at runtime
      (e.g. a row that is a block param of an outer nested-array iterator):
      a poly array of tuples, matching the array-receiver form (#3190). */
