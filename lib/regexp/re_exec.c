@@ -40,9 +40,10 @@ skip_to_prefix(const mrb_regexp_pattern *pat, const char *sp, const char *str_en
 
 /* Check if a codepoint matches a character class. ASCII (cp < 128) hits
    the bitmap; non-ASCII falls back to the inclusive (lo, hi) range list,
-   then to the utf8_any catch-all (used by negated shorthand like \D). */
+   then to the POSIX brackets the class holds, then to the utf8_any catch-all
+   (used by negated shorthand like \D). */
 static mrb_bool
-class_match(const re_charclass *cc, uint32_t cp)
+class_match(const re_charclass *cc, uint32_t cp, mrb_bool binary)
 {
   if (cp < 128) {
     return (cc->bitmap[cp >> 3] >> (cp & 7)) & 1;
@@ -50,6 +51,19 @@ class_match(const re_charclass *cc, uint32_t cp)
   for (uint32_t i = 0; i < cc->num_ranges; i++) {
     if (cp >= cc->ranges[2*i] && cp <= cc->ranges[2*i + 1]) return TRUE;
   }
+#ifdef RE_UNICODE_CTYPE
+  /* A binary subject holds bytes rather than characters, and a byte at or
+     above 0x80 stands for no character: it has no type, so it is in the class
+     through a negated bracket and not through a positive one. Asking the
+     table would make the lone byte 0xB5 the word character it spells in
+     UTF-8. */
+  if (cc->ctype_yes || cc->ctype_no) {
+    if (binary) return cc->ctype_no != 0 || cc->utf8_any;
+    return re_class_ctype_match(cc, cp);
+  }
+#else
+  (void)binary;
+#endif
   return cc->utf8_any;
 }
 
@@ -260,16 +274,16 @@ add_thread(pike_state *s, re_threadlist *list,
 
     case RE_WBOUND:
       {
-        mrb_bool before = (sp > s->str) && re_is_word_char((uint8_t)sp[-1]);
-        mrb_bool after = (sp < s->str_end) && re_is_word_char((uint8_t)*sp);
+        mrb_bool before = (sp > s->str) && re_word_before(s->str, sp, s->str_end, s->binary);
+        mrb_bool after = (sp < s->str_end) && re_word_at(sp, s->str_end, s->binary);
         if (before != after) { pc++; continue; }
       }
       return;
 
     case RE_NWBOUND:
       {
-        mrb_bool before = (sp > s->str) && re_is_word_char((uint8_t)sp[-1]);
-        mrb_bool after = (sp < s->str_end) && re_is_word_char((uint8_t)*sp);
+        mrb_bool before = (sp > s->str) && re_word_before(s->str, sp, s->str_end, s->binary);
+        mrb_bool after = (sp < s->str_end) && re_word_at(sp, s->str_end, s->binary);
         if (before == after) { pc++; continue; }
       }
       return;
@@ -489,14 +503,14 @@ pike_vm(const mrb_regexp_pattern *pat,
         break;
 
       case RE_CLASS:
-        if (class_match(&pat->classes[inst.a], curr_cp)) {
+        if (class_match(&pat->classes[inst.a], curr_cp, s.binary)) {
           int cp = match_only ? 0 : pool_copy(&s, th->cap_slot);
           add_thread(&s, &next, th->pc + 1, cp, sp + advance, s.gen);
         }
         break;
 
       case RE_NCLASS:
-        if (!class_match(&pat->classes[inst.a], curr_cp)) {
+        if (!class_match(&pat->classes[inst.a], curr_cp, s.binary)) {
           int cp = match_only ? 0 : pool_copy(&s, th->cap_slot);
           add_thread(&s, &next, th->pc + 1, cp, sp + advance, s.gen);
         }
@@ -660,7 +674,7 @@ bt_match_depth(const mrb_regexp_pattern *pat, const char *str, const char *str_e
       {
         int dlen = 0;
         uint32_t cp_ = re_decode_char(sp, str_end, &dlen, binary);
-        if (!class_match(&pat->classes[inst.a], cp_)) return FALSE;
+        if (!class_match(&pat->classes[inst.a], cp_, binary)) return FALSE;
         sp += re_charlen(sp, str_end, binary);
       }
       pc++;
@@ -671,7 +685,7 @@ bt_match_depth(const mrb_regexp_pattern *pat, const char *str, const char *str_e
       {
         int dlen = 0;
         uint32_t cp_ = re_decode_char(sp, str_end, &dlen, binary);
-        if (class_match(&pat->classes[inst.a], cp_)) return FALSE;
+        if (class_match(&pat->classes[inst.a], cp_, binary)) return FALSE;
         sp += re_charlen(sp, str_end, binary);
       }
       pc++;
@@ -734,8 +748,8 @@ bt_match_depth(const mrb_regexp_pattern *pat, const char *str, const char *str_e
 
     case RE_WBOUND:
       {
-        mrb_bool before = (sp > str) && re_is_word_char((uint8_t)sp[-1]);
-        mrb_bool after = (sp < str_end) && re_is_word_char((uint8_t)*sp);
+        mrb_bool before = (sp > str) && re_word_before(str, sp, str_end, binary);
+        mrb_bool after = (sp < str_end) && re_word_at(sp, str_end, binary);
         if (before == after) return FALSE;
       }
       pc++;
@@ -743,8 +757,8 @@ bt_match_depth(const mrb_regexp_pattern *pat, const char *str, const char *str_e
 
     case RE_NWBOUND:
       {
-        mrb_bool before = (sp > str) && re_is_word_char((uint8_t)sp[-1]);
-        mrb_bool after = (sp < str_end) && re_is_word_char((uint8_t)*sp);
+        mrb_bool before = (sp > str) && re_word_before(str, sp, str_end, binary);
+        mrb_bool after = (sp < str_end) && re_word_at(sp, str_end, binary);
         if (before != after) return FALSE;
       }
       pc++;

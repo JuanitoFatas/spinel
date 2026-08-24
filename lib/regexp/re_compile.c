@@ -380,35 +380,53 @@ class_add_shorthand(re_charclass *cc, int ch)
    for the `\d`/`\w` shorthands, so these helpers only ever add the
    positive set. */
 static mrb_bool
-class_add_posix(re_charclass *cc, const char *name, size_t len)
+class_add_posix(re_charclass *cc, const char *name, size_t len, uint16_t *ctype)
 {
 #define POSIX_IS(s) (len == sizeof(s) - 1 && memcmp(name, s, len) == 0)
+/* What the name holds ABOVE ASCII, as the re_ctype bit a build carrying
+   re_ctype.h reads off the table at match time. [:xdigit:] and [:ascii:] are
+   sets ASCII defines, so they hold nothing above it and take no bit; without
+   the table every bracket is such a set and nothing is written here.
+   (ported from mruby-regexp 55b6deab4) */
+#ifdef RE_UNICODE_CTYPE
+#define TYPE(t) (*ctype = (t))
+#else
+#define TYPE(t) ((void)0)
+#endif
+  *ctype = 0;
   if (POSIX_IS("alpha")) {
     class_set_range(cc, 'a', 'z');
     class_set_range(cc, 'A', 'Z');
+    TYPE(RE_CTYPE_ALPHA);
   }
   else if (POSIX_IS("digit")) {
     class_set_range(cc, '0', '9');
+    TYPE(RE_CTYPE_DIGIT);
   }
   else if (POSIX_IS("alnum")) {
     class_set_range(cc, 'a', 'z');
     class_set_range(cc, 'A', 'Z');
     class_set_range(cc, '0', '9');
+    TYPE(RE_CTYPE_ALNUM);
   }
   else if (POSIX_IS("upper")) {
     class_set_range(cc, 'A', 'Z');
+    TYPE(RE_CTYPE_UPPER);
   }
   else if (POSIX_IS("lower")) {
     class_set_range(cc, 'a', 'z');
+    TYPE(RE_CTYPE_LOWER);
   }
   else if (POSIX_IS("space")) {
     /* [ \t\n\v\f\r] */
     class_set_range(cc, '\t', '\r');
     class_set_bit(cc, ' ');
+    TYPE(RE_CTYPE_SPACE);
   }
   else if (POSIX_IS("blank")) {
     class_set_bit(cc, ' ');
     class_set_bit(cc, '\t');
+    TYPE(RE_CTYPE_BLANK);
   }
   else if (POSIX_IS("xdigit")) {
     class_set_range(cc, '0', '9');
@@ -420,18 +438,22 @@ class_add_posix(re_charclass *cc, const char *name, size_t len)
     class_set_range(cc, 'A', 'Z');
     class_set_range(cc, '0', '9');
     class_set_bit(cc, '_');
+    TYPE(RE_CTYPE_WORD);
   }
   else if (POSIX_IS("cntrl")) {
     class_set_range(cc, 0, 0x1f);
     class_set_bit(cc, 0x7f);
+    TYPE(RE_CTYPE_CNTRL);
   }
   else if (POSIX_IS("print")) {
     /* printable, including space: 0x20-0x7e */
     class_set_range(cc, 0x20, 0x7e);
+    TYPE(RE_CTYPE_PRINT);
   }
   else if (POSIX_IS("graph")) {
     /* printable, excluding space: 0x21-0x7e */
     class_set_range(cc, 0x21, 0x7e);
+    TYPE(RE_CTYPE_GRAPH);
   }
   else if (POSIX_IS("punct")) {
     /* printable non-alnum non-space ASCII */
@@ -439,6 +461,7 @@ class_add_posix(re_charclass *cc, const char *name, size_t len)
     class_set_range(cc, ':', '@');
     class_set_range(cc, '[', '`');
     class_set_range(cc, '{', '~');
+    TYPE(RE_CTYPE_PUNCT);
   }
   else if (POSIX_IS("ascii")) {
     class_set_range(cc, 0, 0x7f);
@@ -448,23 +471,28 @@ class_add_posix(re_charclass *cc, const char *name, size_t len)
   }
   return TRUE;
 #undef POSIX_IS
+#undef TYPE
 }
 
-/* Negated POSIX class `[:^name:]`: add the ASCII complement of the named
-   set plus utf8_any, mirroring how the `\D`/`\W`/`\S` shorthands build a
-   positive complement set. ASCII input matches CRuby; non-ASCII follows
-   the deferred-Unicode (B50) approximation, same as the shorthands.
-   Returns FALSE for an unrecognized name so the caller can raise. */
+/* Negated POSIX class `[:^name:]`: add the ASCII complement of the named set.
+   Above ASCII the type is read off the table at match time in either
+   polarity, so the negation is the ctype_no the caller records rather than a
+   blanket utf8_any -- that is what made `"aあx" =~ /[[:^alpha:]]x/` answer 1
+   where CRuby answers nil. A set ASCII defines holds nothing above ASCII, so
+   its negation holds everything there and utf8_any is right for it; without
+   the table every bracket is such a set. Returns FALSE for an unrecognized
+   name so the caller can raise. */
 static mrb_bool
-class_add_posix_negated(re_charclass *cc, const char *name, size_t len)
+class_add_posix_negated(re_charclass *cc, const char *name, size_t len,
+                        uint16_t *ctype)
 {
   re_charclass tmp;
   memset(&tmp, 0, sizeof(tmp));
-  if (!class_add_posix(&tmp, name, len)) return FALSE;
+  if (!class_add_posix(&tmp, name, len, ctype)) return FALSE;
   for (int i = 0; i < 128; i++) {
     if (!(tmp.bitmap[i >> 3] & (1 << (i & 7)))) class_set_bit(cc, (uint8_t)i);
   }
-  cc->utf8_any = TRUE;
+  if (*ctype == 0) cc->utf8_any = TRUE;
   return TRUE;
 }
 
@@ -756,9 +784,19 @@ compile_charclass(re_compiler *c)
       while (q < c->src_end && *q != ':' && *q != ']') q++;
       if (q + 1 < c->src_end && q[0] == ':' && q[1] == ']') {
         size_t nlen = (size_t)(q - name);
-        mrb_bool ok = posix_neg ? class_add_posix_negated(cc, name, nlen)
-                                : class_add_posix(cc, name, nlen);
+        uint16_t ctype = 0;
+        mrb_bool ok = posix_neg ? class_add_posix_negated(cc, name, nlen, &ctype)
+                                : class_add_posix(cc, name, nlen, &ctype);
         if (!ok) compile_error(c, "invalid POSIX bracket type");
+#ifdef RE_UNICODE_CTYPE
+        /* Above ASCII the bracket is a type read at match time, not members
+           written out: a class holding [[:alpha:]] would otherwise carry the
+           letters as hundreds of ranges and walk them at every character. */
+        if (ctype) {
+          if (posix_neg) cc->ctype_no |= ctype;
+          else cc->ctype_yes |= ctype;
+        }
+#endif
         c->p = q + 2;  /* consume past ":]" */
         continue;
       }
@@ -820,6 +858,14 @@ compile_charclass(re_compiler *c)
        costs the run count. (ported from mruby-regexp 618ba9435) */
     class_fold_codepoints(c, cc);
   }
+
+#ifdef RE_UNICODE_CTYPE
+  /* A type is not spelled out as members, so the /i closure over the class's
+     members never saw it; it is closed at match time instead, by reading the
+     type of every character sharing the folding of the one in hand. */
+  cc->ctype_fold = (c->flags & RE_FLAG_IGNORECASE) &&
+                   (cc->ctype_yes || cc->ctype_no);
+#endif
 
   cc->negated = negated;
   emit(c, negated ? RE_NCLASS : RE_CLASS, (uint8_t)id, 0);
@@ -884,12 +930,16 @@ parse_quantifier(re_compiler *c, int *min_out, int *max_out)
  */
 /* TRUE when every character the class can match is ASCII, so it always
    consumes exactly one byte. Non-ASCII codepoint ranges and the utf8_any
-   catch-all (set by \D, \W, \S, \H and [[:^alpha:]]) both admit multibyte
-   characters, whose width is not known until match time. (ported from
+   catch-all (set by \D, \W, \S, \H and [[:^ascii:]]) both admit multibyte
+   characters, whose width is not known until match time, and so does a POSIX
+   bracket, which holds whatever the type table says above ASCII. (ported from
    mruby-regexp 1fa7d26c4) */
 static mrb_bool
 class_is_ascii_only(const re_charclass *cc)
 {
+#ifdef RE_UNICODE_CTYPE
+  if (cc->ctype_yes || cc->ctype_no) return FALSE;
+#endif
   return cc->num_ranges == 0 && !cc->utf8_any;
 }
 

@@ -153,7 +153,7 @@ sp_int sp_re_match(mrb_regexp_pattern *pat, const char *str) {SP_GC_ROOT_STR(str
   if (!str) return -1;
   int64_t slen = (int64_t)sp_str_byte_len(str);
   int ncaps = 32;
-  int n = re_exec(pat, str, slen, 0, sp_re_caps, ncaps, 0);
+  int n = re_exec(pat, str, slen, 0, sp_re_caps, ncaps, sp_str_is_binary(str));
   if (n > 0) { sp_re_last_pat = pat; sp_re_set_captures(str, sp_re_caps, n/2); return sp_re_caps[0]; }
   /* Issue #848: clear backrefs on no-match so a subsequent `$1`
      reads as nil rather than the previous match's group. */
@@ -175,7 +175,7 @@ sp_int sp_re_match_at(mrb_regexp_pattern *pat, const char *str, sp_int pos) {SP_
   if (!str) return -1;
   int64_t slen = (int64_t)sp_str_byte_len(str);
   int ncaps = 32;
-  int n = re_exec(pat, str, slen, pos, sp_re_caps, ncaps, 0);
+  int n = re_exec(pat, str, slen, pos, sp_re_caps, ncaps, sp_str_is_binary(str));
   if (n > 0) { sp_re_last_pat = pat; sp_re_set_captures(str, sp_re_caps, n/2); return sp_re_caps[0] - pos; }
   for (int i = 0; i < 10; i++) sp_re_captures[i] = NULL;
   sp_re_last_str = NULL;
@@ -213,7 +213,7 @@ const char *sp_str_splice_re(mrb_regexp_pattern *pat, const char *s, const char 
   if (!val) val = "";
   int64_t slen = (int64_t)sp_str_byte_len(s);
   int caps[2];
-  int n = re_exec(pat, s, slen, 0, caps, 2, 0);
+  int n = re_exec(pat, s, slen, 0, caps, 2, sp_str_is_binary(s));
   if (n <= 0) { sp_raise_cls("IndexError", "regexp not matched"); return s; }
   return sp_sprintf("%.*s%s%s", (int)caps[0], s, val, s + caps[1]);
 }
@@ -223,7 +223,7 @@ const char *sp_str_splice_re(mrb_regexp_pattern *pat, const char *s, const char 
 const char *sp_str_slice_re(mrb_regexp_pattern *pat, const char *s, const char **rest_out) {SP_GC_ROOT_STR(s);
   if (!s) s = &("\xff" "")[1];  /* header-safe empty: s flows to sp_str_byteslice -> sp_str_byte_len(s[-1]) */
   int64_t slen = (int64_t)sp_str_byte_len(s);
-  int n = re_exec(pat, s, slen, 0, sp_re_caps, 32, 0);
+  int n = re_exec(pat, s, slen, 0, sp_re_caps, 32, sp_str_is_binary(s));
   if (n <= 0) {
     for (int i = 0; i < 10; i++) sp_re_captures[i] = NULL;
     sp_re_last_str = NULL;
@@ -246,7 +246,7 @@ sp_int sp_re_rindex(mrb_regexp_pattern *pat, const char *str) {SP_GC_ROOT_STR(st
   int64_t pos = 0;
   sp_int last = -1;
   while (pos <= slen) {
-    int n = re_exec(pat, str, slen, pos, caps, 2, 0);
+    int n = re_exec(pat, str, slen, pos, caps, 2, sp_str_is_binary(str));
     if (n <= 0) break;
     last = caps[0];
     /* rindex keys on the rightmost match START (MRI reverse search): step
@@ -264,7 +264,7 @@ sp_StrArray *sp_re_rpartition(mrb_regexp_pattern *pat, const char *str) {
   int64_t pos = 0;
   sp_int ms = -1, me = -1;
   while (pos <= slen) {
-    int n = re_exec(pat, str, slen, pos, caps, 2, 0);
+    int n = re_exec(pat, str, slen, pos, caps, 2, sp_str_is_binary(str));
     if (n <= 0) break;
     ms = caps[0]; me = caps[1];
     /* rpartition keys on the rightmost match START (MRI reverse search),
@@ -296,7 +296,7 @@ sp_bool sp_re_match_p(mrb_regexp_pattern *pat, const char *str) {
   if (!str) return FALSE;
   int64_t slen = (int64_t)sp_str_byte_len(str);
   int caps[2];
-  return re_exec(pat, str, slen, 0, caps, 2, 0) > 0;
+  return re_exec(pat, str, slen, 0, caps, 2, sp_str_is_binary(str)) > 0;
 }
 sp_bool sp_re_match_p_at(mrb_regexp_pattern *pat, const char *str, sp_int pos) {
   if (!str) return FALSE;
@@ -304,7 +304,7 @@ sp_bool sp_re_match_p_at(mrb_regexp_pattern *pat, const char *str, sp_int pos) {
   if (pos < 0) pos += slen;
   if (pos < 0 || pos > slen) return FALSE;
   int caps[2];
-  return re_exec(pat, str, slen, (sp_int)pos, caps, 2, 0) > 0;
+  return re_exec(pat, str, slen, (sp_int)pos, caps, 2, sp_str_is_binary(str)) > 0;
 }
 /* Regexp#=== on a boxed operand (a case/when arm, an explicit ===). Only a
    String (plain or shared-mutable handle) or a Symbol can match; a match
@@ -498,7 +498,7 @@ const char *sp_re_gsub(mrb_regexp_pattern *pat, const char *str, const char *rep
   char *out = (char *)malloc(cap); size_t olen = 0;
   int64_t pos = 0; int caps[64];
   while (pos <= slen) {
-    int n = re_exec(pat, str, slen, pos, caps, 64, 0);
+    int n = re_exec(pat, str, slen, pos, caps, 64, sp_str_is_binary(str));
     if (n <= 0 || caps[0] < 0) break;
     size_t before = caps[0] - pos;
     if (olen+before+rlen >= cap) { cap = ((olen+before+rlen)*2)+64; out = (char*)realloc(out, cap); }
@@ -536,7 +536,7 @@ else {
 const char *sp_re_sub(mrb_regexp_pattern *pat, const char *str, const char *rep) {SP_GC_ROOT_STR(str);SP_GC_ROOT_STR(rep);
   int64_t slen = (int64_t)sp_str_byte_len(str); size_t rlen = strlen(rep);
   int caps[64];
-  int n = re_exec(pat, str, slen, 0, caps, 64, 0);
+  int n = re_exec(pat, str, slen, 0, caps, 64, sp_str_is_binary(str));
   if (n <= 0 || caps[0] < 0) return str;
   /* Issue #855: expand `\1`..`\9` / `\&` from rep against caps. */
   size_t cap = caps[0] + (rlen * 4) + (slen - caps[1]) + 64;
@@ -560,7 +560,7 @@ sp_StrArray *sp_re_scan(mrb_regexp_pattern *pat, const char *str) {
   SP_GC_ROOT(arr);
   int64_t slen = (int64_t)sp_str_byte_len(str); int64_t pos = 0; int caps[64];
   while (pos <= slen) {
-    int n = re_exec(pat, str, slen, pos, caps, 64, 0);
+    int n = re_exec(pat, str, slen, pos, caps, 64, sp_str_is_binary(str));
     if (n <= 0 || caps[0] < 0) break;
     int len = caps[1] - caps[0];
     char *m = sp_str_alloc_raw(len+1); memcpy(m, str+caps[0], len); m[len] = 0;
@@ -604,7 +604,7 @@ sp_StrArray *sp_re_split_limit(mrb_regexp_pattern *pat, const char *str, sp_int 
       split_push_slice(arr, str, field_start, slen);
       return arr;
     }
-    int n = re_exec(pat, str, slen, search_pos, caps, 64, 0);
+    int n = re_exec(pat, str, slen, search_pos, caps, 64, sp_str_is_binary(str));
     if (n <= 0 || caps[0] < 0) break;
     int64_t match_start = caps[0], match_end = caps[1];
 
@@ -663,7 +663,7 @@ sp_int sp_re_byteindex_opt(mrb_regexp_pattern *pat, const char *str, sp_int star
   if (start < 0) start += bl;
   if (start < 0 || start > bl) return SP_INT_NIL;
   int caps[64];
-  int n = re_exec(pat, str, (int64_t)bl, start, caps, 64, 0);
+  int n = re_exec(pat, str, (int64_t)bl, start, caps, 64, sp_str_is_binary(str));
   if (n <= 0 || caps[0] < 0) return SP_INT_NIL;
   return (sp_int)caps[0];
 }
@@ -679,7 +679,7 @@ sp_int sp_re_byterindex_opt(mrb_regexp_pattern *pat, const char *str, sp_int sta
      so probe each start position from `start` downward */
   int caps[2];
   for (sp_int p = start; p >= 0; p--) {
-    int n = re_exec(pat, str, (int64_t)bl, p, caps, 2, 0);
+    int n = re_exec(pat, str, (int64_t)bl, p, caps, 2, sp_str_is_binary(str));
     if (n > 0 && caps[0] == (int)p) return p;
   }
   return SP_INT_NIL;
@@ -691,7 +691,7 @@ sp_int sp_re_index_from_opt(mrb_regexp_pattern *pat, const char *str, sp_int sta
   if (start < 0 || start > cl) return SP_INT_NIL;
   size_t boff = sp_utf8_byte_offset(str, start);
   int caps[64];
-  int n = re_exec(pat, str, (int64_t)strlen(str), (sp_int)boff, caps, 64, 0);
+  int n = re_exec(pat, str, (int64_t)strlen(str), (sp_int)boff, caps, 64, sp_str_is_binary(str));
   if (n <= 0 || caps[0] < 0) return SP_INT_NIL;
   return sp_str_count_chars(str, (size_t)caps[0]);
 }
@@ -708,7 +708,7 @@ sp_int sp_re_rindex_from_opt(mrb_regexp_pattern *pat, const char *str, sp_int st
   int caps[2];
   int64_t pos = 0; sp_int last = -1;
   while (pos <= slen) {
-    int n = re_exec(pat, str, slen, pos, caps, 2, 0);
+    int n = re_exec(pat, str, slen, pos, caps, 2, sp_str_is_binary(str));
     if (n <= 0 || caps[0] < 0) break;
     if ((size_t)caps[0] > limit) break;
     last = caps[0];
@@ -801,7 +801,7 @@ sp_PolyArray *sp_re_scan_poly(mrb_regexp_pattern *pat, const char *str) {
   int ncaps = 64;
   int caps[64];
   while (pos <= slen) {
-    int n = re_exec(pat, str, slen, pos, caps, ncaps, 0);
+    int n = re_exec(pat, str, slen, pos, caps, ncaps, sp_str_is_binary(str));
     if (n <= 0 || caps[0] < 0) break;
     int pairs = (n > ncaps ? ncaps : n) / 2;
     if (pairs <= 1) {
@@ -837,7 +837,7 @@ sp_PolyArray *sp_re_match_data(mrb_regexp_pattern *pat, const char *str) {
   SP_GC_ROOT_STR(str);
   int64_t slen = (int64_t)sp_str_byte_len(str);
   int ncaps = 64;
-  int n = re_exec(pat, str, slen, 0, sp_re_caps, ncaps, 0);
+  int n = re_exec(pat, str, slen, 0, sp_re_caps, ncaps, sp_str_is_binary(str));
   if (n <= 0 || sp_re_caps[0] < 0) {
     for (int i = 0; i < 10; i++) sp_re_captures[i] = NULL;
     sp_re_last_str = NULL;
@@ -871,7 +871,7 @@ sp_MatchData *sp_re_matchdata(mrb_regexp_pattern *pat, const char *str) {SP_GC_R
   if (!str) return NULL;   /* Regexp#match(nil) is nil, not a walk off NULL (#3633) */
   int64_t slen = (int64_t)sp_str_byte_len(str);
   int caps[64];
-  int n = re_exec(pat, str, slen, 0, caps, 64, 0);
+  int n = re_exec(pat, str, slen, 0, caps, 64, sp_str_is_binary(str));
   if (n <= 0 || caps[0] < 0) {
     for (int i = 0; i < 10; i++) sp_re_captures[i] = NULL;
     sp_re_last_str = NULL; sp_re_match_str = NULL;
@@ -896,7 +896,7 @@ sp_MatchData *sp_re_matchdata_at(mrb_regexp_pattern *pat, const char *str, sp_in
   size_t boff = sp_utf8_byte_offset(str, cpos);
   int64_t slen = (int64_t)sp_str_byte_len(str);
   int caps[64];
-  int n = re_exec(pat, str, slen, (sp_int)boff, caps, 64, 0);
+  int n = re_exec(pat, str, slen, (sp_int)boff, caps, 64, sp_str_is_binary(str));
   if (n <= 0 || caps[0] < 0) {
     for (int i = 0; i < 10; i++) sp_re_captures[i] = NULL;
     sp_re_last_str = NULL; sp_re_match_str = NULL;

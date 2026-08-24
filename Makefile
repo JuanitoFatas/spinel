@@ -228,11 +228,14 @@ endif
 RE_SRC = lib/regexp/re_compile.c lib/regexp/re_exec.c lib/regexp/re_utf8.c
 RE_OBJ = $(patsubst lib/regexp/%.c,build/regexp/%.o,$(RE_SRC))
 
-# RE_CASE_FLAGS: pass -DRE_NO_UNICODE_CASE to build the regexp engine with
-# ASCII-only /i folding, leaving out the ~3KB Unicode fold table.
+# RE_CASE_FLAGS: the two Unicode tables the regexp engine carries, each left
+# out by asking for it. -DRE_NO_UNICODE_CASE gives ASCII-only /i folding and
+# leaves out the ~3KB fold table; -DRE_NO_UNICODE_CTYPE gives ASCII-only POSIX
+# brackets and word boundaries and leaves out the ~14KB type table. Pass both
+# for the smallest engine.
 RE_CASE_FLAGS ?=
 
-build/regexp/%.o: lib/regexp/%.c lib/regexp/re_internal.h lib/regexp/re_casefold.h
+build/regexp/%.o: lib/regexp/%.c lib/regexp/re_internal.h lib/regexp/re_casefold.h lib/regexp/re_ctype.h
 	@mkdir -p build/regexp
 	$(CC) -c $(COPT) $(SEC_FLAGS) $(RE_CASE_FLAGS) -Ilib/regexp $< -o $@
 
@@ -314,7 +317,7 @@ MT_DEF = -DSP_THREADS -ftls-model=initial-exec
 
 # Specific rule before generic: GNU Make 3.81 (macOS system make) picks the
 # first matching pattern rule, not the shortest-stem one (3.82+).
-build/mt/regexp/%.o: lib/regexp/%.c lib/regexp/re_internal.h
+build/mt/regexp/%.o: lib/regexp/%.c lib/regexp/re_internal.h lib/regexp/re_casefold.h lib/regexp/re_ctype.h
 	@mkdir -p $(@D)
 	$(CC) -c $(COPT) $(SEC_FLAGS) $(MT_DEF) -Ilib/regexp $< -o $@
 
@@ -339,7 +342,7 @@ SP_RT_MT_TSAN_LIB = lib/libspinel_rt_mt_tsan.a
 TSAN_DEF = $(MT_DEF) -fsanitize=thread -g
 
 # Specific before generic, as in the mt pair above.
-build/mt-tsan/regexp/%.o: lib/regexp/%.c lib/regexp/re_internal.h
+build/mt-tsan/regexp/%.o: lib/regexp/%.c lib/regexp/re_internal.h lib/regexp/re_casefold.h lib/regexp/re_ctype.h
 	@mkdir -p $(@D)
 	$(CC) -c -O1 $(SEC_FLAGS) $(TSAN_DEF) -Ilib/regexp $< -o $@
 
@@ -390,6 +393,11 @@ TESTS := $(wildcard test/*.rb)
 # answers, and -DRE_NO_UNICODE_CASE is the build that leaves the table out.
 ifneq (,$(findstring RE_NO_UNICODE_CASE,$(RE_CASE_FLAGS)))
 TESTS := $(filter-out test/regexp_unicode_casefold.rb,$(TESTS))
+endif
+# Likewise for the type table: regexp_unicode_ctype pins what a POSIX bracket
+# and a word boundary hold above ASCII, which -DRE_NO_UNICODE_CTYPE drops.
+ifneq (,$(findstring RE_NO_UNICODE_CTYPE,$(RE_CASE_FLAGS)))
+TESTS := $(filter-out test/regexp_unicode_ctype.rb,$(TESTS))
 endif
 # Mode-incompatible: int_overflow_raises pins raise-mode semantics; under
 # --int-overflow=promote the same code auto-promotes and output diverges.

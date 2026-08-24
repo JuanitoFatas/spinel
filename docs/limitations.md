@@ -432,6 +432,19 @@ Building the regexp engine with `-DRE_NO_UNICODE_CASE` (`make
 RE_CASE_FLAGS=-DRE_NO_UNICODE_CASE`) leaves the ~3KB fold table out and folds
 ASCII alone; a non-ASCII literal then matches literally under `/i` too.
 
+**A POSIX bracket and a word boundary read Unicode above ASCII.**
+`[[:alpha:]]` and its ten siblings hold what CRuby's brackets hold in every
+script, and `\b` / `\B` sit beside a character of any script, both read off
+the type table in `lib/regexp/re_ctype.h`. `\d`, `\w` and `\s` are ASCII in
+Ruby's syntax and stay so, exactly as in CRuby, so `/\w/` and `/\b/` answer
+different questions about the same character on purpose. Building with
+`-DRE_NO_UNICODE_CTYPE` (`make RE_CASE_FLAGS=-DRE_NO_UNICODE_CTYPE`) leaves
+the ~14KB table out and a bracket then holds its ASCII set alone, which the
+boundary reads too. One case above ASCII still differs from CRuby: a bracket
+under `/i` reaches a character through the 1:1 foldings only, so
+`"ß" =~ /[[:upper:]]/i` is nil here and 0 in CRuby, for the same reason
+`"ß" =~ /ss/i` does not match (see the fold note above).
+
 **A regexp construct the engine does not carry is refused, not read as its
 letters.** `\K` (drop what was matched before it), `\R` (any linebreak), `\X`
 (a grapheme cluster) and `\p{...}` / `\P{...}` (a character property) each mean
