@@ -357,6 +357,16 @@ static inline int sp_str_fixed_width(const char *s, size_t *out) {
   *out = 0;
   return 0;
 }
+/* Mark and hand back, so an emitter can wrap an expression in it. */
+static inline const char *sp_str_as_binary(const char *s) {
+  sp_str_mark_binary((char *)s);
+  return s;
+}
+/* The inverse, for force_encoding back to the text side. */
+static inline const char *sp_str_as_text(const char *s) {
+  if (s && sp_str_has_hdr(s)) (((sp_str_hdr *)(s - 1)) - 1)->size &= ~SP_STR_SIZE_BINARY;
+  return s;
+}
 static inline int sp_str_is_ascii7(const char *s) {
   if (!s || !sp_str_has_hdr(s)) return 0;
   return (((const sp_str_hdr *)(s - 1)) - 1)->size & SP_STR_SIZE_ASCII7 ? 1 : 0;

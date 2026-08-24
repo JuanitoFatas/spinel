@@ -157,14 +157,18 @@ sp_float sp_Random_rand_float_bound(sp_Random *r, sp_float bound) {SP_GC_ROOT(r)
 sp_Random *sp_random_default_get(void) {
   return &sp_random_default;
 }
-/* Random#bytes(n) — n random bytes as a String. Uses sp_str_set_len
-   so embedded NULs are preserved and #length reports n. */
+/* Random#bytes(n) — n random bytes as a String, tagged ASCII-8BIT as CRuby
+   does. sp_str_set_len alone was not enough: #length counts UTF-8 units, and a
+   short draw is valid UTF-8 by chance often enough that Random.bytes(8).length
+   answered less than 8 about three times in a thousand. That is #3474, which
+   fixed urandom eight lines below and left this one. */
 const char *sp_Random_bytes(sp_Random *r, sp_int n) {SP_GC_ROOT(r);
   if (n < 0) sp_raise_cls("ArgumentError", "negative string size (or size too big)");
   char *b = sp_str_alloc((size_t)n);
   for (sp_int i = 0; i < n; i++) b[i] = (char)(sp_random_next(r) & 0xff);
   b[n] = 0;
   sp_str_set_len(b, (size_t)n);
+  sp_str_mark_binary(b);
   return b;
 }
 /* Random#rand(Float range): a Float in [lo, hi) (or [lo, hi] for an inclusive

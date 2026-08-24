@@ -189,6 +189,9 @@ const char *sp_marshal_dump(sp_RbVal v) {
   char *out = sp_str_alloc_raw(b.len + 1);
   memcpy(out, b.p, b.len); out[b.len] = 0;
   sp_str_set_len(out, b.len);
+  /* a marshalled stream is bytes, and CRuby names it ASCII-8BIT: without the
+     tag #length counts UTF-8 units over binary data and [] slices by them */
+  sp_str_mark_binary(out);
   for (int i = 0; i < b.nws; i++) free(b.wsyms[i]);
   free(b.wsyms);
   free(b.p); free(b.lptr); free(b.lid);

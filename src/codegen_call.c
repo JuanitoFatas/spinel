@@ -20706,7 +20706,12 @@ else { memcpy(dir, sf, n); dir[n] = 0; } }
       emit_str_expr(c, argv[1], b); buf_puts(b, ")"); return;
     }
     if ((sp_streq(name, "read") || sp_streq(name, "binread")) && argc == 1) {
-      buf_puts(b, "sp_file_read("); emit_path_expr(c, argv[0], b); buf_puts(b, ")"); return;
+      /* binread answers BYTES (CRuby names them ASCII-8BIT); read answers text */
+      int bin_r = sp_streq(name, "binread");
+      if (bin_r) buf_puts(b, "sp_str_as_binary(");
+      buf_puts(b, "sp_file_read("); emit_path_expr(c, argv[0], b); buf_puts(b, ")");
+      if (bin_r) buf_puts(b, ")");
+      return;
     }
     /* File.read(path, length) -> the first length bytes (#2776); a nil
        length is "the whole file", as CRuby */
@@ -20716,8 +20721,12 @@ else { memcpy(dir, sf, n); dir[n] = 0; } }
         buf_puts(b, "); sp_file_read("); emit_path_expr(c, argv[0], b); buf_puts(b, "); })");
         return;
       }
-      buf_puts(b, "sp_file_read_len("); emit_path_expr(c, argv[0], b); buf_puts(b, ", ");
-      emit_int_expr(c, argv[1], b); buf_puts(b, ")"); return;
+      { int bin_r2 = sp_streq(name, "binread");
+        if (bin_r2) buf_puts(b, "sp_str_as_binary(");
+        buf_puts(b, "sp_file_read_len("); emit_path_expr(c, argv[0], b); buf_puts(b, ", ");
+        emit_int_expr(c, argv[1], b); buf_puts(b, ")");
+        if (bin_r2) buf_puts(b, ")"); }
+      return;
     }
     /* the stat/predicate family (#2775) */
     if (sp_streq(name, "ftype") && argc == 1) {

@@ -6675,8 +6675,36 @@ int emit_scalar_call(Compiler *c, int id, Buf *b) {
          raises, as CRuby checks before the (empty) append (#3339). */
       else if ((sp_streq(name, "concat") || sp_streq(name, "prepend")) && argc == 0)
         buf_printf(b, "(sp_str_check_mutable(%s), (%s))", r, r);
-      else if ((sp_streq(name, "force_encoding") || sp_streq(name, "encode!")) && argc <= 2)
-        buf_printf(b, "(sp_str_check_mutable(%s), (%s))", r, r);
+      else if ((sp_streq(name, "force_encoding") || sp_streq(name, "encode!")) && argc <= 2) {
+        /* The argument was ignored entirely, so `force_encoding("ASCII-8BIT")`
+           left the string naming UTF-8 -- and spinel's one tag is exactly what
+           that argument asks for. A constant path (Encoding::BINARY) or a
+           string literal both name it; anything else keeps today's no-op,
+           since spinel has no third encoding to move to. */
+        const char *fe_nm = NULL;
+        if (argc >= 1) {
+          const char *at = nt_type(nt, argv[0]);
+          if (at && sp_streq(at, "ConstantPathNode")) fe_nm = nt_str(nt, argv[0], "name");
+          else if (at && sp_streq(at, "StringNode")) {
+            fe_nm = nt_str(nt, argv[0], "unescaped");
+            if (!fe_nm) fe_nm = nt_str(nt, argv[0], "content");
+          }
+        }
+        int fe_bin = 0, fe_txt = 0;
+        if (fe_nm) {
+          char fe_up[32]; size_t fl = 0;
+          for (; fe_nm[fl] && fl < sizeof fe_up - 1; fl++) {
+            char ch = fe_nm[fl];
+            fe_up[fl] = (ch >= 'a' && ch <= 'z') ? (char)(ch - 32) : (ch == '_' ? '-' : ch);
+          }
+          fe_up[fl] = 0;
+          fe_bin = sp_streq(fe_up, "ASCII-8BIT") || sp_streq(fe_up, "BINARY");
+          fe_txt = sp_streq(fe_up, "UTF-8");
+        }
+        if (fe_bin) buf_printf(b, "(sp_str_check_mutable(%s), sp_str_as_binary(%s))", r, r);
+        else if (fe_txt) buf_printf(b, "(sp_str_check_mutable(%s), sp_str_as_text(%s))", r, r);
+        else buf_printf(b, "(sp_str_check_mutable(%s), (%s))", r, r);
+      }
       else if ((sp_streq(name, "=~") || sp_streq(name, "!~")) && argc == 1 &&
                comp_ntype(c, argv[0]) == TY_STRING) {
         /* `str =~ str` is a TypeError in CRuby, not a missing method: only a

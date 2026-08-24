@@ -973,6 +973,7 @@ else {
         while (off + z < slen && src[z]) z++;
         char *s = sp_str_alloc(z);
         memcpy(s, src, z); s[z] = 0; sp_str_set_len(s, z);
+        sp_str_mark_binary(s);   /* unpack answers BYTES here: ASCII-8BIT, as CRuby (the b/B/h/H arms build ASCII TEXT and stay on the text side) */
         sp_PolyArray_push(out, sp_box_str(s));
         off += z;
         if (off < slen && str[off] == 0) off++;
@@ -992,6 +993,7 @@ else if (spec == 'Z') {
           real = z;
         }
         sp_str_set_len(s, real);
+        sp_str_mark_binary(s);   /* unpack answers BYTES here: ASCII-8BIT, as CRuby (the b/B/h/H arms build ASCII TEXT and stay on the text side) */
         sp_PolyArray_push(out, sp_box_str(s));
         off += take;
       }
@@ -1038,6 +1040,7 @@ else if (spec == 'Z') {
       /* `m0` is strict RFC 4648: reject any non-alphabet byte. */
       char *s = (spec == 'm') ? uk_b64_decode_strict(str + off, avail, count == 0)
                               : uk_qp_decode(str + off, avail);
+      sp_str_mark_binary(s);   /* unpack answers BYTES here: ASCII-8BIT, as CRuby (the b/B/h/H arms build ASCII TEXT and stay on the text side) */
       sp_PolyArray_push(out, sp_box_str(s));
       off = slen;
       continue;
@@ -1063,6 +1066,7 @@ else if (spec == 'Z') {
         if (i < slen) i++;
       }
       s[o] = 0; sp_str_set_len(s, o);
+      sp_str_mark_binary(s);   /* unpack answers BYTES here: ASCII-8BIT, as CRuby (the b/B/h/H arms build ASCII TEXT and stay on the text side) */
       sp_PolyArray_push(out, sp_box_str(s));
       off = slen;
       continue;
