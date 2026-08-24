@@ -10,6 +10,7 @@ def probe(v)
    v&.reject { |x| x > 2 },
    v&.filter_map { |x| x if x > 2 },
    v&.partition { |x| x > 2 },
+   v&.group_by { |x| x > 2 },
    v&.sort_by { |x| -x },
    v&.min_by { |x| -x },
    v&.count { |x| x > 2 },
