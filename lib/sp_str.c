@@ -27,7 +27,7 @@ static int sp_char_cache_init = 0;
 typedef struct { sp_str_hdr h; char m; char d[2]; } sp_bin_char_ent;
 static sp_bin_char_ent sp_bin_char_cache[256];
 static int sp_bin_char_cache_init = 0;
-static const char *sp_bin_char(unsigned char c) {
+const char *sp_bin_char(unsigned char c) {
   if (!sp_bin_char_cache_init) {
     for (int i = 0; i < 256; i++) {
       sp_bin_char_cache[i].h.next = NULL;
@@ -600,8 +600,13 @@ sp_int sp_str_length(const char*s){
   sp_str_lcache[victim].char_len = n;
   return n;
 }
-sp_int sp_str_ord(const char*s){if(!s)sp_nil_recv("ord");unsigned char m=((const unsigned char*)s)[-1];size_t blen;if(m==0xfe||m==0xfc){blen=(((const sp_str_hdr*)(s-1))-1)->len;if(blen==0)sp_raise_cls("ArgumentError","empty string");}
-else{blen=strlen(s);if(blen==0)sp_raise_cls("ArgumentError","empty string");}uint32_t cp;sp_utf8_decode(s,&cp);return(sp_int)cp;}
+/* The byte length comes from sp_str_byte_len, which knows every marker: this
+   spelled out 0xfe/0xfc itself and fell to strlen for the rest, so a
+   header-bearing string whose first byte is NUL -- a 1-byte slice of a BINARY
+   string, served from the static table -- measured 0 and raised. */
+sp_int sp_str_ord(const char*s){if(!s)sp_nil_recv("ord");
+  if(sp_str_byte_len(s)==0)sp_raise_cls("ArgumentError","empty string");
+  uint32_t cp;sp_utf8_decode(s,&cp);return(sp_int)cp;}
 size_t sp_utf8_byte_offset(const char*s,sp_int char_idx){
   if (!s || char_idx <= 0) return 0;
   /* one unit per byte on a binary string, so indexing and slicing agree with

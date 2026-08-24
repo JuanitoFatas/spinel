@@ -44,3 +44,14 @@ puts d[3].ord                  # 200
 e = d[0, 4]
 puts e.length                  # 4
 puts e[3].ord                  # 200
+
+# A 1-byte slice of a BINARY string is served from a static table whose header
+# carries the length. String#ord spelled out 0xfe/0xfc itself and fell to
+# strlen for every other marker, so that slice measured 0 and raised
+# ArgumentError; it asks sp_str_byte_len now, which knows all of them.
+b = [0, 65, 255].pack("C*")
+puts b[0].ord
+puts b[1].ord
+puts b[2].ord
+puts b[0].bytesize
+puts b[0].length
