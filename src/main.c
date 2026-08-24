@@ -671,12 +671,17 @@ int main(int argc, char **argv) {
 
   int cc_rc = system(cmd.p);
   free(cmd.p);
-  if (c_is_temp) remove(c_path);
   if (cc_rc != 0) {
+    /* Keep the generated C and say where: cc's diagnostic points into that
+       file, and the one build where it is the only thing that can explain the
+       failure was the one build that threw it away (#4096). */
     fprintf(stderr, "spinel: C compilation failed\n");
+    if (c_is_temp)
+      fprintf(stderr, "spinel: the generated C is kept at %s\n", c_path);
     if (bin_is_temp) remove(bin_path);
     return 1;
   }
+  if (c_is_temp) remove(c_path);
 
   if (!run_mode) {
     fprintf(stderr, "%s -> %s\n", source, bin_path);
