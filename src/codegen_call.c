@@ -5249,9 +5249,15 @@ static int emit_poly_method_dispatch(Compiler *c, int id, Buf *b) {
            was silently truncated to `..._t2.v` and the build stopped. */
         char selfpbuf2[320];  /* stack-local: nested inlines each need their own receiver buffer */
         snprintf(selfpbuf2, sizeof selfpbuf2, "(sp_%s *)_t%d.v.p", c->classes[defcls].c_name, tv);
-        buf_printf(&cb, "sp_%s_%s(%s", c->classes[defcls].c_name,
+        /* The ARGUMENT differs from the inline receiver: a by-value class
+           takes self BY VALUE, so the boxed pointer is dereferenced for the
+           call while g_self keeps the pointer form its ivar reads want. The
+           sibling arm at the default dispatch has spelled this out since
+           #2441; without it the C build stopped the moment ceaea73e gave
+           `join` a user arm and that user's class was a value type. */
+        buf_printf(&cb, "sp_%s_%s(%s%s", c->classes[defcls].c_name,
                    mc(pfi8 >= 0 ? c->scopes[pfi8].name : c->scopes[mi].name),
-                   selfpbuf2);
+                   c->classes[defcls].is_value_type ? "*" : "", selfpbuf2);
         const char *saved_self = g_self;
         int r_idx = c->scopes[mi].rest_idx;
         int npost = c->scopes[mi].npost_rest;
