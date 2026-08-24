@@ -92,6 +92,8 @@ TyKind infer_uncached(Compiler *c, int id);
    (see an_set_hash_face_node). -1 clears the pin. */
 void an_set_hash_face_node(int node);
 int  an_hash_face_node(void);
+void an_set_poly_arr_face_node(int node);
+int  an_poly_arr_face_node(void);
 /* Name of a block's idx-th required parameter, or NULL. */
 const char *block_param_name(Compiler *c, int block, int idx);
 /* Name of a block's trailing rest parameter (`|*a|`), or NULL. */

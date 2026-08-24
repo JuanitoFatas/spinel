@@ -1222,9 +1222,7 @@ int emit_array_call(Compiler *c, int id, Buf *b) {
             emitter and bakes a NoMethodError whose argument does not even
             typecheck. Leave the guarded shape on its existing path (it raises
             at run time, as it did before) rather than failing the build. */
-         ((sp_streq(name, "each_cons") || sp_streq(name, "each_slice")) &&
-          !(nt_str(nt, id, "call_operator") &&
-            sp_streq(nt_str(nt, id, "call_operator"), "&."))))))) {
+         sp_streq(name, "each_cons") || sp_streq(name, "each_slice"))))) {
     int ta = ++g_tmp;
     /* `each_slice(n) { }` / `each_cons(n) { }` answer the RECEIVER, and for a
        Hash that is the hash itself, not the pairs the re-dispatch materializes
@@ -1250,9 +1248,13 @@ int emit_array_call(Compiler *c, int id, Buf *b) {
     snprintf(g_argov_text[g_n_argov], sizeof g_argov_text[0], "_t%d", ta);
     g_n_argov++;
     TyKind sv = c->ntype[recv]; c->ntype[recv] = TY_POLY_ARRAY;
-    /* The re-entry below is the SAME node, and overriding the receiver's type
-       is not enough to stop it reaching this arm again: under a safe-nav guard
-       the answer is re-derived and comes back poly. Latch the node. */
+    /* and pin it for the inference too, the way the hash face does: the cached
+       type alone does not survive a safe-navigation guard, whose re-emission
+       asks again and re-establishes the receiver as poly -- the array emitters
+       then decline the very call this arm re-entered to have them serve. */
+    int sv_face = an_poly_arr_face_node(); an_set_poly_arr_face_node(recv);
+    /* The re-entry below is the SAME node, and neither the type nor the pin
+       stops it reaching this arm again. Latch the node. */
     int sv_rd = g_poly_redispatch_id; g_poly_redispatch_id = id;
     if (ret_recv) {
       Buf vb; memset(&vb, 0, sizeof vb);
@@ -1262,6 +1264,7 @@ int emit_array_call(Compiler *c, int id, Buf *b) {
     }
     else emit_call(c, id, b);
     g_poly_redispatch_id = sv_rd;
+    an_set_poly_arr_face_node(sv_face);
     c->ntype[recv] = sv;
     g_n_argov--;
     return 1;

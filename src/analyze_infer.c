@@ -27,6 +27,15 @@ static int g_hash_face_node = -1;
    anything under the re-emission that asks re-establishes it. */
 void an_set_hash_face_node(int node) { g_hash_face_node = node; }
 int an_hash_face_node(void) { return g_hash_face_node; }
+/* The same pin for the poly ARRAY face: codegen materializes a boxed receiver
+   into a poly array and re-dispatches the call as the array form, and the
+   inference has to answer the same way for the duration. Poking the node's
+   cached type is not enough on its own -- under a safe-navigation guard the
+   re-emission asks again and re-establishes the receiver as poly, and the
+   array emitters then decline the call they were re-entered to serve. */
+static int g_poly_arr_face_node = -1;
+void an_set_poly_arr_face_node(int node) { g_poly_arr_face_node = node; }
+int an_poly_arr_face_node(void) { return g_poly_arr_face_node; }
 #define SP_NMEMO_SZ 16384
 static unsigned g_narrow_gen = 1;
 static struct { unsigned gen; long key; signed char val; } g_nmemo[SP_NMEMO_SZ];
@@ -6371,6 +6380,7 @@ TyKind infer_type(Compiler *c, int id) {
      node, only for the duration of the recursion, and the cache is left
      untouched so the receiver's own type is unaffected. */
   if (id == g_hash_face_node) return TY_POLY_POLY_HASH;
+  if (id == g_poly_arr_face_node) return TY_POLY_ARRAY;
   TyKind t = infer_uncached(c, id);
   /* The builtin-only re-derivation (see an_builtin_only) asks what this call
      would be if no user class owned the name. That answer is not the node's
