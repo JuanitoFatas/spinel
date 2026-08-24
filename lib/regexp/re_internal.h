@@ -187,12 +187,15 @@ typedef struct mrb_regexp_pattern {
 #endif
 
 /* C frames bt_match may nest. A lookaround and an atomic group still recurse
-   one frame each, and their nesting is a property of the PATTERN rather than
-   of the subject, so a small ceiling covers every realistic one; what used to
-   need a large one was the fork per iteration, which no longer takes a frame.
-   Issue #777. */
+   one frame each, but a frame is entered and left per construct rather than
+   held across the text after it, so what this counts is how deeply the two
+   NEST IN THE PATTERN -- `(?>(?>(?>a)))` and not `(?>a)*` over a long run,
+   which spends one frame at a time whatever the run. It stays at the number
+   the old ceiling had, so no pattern that used to compile its way through
+   loses it; the frames are far cheaper than the old ones, since the fork per
+   iteration is no longer one. Issue #777. */
 #ifndef MRB_REGEXP_FRAME_LIMIT
-#define MRB_REGEXP_FRAME_LIMIT 256
+#define MRB_REGEXP_FRAME_LIMIT 10000
 #endif
 
 /* Maximum captures. Sized for realistic code: complex parsers rarely

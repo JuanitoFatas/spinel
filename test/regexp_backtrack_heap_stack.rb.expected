@@ -14,6 +14,12 @@
 ["b"]
 ["ab"]
 ["", ""]
+[200, true, true]
+[1000, true, true]
+[5000, true, true]
+[1, true, true]
+[50, true, true]
+[300, true, true]
 false
 false
 ["aa", "a"]

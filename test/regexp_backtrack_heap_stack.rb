@@ -35,6 +35,18 @@ p(/(?:(?!a))*b?/.match("b").to_a)
 p(/a(?:(?<=a))*b?/.match("ab").to_a)
 p(/(a?)\1*/.match("").to_a)
 
+# A lookaround and an atomic group still take a C frame each, but one is
+# entered and left per construct rather than held across the text after it, so
+# a REPETITION of one spends a frame at a time whatever the run, and only
+# nesting in the pattern goes deep.
+[200, 1000, 5000].each do |n|
+  p [n, !!(("a" * n) =~ /\A(?>a)*\z/), !!(("a" * n) =~ /\A(?:(?=a)a)*\z/)]
+end
+[1, 50, 300].each do |d|
+  p [d, !!("a" =~ Regexp.new("(?>" * d + "a" + ")" * d)),
+        !!("a" =~ Regexp.new("(?=" * d + "a" + ")" * d + "a"))]
+end
+
 # The catastrophic shapes still give up at a limit rather than run forever.
 p(!!(("a" * 40 + "!") =~ /(a+)+$/))
 p(!!(("a" * 40 + "!") =~ /(a*)*b\1/))
