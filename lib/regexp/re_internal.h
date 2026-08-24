@@ -173,19 +173,32 @@ typedef struct mrb_regexp_pattern {
 #define MRB_REGEXP_STEP_LIMIT 1000000
 #endif
 
-/* Recursion depth ceiling for bt_match. Backtracking SPLIT/SAVE
-   recursion can otherwise drive the C stack to overflow on patterns
-   like long alternation chains or backref + many quantifier
-   iterations. 10000 frames covers realistic workloads while staying
-   well under a default 8 MB stack (~40 bytes per frame). Issue #777. */
-#ifndef MRB_REGEXP_DEPTH_LIMIT
-#define MRB_REGEXP_DEPTH_LIMIT 10000
+/* How much backtracking state one search may hold: choice points and undo
+   records counted together, since each stands for a branch or a write the
+   search can still take back. A greedy repetition forks once per iteration
+   whatever its body holds, so what a search holds grows with the LENGTH OF
+   THE SUBJECT and not with the nesting of the pattern -- and this is what
+   refuses a pattern that is nothing out of the ordinary once the subject is
+   long enough, so it is not a knob turned up idly. It sits on the heap, so
+   it is not the C stack it protects (see MRB_REGEXP_FRAME_LIMIT).
+   (ported from mruby-regexp 7c6059908) */
+#ifndef MRB_REGEXP_STACK_LIMIT
+#define MRB_REGEXP_STACK_LIMIT 32768
+#endif
+
+/* C frames bt_match may nest. A lookaround and an atomic group still recurse
+   one frame each, and their nesting is a property of the PATTERN rather than
+   of the subject, so a small ceiling covers every realistic one; what used to
+   need a large one was the fork per iteration, which no longer takes a frame.
+   Issue #777. */
+#ifndef MRB_REGEXP_FRAME_LIMIT
+#define MRB_REGEXP_FRAME_LIMIT 256
 #endif
 
 /* Maximum captures. Sized for realistic code: complex parsers rarely
    exceed ~50-100 capture groups. Pathological inputs like depth-500
    `((((...((a))...))))` raise RegexpError, which is the same
-   "fail-gracefully on absurd input" stance as MRB_REGEXP_DEPTH_LIMIT
+   "fail-gracefully on absurd input" stance as MRB_REGEXP_STACK_LIMIT
    above. Runtime memory scales with actual ncap per regex (see
    re_exec.c comment) so this is purely a compile-time cap. */
 #define RE_MAX_CAPTURES 128

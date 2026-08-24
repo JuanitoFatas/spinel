@@ -2075,9 +2075,26 @@ epsilon_path(const re_inst *code, uint32_t pc, uint32_t goal,
     case RE_SAVE:
     case RE_BOL: case RE_EOL: case RE_BOT: case RE_EOT: case RE_EOTNL:
     case RE_WBOUND: case RE_NWBOUND:
+    /* A backreference to a group that captured empty consumes nothing, so it
+       can lie on a path that need not consume. */
+    case RE_BACKREF:
       pc++;
       break;
     case RE_JMP:
+    /* A lookaround is zero-width whatever its sub-pattern does, so the walk
+       steps over the sub-pattern to the end the instruction records.
+       (ported from mruby-regexp 2ea26d60f) */
+    case RE_LOOKAHEAD: case RE_NEG_LOOKAHEAD:
+    case RE_LOOKBEHIND: case RE_NEG_LOOKBEHIND:
+      pc = code[pc].offset;
+      break;
+    /* An atomic group is zero-width exactly when its sub-pattern can match
+       empty -- unlike a lookaround it consumes what that sub-pattern does.
+       The sub-pattern runs from pc+1 and ends at its own MATCH, which sits
+       just before the instruction `offset` names, so that is the goal the
+       inner walk is given. */
+    case RE_ATOMIC:
+      if (!epsilon_path(code, pc + 1, code[pc].offset - 1, seen, mark)) return FALSE;
       pc = code[pc].offset;
       break;
     case RE_SPLIT:

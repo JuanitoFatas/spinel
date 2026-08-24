@@ -432,6 +432,18 @@ Building the regexp engine with `-DRE_NO_UNICODE_CASE` (`make
 RE_CASE_FLAGS=-DRE_NO_UNICODE_CASE`) leaves the ~3KB fold table out and folds
 ASCII alone; a non-ASCII literal then matches literally under `/i` too.
 
+**A search that backtracks is bounded by the state it holds.** A pattern with
+a backreference, a lookaround or an atomic group runs on the backtracking
+engine, whose choice points and undo records are capped together by
+`MRB_REGEXP_STACK_LIMIT` (32768 entries). A greedy repetition leaves one
+choice point per iteration, so what a search holds grows with the length of
+the subject: `"a" * n + "b" + "a" * n =~ /\A(a+)b\1\z/` is answered for n up
+to roughly 30000 and gives up above it, where CRuby keeps going. Giving up
+answers `nil`, the same as no match. The step ceiling
+(`MRB_REGEXP_STEP_LIMIT`) bounds the catastrophic shapes the same way, so
+`("a" * 40 + "!") =~ /(a+)+$/` returns `nil` in milliseconds rather than
+running for years.
+
 **A POSIX bracket and a word boundary read Unicode above ASCII.**
 `[[:alpha:]]` and its ten siblings hold what CRuby's brackets hold in every
 script, and `\b` / `\B` sit beside a character of any script, both read off
