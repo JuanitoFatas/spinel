@@ -942,7 +942,21 @@ def compile(prj, entry, out, extra)
   end
 end
 
+# The compiler modes that produce no executable. `spin build` writes one to
+# build/bin/<target> and compile_cmd always appends that `-o`, so these
+# contradict it -- and `-c` does so silently: spinel honours both flags and
+# writes C SOURCE over the executable's path, which keeps its executable bit
+# while the build reports success (#4098).
+EMIT_ONLY_FLAGS = ["-c", "-S", "--emit-rbs", "--emit-types",
+                   "--emit-symbol-map", "--dump-ast"]
+
 def cmd_build(prj, targets, extra)
+  extra.split(" ").each do |a|
+    if EMIT_ONLY_FLAGS.include?(a)
+      spin_die("`#{a}` produces no executable, and `spin build` writes one to " \
+               "build/bin/ -- run the compiler directly for that")
+    end
+  end
   bins = prj.bins
   spin_die("no bin/*.rb executables to build (a library is exercised via `spin test`)") if bins.empty?
   targets = bins if targets.empty?

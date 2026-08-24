@@ -33,6 +33,17 @@ expect "scaffold run" "Hello from app" "$("$SPIN" run 2>&1 | tail -1)"
 [ -f build/bin/app.symbols.json ] || fail "build <target> -- <flag>: flag never reached the compiler"
 "$SPIN" clean >/dev/null
 
+# --- an emit-only flag after `--` is refused, and leaves the binary alone -----
+# `spin build -- -c` used to write C SOURCE over build/bin/<target>, keep its
+# executable bit and exit 0, so nothing said the binary was gone.
+"$SPIN" build >/dev/null 2>&1 || fail "build before emit-only check: exited non-zero"
+before=$(head -c 4 build/bin/app | od -An -c | tr -d ' \n')
+"$SPIN" build -- -c >/dev/null 2>&1 && fail "build -- -c: exited zero"
+[ -f build/bin/app ] || fail "build -- -c: removed the binary"
+after=$(head -c 4 build/bin/app | od -An -c | tr -d ' \n')
+expect "build -- -c leaves the binary" "$before" "$after"
+"$SPIN" clean >/dev/null
+
 # --- library package (path dependency) --------------------------------------------
 cd "$WORK"
 "$SPIN" new spinel-ansi >/dev/null
