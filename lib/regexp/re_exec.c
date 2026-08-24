@@ -448,7 +448,7 @@ pike_vm(const mrb_regexp_pattern *pat,
 
     if (sp >= str_end) break;
 
-    if (!match_only && curr.count > 0) {
+    if (!match_only) {
       /* Renumber each live thread's capture slot to its list index so the
          pool can be reset to curr.count. Stage the copies through freshly
          allocated tail slots first: writing straight to CAP(i) would clobber
@@ -457,17 +457,26 @@ pike_vm(const mrb_regexp_pattern *pat,
          happens once alternation reorders threads relative to their slot
          numbers. Tail slots are disjoint from every source slot, and the
          final block copy to the front is disjoint because base >= count. */
-      int base = s.pool_next;
-      for (int i = 0; i < curr.count; i++) {
-        int dst;
-        if (!pool_alloc(&s, &dst)) break;
-        memcpy(CAP(&s, dst), CAP(&s, curr.threads[i].cap_slot),
-               sizeof(int) * ncap);
-        curr.threads[i].cap_slot = i;
+      if (curr.count > 0) {
+        int base = s.pool_next;
+        for (int i = 0; i < curr.count; i++) {
+          int dst;
+          if (!pool_alloc(&s, &dst)) break;
+          memcpy(CAP(&s, dst), CAP(&s, curr.threads[i].cap_slot),
+                 sizeof(int) * ncap);
+          curr.threads[i].cap_slot = i;
+        }
+        if (s.oom) break;
+        memcpy(&s.cap_pool[0], &s.cap_pool[base * ncap],
+               sizeof(int) * ncap * curr.count);
       }
-      if (s.oom) break;
-      memcpy(&s.cap_pool[0], &s.cap_pool[base * ncap],
-             sizeof(int) * ncap * curr.count);
+      /* The reclaim belongs to every step, not only one with a thread to
+         renumber: a live slot is a thread's, and a step whose closure killed
+         them all holds none -- a match keeps what it found in result_caps
+         rather than in the pool. Left inside the renumbering, a run of
+         positions where nothing survives climbed the pool by a slot a
+         position, and the pool is grown by doubling.
+         (ported from mruby-regexp 8339cd728) */
       s.pool_next = curr.count;
     }
 
@@ -728,6 +737,12 @@ bt_push(bt_state *m, const char *sp, uint32_t pc, uint8_t kind, uint32_t group)
 static int
 bt_log(bt_state *m, int *slot, int val)
 {
+  /* A write of the value already there is nothing to put back, and logging it
+     would spend an entry of MRB_REGEXP_STACK_LIMIT on a record that restores
+     what is already in the slot. The limit is meant to bound the state that
+     DIFFERS and would have to be undone, not the writes a search made.
+     (ported from mruby-regexp f5314068d) */
+  if (*slot == val) return BT_OK;
   if (!bt_room(m)) return BT_LIMIT;
   if (m->undo_top >= m->undo_capa) {
     uint32_t capa = bt_grow_capa(m->undo_capa);
