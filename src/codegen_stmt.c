@@ -6227,6 +6227,12 @@ void emit_stmt_inner(Compiler *c, int id, Buf *b, int indent) {
                   buf_puts(b, "("); emit_expr(c, recv, b); buf_printf(b, ")->iv_%s = ", iv_c(base));
                 }
                 if (ivt == TY_POLY && comp_ntype(c, argv[0]) != TY_POLY) emit_boxed(c, argv[0], b);
+                /* A genuinely poly rhs narrowing into a concrete slot takes
+                   the same unboxing the local-assignment path uses. The slot
+                   is concrete because an --rbs signature said so while the
+                   value is poly from observed dataflow, so the two only meet
+                   here (#4093); without it the sp_RbVal was assigned raw. */
+                else if (ivt != TY_POLY && emit_poly_rhs_coerced(c, ivt, argv[0], b)) { }
                 /* A concrete slot takes the coercing emit: an unresolved rhs
                    lowers to the gate's raising sp_RbVal token, which assigned
                    raw into an object-pointer or scalar field is ill-typed C.

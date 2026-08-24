@@ -1,0 +1,12 @@
+class Cand
+  attr_reader id: untyped
+  attr_writer id: untyped
+  def initialize: (untyped id) -> untyped
+  def to_s: () -> untyped
+  def to_i: () -> untyped
+end
+
+class Req
+  attr_accessor verb: String
+  attr_accessor count: Integer
+end
