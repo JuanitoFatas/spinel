@@ -10844,20 +10844,38 @@ int emit_poly_call(Compiler *c, int id, Buf *b) {
   /* The names Integer alone owns, on a boxed receiver: unbox once and
      re-dispatch through the typed emitter, the way the String surface below
      does. Untyped, they raised NoMethodError naming Integer itself. */
-  if (recv >= 0 && rt == TY_POLY && nt_ref(nt, id, "block") < 0 &&
+  if (recv >= 0 && rt == TY_POLY &&
       !user_defines_or_reads(c, name) && g_n_argov < MAX_ARG_OVERRIDE) {
+    int pi_blk = nt_ref(nt, id, "block") >= 0;
     static const struct { const char *name; int argc; } PINT[] = {
       {"digits", 0}, {"digits", 1}, {"pred", 0}, {"bit_length", 0},
       {"ceildiv", 1}, {"pow", 1}, {"pow", 2}, {"gcdlcm", 1},
       {NULL, 0} };
+    /* The block iterators Integer owns take the same route. They were left
+       out because this arm only ever ran for the blockless names, so
+       `n.times { }` on a boxed receiver raised NoMethodError naming Integer. */
+    /* step is left out: a Float receiver owns it too, so unboxing to an
+       sp_int would truncate a legitimate `2.5.step(9, 3)`. */
+    static const struct { const char *name; int argc; } PINTB[] = {
+      {"times", 0}, {"upto", 1}, {"downto", 1},
+      {NULL, 0} };
     int want_pi = 0;
     for (int i = 0; PINT[i].name && !want_pi; i++)
-      if (sp_streq(name, PINT[i].name) && argc == PINT[i].argc) want_pi = 1;
+      if (!pi_blk && sp_streq(name, PINT[i].name) && argc == PINT[i].argc) want_pi = 1;
+    for (int i = 0; PINTB[i].name && !want_pi; i++)
+      if (pi_blk && sp_streq(name, PINTB[i].name) && argc == PINTB[i].argc) want_pi = 1;
     if (want_pi) {
       int tpi = ++g_tmp;
       Buf rbi; memset(&rbi, 0, sizeof rbi); emit_expr(c, recv, &rbi);
       emit_indent(g_pre, g_indent);
-      buf_printf(g_pre, "sp_int _t%d = sp_poly_to_i(%s);\n", tpi, rbi.p ? rbi.p : "sp_box_nil()");
+      /* The block iterators check: `"x".times { }` is a NoMethodError in CRuby,
+         and coercing would silently run the loop zero times. The blockless
+         names keep the plain coercion they have always used. */
+      if (pi_blk)
+        buf_printf(g_pre, "sp_int _t%d = sp_poly_int_recv(%s, \"%s\");\n",
+                   tpi, rbi.p ? rbi.p : "sp_box_nil()", name);
+      else
+        buf_printf(g_pre, "sp_int _t%d = sp_poly_to_i(%s);\n", tpi, rbi.p ? rbi.p : "sp_box_nil()");
       free(rbi.p);
       g_argov_node[g_n_argov] = recv;
       snprintf(g_argov_text[g_n_argov], sizeof g_argov_text[0], "_t%d", tpi);

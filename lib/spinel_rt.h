@@ -3413,6 +3413,15 @@ static sp_PolyArray *sp_poly_set_operand(sp_RbVal v) {
 /* Coerce a poly value that a container-read Array method (find/reject/sort/
    each_index) was called on to a poly array, raising CRuby's NoMethodError when
    it is not an Array at run time (e.g. the method reached a nil ivar). (#2928) */
+/* The receiver of an Integer-only iterator (times/upto/downto) reached through
+   a boxed value. The sibling of sp_poly_arr_recv above: a value that is not an
+   Integer answers NoMethodError naming the method, rather than being coerced
+   to some number and running the loop anyway. */
+static sp_int sp_poly_int_recv(sp_RbVal v, const char *m) {
+  if (v.tag == SP_TAG_INT) return v.v.i;
+  sp_raise_nomethod(sp_nomethod_msg(m, v));
+  return 0;  /* unreachable: sp_raise_nomethod does not return */
+}
 /* map!'s write-back through a boxed receiver: sp_poly_arr_recv normalizes a
    TYPED array to a poly COPY, so in-place rewrites never reached the
    original (#3234). Copy the mutated elements back into the original

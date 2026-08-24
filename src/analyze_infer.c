@@ -1289,6 +1289,14 @@ TyKind infer_call(Compiler *c, int id) {
       (sp_streq(name, "reject") || sp_streq(name, "select") || sp_streq(name, "filter")) &&
       infer_type(c, recv) == TY_POLY)
     return TY_POLY;
+  /* `poly.times { }` / `upto(n) { }` / `downto(n) { }` answer the receiver,
+     which codegen unboxes to an sp_int before handing the call to the typed
+     emitters. step is left out: a Float owns it too. */
+  if (recv >= 0 && nt_ref(nt, id, "block") >= 0 &&
+      ((argc == 0 && sp_streq(name, "times")) ||
+       (argc == 1 && (sp_streq(name, "upto") || sp_streq(name, "downto")))) &&
+      infer_type(c, recv) == TY_POLY && !an_user_defines_or_reads(c, name))
+    return TY_INT;
   /* `poly.find { }` / `detect { }` answer the winning ELEMENT, boxed. Without
      an arm here they fell through to the last-resort Hash face below, which
      types them as the winning [k, v] pair -- and the emitter, which answers
