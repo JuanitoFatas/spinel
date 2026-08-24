@@ -80,6 +80,19 @@ void sp_re_set_error_handler(void (*fn)(const char *msg)) {
   sp_re_error_handler = fn;
 }
 
+static __attribute__((noreturn)) void compile_error(re_compiler *c, const char *msg);
+
+/* CRuby's `invalid group name <...>` quotes the name it could not read.
+   Upstream spells the slice through mrb_format's %l; compile_error here takes
+   a plain string, so the quoting happens first. */
+static __attribute__((noreturn)) void
+compile_error_group_name(re_compiler *c, const char *name, size_t len)
+{
+  char buf[512];
+  snprintf(buf, sizeof(buf), "invalid group name <%.*s>", (int)len, name);
+  compile_error(c, buf);
+}
+
 static __attribute__((noreturn)) void
 compile_error(re_compiler *c, const char *msg)
 {
@@ -1091,9 +1104,28 @@ compile_atom(re_compiler *c)
           int close = (c->p[1] == '<') ? '>' : '\'';
           next_char(c); next_char(c);  /* skip ?< or ?' */
           cap_name = c->p;
-          while (peek(c) != close && peek(c) >= 0) next_char(c);
+          while (peek(c) != close && peek(c) >= 0) {
+            /* CRuby's fetch_name() ends the scan at a ')' instead of taking it
+               into the name, and a name no delimiter ended is `invalid group
+               name`. The first byte is exempt, the test starting one byte in,
+               so (?<)>x) names ")" in both engines. The message quotes to the
+               end of the pattern, as CRuby does when the scan never reached a
+               delimiter. */
+            if (peek(c) == ')' && c->p > cap_name)
+              compile_error_group_name(c, cap_name, (size_t)(c->src_end - cap_name));
+            next_char(c);
+          }
           if (peek(c) != close) compile_error(c, "unterminated named capture");
           if (c->p == cap_name) compile_error(c, "group name is empty");
+          /* A definition names a group, it never numbers one: CRuby reads a
+             leading digit or '-' as the number spelling, which only a
+             reference may use, and refuses it here. Everything after the first
+             byte is a name to both engines, '-' and spaces included, so this
+             is not a restriction to word characters. Without it, (?<1>x)
+             defined a group that no \k could reach, the reference side
+             reading digits as a number. */
+          if (*cap_name == '-' || (*cap_name >= '0' && *cap_name <= '9'))
+            compile_error_group_name(c, cap_name, (size_t)(c->p - cap_name));
           if (!RE_NAME_LEN_FITS(c->p - cap_name)) compile_error(c, "group name too long");
           cap_name_len = (uint16_t)(c->p - cap_name);
           next_char(c);  /* skip the closing > or ' */
@@ -1314,7 +1346,14 @@ compile_atom(re_compiler *c)
       int close = (peek(c) == '<') ? '>' : '\'';
       next_char(c);  /* skip < or ' */
       const char *name = c->p;
-      while (peek(c) != close && peek(c) >= 0) next_char(c);
+      while (peek(c) != close && peek(c) >= 0) {
+        /* The reference reads a name the same way a definition does, and stops
+           at a ')' the same way too, from the second byte on: \k<)> reaches the
+           group (?<)>x) opened, while \k<a)b> is `invalid group name`. */
+        if (peek(c) == ')' && c->p > name)
+          compile_error_group_name(c, name, (size_t)(c->src_end - name));
+        next_char(c);
+      }
       if (peek(c) != close) compile_error(c, "unterminated backreference name");
       uint16_t name_len = (uint16_t)(c->p - name);
       next_char(c);  /* skip the closing > or ' */
