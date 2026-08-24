@@ -176,6 +176,28 @@ static int write_text_file(const char *path, const char *text) {
   return 1;
 }
 
+/* Whether the C compiler spells things clang's way. The two spellings of the
+   caret suppression are not interchangeable -- gcc takes
+   -fno-diagnostics-show-caret and refuses clang's -fno-caret-diagnostics, and
+   clang the reverse -- and an unknown -f flag is an error on both rather than
+   the warning an unknown -W is, so there is no spelling to pass blind. Asked
+   once: the answer cannot change inside one run, and the question costs a
+   process. */
+static int cc_is_clang(const char *cc_cmd) {
+  static int answer = -1;
+  if (answer >= 0) return answer;
+  answer = 0;
+  char q[1024];
+  snprintf(q, sizeof q, "%s --version 2>/dev/null", cc_cmd);
+  FILE *fp = popen(q, "r");
+  if (fp) {
+    char line[512] = {0};
+    if (fgets(line, sizeof line, fp) && strstr(line, "clang")) answer = 1;
+    pclose(fp);
+  }
+  return answer;
+}
+
 static void usage(void) {
   fprintf(stderr,
     "Spinel AOT Compiler\n\n"
@@ -538,10 +560,18 @@ int main(int argc, char **argv) {
      true (#4097). The caret goes with it -- cc draws it from the same column,
      so it points at nothing and pads to that width whatever the location says;
      the source-quote line is cc's only way to carry it and goes too, leaving
-     the file and line the message already names. Both gcc and clang take the
-     flags. */
-  if (debug || line_map)
-    s_add(&cmd, "-fno-show-column -fno-diagnostics-show-caret ");
+     the file and line the message already names.
+
+     -fno-show-column is a flag both take, and on gcc it is the whole of it:
+     with no column there is nothing to draw a caret from, so gcc drops the
+     quote line with it. clang draws one anyway and needs to be told, in its
+     own spelling of the flag -- gcc's is an error there, and clang's is one
+     on gcc, which is what cc_is_clang() is asked (#4097 left the build broken
+     for every clang, macOS CI included). */
+  if (debug || line_map) {
+    s_add(&cmd, "-fno-show-column ");
+    if (cc_is_clang(cc_cmd)) s_add(&cmd, "-fno-caret-diagnostics ");
+  }
   if (fiber_frame_guard) s_add(&cmd, "-Wframe-larger-than=65536 ");
   snprintf(tmp, sizeof tmp, "-I\"%s\" -I\"%s%cregexp\" ", lib_dir, lib_dir, PATH_SEP); s_add(&cmd, tmp);
   /* Compile the generated TU with the same threading define as the mt runtime
