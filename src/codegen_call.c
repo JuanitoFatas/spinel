@@ -135,7 +135,7 @@ int emit_ctor_yield_inline(Compiler *c, int id, int ci, Buf *b) {
   /* stack-local: this ctor inliner recurses (a constructor's block may itself
      construct), and g_self points into this buffer -- a shared static would be
      clobbered by the nested inline. */
-  char selfbuf[64];
+  char selfbuf[320];   /* a class name plus a cast: 64 truncated the longest of them */
   g_yield_block_fallback = saved_block;
   g_yield_block_fallback_nren = saved_bnren;
   /* the block being captured is caller code: record the caller's self so
@@ -4476,7 +4476,7 @@ static int emit_poly_method_dispatch(Compiler *c, int id, Buf *b) {
              unboxed value, not a struct pointer -- read the matching union field
              instead of casting .v.p to a non-existent sp_<Prim> struct. */
           const char *_dcn = c->classes[defcls].c_name;
-          char _dself[64];
+          char _dself[320];
           if (sp_streq(_dcn, "Integer") || sp_streq(_dcn, "Numeric")) snprintf(_dself, sizeof _dself, "_t%d.v.i", tv);
           else if (sp_streq(_dcn, "Float")) snprintf(_dself, sizeof _dself, "_t%d.v.f", tv);
           else if (sp_streq(_dcn, "String")) snprintf(_dself, sizeof _dself, "_t%d.v.s", tv);
@@ -4492,7 +4492,7 @@ static int emit_poly_method_dispatch(Compiler *c, int id, Buf *b) {
                      mc(pfi9 >= 0 ? c->scopes[pfi9].name : c->scopes[mi].name), _dself);
           if (c->scopes[mi].nparams > 0) {
             const char *saved_self = g_self;
-            char selfpbuf[64];  /* stack-local: nested inlines each need their own receiver buffer */
+            char selfpbuf[320];  /* stack-local: nested inlines each need their own receiver buffer */
             snprintf(selfpbuf, sizeof selfpbuf, "%s", _dself);
             g_self = selfpbuf;
             for (int a = 0; a < c->scopes[mi].nparams; a++) {
@@ -5240,12 +5240,19 @@ static int emit_poly_method_dispatch(Compiler *c, int id, Buf *b) {
         int mnp = c->scopes[mi].nparams;
         Buf cb; memset(&cb, 0, sizeof cb);
         int pfi8 = scope_proc_form_of(c, mi);   /* yielding: call the clone (#3399) */
-        buf_printf(&cb, "sp_%s_%s((sp_%s *)_t%d.v.p", c->classes[defcls].c_name,
-                   mc(pfi8 >= 0 ? c->scopes[pfi8].name : c->scopes[mi].name),
-                   c->classes[defcls].c_name, tv);
-        const char *saved_self = g_self;
-        char selfpbuf2[64];  /* stack-local: nested inlines each need their own receiver buffer */
+        /* a by-value (value-type) class takes self BY VALUE: dereference the
+           boxed pointer rather than passing it, as the sibling arm at the
+           default-dispatch above already does (#2441). Passing the pointer
+           stopped the C build the moment ceaea73e gave `join` a user arm and
+           the user's class happened to be a value type (#4091). */
+        /* Sized for the longest class name a bundle produces: at 64 the cast
+           was silently truncated to `..._t2.v` and the build stopped. */
+        char selfpbuf2[320];  /* stack-local: nested inlines each need their own receiver buffer */
         snprintf(selfpbuf2, sizeof selfpbuf2, "(sp_%s *)_t%d.v.p", c->classes[defcls].c_name, tv);
+        buf_printf(&cb, "sp_%s_%s(%s", c->classes[defcls].c_name,
+                   mc(pfi8 >= 0 ? c->scopes[pfi8].name : c->scopes[mi].name),
+                   selfpbuf2);
+        const char *saved_self = g_self;
         int r_idx = c->scopes[mi].rest_idx;
         int npost = c->scopes[mi].npost_rest;
         int rest_end = pos_argc - npost;   /* where the *rest collection stops */
@@ -7836,7 +7843,7 @@ static int emit_case_eq_call(Compiler *c, int id, Buf *b) {
       int ecid = ty_object_class(rt);
       int emi = comp_method_in_chain(c, ecid, name, NULL);
       if (emi >= 0) {
-        char selfptr[64];
+        char selfptr[320];
         const char *rty2 = nt_type(nt, recv);
         if (rty2 && (sp_streq(rty2, "LocalVariableReadNode") ||
                      sp_streq(rty2, "InstanceVariableReadNode") ||
@@ -7870,7 +7877,7 @@ static int emit_case_eq_call(Compiler *c, int id, Buf *b) {
           buf_printf(b, "(%ssp_poly_cmp_eq(_t%d, _t%d))", eq ? "" : "!", ta, tb2);
           return 1;
         }
-        char selfptr[64];
+        char selfptr[320];
         const char *rty2 = nt_type(nt, recv);
         if (rty2 && (sp_streq(rty2, "LocalVariableReadNode") ||
                      sp_streq(rty2, "InstanceVariableReadNode") ||
@@ -19496,7 +19503,7 @@ else { memcpy(dir, sf, n); dir[n] = 0; } }
         emit_indent(g_pre, g_indent); emit_ctype(c, body_ty, g_pre);
         buf_printf(g_pre, " _t%d;\n", tres);
       }
-      char selfbuf[64]; snprintf(selfbuf, sizeof selfbuf, "_t%d", tr);
+      char selfbuf[320];   /* a class name plus a cast: 64 truncated the longest of them */ snprintf(selfbuf, sizeof selfbuf, "_t%d", tr);
       const char *saved_self2 = g_self; g_self = selfbuf;
       const char *saved_deref2 = g_self_deref; g_self_deref = self_is_val ? "." : "->";
       int saved_ie = g_ie_class_id; g_ie_class_id = cls_id;
@@ -24064,7 +24071,7 @@ else { memcpy(dir, sf, n); dir[n] = 0; } }
           buf_printf(b, "(sp_poly_cmp_ck(_t%d, _t%d) %s 0)", ta, tb2, name);
           return;
         }
-        char selfptr[64];
+        char selfptr[320];
         const char *rtyp = nt_type(nt, recv);
         if (rtyp && (sp_streq(rtyp, "LocalVariableReadNode") ||
                      sp_streq(rtyp, "InstanceVariableReadNode") ||
