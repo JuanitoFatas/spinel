@@ -4856,6 +4856,23 @@ static void emit_tail_value(Compiler *c, int node, Buf *b) {
       return;
     }
   }
+  /* A hash variant the body answers where the signature declares another one:
+     the variants are separate C structs, so the pointer went back uncoerced
+     and the build stopped. An --rbs return type is the usual way the two come
+     apart -- the signature is a true description of the method while the ivar
+     writes widened its variant -- and the conversion is the one the assignment
+     side already makes (#4089), through the boxed form the converting entries
+     take. */
+  if (ty_is_hash(g_ret_type) && ty_is_hash(comp_ntype(c, node)) &&
+      g_ret_type != comp_ntype(c, node) &&
+      (g_ret_type == TY_POLY_POLY_HASH || g_ret_type == TY_SYM_POLY_HASH ||
+       g_ret_type == TY_STR_POLY_HASH)) {
+    const char *hconv = g_ret_type == TY_POLY_POLY_HASH ? "sp_poly_as_poly_poly_hash"
+                      : g_ret_type == TY_SYM_POLY_HASH  ? "sp_poly_as_sym_poly_hash"
+                      : "sp_poly_as_str_poly_hash";
+    buf_printf(b, "%s(", hconv); emit_boxed(c, node, b); buf_puts(b, ")");
+    return;
+  }
   /* A bare `nil` returned through an int or float slot. emit_expr renders
      NilNode as the numeric default 0, which in those two slots is a real
      value -- the caller reads 0 / 0.0 where the method said nil. Both have a

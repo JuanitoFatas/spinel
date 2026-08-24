@@ -1,0 +1,10 @@
+class Jar
+  def initialize: (?Hash[String, String] inbound) -> void
+  def to_h: () -> Hash[String, String]
+  def add: (String k, String v) -> Jar
+end
+
+class SymJar
+  def initialize: () -> void
+  def to_h: () -> Hash[Symbol, Integer]
+end
