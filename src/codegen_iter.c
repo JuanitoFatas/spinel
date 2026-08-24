@@ -1886,8 +1886,11 @@ int emit_iter_value_expr(Compiler *c, int id, Buf *b) {
   buf_printf(b, " _t%d = ", ta);
   emit_expr(c, recv, b);
   buf_puts(b, "; ");
-  if (rt == TY_POLY) buf_printf(b, "SP_GC_ROOT_RBVAL(_t%d); ", ta);
-  else if (!is_scalar_ret(rt) && rt != TY_RANGE) buf_printf(b, "SP_GC_ROOT(_t%d); ", ta);
+  /* Root the hoisted receiver on the same test hoist_loop_recv uses: it lives
+     across the whole loop body, which allocates. is_scalar_ret() answers TRUE
+     for arrays, hashes and objects (it asks how a value is RETURNED, not
+     whether it is collectable), so this rooted almost nothing. */
+  if (needs_root(rt)) buf_printf(b, rt == TY_POLY ? "SP_GC_ROOT_RBVAL(_t%d); " : "SP_GC_ROOT(_t%d); ", ta);
   buf_puts(b, body.p ? body.p : "");
   free(body.p);
   /* yield the original Enumerable receiver, not the intermediate member array:
