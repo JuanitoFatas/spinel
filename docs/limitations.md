@@ -443,6 +443,13 @@ CRuby reads them as the letter too, and so does the class parser here, so
 `[\R]` still matches an `R`. `\G` and `\g<name>` ARE carried and behave as
 CRuby does.
 
+The same applies inside a character class, where a `[` never stands for
+itself: `[[a][b]]` (a nested class), `[[.a.]]` (a collating element) and
+`[[=a=]]` (an equivalence class) each raise `RegexpError` rather than compile
+a different pattern than the one written -- taken as plain members, `[[a][b]]`
+was `[` or `a`, then `b`, then `]`. `[[:alpha:]]` is read, and `[\[]` holds
+the bracket itself as it does in CRuby.
+
 **An `--rbs` seed is enforced where a value crosses into it.** A parameter
 seeded `Hash[Symbol, untyped]` handed a hash whose keys the caller widened to
 any type converts at the call, and a key the declared type cannot hold raises
