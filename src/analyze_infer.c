@@ -973,6 +973,12 @@ int an_ty_holds_nil(TyKind t) {
    depended on which name you picked. Ask once, on the way out. */
 static TyKind an_poly_concrete(Compiler *c, const char *name, TyKind t) {
   if (t == TY_POLY || t == TY_UNKNOWN || !name) return t;
+  /* The builtin-only re-derivation asks what this call would be if NO user
+     class owned the name, so the union with a user return is the one thing it
+     must not take: the dispatch records that answer to shape its BUILTIN arm,
+     and a poly there made the arm assign sp_poly_values()'s raw sp_PolyArray *
+     into the boxed slot the user arms need. */
+  if (an_builtin_only) return t;
   for (int k = 0; k < c->nclasses; k++) {
     int mi = comp_method_in_chain(c, k, name, NULL);
     if (mi < 0 || mi >= c->nscopes) continue;
