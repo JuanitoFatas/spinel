@@ -468,12 +468,50 @@ class_add_posix_negated(re_charclass *cc, const char *name, size_t len)
   return TRUE;
 }
 
+static int parse_escape(re_compiler *c);
+
+/* Read the character a control escape names and return the control character
+   it stands for. `\cX` and `\C-X` name the same one, and a `\` in the X
+   position opens an escape of its own, so `\c\n` is a control newline.
+
+   The mask is the one this build's own lexer uses for a string, which is what
+   a regexp literal is read by: /\cA/ reaches the engine as the byte already.
+   Only Regexp.new() with a written-out backslash arrives here, and the two
+   spellings have to name the same character. That settles `\c?`, where CRuby
+   disagrees with itself: its lexer answers DEL and Onig answers 0x1f, so
+   /\c?/ and Regexp.new("\\c?") are two different patterns there. Following
+   the lexer keeps the pair together here. */
+static int
+parse_control_escape(re_compiler *c)
+{
+  int ch = next_char(c);
+
+  if (ch < 0) compile_error(c, "too short control escape");
+  if (ch == '\\') ch = parse_escape(c);
+  if (ch == '?') return 0x7f;
+  return ch & 0x1f;
+}
+
 static int
 parse_escape(re_compiler *c)
 {
   int ch = next_char(c);
   if (ch < 0) compile_error(c, "trailing backslash");
   switch (ch) {
+  case 'c':
+    return parse_control_escape(c);
+  case 'C':
+    /* Only the `\C-X` spelling names a control character; a `\C` with
+       anything else after it is the escape ending early, as it is to CRuby. */
+    if (peek(c) != '-') compile_error(c, "too short control escape");
+    next_char(c);
+    return parse_control_escape(c);
+  case 'M':
+    /* `\M-X` sets the high bit, making a byte that starts no character. This
+       engine has no encoding to read one against, and CRuby refuses the escape
+       in a pattern that is not binary, so it is refused rather than answered
+       with a byte nothing matches. */
+    compile_error(c, "meta escape is not supported");
   case 'n': return '\n';
   case 't': return '\t';
   case 'r': return '\r';
@@ -696,6 +734,20 @@ compile_charclass(re_compiler *c)
        leading `^` (`[:^name:]`) negates the class in place. A complete
        `[:...:]` with an unrecognized name is a hard error in CRuby
        ("invalid POSIX bracket type"); raise rather than match nothing. */
+    /* A '[' inside a class opens something in CRuby rather than standing for
+       itself: a POSIX bracket, a collating element, an equivalence class, or a
+       class nested in this one. Only the bracket is read here and the rest are
+       refused, since taken as members they compile to a different pattern than
+       the one written: [[a][b]] is the union of two classes there and was `[`
+       or `a`, then b, then `]` here. `[\[]` holds the bracket itself, in CRuby
+       as well. A '[' with nothing after it leaves the class unterminated,
+       which the loop reports on its own. */
+    if (peek(c) == '[' && c->p + 1 < c->src_end) {
+      if (c->p[1] == '.') compile_error(c, "POSIX collating element is not supported");
+      if (c->p[1] == '=') compile_error(c, "POSIX equivalence class is not supported");
+      if (c->p[1] != ':') compile_error(c, "nested character class is not supported");
+    }
+
     if (peek(c) == '[' && c->p + 1 < c->src_end && c->p[1] == ':') {
       const char *name = c->p + 2;
       mrb_bool posix_neg = FALSE;
@@ -710,8 +762,16 @@ compile_charclass(re_compiler *c)
         c->p = q + 2;  /* consume past ":]" */
         continue;
       }
-      /* No `:]` terminator: not a POSIX class. Fall through and treat
-         '[' literally (e.g. `[[:]` is the literal set {'[', ':'}). */
+      /* The '[' opened a bracket, so a name that does not close is the
+         bracket ending early rather than a literal '[', as it is to CRuby.
+         Which of the two things went wrong depends on where the scan stopped:
+         at a ']' the class does close and only the bracket ended early, and
+         anywhere else (a ':' with nothing after it, or the end of the pattern)
+         the class never closes either, which is the older and more particular
+         complaint of the two. */
+      compile_error(c, (q < c->src_end && *q == ']')
+                    ? "premature end of char-class"
+                    : "unterminated character class");
     }
 
     uint32_t cp = read_class_atom(c, cc);
