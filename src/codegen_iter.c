@@ -1819,20 +1819,15 @@ int emit_takewhile_with_index(Compiler *c, int id, Buf *b) {
   return 1;
 }
 
-int emit_iter_value_expr(Compiler *c, int id, Buf *b) {
+/* The iterator names whose value IS the receiver and which emit_iter_value_expr
+   lowers by hoisting that receiver into a temp. Shared with the tail-statement
+   emitter, which has to know whether this path can carry the value before it
+   commits to the statement form. */
+int iter_value_answers_recv(Compiler *c, int id) {
   const NodeTable *nt = c->nt;
   const char *name = nt_str(nt, id, "name");
   if (!name) return 0;
-  /* A `&.` call has to reach the safe-nav guard first: this lowering answers
-     the receiver and never looks at the operator, so `v&.each { }` walked a
-     nil receiver and raised where CRuby answers nil. Stand down only BEFORE
-     the guard runs -- it re-enters this emission on the guarded temp with
-     g_sn_skip set, and that pass has to lower normally. */
-  { const char *sop = nt_str(nt, id, "call_operator");
-    int sn_recv = nt_ref(nt, id, "receiver");
-    if (sop && sp_streq(sop, "&.") && g_sn_skip != id &&
-        sn_recv >= 0 && comp_ntype(c, sn_recv) == TY_POLY) return 0; }
-  if (!(sp_streq(name, "each") || sp_streq(name, "each_value") ||
+  return sp_streq(name, "each") || sp_streq(name, "each_value") ||
         sp_streq(name, "each_key") || sp_streq(name, "each_pair") ||
         sp_streq(name, "each_with_index") || sp_streq(name, "reverse_each") ||
         sp_streq(name, "each_entry") ||
@@ -1847,8 +1842,23 @@ int emit_iter_value_expr(Compiler *c, int id, Buf *b) {
           comp_ntype(c, nt_ref(nt, id, "receiver")) == TY_RANGE)) ||
         /* `str.split(sep) { |piece| }` answers the receiver too; in value
            position the block was dropped and the split array returned */
-        sp_streq(name, "split")))
-    return 0;
+        sp_streq(name, "split");
+}
+
+int emit_iter_value_expr(Compiler *c, int id, Buf *b) {
+  const NodeTable *nt = c->nt;
+  const char *name = nt_str(nt, id, "name");
+  if (!name) return 0;
+  /* A `&.` call has to reach the safe-nav guard first: this lowering answers
+     the receiver and never looks at the operator, so `v&.each { }` walked a
+     nil receiver and raised where CRuby answers nil. Stand down only BEFORE
+     the guard runs -- it re-enters this emission on the guarded temp with
+     g_sn_skip set, and that pass has to lower normally. */
+  { const char *sop = nt_str(nt, id, "call_operator");
+    int sn_recv = nt_ref(nt, id, "receiver");
+    if (sop && sp_streq(sop, "&.") && g_sn_skip != id &&
+        sn_recv >= 0 && comp_ntype(c, sn_recv) == TY_POLY) return 0; }
+  if (!iter_value_answers_recv(c, id)) return 0;
   int block = nt_ref(nt, id, "block");
   int recv = nt_ref(nt, id, "receiver");
   if (block < 0 || recv < 0) return 0;

@@ -9339,7 +9339,16 @@ void emit_stmt_tail_inner(Compiler *c, int id, Buf *b, int indent) {
                        (sp_streq(tv_name, "tap") ||
                         sp_streq(tv_name, "then") ||
                         sp_streq(tv_name, "yield_self"));
-  if (!is_tail_loop && !is_tail_valued && sp_streq(ty, "CallNode") && nt_ref(nt, id, "block") >= 0 &&
+  /* An iterator whose value is its receiver, called on something that is NOT
+     a plain read (`s.keys.each { }`, `s.dup.each { }`): the statement form
+     below produces the tail value by RE-READING the receiver, which it cannot
+     do for a call without evaluating it twice, so it emitted the loop and let
+     the method fall through to nil. The value path hoists the receiver into a
+     temp before the loop and yields that temp, so route these there. */
+  int is_tail_recv_val = sp_streq(ty, "CallNode") && nt_ref(nt, id, "block") >= 0 &&
+                         iter_value_answers_recv(c, id) && tail_iter_receiver(c, id) < 0;
+  if (!is_tail_loop && !is_tail_valued && !is_tail_recv_val &&
+      sp_streq(ty, "CallNode") && nt_ref(nt, id, "block") >= 0 &&
       !call_breaks(c, id) &&
       emit_iteration_stmt(c, id, b, indent)) {
     /* CRuby's iterators answer their receiver -- `each`, `each_pair`, `times`,
