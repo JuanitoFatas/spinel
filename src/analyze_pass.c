@@ -6577,6 +6577,19 @@ int infer_block_params(Compiler *c) {
            it -- its param registration below then runs (types stay poly, which
            the boxed inline uses). (#2448) */
         if (mi < 0 && (rt0 == TY_POLY || rt0 == TY_UNKNOWN)) {
+          /* UNKNOWN here is not the same claim as POLY. POLY says the
+             receiver really can be several things; UNKNOWN only says this
+             round has not typed it yet, and both answers below (adopting a
+             user method's yield types, widening the params to poly) are
+             irreversible once taken. A parameter whose call site types it
+             one round later would be judged on the guess instead of on the
+             answer -- `flat.each { |k, v| sub[k] = v }` widened `sub` to
+             poly even though `flat` settles as a String->String hash, and
+             the widened hash then no longer fits an RBS-declared
+             Hash[String, untyped] slot (#4100). Wait: the second stage runs
+             with g_infer_optimistic cleared, and a receiver still UNKNOWN
+             there is genuinely untypable. */
+          if (rt0 == TY_UNKNOWN && g_infer_optimistic) continue;
           int found = -1, ndef = 0;
           for (int k = 0; k < c->nclasses; k++) {
             int km = comp_method_in_chain(c, k, name, NULL);

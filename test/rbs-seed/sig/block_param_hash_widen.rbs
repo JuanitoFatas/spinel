@@ -1,0 +1,5 @@
+class Env
+  @params: Hash[String, untyped]
+  def params=: (Hash[String, untyped] h) -> Hash[String, untyped]
+  def params: () -> Hash[String, untyped]
+end

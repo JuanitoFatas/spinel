@@ -641,6 +641,12 @@ rbs-seed-test: $(SPINEL) $(RBS_EXTRACT_BIN) $(SP_RT_LIB)
 	  "$$tmp/mh" > "$$tmp/mh.out" 2>/dev/null; \
 	  cmp -s "$$tmp/mh.out" test/rbs-seed/memo_civ_hash.expected || { echo "rbs-seed-test: FAIL (#3779 memoized class-ivar hash pin output mismatch)"; diff -u test/rbs-seed/memo_civ_hash.expected "$$tmp/mh.out" || true; ok=0; }; \
 	else echo "rbs-seed-test: FAIL (#3779 memoized class-ivar hash pin: C did not compile)"; ok=0; fi; \
+	$(SPINEL) test/rbs-seed/block_param_hash_widen.rb --rbs test/rbs-seed/sig \
+	  -c --no-line-map -o "$$tmp/bw.c" 2>/dev/null; \
+	if $(CC) -O0 -Ilib $(RBS_SEED_STRICT) "$$tmp/bw.c" $(SP_RT_LIB) $(LDFLAGS) -lm -o "$$tmp/bw" 2>"$$tmp/bw.err"; then \
+	  "$$tmp/bw" > "$$tmp/bw.out" 2>/dev/null; \
+	  cmp -s "$$tmp/bw.out" test/rbs-seed/block_param_hash_widen.expected || { echo "rbs-seed-test: FAIL (#4100 block param over an untyped receiver widened the hash it writes into)"; diff -u test/rbs-seed/block_param_hash_widen.expected "$$tmp/bw.out" || true; ok=0; }; \
+	else echo "rbs-seed-test: FAIL (#4100 widened block param: C did not compile)"; ok=0; fi; \
 	$(SPINEL) test/rbs-seed/hash_kind_arg_boundary.rb --rbs test/rbs-seed/sig \
 	  -c --no-line-map -o "$$tmp/hk.c" 2>/dev/null; \
 	if $(CC) -O0 -Ilib $(RBS_SEED_STRICT) "$$tmp/hk.c" $(SP_RT_LIB) $(LDFLAGS) -lm -o "$$tmp/hk" 2>"$$tmp/hk.err"; then \
