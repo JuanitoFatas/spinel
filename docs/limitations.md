@@ -432,6 +432,17 @@ Building the regexp engine with `-DRE_NO_UNICODE_CASE` (`make
 RE_CASE_FLAGS=-DRE_NO_UNICODE_CASE`) leaves the ~3KB fold table out and folds
 ASCII alone; a non-ASCII literal then matches literally under `/i` too.
 
+**A regexp construct the engine does not carry is refused, not read as its
+letters.** `\K` (drop what was matched before it), `\R` (any linebreak), `\X`
+(a grapheme cluster) and `\p{...}` / `\P{...}` (a character property) each mean
+something in CRuby that this engine does not do. Left as unknown escapes each
+was simply its own letter, so `/\R/` matched an `R` rather than a newline and
+`/\p{Alpha}/` answered a request for a letter with the text of the request.
+They raise `RegexpError` at compile time instead. Inside a character class
+CRuby reads them as the letter too, and so does the class parser here, so
+`[\R]` still matches an `R`. `\G` and `\g<name>` ARE carried and behave as
+CRuby does.
+
 **An `--rbs` seed is enforced where a value crosses into it.** A parameter
 seeded `Hash[Symbol, untyped]` handed a hash whose keys the caller widened to
 any type converts at the call, and a key the declared type cannot hold raises

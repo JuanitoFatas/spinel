@@ -1383,6 +1383,31 @@ compile_atom(re_compiler *c)
       emit(c, RE_BACKREF, (uint8_t)group, (c->flags & RE_FLAG_IGNORECASE) ? 1 : 0);
       c->has_backref = TRUE;
     }
+    else if (ch == 'K' || ch == 'R' || ch == 'X') {
+      /* Each of these means something in CRuby that this engine does not do:
+         `\K` drops what was matched before it, `\R` is any linebreak and `\X`
+         is a whole grapheme cluster. Left to the fall-through each was simply
+         its own letter, so /\R/ matched an R rather than a newline. Inside a
+         character class CRuby reads them as the letter too, which is what the
+         class parser already does, so only the escape outside one is refused
+         here. Upstream refuses `\G` and `\g<name>` alongside these; both are
+         carried here already (RE_GPOS and the subexpression-call arm above),
+         so they stay. */
+      {
+        char ebuf[64];
+        snprintf(ebuf, sizeof(ebuf), "\\%c is not supported", (char)ch);
+        compile_error(c, ebuf);
+      }
+    }
+    else if ((ch == 'p' || ch == 'P') && c->p + 1 < c->src_end && c->p[1] == '{') {
+      /* The engine reads no character property. Without this the escape is
+         the letter it names and the braces are literal too, so /\p{Alpha}/
+         would answer a pattern that asked for a letter with the text of the
+         request. `[[:alpha:]]` is how to ask for one.
+         Only the braced spelling is a property: CRuby reads a bare `\p`, and
+         `\pL` as well, as the letter, and so does the fall-through below. */
+      compile_error(c, "character property is not supported");
+    }
     else if (ch == 'u') {
       next_char(c);  /* skip u */
       mrb_bool more;

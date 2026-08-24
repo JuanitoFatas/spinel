@@ -1,0 +1,14 @@
+bs-K | RegexpError
+bs-R | RegexpError
+bs-X | RegexpError
+bs-G | 0
+bs-G-mid | nil
+bs-g-name | "ab"
+bs-g-quote | "ab"
+prop-p | RegexpError
+prop-P | RegexpError
+bare-g | "g"
+bare-p | "p"
+pL | "pL"
+class-R | "R"
+class-K | "K"
