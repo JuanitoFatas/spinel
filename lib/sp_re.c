@@ -394,6 +394,14 @@ void sp_re_expand_rep(const mrb_regexp_pattern *pat,
       char d = rep[i+1];
       if ((d >= '0' && d <= '9') || d == '&' || d == '+') {
         int gi = (d == '&') ? 0 : (d == '+') ? 0 : (d - '0');
+        /* A pattern that names a group turns `\1` through `\9` off, the same
+           rule that stops a plain `(...)` from taking a number there: the
+           number a named group answers to for md[1] is not one a replacement
+           may spend, and `\k<name>` is what reaches it. `\0` is the whole
+           match, which naming a group does not touch, and neither do `\&` and
+           `\+`. A literal String pattern hands in no pattern and has no group
+           for a number to reach either way. */
+        if (d >= '1' && d <= '9' && pat && re_num_named(pat) > 0) { i += 2; continue; }
         if (d == '+') {
           /* \+: the highest-numbered group that participated in the match;
              none participating expands to "" (gi stays 0 with caps[0] the
