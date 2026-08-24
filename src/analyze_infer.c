@@ -1280,6 +1280,15 @@ TyKind infer_call(Compiler *c, int id) {
       (sp_streq(name, "reject") || sp_streq(name, "select") || sp_streq(name, "filter")) &&
       infer_type(c, recv) == TY_POLY)
     return TY_POLY;
+  /* find_all is NOT the third spelling of select: Hash#select answers a Hash,
+     Hash#find_all the [k, v] pairs as an Array. take_while and drop_while
+     answer an Array the same way. All three are an array whatever the
+     receiver turns out to be. */
+  if (recv >= 0 && nt_ref(nt, id, "block") >= 0 && argc == 0 &&
+      (sp_streq(name, "find_all") || sp_streq(name, "take_while") ||
+       sp_streq(name, "drop_while")) &&
+      infer_type(c, recv) == TY_POLY)
+    return TY_POLY_ARRAY;
   /* `poly.zip(other...)` on a value only known to be an array at runtime
      (e.g. a row that is a block param of an outer nested-array iterator):
      a poly array of tuples, matching the array-receiver form (#3190). */

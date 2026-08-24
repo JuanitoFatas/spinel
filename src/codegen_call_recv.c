@@ -1006,15 +1006,26 @@ int emit_array_call(Compiler *c, int id, Buf *b) {
      a container: coerce to a poly array and filter it into a fresh poly array,
      mirroring the find arm above (this TY_POLY receiver would otherwise skip to
      the loud NoMethodError). (#2930) */
+  /* find_all, take_while and drop_while ride the same loop. They differ only
+     in what the loop does with the predicate and in what the value is: those
+     three answer the plain Array of elements whatever the receiver is (CRuby's
+     Hash#find_all gives the [k, v] pairs, unlike Hash#select), so they skip
+     the sp_poly_kept_result hop that hands a Hash receiver a Hash back. */
+  int pf_rej = sp_streq(name, "reject");
+  int pf_sel = sp_streq(name, "select") || sp_streq(name, "filter");
+  int pf_fa  = sp_streq(name, "find_all");
+  int pf_tw  = sp_streq(name, "take_while");
+  int pf_dw  = sp_streq(name, "drop_while");
   if (recv >= 0 && rt == TY_POLY && nt_ref(nt, id, "block") >= 0 && argc == 0 &&
-      (sp_streq(name, "reject") || sp_streq(name, "select") || sp_streq(name, "filter"))) {
+      (pf_rej || pf_sel || pf_fa || pf_tw || pf_dw)) {
     int fblock = nt_ref(nt, id, "block");
     const char *bp = block_param_name(c, fblock, 0); if (bp) bp = rename_local(bp);
     int fbody = nt_ref(nt, fblock, "body");
     int fbn = 0; const int *fbb = fbody >= 0 ? nt_arr(nt, fbody, "body", &fbn) : NULL;
     if (fbn >= 1) {
-      int keep_truthy = !sp_streq(name, "reject");  /* select/filter keep truthy */
+      int keep_truthy = !pf_rej;  /* select/filter/find_all keep truthy */
       int trecv = ++g_tmp, ti = ++g_tmp, tres = ++g_tmp, tbox = ++g_tmp;
+      int tdrop = pf_dw ? ++g_tmp : 0;
       Buf rb = expr_buf(c, recv);
       /* Keep the receiver boxed as well as coerced: Hash#select answers a
          Hash, Array#select an Array, and only the runtime value says which
@@ -1029,6 +1040,10 @@ int emit_array_call(Compiler *c, int id, Buf *b) {
                  trecv, tbox, name, trecv);
       emit_indent(g_pre, g_indent);
       buf_printf(g_pre, "sp_PolyArray *_t%d = sp_PolyArray_new(); SP_GC_ROOT(_t%d);\n", tres, tres);
+      if (pf_dw) {
+        emit_indent(g_pre, g_indent);
+        buf_printf(g_pre, "int _t%d = 1;\n", tdrop);
+      }
       emit_indent(g_pre, g_indent);
       buf_printf(g_pre, "for (sp_int _t%d = 0; _t%d < _t%d->len; _t%d++) {\n", ti, ti, trecv, ti);
       char es[64]; snprintf(es, sizeof es, "sp_PolyArray_get(_t%d, _t%d)", trecv, ti);
@@ -1038,11 +1053,26 @@ int emit_array_call(Compiler *c, int id, Buf *b) {
       int sv = g_indent; g_indent++;
       Buf cb; memset(&cb, 0, sizeof cb); emit_cond(c, fbb[fbn - 1], &cb); g_indent = sv;
       emit_indent(g_pre, g_indent + 1);
-      buf_printf(g_pre, "if (%s(%s)) sp_PolyArray_push(_t%d, %s);\n",
-                 keep_truthy ? "" : "!", cb.p ? cb.p : "0", tres, es);
+      if (pf_tw) {
+        buf_printf(g_pre, "if (!(%s)) break;\n", cb.p ? cb.p : "0");
+        emit_indent(g_pre, g_indent + 1);
+        buf_printf(g_pre, "sp_PolyArray_push(_t%d, %s);\n", tres, es);
+      }
+      else if (pf_dw) {
+        buf_printf(g_pre, "if (_t%d && (%s)) continue;\n", tdrop, cb.p ? cb.p : "0");
+        emit_indent(g_pre, g_indent + 1);
+        buf_printf(g_pre, "_t%d = 0;\n", tdrop);
+        emit_indent(g_pre, g_indent + 1);
+        buf_printf(g_pre, "sp_PolyArray_push(_t%d, %s);\n", tres, es);
+      }
+      else {
+        buf_printf(g_pre, "if (%s(%s)) sp_PolyArray_push(_t%d, %s);\n",
+                   keep_truthy ? "" : "!", cb.p ? cb.p : "0", tres, es);
+      }
       free(cb.p);
       emit_indent(g_pre, g_indent); buf_puts(g_pre, "}\n");
-      buf_printf(b, "sp_poly_kept_result(_t%d, _t%d)", tbox, tres);
+      if (pf_sel || pf_rej) buf_printf(b, "sp_poly_kept_result(_t%d, _t%d)", tbox, tres);
+      else buf_printf(b, "_t%d", tres);
       return 1;
     }
   }
