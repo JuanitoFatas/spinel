@@ -1491,13 +1491,68 @@ void emit_method_cname(Compiler *c, Scope *s, Buf *b) {
    class defines one returning a concrete array) so the loop iterates its
    elements. `tv` names an already-rooted sp_RbVal temp; emits nothing when
    no instantiated class qualifies. */
+/* The collector a class's own #each is driven with when it has no #to_a: one
+   function per program, pushing each yielded value into the PolyArray its cap
+   points at. A yield of several values becomes one boxed array, which is what
+   `to_a` answers for a Hash-like each. */
+static int g_iter_collect_emitted = 0;
+static void emit_iter_collect_proc(void) {
+  if (g_iter_collect_emitted) return;
+  g_iter_collect_emitted = 1;
+  buf_puts(&g_proc_protos, "static sp_int _sp_iter_collect(void *cap, sp_int argc, sp_int *args);\n");
+  buf_puts(&g_procs,
+    "static sp_int _sp_iter_collect(void *cap, sp_int argc, sp_int *args) {\n"
+    "  (void)args;\n"
+    "  sp_PolyArray *_a = (sp_PolyArray *)cap;\n"
+    "  if (argc <= 1) sp_PolyArray_push(_a, argc > 0 ? _sp_proc_poly_args[0] : sp_box_nil());\n"
+    "  else {\n"
+    "    sp_PolyArray *_p = sp_PolyArray_new(); SP_GC_ROOT(_p);\n"
+    "    for (sp_int _i = 0; _i < argc && _i < 16; _i++) sp_PolyArray_push(_p, _sp_proc_poly_args[_i]);\n"
+    "    sp_PolyArray_push(_a, sp_box_poly_array(_p));\n"
+    "  }\n"
+    "  _sp_proc_poly_ret = sp_box_nil();\n"
+    "  return 0;\n}\n");
+}
+
+/* The class's #each in a form that takes a real block, or -1. A `def each(&b)`
+   already does; a `def each; ...yield...; end` has a proc-form clone (#3399). */
+static int iter_each_proc_form(Compiler *c, int k) {
+  int mi = comp_method_in_chain(c, k, "each", NULL);
+  if (mi < 0 || c->scopes[mi].is_cmethod || c->scopes[mi].nrequired != 0) return -1;
+  int pf = scope_proc_form_of(c, mi);
+  if (pf < 0 && c->scopes[mi].blk_param && c->scopes[mi].blk_param[0] && !c->scopes[mi].yields)
+    pf = mi;
+  if (pf < 0) return -1;
+  /* The collector is the ONLY argument this can pass, so an #each that takes
+     anything else of its own (StringIO#each(sep), with a separator) is not one
+     the normalization can drive. */
+  if (c->scopes[pf].nparams != 0 || c->scopes[pf].rest_idx >= 0) return -1;
+  return pf;
+}
+
 void emit_poly_iter_obj_normalize(Compiler *c, int tv, Buf *b) {
   Buf arms; memset(&arms, 0, sizeof arms);
   for (int k = 0; k < c->nclasses; k++) {
     /* a never-instantiated class can't be the runtime class (#1608) */
     if (!c->classes[k].instantiated) continue;
     int mi = comp_method_in_chain(c, k, "to_a", NULL);
-    if (mi < 0 || c->scopes[mi].nrequired != 0 || c->scopes[mi].is_cmethod) continue;
+    if (mi < 0 || c->scopes[mi].nrequired != 0 || c->scopes[mi].is_cmethod) {
+      /* No #to_a, but the class defines #each -- the ordinary way to write an
+         enumerable, forwarding the block on. Drive it with a collector and walk
+         what it yielded; without this the lowering walked the object AS A
+         CONTAINER and found nothing, so the loop body never ran (#4088). */
+      int pf = iter_each_proc_form(c, k);
+      if (pf < 0) continue;
+      emit_iter_collect_proc();
+      buf_printf(&arms, " case %d: { sp_PolyArray *_ia%d = sp_PolyArray_new(); SP_GC_ROOT(_ia%d);"
+                        " sp_Proc *_ip%d = sp_proc_new_meta((void *)_sp_iter_collect, (void *)_ia%d,"
+                        " sp_hashproc_cap_scan, 1, FALSE, 1, NULL, NULL); (void)",
+                 k, tv, tv, tv, tv);
+      emit_method_cname(c, &c->scopes[pf], &arms);
+      buf_printf(&arms, "((sp_%s *)_t%d.v.p, _ip%d); _t%d = sp_box_poly_array(_ia%d); break; }",
+                 c->classes[k].c_name, tv, tv, tv, tv);
+      continue;
+    }
     TyKind ret = (TyKind)c->scopes[mi].ret;
     const char *box = ret == TY_POLY_ARRAY  ? "sp_box_poly_array"
                     : ret == TY_INT_ARRAY   ? "sp_box_int_array"
