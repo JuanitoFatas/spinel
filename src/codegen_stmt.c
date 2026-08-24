@@ -1153,97 +1153,30 @@ void emit_assign(Compiler *c, int id, Buf *b, int indent) {
   buf_puts(b, ";\n");
 }
 
-void emit_op_assign(Compiler *c, int id, Buf *b, int indent) {
+/* `x op= v` on a local. `lval` is the slot's C lvalue -- `lv_x` for a plain
+   local, the cell/capture deref for a captured one -- so the typed arms below
+   are the same either way. */
+static void emit_op_assign_lv(Compiler *c, int id, Buf *b, int indent,
+                              const char *lval) {
   const NodeTable *nt = c->nt;
   const char *nm = nt_str(nt, id, "name");
   const char *op = nt_str(nt, id, "binary_operator");
   int v = nt_ref(nt, id, "value");
   LocalVar *lv = scope_local(comp_scope_of(c, id), nm);
   TyKind t = lv ? lv->type : TY_UNKNOWN;
-  const char *en = rename_local(nm);
   emit_indent(b, indent);
 
-  /* A captured/cell var: x op= v is x = x op v through the cell deref. Int and
-     float cells exist (a float capture rides a native sp_float cell, so its deref
-     is a real sp_float lvalue); pointer/proc cells take the int_arith path below. */
-  int celled = (lv && lv->is_cell) || (g_cap_struct && g_cap_names && nameset_has(g_cap_names, nm));
-  if (celled) {
-    emit_local_ref(c, id, nm, b); buf_puts(b, " = ");
-    /* A bigint cell (an accumulator widened to bigint in promote mode and then
-       captured): route through the bigint helpers, not the int ones, which
-       would truncate the pointer-sized value. The cell stores the sp_Bigint*
-       as its int-sized slot, so read/write are still through emit_local_ref. */
-    if (t == TY_BIGINT) {
-      const char *bfn = bigint_arith_fn(op);
-      if (bfn) {
-        TyKind vt = comp_ntype(c, v);
-        buf_printf(b, "%s(", bfn); emit_local_ref(c, id, nm, b); buf_puts(b, ", ");
-        if (vt == TY_POLY) { buf_puts(b, "sp_poly_as_bigint("); emit_expr(c, v, b); buf_puts(b, ")"); }
-        else if (vt != TY_BIGINT) { buf_puts(b, "sp_bigint_new_int("); emit_expr(c, v, b); buf_puts(b, ")"); }
-        else emit_expr(c, v, b);
-        buf_puts(b, ");\n");
-        return;
-      }
-    }
-    if (t == TY_INT && (sp_streq(op, "+") || sp_streq(op, "-") || sp_streq(op, "*"))) {
-      /* Same overflow-checked helpers as the binary form (raw `x *= y` wrapped
-         where `x * y` raised); a poly RHS coerces through sp_poly_to_i as
-         before -- an uncoerced `sp_int <op> sp_RbVal` fails to compile. */
-      TyKind vt = comp_ntype(c, v);
-      buf_printf(b, "%s(", int_arith_fn(op)); emit_local_ref(c, id, nm, b); buf_puts(b, ", ");
-      if (vt == TY_POLY) { buf_puts(b, "sp_poly_to_i("); emit_expr(c, v, b); buf_puts(b, ")"); }
-      else emit_expr(c, v, b);
-      buf_puts(b, ");\n");
-      return;
-    }
-    if (t == TY_FLOAT && (sp_streq(op, "+") || sp_streq(op, "-") || sp_streq(op, "*") || sp_streq(op, "/"))) {
-      TyKind vt = comp_ntype(c, v);
-      emit_local_ref(c, id, nm, b); buf_printf(b, " %s ", op);
-      if (vt == TY_POLY) { buf_puts(b, "sp_poly_to_f("); emit_expr(c, v, b); buf_puts(b, ")"); }
-      else emit_expr(c, v, b);
-      buf_puts(b, ";\n");
-      return;
-    }
-    /* A poly cell (an int local widened to poly in promote mode, then captured):
-       route the arithmetic through the tag-dispatching sp_poly_<op>, boxing the
-       rhs. Bitwise/shift coerce to int and re-box, mirroring the non-celled
-       poly op-assign path. */
-    if (t == TY_POLY) {
-      const char *pfn = sp_streq(op, "+") ? "sp_poly_add"
-                      : sp_streq(op, "-") ? "sp_poly_sub"
-                      : sp_streq(op, "*") ? "sp_poly_mul"
-                      : sp_streq(op, "/") ? "sp_poly_div"
-                      : sp_streq(op, "%") ? "sp_poly_mod" : NULL;
-      if (pfn) {
-        buf_printf(b, "%s(", pfn); emit_local_ref(c, id, nm, b); buf_puts(b, ", ");
-        emit_boxed(c, v, b); buf_puts(b, ");\n");
-        return;
-      }
-      if (sp_streq(op, "<<") || sp_streq(op, ">>") ||
-          sp_streq(op, "|") || sp_streq(op, "&") || sp_streq(op, "^")) {
-        TyKind vt = comp_ntype(c, v);
-        buf_puts(b, "sp_box_int((sp_poly_to_i("); emit_local_ref(c, id, nm, b);
-        buf_printf(b, ") %s (", op);
-        if (vt == TY_POLY) { buf_puts(b, "sp_poly_to_i("); emit_expr(c, v, b); buf_puts(b, ")"); }
-        else emit_expr(c, v, b);
-        buf_puts(b, ")));\n");
-        return;
-      }
-    }
-    const char *fn = int_arith_fn(op);
-    if (fn) {
-      int isdivmod = sp_streq(op, "/") || sp_streq(op, "%");
-      buf_printf(b, "%s(", fn); emit_local_ref(c, id, nm, b); buf_puts(b, ", ");
-      if (isdivmod) emit_int_divisor(c, v, b);
-      else emit_expr(c, v, b);
-      buf_puts(b, ");\n"); return;
-    }
-    emit_local_ref(c, id, nm, b); buf_printf(b, " %s ", op); emit_expr(c, v, b); buf_puts(b, ";\n");
-    return;
-  }
+  /* Whether the slot lives in a cell (captured by a proc) only decides how it
+     is SPELLED -- `lval` above already carries the deref. The arms below are
+     shared: the celled path used to carry a short list of its own (int, float,
+     bigint, poly) and drop every other type into the int helpers, so `s += x`
+     on a captured String, Array, Rational or Complex emitted sp_int_add over
+     pointers. */
+  int celled = (lv && lv->is_cell) ||
+               (g_cap_struct && g_cap_names && nameset_has(g_cap_names, nm));
 
   if (t == TY_STRING && sp_streq(op, "+")) {
-    buf_printf(b, "lv_%s = sp_str_concat(lv_%s, ", en, en);
+    buf_printf(b, "%s = sp_str_concat(%s, ", lval, lval);
     /* a poly RHS (a destructured `[Int, String]` element bound poly) is an
        sp_RbVal; coerce it to const char* for sp_str_concat (#2875). CRuby's
        String#+ raises TypeError on a non-string, so this only reaches a value
@@ -1260,7 +1193,7 @@ void emit_op_assign(Compiler *c, int id, Buf *b, int indent) {
     if (fn) {
       TyKind vt = comp_ntype(c, v);
       int isdivmod = sp_streq(op, "/") || sp_streq(op, "%");
-      buf_printf(b, "lv_%s = %s(lv_%s, ", en, fn, en);
+      buf_printf(b, "%s = %s(%s, ", lval, fn, lval);
       if (isdivmod) emit_int_divisor(c, v, b);
       else if (vt == TY_POLY) { buf_puts(b, "sp_poly_to_i("); emit_expr(c, v, b); buf_puts(b, ")"); }
       else emit_expr(c, v, b);
@@ -1277,10 +1210,10 @@ void emit_op_assign(Compiler *c, int id, Buf *b, int indent) {
     const char *vty = nt_type(nt, v);
     long long vlit = (vty && sp_streq(vty, "IntegerNode")) ? nt_int(nt, v, "value", 0) : 0;
     if (sp_streq(op, "<<") && vty && sp_streq(vty, "IntegerNode") && (vlit < 0 || vlit >= 63)) {
-      buf_printf(b, "lv_%s = sp_int_shl(lv_%s, %lldLL);\n", en, en, vlit);
+      buf_printf(b, "%s = sp_int_shl(%s, %lldLL);\n", lval, lval, vlit);
       return;
     }
-    buf_printf(b, "lv_%s = (lv_%s %s (", en, en, op);
+    buf_printf(b, "%s = (%s %s (", lval, lval, op);
     if (vt == TY_POLY) { buf_puts(b, "sp_poly_to_i("); emit_expr(c, v, b); buf_puts(b, ")"); }
     else emit_expr(c, v, b);
     buf_puts(b, "));\n");
@@ -1290,15 +1223,16 @@ void emit_op_assign(Compiler *c, int id, Buf *b, int indent) {
     const char *bfn = bigint_arith_fn(op);
     if (bfn) {
       TyKind vt = comp_ntype(c, v);
-      buf_printf(b, "lv_%s = %s(lv_%s, ", en, bfn, en);
-      if (vt != TY_BIGINT) { buf_puts(b, "sp_bigint_new_int("); emit_expr(c, v, b); buf_puts(b, ")"); }
+      buf_printf(b, "%s = %s(%s, ", lval, bfn, lval);
+      if (vt == TY_POLY) { buf_puts(b, "sp_poly_as_bigint("); emit_expr(c, v, b); buf_puts(b, ")"); }
+      else if (vt != TY_BIGINT) { buf_puts(b, "sp_bigint_new_int("); emit_expr(c, v, b); buf_puts(b, ")"); }
       else emit_expr(c, v, b);
       buf_puts(b, ");\n"); return;
     }
   }
   if (t == TY_FLOAT && (sp_streq(op, "+") || sp_streq(op, "-") || sp_streq(op, "*") || sp_streq(op, "/"))) {
     TyKind vt = comp_ntype(c, v);
-    buf_printf(b, "lv_%s %s= ", en, op);
+    buf_printf(b, "%s %s= ", lval, op);
     if (vt == TY_POLY) { buf_puts(b, "sp_poly_to_f("); emit_expr(c, v, b); buf_puts(b, ")"); }
     else emit_expr(c, v, b);
     buf_puts(b, ";\n");
@@ -1307,7 +1241,7 @@ void emit_op_assign(Compiler *c, int id, Buf *b, int indent) {
   if (t == TY_COMPLEX && (sp_streq(op, "+") || sp_streq(op, "*"))) {
     /* coerce the rhs like the binary path does: an Integer, a Float or a boxed
        value all have to reach sp_complex_* as an sp_Complex */
-    buf_printf(b, "lv_%s = sp_complex_%s(lv_%s, ", en, sp_streq(op, "+") ? "add" : "mul", en);
+    buf_printf(b, "%s = sp_complex_%s(%s, ", lval, sp_streq(op, "+") ? "add" : "mul", lval);
     emit_complex_coerce(c, v, b); buf_puts(b, ");\n");
     return;
   }
@@ -1320,7 +1254,7 @@ void emit_op_assign(Compiler *c, int id, Buf *b, int indent) {
     TyKind vt = comp_ntype(c, v);
     if (vt == TY_RATIONAL || vt == TY_INT) {
       const char *fn = op[0] == '+' ? "add" : op[0] == '-' ? "sub" : op[0] == '*' ? "mul" : "div";
-      buf_printf(b, "lv_%s = sp_rational_%s(lv_%s, ", en, fn, en);
+      buf_printf(b, "%s = sp_rational_%s(%s, ", lval, fn, lval);
       emit_rat_coerce(c, v, b);
       buf_puts(b, ");\n");
       return;
@@ -1343,7 +1277,7 @@ void emit_op_assign(Compiler *c, int id, Buf *b, int indent) {
       rhs_empty_lit = (nel == 0);
     }
     if (k && (vt == t || rhs_empty_lit)) {
-      buf_printf(b, "lv_%s = sp_%sArray_concat(lv_%s, ", en, k, en);
+      buf_printf(b, "%s = sp_%sArray_concat(%s, ", lval, k, lval);
       if (rhs_empty_lit) buf_puts(b, "NULL");
       else emit_expr(c, v, b);
       buf_puts(b, ");\n");
@@ -1366,9 +1300,9 @@ void emit_op_assign(Compiler *c, int id, Buf *b, int indent) {
       if (p2t == TY_POLY && comp_ntype(c, v) != TY_POLY) emit_boxed(c, v, g_pre);
       else emit_expr(c, v, g_pre);
       buf_puts(g_pre, ";\n");
-      buf_printf(b, "lv_%s = sp_%s_%s((sp_%s *)lv_%s, _t%d);\n",
-                 en, c->classes[defcls2].c_name, mc(ms2->name),
-                 c->classes[defcls2].c_name, en, atmp2);
+      buf_printf(b, "%s = sp_%s_%s((sp_%s *)%s, _t%d);\n",
+                 lval, c->classes[defcls2].c_name, mc(ms2->name),
+                 c->classes[defcls2].c_name, lval, atmp2);
       return;
     }
   }
@@ -1382,7 +1316,7 @@ void emit_op_assign(Compiler *c, int id, Buf *b, int indent) {
     else if (sp_streq(op, "/")) pfn = "sp_poly_div";
     else if (sp_streq(op, "%")) pfn = "sp_poly_mod";
     if (pfn) {
-      buf_printf(b, "lv_%s = %s(lv_%s, ", en, pfn, en);
+      buf_printf(b, "%s = %s(%s, ", lval, pfn, lval);
       emit_boxed(c, v, b);
       buf_puts(b, ");\n");
       return;
@@ -1399,11 +1333,9 @@ void emit_op_assign(Compiler *c, int id, Buf *b, int indent) {
     else if (sp_streq(op, "*")) pfn = "sp_poly_mul";
     else if (sp_streq(op, "/")) pfn = "sp_poly_div";
     if (pfn) {
-      char slot[64];
-      snprintf(slot, sizeof slot, "lv_%s", en);
       Buf bx; memset(&bx, 0, sizeof bx);
-      emit_boxed_text(c, t, slot, &bx);
-      buf_printf(b, "lv_%s = sp_poly_as_rational(%s(%s, ", en, pfn, bx.p ? bx.p : slot);
+      emit_boxed_text(c, t, lval, &bx);
+      buf_printf(b, "%s = sp_poly_as_rational(%s(%s, ", lval, pfn, bx.p ? bx.p : lval);
       free(bx.p);
       emit_boxed(c, v, b);
       buf_puts(b, "));\n");
@@ -1416,7 +1348,7 @@ void emit_op_assign(Compiler *c, int id, Buf *b, int indent) {
   if (t == TY_POLY && (sp_streq(op, "<<") || sp_streq(op, ">>") ||
                        sp_streq(op, "|") || sp_streq(op, "&") || sp_streq(op, "^"))) {
     TyKind vt = comp_ntype(c, v);
-    buf_printf(b, "lv_%s = sp_box_int((sp_poly_to_i(lv_%s) %s (", en, en, op);
+    buf_printf(b, "%s = sp_box_int((sp_poly_to_i(%s) %s (", lval, lval, op);
     if (vt == TY_POLY) { buf_puts(b, "sp_poly_to_i("); emit_expr(c, v, b); buf_puts(b, ")"); }
     else emit_expr(c, v, b);
     buf_puts(b, ")));\n");
@@ -1431,14 +1363,35 @@ void emit_op_assign(Compiler *c, int id, Buf *b, int indent) {
     if (vt == t || vt == TY_UNKNOWN) {
       const char *k = (t == TY_POLY_ARRAY) ? "Poly" : array_kind(t);
       const char *fn = sp_streq(op, "&") ? "intersect" : (sp_streq(op, "|") ? "union" : "difference");
-      buf_printf(b, "lv_%s = sp_%sArray_%s(lv_%s, ", en, k, fn, en);
+      buf_printf(b, "%s = sp_%sArray_%s(%s, ", lval, k, fn, lval);
       if (vt == TY_UNKNOWN) buf_puts(b, "NULL");
       else emit_expr(c, v, b);
       buf_puts(b, ");\n");
       return;
     }
   }
+  /* A captured local whose type never resolved: the celled path used to send
+     every unrecognized type through the int helpers, which is right only when
+     the slot really is int-sized. Keep it for the untyped case alone -- a
+     typed slot takes its own arm above, or is rejected loudly. */
+  if (celled && t == TY_UNKNOWN) {
+    const char *fn = int_arith_fn(op);
+    if (fn) {
+      buf_printf(b, "%s = %s(%s, ", lval, fn, lval);
+      if (sp_streq(op, "/") || sp_streq(op, "%")) emit_int_divisor(c, v, b);
+      else emit_expr(c, v, b);
+      buf_puts(b, ");\n");
+      return;
+    }
+  }
   unsupported(c, id, "operator assignment");
+}
+
+void emit_op_assign(Compiler *c, int id, Buf *b, int indent) {
+  Buf lvb; memset(&lvb, 0, sizeof lvb);
+  emit_local_ref(c, id, nt_str(c->nt, id, "name"), &lvb);
+  emit_op_assign_lv(c, id, b, indent, lvb.p ? lvb.p : "");
+  free(lvb.p);
 }
 
 /* ---- control flow ---- */
