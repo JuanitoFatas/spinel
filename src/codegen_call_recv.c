@@ -1224,7 +1224,7 @@ int emit_array_call(Compiler *c, int id, Buf *b) {
             at run time, as it did before) rather than failing the build. */
          ((sp_streq(name, "each_cons") || sp_streq(name, "each_slice")) &&
           !(nt_str(nt, id, "call_operator") &&
-            sp_streq(nt_str(nt, id, "call_operator"), "&.")))))))  {
+            sp_streq(nt_str(nt, id, "call_operator"), "&."))))))) {
     int ta = ++g_tmp;
     /* `each_slice(n) { }` / `each_cons(n) { }` answer the RECEIVER, and for a
        Hash that is the hash itself, not the pairs the re-dispatch materializes
