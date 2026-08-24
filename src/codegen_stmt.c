@@ -1122,6 +1122,21 @@ void emit_assign(Compiler *c, int id, Buf *b, int indent) {
     buf_printf(b, "sp_StrPolyHash_from_%s(", comp_ntype(c, v) == TY_STR_STR_HASH ? "str_str_hash" : "str_int_hash");
     emit_expr(c, v, b); buf_puts(b, ")");
   }
+  /* A hash slot the analysis widened past its initializer's variant: the
+     variants are separate C structs, so the pointer went in uncoerced and the
+     build stopped. `sub = Tep.str_hash` where a widened block param later
+     writes a poly key into `sub` is the shape (#4089); the same conversion the
+     argument path uses (#3998) applies here, through the boxed form because
+     that is what the converting entries take. */
+  else if (lv && ty_is_hash(lv->type) && ty_is_hash(comp_ntype(c, v)) &&
+           lv->type != comp_ntype(c, v) &&
+           (lv->type == TY_POLY_POLY_HASH || lv->type == TY_SYM_POLY_HASH ||
+            lv->type == TY_STR_POLY_HASH)) {
+    const char *conv = lv->type == TY_POLY_POLY_HASH ? "sp_poly_as_poly_poly_hash"
+                     : lv->type == TY_SYM_POLY_HASH  ? "sp_poly_as_sym_poly_hash"
+                     : "sp_poly_as_str_poly_hash";
+    buf_printf(b, "%s(", conv); emit_boxed(c, v, b); buf_puts(b, ")");
+  }
   /* scalar/string slot with a poly RHS (`x = (a + b) * 2` over poly a/b, a
      string local read back from a poly call): unbox into the slot. */
   else if (lv && emit_poly_rhs_coerced(c, lv->type, v, b)) { }
