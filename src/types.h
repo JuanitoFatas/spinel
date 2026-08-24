@@ -25,12 +25,16 @@ static inline int sp_streq(const char *a, const char *b) {
    the general boxed-key/value hash: inference types the call that way and
    codegen normalizes the receiver to match, so the two agree by construction.
    Every name here must have a PolyPolyHash emitter, and none may mutate -- the
-   normalization copies any other hash variant, so a write would be lost. */
+   normalization copies any other hash variant, so a write would be lost.
+   A name whose own poly-receiver emitter claims it FIRST does not belong here
+   even if a Hash answers it: the face's answer is then a type nothing renders.
+   find and detect were such names -- their emitter walks sp_poly_arr_recv,
+   which gives a Hash its [k, v] pairs, and answers one boxed ELEMENT of it. */
 static inline int ty_poly_hash_face_name(const char *nm) {
   static const char *const NAMES[] = {
     "dig", "value?", "has_value?", "invert", "assoc", "rassoc",
     "filter_map", "each_with_object", "group_by", "partition", "zip",
-    "reduce", "inject", "find", "detect", "find_all", "take", "drop",
+    "reduce", "inject", "find_all", "take", "drop",
     "select", "filter", "reject", "compact", "slice",
     "except", "values_at", "fetch_values", "entries", "flatten", "first",
     "each_pair", "each_key", "each_value", "transform_values",

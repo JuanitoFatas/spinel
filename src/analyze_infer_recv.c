@@ -1571,7 +1571,10 @@ int infer_poly_call(Compiler *c, int id, TyKind rt, TyKind *out) {
        call answers an Enumerator, exactly as it does for a typed receiver.
        Answering the array either way declared the slot sp_PolyArray * and put
        the emitter's sp_Enumerator * in it. */
-    if (has_blk && (sp_streq(name, "chunk_while") || sp_streq(name, "slice_when")))
+    if (has_blk && argc == 0 &&
+        (sp_streq(name, "chunk_while") || sp_streq(name, "slice_when") ||
+         sp_streq(name, "chunk") ||
+         sp_streq(name, "slice_before") || sp_streq(name, "slice_after")))
       { *out = an_chunk_family_to_a(c, id) ? TY_POLY_ARRAY : TY_ENUMERATOR; return 1; }
     /* each_with_object answers the seed it was handed; an empty literal seed
        carries no type of its own, and the emitter builds the general container

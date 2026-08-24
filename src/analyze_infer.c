@@ -1280,6 +1280,15 @@ TyKind infer_call(Compiler *c, int id) {
       (sp_streq(name, "reject") || sp_streq(name, "select") || sp_streq(name, "filter")) &&
       infer_type(c, recv) == TY_POLY)
     return TY_POLY;
+  /* `poly.find { }` / `detect { }` answer the winning ELEMENT, boxed. Without
+     an arm here they fell through to the last-resort Hash face below, which
+     types them as the winning [k, v] pair -- and the emitter, which answers
+     the element either way, then had its already-boxed value boxed a second
+     time under that array type. */
+  if (recv >= 0 && nt_ref(nt, id, "block") >= 0 && argc == 0 &&
+      (sp_streq(name, "find") || sp_streq(name, "detect")) &&
+      infer_type(c, recv) == TY_POLY && !an_user_defines_or_reads(c, name))
+    return TY_POLY;
   /* find_all is NOT the third spelling of select: Hash#select answers a Hash,
      Hash#find_all the [k, v] pairs as an Array. take_while and drop_while
      answer an Array the same way. All three are an array whatever the
