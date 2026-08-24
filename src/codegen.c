@@ -533,7 +533,7 @@ void emit_scalar_operand(Compiler *c, int node, const char *zero, Buf *b) {
    bare (an operand emitted as `(sp_raise_nomethod(...))`), so the token match
    has to look past any leading ones or the coercion silently does not fire and
    the sp_RbVal lands in the typed slot raw. */
-static const char *past_open_parens(const char *s) {
+const char *past_open_parens(const char *s) {
   while (*s == '(') s++;
   return s;
 }
@@ -561,19 +561,17 @@ static void emit_str_expr_ex(Compiler *c, int node, int strict, Buf *b) {
   Buf tmp; memset(&tmp, 0, sizeof tmp);
   emit_expr(c, node, &tmp);
   const char *txt = tmp.p ? tmp.p : "";
-  /* Same shape from the OTHER raise emitter: a diverging `(sp_raise_cls(...),
-     V)` whose dead tail V is the poly placeholder raise_tail_value picks for an
-     UNKNOWN node. `def tag = "b" + super` in a module with no superclass emits
-     one, and its sp_RbVal met a const char * slot -- the guard above named one
-     raise token and the other went past it. Keyed on the placeholder rather
-     than on the token, so a third raise emitter is covered too. */
-  size_t tl = strlen(txt);
-  const char *nilt = ", sp_box_nil())";
-  size_t nl2 = strlen(nilt);
-  if (strncmp(past_open_parens(txt), "sp_raise_nomethod(", 18) == 0 ||
-      (tl > nl2 && strcmp(txt + tl - nl2, nilt) == 0 &&
-       strncmp(past_open_parens(txt), "sp_raise_", 9) == 0))
-    buf_printf(b, "sp_poly_to_s(%s)", txt);
+  /* Anything that DIVERGES: the several raise emitters each close their
+     expression with a dead placeholder of whatever type the node had, and that
+     type is not the string this slot wants -- an sp_RbVal from
+     raise_tail_value's UNKNOWN case (`"b" + super` in a module with no
+     superclass), an sp_Class from an unresolvable constant read inside an
+     interpolation (#4092). Discarding the whole thing and answering NULL
+     type-checks for every one of them, and the raise means the NULL is never
+     read. Keyed on the token rather than on the placeholder, since it is the
+     token that says the expression cannot return. */
+  if (strncmp(past_open_parens(txt), "sp_raise_", 9) == 0)
+    buf_printf(b, "((void)(%s), (const char *)NULL)", txt);
   else buf_puts(b, txt);
   free(tmp.p);
 }

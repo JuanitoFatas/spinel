@@ -438,6 +438,7 @@ int nil_answers_name(const char *n);
 void emit_sg_activate(Compiler *c, int node, int recv, Buf *b, int indent);
 int sg_activates_ci(Compiler *c, int node);
 int subtree_has_param_named_pub(const NodeTable *nt, int id, const char *nm);
+const char *past_open_parens(const char *s);
 const char *cell_scan_fn(TyKind t);
 const char *cell_value_struct(TyKind t);
 const char *cell_value_struct_empty(TyKind t);

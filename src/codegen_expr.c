@@ -153,7 +153,31 @@ void emit_interp(Compiler *c, int id, Buf *b) {
          converts to a marker-carrying string whose byte length is summed. */
       Buf conv; memset(&conv, 0, sizeof conv);
       int wkind = WK_DYN;
-      #define EMIT_IV() do { if (vexpr[0]) buf_puts(&conv, vexpr); else emit_expr(c, expr, &conv); } while (0)
+      char *iv_pre = NULL;   /* the value's text, emitted once by the probe below */
+      #define EMIT_IV() do { if (vexpr[0]) buf_puts(&conv, vexpr); \
+                             else if (iv_pre) buf_puts(&conv, iv_pre); \
+                             else emit_expr(c, expr, &conv); } while (0)
+      /* A part that DIVERGES: the raise emitters close their expression with a
+         dead placeholder of whatever type the node had, and the arm chosen
+         from that node's type may disagree with it -- an unresolvable constant
+         read renders `(sp_raise_cls(...), (sp_Class){-1})` while the node types
+         poly, so sp_poly_to_s took an sp_Class (#4092). Discard it and answer
+         the empty string; the raise means nothing reads the answer. */
+      { Buf ivp; memset(&ivp, 0, sizeof ivp);
+        int ivp_emitted = 0;
+        if (vexpr[0]) buf_puts(&ivp, vexpr);
+        else { emit_expr(c, expr, &ivp); ivp_emitted = 1; }
+        const char *ivt = ivp.p ? ivp.p : "";
+        if (strncmp(past_open_parens(ivt), "sp_raise_", 9) == 0) {
+          buf_printf(&conv, "((void)(%s), sp_str_empty)", ivt);
+          free(ivp.p);
+          goto iv_done;
+        }
+        /* The probe EMITTED the value; emitting it again for the real arm
+           would run its g_pre hoists and temp numbering twice. Hand the text
+           to EMIT_IV instead, the way a pre-evaluated temp already does. */
+        if (ivp_emitted && ivp.p) { free(iv_pre); iv_pre = ivp.p; }
+        else free(ivp.p); }
       if (t == TY_INT) {
         /* nil-aware: an int slot holding the nil sentinel writes nothing */
         wkind = WK_INT;
@@ -270,6 +294,8 @@ void emit_interp(Compiler *c, int id, Buf *b) {
         free(conv.p); free(lits.p); free(decls.p); free(wp); free(flat);
         unsupported(c, pid, "interpolation value");
       }
+      iv_done:
+      free(iv_pre);
       #undef EMIT_IV
       /* Pre-evaluate into an ordered temp. A dynamic part's string is rooted
          (its bytes are copied after later parts may allocate, and the final
