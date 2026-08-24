@@ -2678,6 +2678,13 @@ static int emit_chunk_family_runs(Compiler *c, int ck) {
   if (pr < 0 || (prt != TY_POLY_ARRAY && prt != TY_INT_ARRAY && prt != TY_POLY &&
                  prt != TY_STR_ARRAY && prt != TY_FLOAT_ARRAY && !pr_empty_lit))
     return -1;
+  /* A `&.` call has to reach the safe-nav guard first: this lowering walks the
+     receiver and never looks at the operator, so `v&.chunk_while { }` walked a
+     nil receiver and raised where CRuby answers nil. Stand down only BEFORE
+     the guard runs -- it re-enters this emission on the guarded temp with
+     g_sn_skip set, and that pass has to lower normally. */
+  { const char *sop = nt_str(nt, ck, "call_operator");
+    if (sop && sp_streq(sop, "&.") && g_sn_skip != ck && prt == TY_POLY) return -1; }
   int body = nt_ref(nt, block, "body");
   int bn = 0; const int *bb = body >= 0 ? nt_arr(nt, body, "body", &bn) : NULL;
   if (bn < 1) return -1;

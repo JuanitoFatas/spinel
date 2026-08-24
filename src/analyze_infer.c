@@ -928,6 +928,21 @@ int an_user_ret_disagrees(Compiler *c, const char *name, TyKind want) {
   return 0;
 }
 
+/* Whether a chunk_while/slice_when/chunk block call is consumed by a `.to_a`
+   terminal. Without one it answers a first-class Enumerator; with one, the
+   poly array of runs the terminal materializes. Both the typed-receiver arm
+   and the poly-receiver arm have to make the same call, or the slot the value
+   lands in disagrees with what the emitter renders. */
+int an_chunk_family_to_a(Compiler *c, int id) {
+  const NodeTable *nt = c->nt;
+  NT_FOREACH_KIND(nt, NK_CallNode, w) {
+    if (nt_ref(nt, w, "receiver") != id) continue;
+    const char *wn = nt_str(nt, w, "name");
+    if (wn && sp_streq(wn, "to_a")) return 1;
+  }
+  return 0;
+}
+
 /* Can this type's C slot hold a nil of its own? Integer and Float have their
    sentinels; String, the arrays and every reference object have NULL. A bool, a
    Symbol, a Class, a Rational and a Complex have no such value, so a nil in one
@@ -1503,13 +1518,7 @@ TyKind infer_call(Compiler *c, int id) {
     TyKind crt = infer_type(c, recv);
     if (crt == TY_POLY_ARRAY || crt == TY_INT_ARRAY || crt == TY_STR_ARRAY ||
         (crt == TY_RANGE && range_enum_redispatch(c, id))) {
-      int wrapped = 0;
-      NT_FOREACH_KIND(nt, NK_CallNode, w) {
-        if (nt_ref(nt, w, "receiver") != id) continue;
-        const char *wn = nt_str(nt, w, "name");
-        if (wn && sp_streq(wn, "to_a")) wrapped = 1;
-      }
-      if (!wrapped) return TY_ENUMERATOR;
+      if (!an_chunk_family_to_a(c, id)) return TY_ENUMERATOR;
     }
   }
 

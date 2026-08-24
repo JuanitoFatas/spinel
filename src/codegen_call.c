@@ -13592,8 +13592,16 @@ static void emit_call_body(Compiler *c, int id, Buf *b) {
         Buf *b_sv = b;
         b = &nb;
         /* an array-typed result lowers to a C pointer, whose NULL is nil */
+        /* Whether the answer can hold a nil in its own C slot, in which case
+           both arms share that slot unboxed. Integer and Float have their
+           sentinels, String and the arrays have NULL -- and so does every
+           other GC pointer (an Enumerator, a Hash, a user object), which the
+           list had stopped short of, so `v&.chunk_while { }` declared an
+           sp_RbVal slot while its consumers read an sp_Enumerator *. */
+        int sn_gcptr = needs_root(ret2) && ret2 != TY_POLY && ret2 != TY_STRING &&
+                       !ty_is_array(ret2) && !ty_is_struct_valued(ret2);
         int sn_ptr = (ret2 == TY_INT || ret2 == TY_FLOAT || ret2 == TY_STRING ||
-                      ty_is_array(ret2));
+                      ty_is_array(ret2) || sn_gcptr);
         if (ret2 == TY_INT) buf_puts(b, "SP_INT_NIL");
         else if (ret2 == TY_FLOAT) buf_puts(b, "sp_float_nil()");
         else if (ret2 == TY_STRING) buf_puts(b, "((const char *)NULL)");
@@ -13601,6 +13609,7 @@ static void emit_call_body(Compiler *c, int id, Buf *b) {
           const char *ak = (ret2 == TY_POLY_ARRAY) ? "Poly" : array_kind(ret2);
           buf_printf(b, "((sp_%sArray *)NULL)", ak ? ak : "Poly");
         }
+        else if (sn_gcptr) { buf_puts(b, "(("); emit_ctype(c, ret2, b); buf_puts(b, ")NULL)"); }
         else buf_puts(b, "sp_box_nil()");
         b = &vb2;
         g_pre = &preb;
@@ -13659,7 +13668,7 @@ static void emit_call_body(Compiler *c, int id, Buf *b) {
           buf_printf(g_pre, " _snr%d = %s;\n", rsv, nb.p ? nb.p : "sp_box_nil()");
           emit_indent(g_pre, g_indent);
           if (!sn_ptr) buf_printf(g_pre, "SP_GC_ROOT_RBVAL(_snr%d);\n", rsv);
-          else if (ret2 == TY_STRING || ty_is_array(ret2)) buf_printf(g_pre, "SP_GC_ROOT(_snr%d);\n", rsv);
+          else if (ret2 == TY_STRING || ty_is_array(ret2) || sn_gcptr) buf_printf(g_pre, "SP_GC_ROOT(_snr%d);\n", rsv);
           else buf_printf(g_pre, "(void)_snr%d;\n", rsv);
           emit_indent(g_pre, g_indent);
           buf_printf(g_pre, "if (_sn%d.tag != SP_TAG_NIL) {\n", tsn);

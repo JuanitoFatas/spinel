@@ -1567,8 +1567,12 @@ int infer_poly_call(Compiler *c, int id, TyKind rt, TyKind *out) {
       { *out = TY_POLY_ARRAY; return 1; }
     if (has_blk && sp_streq(name, "group_by")) { *out = TY_POLY_POLY_HASH; return 1; }
     if (has_blk && sp_streq(name, "partition")) { *out = TY_POLY_ARRAY; return 1; }
+    /* the runs only when a `.to_a` terminal materializes them; on its own the
+       call answers an Enumerator, exactly as it does for a typed receiver.
+       Answering the array either way declared the slot sp_PolyArray * and put
+       the emitter's sp_Enumerator * in it. */
     if (has_blk && (sp_streq(name, "chunk_while") || sp_streq(name, "slice_when")))
-      { *out = TY_POLY_ARRAY; return 1; }
+      { *out = an_chunk_family_to_a(c, id) ? TY_POLY_ARRAY : TY_ENUMERATOR; return 1; }
     /* each_with_object answers the seed it was handed; an empty literal seed
        carries no type of its own, and the emitter builds the general container
        of that shape -- a poly hash for `{}`, a poly array for `[]`. */
