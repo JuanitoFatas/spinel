@@ -529,6 +529,19 @@ int main(int argc, char **argv) {
      in the build log, easy to scroll past. Fail the build instead, so the
      emitter's own bug surfaces here rather than at run time. */
   s_add(&cmd, "-Werror=incompatible-pointer-types -Werror=int-conversion ");
+  /* With #line on, cc reports against the .rb -- but only the LINE is remapped.
+     The column is the C one, and a whole Ruby line is emitted as one C line, so
+     it routinely lands hundreds of columns past the end of the source line it
+     is printed under. cc then pads its caret line out to that column, so every
+     error costs a line of whitespace as wide as the C expression was long.
+     Ask for no column at all: `repro.rb:12: error: ...` claims only what is
+     true (#4097). The caret goes with it -- cc draws it from the same column,
+     so it points at nothing and pads to that width whatever the location says;
+     the source-quote line is cc's only way to carry it and goes too, leaving
+     the file and line the message already names. Both gcc and clang take the
+     flags. */
+  if (debug || line_map)
+    s_add(&cmd, "-fno-show-column -fno-diagnostics-show-caret ");
   if (fiber_frame_guard) s_add(&cmd, "-Wframe-larger-than=65536 ");
   snprintf(tmp, sizeof tmp, "-I\"%s\" -I\"%s%cregexp\" ", lib_dir, lib_dir, PATH_SEP); s_add(&cmd, tmp);
   /* Compile the generated TU with the same threading define as the mt runtime
