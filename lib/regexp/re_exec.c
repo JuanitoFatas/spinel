@@ -102,29 +102,43 @@ typedef struct {
   mrb_bool binary;        /* true: subject is byte-indexed ASCII-8BIT */
   mrb_bool cut;           /* a higher-priority thread matched this step:
                              stop adding/processing lower-priority threads */
+  mrb_bool oom;           /* the capture pool could not grow: the search holds
+                             no answer about the text, so it stops rather than
+                             reading a slot it was not given */
   int *result_caps;       /* best match (ncap ints) */
 } pike_state;
 
-static int
-pool_alloc(pike_state *s)
+/* Answer whether a slot was handed out, writing it through `out`, so that no
+   caller can use what it was not given: the old form answered an index and a
+   failed grow left the pool NULL, which the next CAP() read through. The
+   refusal is recorded on the state as well, since the epsilon closure that
+   asks for most of the slots is several frames deep and hands nothing back;
+   add_thread() reads it where it already reads s->cut.
+   (ported from mruby-regexp 73ace4d8b) */
+static mrb_bool
+pool_alloc(pike_state *s, int *out)
 {
   if (s->pool_next >= s->pool_capa) {
     int new_capa = s->pool_capa * 2;
-    s->cap_pool = (int*)realloc(s->cap_pool,
-                                     sizeof(int) * new_capa * s->ncap);
+    int *grown = (int*)realloc(s->cap_pool, sizeof(int) * new_capa * s->ncap);
+    if (!grown) { s->oom = TRUE; return FALSE; }
+    s->cap_pool = grown;
     s->pool_capa = new_capa;
   }
-  return s->pool_next++;
+  *out = s->pool_next++;
+  return TRUE;
 }
 
-static int
-pool_copy(pike_state *s, int src_slot)
+static mrb_bool
+pool_copy(pike_state *s, int src_slot, int *out)
 {
-  int dst = pool_alloc(s);
+  int dst;
+  if (!pool_alloc(s, &dst)) return FALSE;
   memcpy(&s->cap_pool[dst * s->ncap],
          &s->cap_pool[src_slot * s->ncap],
          sizeof(int) * s->ncap);
-  return dst;
+  *out = dst;
+  return TRUE;
 }
 
 #define CAP(s, slot) (&(s)->cap_pool[(slot) * (s)->ncap])
@@ -163,7 +177,7 @@ add_thread(pike_state *s, re_threadlist *list,
            uint32_t pc, int cap_slot, const char *sp, uint32_t key)
 {
   for (;;) {
-    if (s->cut) return;
+    if (s->cut || s->oom) return;
     if (pc >= s->pat->code_len) return;
     if (s->visited[pc] >= key) return;
     s->visited[pc] = key;
@@ -207,7 +221,8 @@ add_thread(pike_state *s, re_threadlist *list,
       {
         uint32_t back = re_loop_back(s, inst, pc, key);
         if (back == RE_LOOP_STOP) { pc++; continue; }
-        int cp = s->match_only ? 0 : pool_copy(s, cap_slot);
+        int cp = 0;
+        if (!s->match_only && !pool_copy(s, cap_slot, &cp)) return;
         add_thread(s, list, pc + 1, cap_slot, sp, key);
         if (s->cut) return;
         pc = inst.offset;
@@ -221,7 +236,8 @@ add_thread(pike_state *s, re_threadlist *list,
       {
         uint32_t back = re_loop_back(s, inst, pc, key);
         if (back == RE_LOOP_STOP) { pc++; continue; }
-        int cp = s->match_only ? 0 : pool_copy(s, cap_slot);
+        int cp = 0;
+        if (!s->match_only && !pool_copy(s, cap_slot, &cp)) return;
         add_thread(s, list, inst.offset, cap_slot, sp, back);
         if (s->cut) return;
         pc = pc + 1;
@@ -360,6 +376,7 @@ pike_vm(const mrb_regexp_pattern *pat,
   s.str = str;
   s.str_end = str_end;
   s.matched = FALSE;
+  s.oom = FALSE;
   s.match_only = match_only;
   s.binary = binary;
   s.cut = FALSE;
@@ -417,8 +434,11 @@ pike_vm(const mrb_regexp_pattern *pat,
       if (!s.binary && curr.count == 0 && sp < str_end && re_utf8_continuation_p(sp)) {
         continue;
       }
-      int slot = match_only ? 0 : pool_alloc(&s);
-      if (!match_only) memset(CAP(&s, slot), -1, sizeof(int) * ncap);
+      int slot = 0;
+      if (!match_only) {
+        if (!pool_alloc(&s, &slot)) break;
+        memset(CAP(&s, slot), -1, sizeof(int) * ncap);
+      }
       s.gen += s.pass_span;
       s.key_max += s.pass_span;
       s.cut = FALSE;
@@ -439,11 +459,13 @@ pike_vm(const mrb_regexp_pattern *pat,
          final block copy to the front is disjoint because base >= count. */
       int base = s.pool_next;
       for (int i = 0; i < curr.count; i++) {
-        int dst = pool_alloc(&s);
+        int dst;
+        if (!pool_alloc(&s, &dst)) break;
         memcpy(CAP(&s, dst), CAP(&s, curr.threads[i].cap_slot),
                sizeof(int) * ncap);
         curr.threads[i].cap_slot = i;
       }
+      if (s.oom) break;
       memcpy(&s.cap_pool[0], &s.cap_pool[base * ncap],
              sizeof(int) * ncap * curr.count);
       s.pool_next = curr.count;
@@ -483,35 +505,40 @@ pike_vm(const mrb_regexp_pattern *pat,
       switch (inst.op) {
       case RE_CHAR:
         if (ch == inst.a) {
-          int cp = match_only ? 0 : pool_copy(&s, th->cap_slot);
+          int cp = 0;
+          if (!match_only && !pool_copy(&s, th->cap_slot, &cp)) break;
           add_thread(&s, &next, th->pc + 1, cp, sp + 1, s.gen);
         }
         break;
 
       case RE_ANY:
         if (ch != '\n') {
-          int cp = match_only ? 0 : pool_copy(&s, th->cap_slot);
+          int cp = 0;
+          if (!match_only && !pool_copy(&s, th->cap_slot, &cp)) break;
           add_thread(&s, &next, th->pc + 1, cp, sp + advance, s.gen);
         }
         break;
 
       case RE_ANY_NL:
         {
-          int cp = match_only ? 0 : pool_copy(&s, th->cap_slot);
+          int cp = 0;
+          if (!match_only && !pool_copy(&s, th->cap_slot, &cp)) break;
           add_thread(&s, &next, th->pc + 1, cp, sp + advance, s.gen);
         }
         break;
 
       case RE_CLASS:
         if (class_match(&pat->classes[inst.a], curr_cp, s.binary)) {
-          int cp = match_only ? 0 : pool_copy(&s, th->cap_slot);
+          int cp = 0;
+          if (!match_only && !pool_copy(&s, th->cap_slot, &cp)) break;
           add_thread(&s, &next, th->pc + 1, cp, sp + advance, s.gen);
         }
         break;
 
       case RE_NCLASS:
         if (!class_match(&pat->classes[inst.a], curr_cp, s.binary)) {
-          int cp = match_only ? 0 : pool_copy(&s, th->cap_slot);
+          int cp = 0;
+          if (!match_only && !pool_copy(&s, th->cap_slot, &cp)) break;
           add_thread(&s, &next, th->pc + 1, cp, sp + advance, s.gen);
         }
         break;
@@ -536,7 +563,11 @@ pike_vm(const mrb_regexp_pattern *pat,
   }
 
   int ret = 0;
-  if (s.matched) {
+  /* A refused buffer says nothing about the text, so it is not answered from
+     the threads that were running when it was refused: a match those hold is
+     a smaller question's answer, told from the real one by nothing.
+     (ported from mruby-regexp e86ec72c7) */
+  if (s.matched && !s.oom) {
     if (captures && s.result_caps) {
       int copy = ncap < captures_size ? ncap : captures_size;
       memcpy(captures, s.result_caps, sizeof(int) * copy);
