@@ -121,6 +121,7 @@ const char *sp_str_crypt(const char *s, const char *salt);
 const char*sp_str_lstrip(const char*s);
 const char*sp_str_rstrip(const char*s);
 const char*sp_str_dup(const char*s);
+const char *sp_plain_char(unsigned char c);
 const char *sp_bin_char(unsigned char c);
 const char*sp_str_b(const char*s);
 

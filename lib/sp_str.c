@@ -24,24 +24,35 @@ static int sp_char_cache_init = 0;
    here where strlen makes it the empty string above. Built once; never
    allocated, never swept, never mutated in place (0xfb is not in the
    heap-string group any of those paths test for). */
-typedef struct { sp_str_hdr h; char m; char d[2]; } sp_bin_char_ent;
-static sp_bin_char_ent sp_bin_char_cache[256];
-static int sp_bin_char_cache_init = 0;
-const char *sp_bin_char(unsigned char c) {
-  if (!sp_bin_char_cache_init) {
-    for (int i = 0; i < 256; i++) {
-      sp_bin_char_cache[i].h.next = NULL;
-      sp_bin_char_cache[i].h.size = SP_STR_SIZE_BINARY;
-      sp_bin_char_cache[i].h.len = 1;
-      sp_bin_char_cache[i].h.hash = 0;
-      sp_bin_char_cache[i].m = (char)0xfb;
-      sp_bin_char_cache[i].d[0] = (char)i;
-      sp_bin_char_cache[i].d[1] = 0;
-    }
-    sp_bin_char_cache_init = 1;
+typedef struct { sp_str_hdr h; char m; char d[2]; } sp_hdr_char_ent;
+/* [0] plain (whatever the default encoding is -- spinel names one), [1] BINARY.
+   Two tables rather than one because the tag is the only thing that differs and
+   it has to be in the header the entry carries. */
+static sp_hdr_char_ent sp_hdr_char_cache[2][256];
+static int sp_hdr_char_cache_init = 0;
+static const char *sp_hdr_char(unsigned char c, int binary) {
+  if (!sp_hdr_char_cache_init) {
+    for (int k = 0; k < 2; k++)
+      for (int i = 0; i < 256; i++) {
+        sp_hdr_char_cache[k][i].h.next = NULL;
+        sp_hdr_char_cache[k][i].h.size = k ? SP_STR_SIZE_BINARY : 0u;
+        sp_hdr_char_cache[k][i].h.len = 1;
+        sp_hdr_char_cache[k][i].h.hash = 0;
+        sp_hdr_char_cache[k][i].m = (char)0xfb;
+        sp_hdr_char_cache[k][i].d[0] = (char)i;
+        sp_hdr_char_cache[k][i].d[1] = 0;
+      }
+    sp_hdr_char_cache_init = 1;
   }
-  return sp_bin_char_cache[c].d;
+  return sp_hdr_char_cache[binary ? 1 : 0][c].d;
 }
+/* Integer#chr: a 1-byte string, no allocation. spinel does not let a program
+   name an encoding, so nothing but pack and String#b asks for BYTES -- and a
+   chr result is not one of those. It stays on the plain table, which is what
+   it has always reported; CRuby would say US-ASCII (or ASCII-8BIT above 0x7F),
+   a divergence spinel already accepts for want of a third encoding. */
+const char *sp_plain_char(unsigned char c) { return sp_hdr_char(c, 0); }
+const char *sp_bin_char(unsigned char c) { return sp_hdr_char(c, 1); }
 
 /* Hex-digit value, used by sp_str_undump's \xNN / \uNNNN unescape. */
 static int _sp_hexval(unsigned char d){return (d<='9')?(d-'0'):(tolower(d)-'a'+10);}

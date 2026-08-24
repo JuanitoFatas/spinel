@@ -2506,7 +2506,7 @@ const char *sp_range_str(sp_Range r) {
 /* Integer#chr: a single byte; CRuby raises RangeError outside 0..255. */
 const char*sp_int_chr(sp_int n){
   if(n<0||n>255)sp_raise_cls("RangeError",sp_sprintf("%lld out of char range",(long long)n));
-  char*s=sp_str_alloc_raw(2);s[0]=(char)n;s[1]=0;sp_str_set_len(s,1);return s;
+  return sp_plain_char((unsigned char)n);
 }
 /* Integer#chr(Encoding::UTF_8): encode the codepoint as UTF-8 (1-4 bytes).
    CRuby raises RangeError for a negative/too-large codepoint and for the
