@@ -304,10 +304,7 @@ int emit_inline_call_x(Compiler *c, int id, Buf *b, int indent, int as_expr) {
     snprintf(g_ren_to[g_nren], sizeof g_ren_to[0], "_y%d_%s", tag, lv->name);
     const char *rn = g_ren_to[g_nren];
     g_nren++;
-    emit_indent(b, din);
-    emit_ctype(c, lv->type, b);
-    buf_printf(b, " lv_%s = %s;\n", rn, local_init_value(c, lv));
-    if (needs_root(lv->type)) { emit_indent(b, din); buf_printf(b, lv->type == TY_POLY ? "SP_GC_ROOT_RBVAL(lv_%s);\n" : "SP_GC_ROOT(lv_%s);\n", rn); }
+    emit_inlined_local_decl(c, lv, rn, b, din);
   }
 
   /* bind params to call args (args are in the call-site scope: renames off) */

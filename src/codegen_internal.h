@@ -439,6 +439,7 @@ void emit_sg_activate(Compiler *c, int node, int recv, Buf *b, int indent);
 int sg_activates_ci(Compiler *c, int node);
 int subtree_has_param_named_pub(const NodeTable *nt, int id, const char *nm);
 const char *past_open_parens(const char *s);
+void emit_inlined_local_decl(Compiler *c, LocalVar *lv, const char *rn, Buf *b, int din);
 const char *cell_scan_fn(TyKind t);
 const char *cell_value_struct(TyKind t);
 const char *cell_value_struct_empty(TyKind t);

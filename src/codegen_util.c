@@ -560,8 +560,14 @@ void emit_local_ref(Compiler *c, int scope_node, const char *name, Buf *b) {
   }
   LocalVar *lv = scope_node >= 0 ? scope_local(comp_scope_of(c, scope_node), name) : NULL;
   if (lv && lv->is_cell) {
-    if (lv->type == TY_PROC) buf_printf(b, "(sp_Proc *)(uintptr_t)(*_cell_%s)", name);
-    else buf_printf(b, "(*_cell_%s)", name);
+    /* Through the rename map, exactly as the plain form below: a method
+       INLINED at its call site renames its locals, and the cell form did not
+       follow -- the prologue declared `lv__y1_n` while the body read
+       `(*_cell_n)`, which nothing declared (#4088). Outside an inline the map
+       is empty and this is the name itself. */
+    const char *crn = rename_local(name);
+    if (lv->type == TY_PROC) buf_printf(b, "(sp_Proc *)(uintptr_t)(*_cell_%s)", crn);
+    else buf_printf(b, "(*_cell_%s)", crn);
     return;
   }
   buf_printf(b, "lv_%s", rename_local(name));
