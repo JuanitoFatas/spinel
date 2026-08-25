@@ -2434,6 +2434,39 @@ static void emit_pm_body_value(Compiler *c, int stmts, TyKind rt, int cr,
   }
   int last = bb[n - 1];
   TyKind lt = comp_ntype(c, last);
+  /* An empty `[]` / `{}` caches TY_UNKNOWN because it has no ELEMENT type
+     yet, not because it has no value; running it for effect left the arm at
+     the default. Build it against the arm's result type, as the `when` form
+     and the if-as-value form do. */
+  {
+    int elen = 0;
+    const char *ety = nt_type(nt, last);
+    if (lt == TY_UNKNOWN && ety &&
+        (sp_streq(ety, "ArrayNode") || sp_streq(ety, "HashNode")) &&
+        (nt_arr(nt, last, "elements", &elen), elen == 0)) {
+      const char *txt = NULL;
+      char buf[128];
+      if (sp_streq(ety, "ArrayNode")) {
+        const char *rk = rt == TY_POLY_ARRAY ? "Poly" : array_kind(rt);
+        if (rk) { snprintf(buf, sizeof buf, "sp_%sArray_new()", rk); txt = buf; }
+        else if (rt == TY_POLY) { txt = "sp_box_poly_array(sp_PolyArray_new())"; }
+      }
+      else {
+        const char *hc = ty_hash_cname(rt);
+        if (hc) { snprintf(buf, sizeof buf, "sp_%sHash_new()", hc); txt = buf; }
+        else if (rt == TY_POLY) {
+          snprintf(buf, sizeof buf, "sp_box_obj(sp_StrPolyHash_new(), %s)",
+                   hash_box_cls(TY_STR_POLY_HASH));
+          txt = buf;
+        }
+      }
+      if (txt) {
+        emit_indent(b, indent);
+        buf_printf(b, "_t%d = %s;\n", cr, txt);
+        return;
+      }
+    }
+  }
   if (lt == TY_NIL || lt == TY_UNKNOWN) {
     /* a valueless last expr (e.g. a bare assignment / void call): run it for
        its side effect, then default the result. */
@@ -4076,11 +4109,22 @@ void emit_case_branch_value(Compiler *c, int stmts, TyKind rt, int cr, Buf *b) {
       nt_arr(nt, bb[n - 1], "elements", &len);
       const char *rk = rt == TY_POLY_ARRAY ? "Poly" : array_kind(rt);
       if (len == 0 && rk) { buf_printf(b, "_cr%d = sp_%sArray_new(); ", cr, rk); return; }
+      /* A branch merged with one of another kind types the whole case POLY,
+         and the empty literal is then a BOXED empty array rather than a typed
+         one: `case ... then [] else "x" end` is [] in CRuby, and leaving it to
+         the value-less arm below answered nil. */
+      if (len == 0 && rt == TY_POLY) {
+        buf_printf(b, "_cr%d = sp_box_poly_array(sp_PolyArray_new()); ", cr); return;
+      }
     }
     else if (lty && (sp_streq(lty, "HashNode") || sp_streq(lty, "KeywordHashNode"))) {
       nt_arr(nt, bb[n - 1], "elements", &len);
       const char *hc = ty_hash_cname(rt);
       if (len == 0 && hc) { buf_printf(b, "_cr%d = sp_%sHash_new(); ", cr, hc); return; }
+      if (len == 0 && rt == TY_POLY) {
+        buf_printf(b, "_cr%d = sp_box_obj(sp_StrPolyHash_new(), %s); ",
+                   cr, hash_box_cls(TY_STR_POLY_HASH)); return;
+      }
     }
   }
   /* a value-less tail (nil/void/unknown -- e.g. an arm ending in `puts` or

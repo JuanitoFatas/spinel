@@ -5594,6 +5594,44 @@ static int branch_stmts(Compiler *c, int b) {
   return k == NK_StatementsNode ? b : -1;
 }
 
+/* An empty `[]` / `{}` carries no element type of its own, so it caches
+   TY_UNKNOWN, and unifying an arm that ends in one DROPS it: the branch then
+   answers whatever the other arms said, and the literal's construction is
+   emitted into that slot. `if true then [] else 1 end` typed Integer and the
+   C compiler refused the program; `... else [] end` typed nil and answered
+   nil where CRuby answers []. Answer the container the literal is instead,
+   and let the unify see it. TY_UNKNOWN here means "not an empty literal
+   tail", which leaves the caller's own answer alone. */
+static TyKind an_empty_container_tail(Compiler *c, int stmts) {
+  if (stmts < 0) return TY_UNKNOWN;
+  const NodeTable *nt = c->nt;
+  int n = 0;
+  const int *bb = nt_arr(nt, stmts, "body", &n);
+  int tail = (bb && n > 0) ? bb[n - 1] : stmts;
+  const char *ty = nt_type(nt, tail);
+  int len = 0;
+  if (ty && sp_streq(ty, "ArrayNode")) {
+    nt_arr(nt, tail, "elements", &len);
+    if (len == 0) return TY_POLY_ARRAY;
+  }
+  else if (ty && sp_streq(ty, "HashNode")) {
+    nt_arr(nt, tail, "elements", &len);
+    if (len == 0) return TY_STR_POLY_HASH;
+  }
+  return TY_UNKNOWN;
+}
+
+/* infer_type for one branch arm, with the empty-literal tail above given its
+   container type. */
+static TyKind an_branch_ty(Compiler *c, int stmts) {
+  TyKind t = stmts >= 0 ? infer_type(c, stmts) : TY_NIL;
+  if (t == TY_UNKNOWN) {
+    TyKind e = an_empty_container_tail(c, stmts);
+    if (e != TY_UNKNOWN) return e;
+  }
+  return t;
+}
+
 TyKind infer_uncached(Compiler *c, int id) {
   const NodeTable *nt = c->nt;
   const char *ty = nt_type(nt, id);
@@ -6030,11 +6068,11 @@ TyKind infer_uncached(Compiler *c, int id) {
     for (int w = 0; w < nw; w++) {
       int st = nt_ref(nt, whens[w], "statements");
       if (stmts_diverge(c, st)) continue;
-      r = ty_unify(r, st >= 0 ? infer_type(c, st) : TY_NIL);
+      r = ty_unify(r, an_branch_ty(c, st));
     }
     if (else_c >= 0) {
       int st = nt_ref(nt, else_c, "statements");
-      if (!stmts_diverge(c, st)) r = ty_unify(r, st >= 0 ? infer_type(c, st) : TY_NIL);
+      if (!stmts_diverge(c, st)) r = ty_unify(r, an_branch_ty(c, st));
     }
     else r = ty_unify(r, TY_NIL);
     return r;
@@ -6047,11 +6085,11 @@ TyKind infer_uncached(Compiler *c, int id) {
     for (int w = 0; w < nw; w++) {
       int st = nt_ref(nt, conds[w], "statements");
       if (stmts_diverge(c, st)) continue;
-      r = ty_unify(r, st >= 0 ? infer_type(c, st) : TY_NIL);
+      r = ty_unify(r, an_branch_ty(c, st));
     }
     if (else_c >= 0) {
       int st = nt_ref(nt, else_c, "statements");
-      if (!stmts_diverge(c, st)) r = ty_unify(r, st >= 0 ? infer_type(c, st) : TY_NIL);
+      if (!stmts_diverge(c, st)) r = ty_unify(r, an_branch_ty(c, st));
     }
     return r;
   }
@@ -6073,10 +6111,10 @@ TyKind infer_uncached(Compiler *c, int id) {
     int ediv = stmts_diverge(c, branch_stmts(c, else_b));
     /* both arms diverging leaves nothing to type: fall through to the plain
        unify rather than answering UNKNOWN out of nowhere */
-    if (tdiv && !ediv) return else_b >= 0 ? infer_type(c, else_b) : TY_NIL;
-    if (ediv && !tdiv) return then_b >= 0 ? infer_type(c, then_b) : TY_NIL;
-    TyKind tt = then_b >= 0 ? infer_type(c, then_b) : TY_NIL;
-    TyKind et = else_b >= 0 ? infer_type(c, else_b) : TY_NIL;
+    if (tdiv && !ediv) return an_branch_ty(c, else_b);
+    if (ediv && !tdiv) return an_branch_ty(c, then_b);
+    TyKind tt = an_branch_ty(c, then_b);
+    TyKind et = an_branch_ty(c, else_b);
     return ty_unify(tt, et);
   }
   if (nk == NK_ElseNode) {

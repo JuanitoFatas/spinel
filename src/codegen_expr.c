@@ -2589,7 +2589,24 @@ else {
       if (tn > 0) {
         int last_then = tb[tn - 1];
         TyKind lt = comp_ntype(c, last_then);
-        if (lt == TY_NIL || lt == TY_UNKNOWN || lt == TY_VOID) {
+        /* An empty `[]` / `{}` caches TY_UNKNOWN for a reason that is not
+           "has no value": it has no ELEMENT type until something supplies
+           one. Running it for effect leaves the slot at its default, which
+           is how `if c then [] end` answered nil where CRuby answers [].
+           emit_ternary_arm already builds it against a result type. */
+        int elen = 0;
+        const char *ety = nt_type(nt, last_then);
+        int empty_lit = lt == TY_UNKNOWN && ety &&
+                        (sp_streq(ety, "ArrayNode") || sp_streq(ety, "HashNode")) &&
+                        (nt_arr(nt, last_then, "elements", &elen), elen == 0);
+        if (empty_lit) {
+          Buf le; memset(&le, 0, sizeof le);
+          emit_ternary_arm(c, last_then, res, &le);
+          emit_indent(g_pre, g_indent + 2);
+          buf_printf(g_pre, "_t%d = %s;\n", tr, le.p ? le.p : default_value(res));
+          free(le.p);
+        }
+        else if (lt == TY_NIL || lt == TY_UNKNOWN || lt == TY_VOID) {
           emit_stmt(c, last_then, g_pre, g_indent + 2);
         }
         else {
