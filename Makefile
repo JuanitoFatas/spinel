@@ -42,7 +42,7 @@ RBS_SRC      = $(wildcard $(RBS_DIR)/src/*.c) $(wildcard $(RBS_DIR)/src/util/*.c
 RBS_OBJ      = $(patsubst $(RBS_DIR)/src/%.c,build/rbs/%.o,$(RBS_SRC))
 RBS_LIB      = build/librbs.a
 
-.PHONY: all regexp rbs_extract rbs-test rbs-seed-test alloc-report-test rubyspec rubyspec-gate spin-check \
+.PHONY: all regexp rbs_extract rbs-test rbs-seed-test re-lit-test alloc-report-test rubyspec rubyspec-gate spin-check \
         test test-run clean-test-results regen-rbs-expected \
         regen-expected regen-expected-err bench optcarrot gate check gate-legs gate-test gate-bench \
         gate-optcarrot clean install uninstall deps tools
@@ -198,9 +198,16 @@ FORCE:
 build/csrc/sp_parse_lib.o: src/spinel_parse.c $(PRISM_LIB) | build/csrc
 	$(CC) $(CFLAGS) -I$(PRISM_INC) -c src/spinel_parse.c -o $@
 
-$(SPINEL): $(SPINEL_OBJ) build/csrc/sp_parse_lib.o $(PRISM_LIB)
+# The compiler links the regexp engine so it can compile a literal at build
+# time and refuse one the engine cannot read, where it used to reach the
+# engine only at the built program's startup. src/re_lit_check.c is the seam
+# (and carries the sp_sprintf the engine's object file references).
+build/csrc/re_lit_check.o: src/re_lit_check.c lib/regexp/re_internal.h | build/csrc
+	$(CC) $(CFLAGS) -Ilib/regexp -c src/re_lit_check.c -o $@
+
+$(SPINEL): $(SPINEL_OBJ) build/csrc/sp_parse_lib.o build/csrc/re_lit_check.o $(RE_OBJ) $(PRISM_LIB)
 	@mkdir -p bin
-	$(CC) $(CFLAGS) $(SPINEL_OBJ) build/csrc/sp_parse_lib.o $(PRISM_LIB) -lm $(LDFLAGS) -o $@
+	$(CC) $(CFLAGS) $(SPINEL_OBJ) build/csrc/sp_parse_lib.o build/csrc/re_lit_check.o $(RE_OBJ) $(PRISM_LIB) -lm $(LDFLAGS) -o $@
 	@# Dev convenience: a repo-root `./spinel` pointing at the built binary
 	@# (the installed command is `spinel` too). Best-effort; gitignored.
 	@ln -sf $@ spinel 2>/dev/null || cp $@ spinel 2>/dev/null || true
@@ -499,6 +506,41 @@ TEST_JOBS := $(if $(filter -j%,$(MAKEFLAGS)),,-j$(NPROC))
 # all cores.
 BENCH_PJOBS := $(if $(filter -j%,$(MAKEFLAGS)),1,$(NPROC))
 
+# A regexp literal is two constants, the pattern and its flags, so whether the
+# engine can read it is settled at compile time. It used to reach the engine
+# only at the built program's startup, so a pattern like /[z-a]/ built clean
+# and raised RegexpError when the program ran; CRuby reports it from the parse.
+# There is no place for this in test/*.rb, whose harness needs the compile to
+# succeed, so the refusal is checked here.
+re-lit-test: $(SPINEL)
+	@tmp=$$(mktemp -d /tmp/spinel-relit.XXXXXX); ok=1; \
+	printf 'p(/[z-a]/i)\n' > "$$tmp/bad.rb"; \
+	if $(SPINEL) "$$tmp/bad.rb" -o "$$tmp/bad" >"$$tmp/bad.out" 2>&1; then \
+	  echo "re-lit-test: FAIL (a literal the engine cannot read still built)"; ok=0; \
+	else \
+	  grep -q 'bad.rb:1: empty range in char class: /\[z-a\]/i' "$$tmp/bad.out" || \
+	    { echo "re-lit-test: FAIL (the refusal did not name the line, the pattern and its flags)"; cat "$$tmp/bad.out"; ok=0; }; \
+	fi; \
+	printf 'x = 1\ny = 2\np(/(?<1>a)/)\n' > "$$tmp/name.rb"; \
+	if $(SPINEL) "$$tmp/name.rb" -o "$$tmp/name" >"$$tmp/name.out" 2>&1; then \
+	  echo "re-lit-test: FAIL (an invalid group name still built)"; ok=0; \
+	else \
+	  grep -q 'name.rb:3: invalid group name <1>' "$$tmp/name.out" || \
+	    { echo "re-lit-test: FAIL (the refusal named the wrong line)"; cat "$$tmp/name.out"; ok=0; }; \
+	fi; \
+	printf 'p("m" =~ /[a-z]/)\np("M" =~ /[a-z]/i)\n' > "$$tmp/good.rb"; \
+	if $(SPINEL) "$$tmp/good.rb" -o "$$tmp/good" >"$$tmp/good.out" 2>&1; then \
+	  [ "$$("$$tmp/good")" = "$$(printf '0\n0')" ] || { echo "re-lit-test: FAIL (a valid literal changed behaviour)"; "$$tmp/good"; ok=0; }; \
+	else echo "re-lit-test: FAIL (a valid literal was refused)"; cat "$$tmp/good.out"; ok=0; fi; \
+	printf 'x = "z-a"\nre = /[#{x}]/\np((("m" =~ re) ? 1 : 0))\n' > "$$tmp/interp.rb"; \
+	if $(SPINEL) "$$tmp/interp.rb" -o "$$tmp/interp" >"$$tmp/interp.out" 2>&1; then \
+	  "$$tmp/interp" >"$$tmp/interp.run" 2>&1 || true; \
+	  grep -q 'empty range in char class' "$$tmp/interp.run" || \
+	    { echo "re-lit-test: FAIL (an interpolated pattern should stay a runtime question)"; cat "$$tmp/interp.run"; ok=0; }; \
+	else echo "re-lit-test: FAIL (an interpolated pattern was refused at compile time)"; cat "$$tmp/interp.out"; ok=0; fi; \
+	rm -rf "$$tmp"; \
+	if [ $$ok = 1 ]; then echo "re-lit-test: pass"; else exit 1; fi
+
 # `make test` always runs fresh: it wipes the prior `.ok` stamps first,
 # then runs the suite. (The old incremental `test` + `retest` split is
 # gone — a stale `.ok` reading PASS was a recurring foot-gun.)
@@ -509,7 +551,7 @@ test:
 # The actual run. rbs-test golden-checks the RBS extractor (cheap, C-only).
 # rbs-seed-test checks the seeds actually reach the analyzer (incl. nested
 # classes, #1417).
-test-run: rbs-test rbs-seed-test $(TEST_TARGETS) $(PKG_TEST_TARGETS)
+test-run: rbs-test rbs-seed-test re-lit-test $(TEST_TARGETS) $(PKG_TEST_TARGETS)
 	@if [ -z "$(TIMEOUT_BIN)" ]; then echo "Note: no 'timeout' command found; running without time limits."; fi
 	@if [ -t 1 ]; then printf '\n'; fi
 	@pass=$$(grep -l '^PASS' build/test-results/*.ok 2>/dev/null | wc -l); \

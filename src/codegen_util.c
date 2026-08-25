@@ -465,6 +465,15 @@ int re_lit_index(Compiler *c, int nid) {
   int flg = re_engine_flags((int)nt_int(c->nt, nid, "flags", 0));
   for (int i = 0; i < g_re_count; i++)
     if (g_re_flg[i] == flg && sp_streq(g_re_src[i], src)) return i;
+  /* A literal is two constants, the pattern and its flags, so whether the
+     engine can read it is known here rather than at the program's startup,
+     where it used to surface as a RegexpError from a build that had reported
+     nothing. CRuby reports it from the parse, as a SyntaxError. Checked once
+     per distinct literal, after the table lookup above. */
+  {
+    const char *err = sp_re_literal_error(src, (int)strlen(src), flg);
+    if (err) unsupported_feature(c, nid, err);
+  }
   if (g_re_count >= g_re_cap) {
     g_re_cap = g_re_cap ? g_re_cap * 2 : 8;
     g_re_src = realloc(g_re_src, sizeof(char *) * (size_t)g_re_cap);

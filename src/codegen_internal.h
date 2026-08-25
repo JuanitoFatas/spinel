@@ -507,6 +507,13 @@ int prog_has_conv_method(Compiler *c, const char *conv, TyKind want);
 
 __attribute__((noreturn)) void unsupported(Compiler *c, int id, const char *what);
 __attribute__((noreturn)) void unsupported_feature(Compiler *c, int id, const char *msg);
+
+/* Compile a regexp literal with the engine and throw the result away, to
+   refuse at COMPILE time a pattern that would only have failed at the
+   program's startup. Returns the engine's own message, or NULL when the
+   pattern reads. Defined in src/re_lit_check.c, which is what links the
+   engine into the compiler. */
+const char *sp_re_literal_error(const char *src, int len, int flags);
 /* Returns a negative cls_id for well-known builtin class/module names,
    or 0 if the name is not a recognized builtin class. */
 int builtin_class_id(const char *name);

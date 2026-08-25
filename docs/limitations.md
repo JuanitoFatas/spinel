@@ -432,6 +432,13 @@ Building the regexp engine with `-DRE_NO_UNICODE_CASE` (`make
 RE_CASE_FLAGS=-DRE_NO_UNICODE_CASE`) leaves the ~3KB fold table out and folds
 ASCII alone; a non-ASCII literal then matches literally under `/i` too.
 
+**A regexp literal is compiled when the program is.** A pattern the engine
+cannot read is refused at compile time rather than raising `RegexpError` when
+the built program reaches the literal, which is where CRuby reports it too
+(as a `SyntaxError` from the parse). A pattern built at run time -- an
+interpolated literal, `Regexp.new` on anything but a constant -- is still a
+runtime question and still raises `RegexpError`.
+
 **A search that backtracks is bounded by the state it holds.** A pattern with
 a backreference, a lookaround or an atomic group runs on the backtracking
 engine, whose choice points and undo records are capped together by
