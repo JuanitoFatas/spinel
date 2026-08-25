@@ -810,7 +810,9 @@ sp_StrArray*sp_str_split(const char*s,const char*sep){if(!s)sp_nil_recv("split")
 /* Same as sp_str_split but removes trailing empty strings
    (CRuby default limit behavior: split without limit drops
    trailing empties; split(sep, -1) keeps them). */
-sp_StrArray*sp_str_split_drop_trailing(const char*s,const char*sep){SP_GC_ROOT_STR(s);SP_GC_ROOT_STR(sep);if(!sep||(sep[0]==' '&&sep[1]==0))return sp_str_split_ws(s);sp_StrArray*a=sp_str_split(s,sep);while(a->len>0&&a->data[a->len-1][0]==0)a->len--;return a;}
+sp_StrArray*sp_str_split_drop_trailing(const char*s,const char*sep){SP_GC_ROOT_STR(s);SP_GC_ROOT_STR(sep);if(!sep||(sep[0]==' '&&sep[1]==0))return sp_str_split_ws(s);sp_StrArray*a=sp_str_split(s,sep);/* an EMPTY tail, not one that merely starts with NUL: `"\0x\0".split("x")`
+     dropped both halves when the test was s[0]==0. */
+  while(a->len>0&&sp_str_byte_len(a->data[a->len-1])==0)a->len--;return a;}
 /* `s.split(sep, n)` with explicit limit. Positive n caps the result
    at n elements: the last element holds the unsplit remainder.
    n == 0 means "no limit" and drops trailing empty strings (same as

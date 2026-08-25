@@ -7138,7 +7138,7 @@ static int emit_class_new_call(Compiler *c, int id, Buf *b) {
           emit_indent(g_pre, g_indent);
           buf_printf(g_pre, "const char *_t%d = sp_re_source((void *)(%s));\n", ts, rv.p ? rv.p : "0");
           emit_indent(g_pre, g_indent);
-          buf_printf(g_pre, "mrb_regexp_pattern *_t%d = re_compile(_t%d, (int64_t)strlen(_t%d ? _t%d : \"\"), sp_re_raw_flags((void *)(%s)));\n",
+          buf_printf(g_pre, "mrb_regexp_pattern *_t%d = re_compile(_t%d, (int64_t)(_t%d ? sp_str_byte_len(_t%d) : 0), sp_re_raw_flags((void *)(%s)));\n",
                      tp, ts, ts, ts, rv.p ? rv.p : "0");
           free(rv.p);
           buf_printf(b, "_t%d", tp);
@@ -7158,7 +7158,7 @@ static int emit_class_new_call(Compiler *c, int id, Buf *b) {
         Buf flagbuf; memset(&flagbuf, 0, sizeof flagbuf);
         emit_re_opts_flags(c, argc, argv, &flagbuf);
         emit_indent(g_pre, g_indent);
-        buf_printf(g_pre, "mrb_regexp_pattern *_t%d = re_compile(_t%d, (int64_t)strlen(_t%d ? _t%d : \"\"), %s);\n",
+        buf_printf(g_pre, "mrb_regexp_pattern *_t%d = re_compile(_t%d, (int64_t)(_t%d ? sp_str_byte_len(_t%d) : 0), %s);\n",
                    tp, ts, ts, ts, flagbuf.p ? flagbuf.p : "0");
         free(flagbuf.p);
         buf_printf(b, "_t%d", tp);
@@ -18325,7 +18325,7 @@ else { memcpy(dir, sf, n); dir[n] = 0; } }
     /* an empty union (`Regexp.union()` or `Regexp.union([])`) never matches */
     if (nops == 0) { emit_indent(g_pre, g_indent); buf_printf(g_pre, "const char *_t%d = \"(?!)\";\n", ts); }
     emit_indent(g_pre, g_indent);
-    buf_printf(g_pre, "mrb_regexp_pattern *_t%d = re_compile(_t%d, (int64_t)strlen(_t%d ? _t%d : \"\"), 0);\n",
+    buf_printf(g_pre, "mrb_regexp_pattern *_t%d = re_compile(_t%d, (int64_t)(_t%d ? sp_str_byte_len(_t%d) : 0), 0);\n",
                tp, ts, ts, ts);
     buf_printf(b, "_t%d", tp);
     return;
@@ -18370,7 +18370,7 @@ else { memcpy(dir, sf, n); dir[n] = 0; } }
     Buf flagbuf; memset(&flagbuf, 0, sizeof flagbuf);
     emit_re_opts_flags(c, argc, argv, &flagbuf);   /* (#3055) */
     emit_indent(g_pre, g_indent);
-    buf_printf(g_pre, "mrb_regexp_pattern *_t%d = re_compile(_t%d, (int64_t)strlen(_t%d ? _t%d : \"\"), %s);\n",
+    buf_printf(g_pre, "mrb_regexp_pattern *_t%d = re_compile(_t%d, (int64_t)(_t%d ? sp_str_byte_len(_t%d) : 0), %s);\n",
                tp, ts, ts, ts, flagbuf.p ? flagbuf.p : "0");
     free(flagbuf.p);
     buf_printf(b, "_t%d", tp);
@@ -22193,7 +22193,7 @@ else { memcpy(dir, sf, n); dir[n] = 0; } }
       emit_expr(c, recv, b); return;
     }
     if (sp_streq(name, "source")) {
-      buf_puts(b, "sp_re_source((void *)("); emit_expr(c, recv, b); buf_puts(b, "))");
+      buf_puts(b, "sp_re_source_str((void *)("); emit_expr(c, recv, b); buf_puts(b, "))");
       return;
     }
     if (sp_streq(name, "inspect")) {
@@ -22412,7 +22412,7 @@ else { memcpy(dir, sf, n); dir[n] = 0; } }
       int ts = ++g_tmp;
       const char *fn = sp_streq(name, "match?") ? "sp_re_match_p" : "sp_re_matchdata";
       buf_printf(b, "({ const char *_t%d = ", ts); emit_str_expr(c, argv[0], b);
-      buf_printf(b, "; mrb_regexp_pattern *_t%dp = re_compile(_t%d, (int64_t)strlen(_t%d ? _t%d : \"\"), 0); ",
+      buf_printf(b, "; mrb_regexp_pattern *_t%dp = re_compile(_t%d, (int64_t)(_t%d ? sp_str_byte_len(_t%d) : 0), 0); ",
                  ts, ts, ts, ts);
       buf_printf(b, "%s(_t%dp, ", fn, ts); emit_expr(c, recv, b); buf_puts(b, "); })");
       return;

@@ -1400,6 +1400,14 @@ static inline sp_int sp_obj_cls_id_of(void *p) { return p ? *(sp_int *)p : 0; }
 const char *sp_re_inspect_str(void *pat);
 const char *sp_re_to_s_str(void *pat);
 const char *sp_re_source(void *pat);
+uint32_t sp_re_source_len(void *pat);
+/* Regexp#source as a spinel string. pat->source is a plain malloc'd C buffer,
+   so handing it to the Ruby side directly ends the value at an embedded NUL:
+   the length comes from the pattern instead. */
+static const char *sp_re_source_str(void *pat) {
+  const char *s = sp_re_source(pat);
+  return s ? sp_str_from_bytes(s, (size_t)sp_re_source_len(pat)) : sp_str_empty;
+}
 sp_int sp_re_options(void *pat);
 sp_bool sp_re_eq(void *a, void *b);
 extern SP_TLS const mrb_regexp_pattern *sp_re_last_pat;

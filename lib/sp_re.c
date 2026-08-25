@@ -108,6 +108,7 @@ void sp_re_set_captures(const char *str, int *caps, int ncaps) {SP_GC_ROOT_STR(s
       int len = caps[(i*2)+1] - caps[i*2];
       char *buf = sp_str_alloc_raw(len+1);
       memcpy(buf, str+caps[i*2], len); buf[len] = 0;
+      sp_str_set_len(buf, (size_t)len);
       sp_re_captures[i] = buf;
     }
   }
@@ -123,6 +124,7 @@ void sp_re_set_captures(const char *str, int *caps, int ncaps) {SP_GC_ROOT_STR(s
     char *m = sp_str_alloc_raw(mlen + 1);
     memcpy(m, str + caps[0], mlen); m[mlen] = 0;
     sp_str_set_len(m, (size_t)mlen);
+    sp_str_set_len(m, (size_t)mlen);
     sp_re_match_str = m;
     sp_re_pp_span[0] = caps[0]; sp_re_pp_span[1] = caps[1];
   }
@@ -135,6 +137,7 @@ const char *sp_re_pre_match(void) {
   char *pre = sp_str_alloc_raw(n + 1);
   memcpy(pre, sp_re_last_str, n); pre[n] = 0;
   sp_str_set_len(pre, (size_t)n);
+  sp_str_set_len(pre, (size_t)n);
   sp_re_match_pre = pre;
   return pre;
 }
@@ -146,6 +149,7 @@ const char *sp_re_post_match(void) {
   if (n < 0) n = 0;
   char *post = sp_str_alloc_raw(n + 1);
   memcpy(post, sp_re_last_str + sp_re_pp_span[1], n); post[n] = 0;
+  sp_str_set_len(post, (size_t)n);
   sp_str_set_len(post, (size_t)n);
   sp_re_match_post = post;
   return post;
@@ -282,12 +286,15 @@ sp_StrArray *sp_re_rpartition(mrb_regexp_pattern *pat, const char *str) {
   }
   char *before = sp_str_alloc_raw(ms + 1);
   memcpy(before, str, ms); before[ms] = 0;
+  sp_str_set_len(before, (size_t)ms);
   int mlen = (int)(me - ms);
   char *mid = sp_str_alloc_raw(mlen + 1);
   memcpy(mid, str + ms, mlen); mid[mlen] = 0;
+  sp_str_set_len(mid, (size_t)mlen);
   int alen = (int)(slen - me);
   char *after = sp_str_alloc_raw(alen + 1);
   memcpy(after, str + me, alen); after[alen] = 0;
+  sp_str_set_len(after, (size_t)alen);
   sp_StrArray_push(r, before);
   sp_StrArray_push(r, mid);
   sp_StrArray_push(r, after);
@@ -338,7 +345,7 @@ mrb_regexp_pattern *sp_poly_as_pattern(sp_RbVal v) {SP_GC_ROOT_RBVAL(v);
   else if (v.tag == SP_TAG_OBJ && v.cls_id == SP_BUILTIN_STRBUF && v.v.p)
     s = sp_String_cstr((sp_String *)v.v.p);
   if (!s) return NULL;
-  return re_compile(s, (int64_t)strlen(s), 0);
+  return re_compile(s, (int64_t)sp_str_byte_len(s), 0);
 }
 /* The subject string behind a boxed value (a plain string, a shared handle, a
    Symbol); NULL when the value is not one. */
@@ -490,7 +497,7 @@ else if (d == '\\') {
   *out_io = out; *olen_io = olen; *cap_io = cap;
 }
 const char *sp_re_gsub(mrb_regexp_pattern *pat, const char *str, const char *rep) {SP_GC_ROOT_STR(str);SP_GC_ROOT_STR(rep);
-  int64_t slen = (int64_t)sp_str_byte_len(str); size_t rlen = strlen(rep);
+  int64_t slen = (int64_t)sp_str_byte_len(str); size_t rlen = sp_str_byte_len(rep);
   size_t cap = (slen * 2) + (rlen * 4) + 64;
  /* Build into a plain malloc scratch: the buffer is grown with realloc
     here and inside sp_re_expand_rep, which is only valid on a real
@@ -535,7 +542,7 @@ else {
   return res;
 }
 const char *sp_re_sub(mrb_regexp_pattern *pat, const char *str, const char *rep) {SP_GC_ROOT_STR(str);SP_GC_ROOT_STR(rep);
-  int64_t slen = (int64_t)sp_str_byte_len(str); size_t rlen = strlen(rep);
+  int64_t slen = (int64_t)sp_str_byte_len(str); size_t rlen = sp_str_byte_len(rep);
   int caps[64];
   int n = re_exec(pat, str, slen, 0, caps, 64, sp_str_is_binary(str));
   if (n <= 0 || caps[0] < 0) return str;
@@ -565,6 +572,7 @@ sp_StrArray *sp_re_scan(mrb_regexp_pattern *pat, const char *str) {
     if (n <= 0 || caps[0] < 0) break;
     int len = caps[1] - caps[0];
     char *m = sp_str_alloc_raw(len+1); memcpy(m, str+caps[0], len); m[len] = 0;
+    sp_str_set_len(m, (size_t)len);
     sp_StrArray_push(arr, m);
     pos = caps[1]; if (caps[0] == caps[1]) pos++;
   }
@@ -585,6 +593,7 @@ static void split_push_slice(sp_StrArray *arr, const char *str, int64_t from, in
   int len = (int)(to - from);
   char *m = sp_str_alloc_raw(len + 1);
   memcpy(m, str + from, len); m[len] = 0;
+  sp_str_set_len(m, (size_t)len);
   sp_StrArray_push(arr, m);
 }
 
@@ -692,7 +701,7 @@ sp_int sp_re_index_from_opt(mrb_regexp_pattern *pat, const char *str, sp_int sta
   if (start < 0 || start > cl) return SP_INT_NIL;
   size_t boff = sp_utf8_byte_offset(str, start);
   int caps[64];
-  int n = re_exec(pat, str, (int64_t)strlen(str), (sp_int)boff, caps, 64, sp_str_is_binary(str));
+  int n = re_exec(pat, str, (int64_t)sp_str_byte_len(str), (sp_int)boff, caps, 64, sp_str_is_binary(str));
   if (n <= 0 || caps[0] < 0) return SP_INT_NIL;
   return sp_str_count_chars(str, (size_t)caps[0]);
 }
@@ -789,9 +798,21 @@ mrb_regexp_pattern *sp_re_union_array(sp_PolyArray *a) {
     if (v.tag == SP_TAG_STR) part = sp_re_escape(v.v.s ? v.v.s : "");
     else if (v.tag == SP_TAG_OBJ && v.cls_id == SP_BUILTIN_REGEX) part = sp_re_to_s_str(v.v.p);
     else { sp_raise_cls("TypeError", "no implicit conversion of element into String or Regexp"); return NULL; }
-    joined = (i == 0) ? part : sp_sprintf("%s|%s", joined, part);
+    /* sp_sprintf's %s stops at an embedded NUL, so a part carrying one was
+       joined short. Build the alternation byte-wise instead. */
+    if (i == 0) { joined = part; continue; }
+    {
+      size_t jl = sp_str_byte_len(joined), pl = sp_str_byte_len(part);
+      char *buf = sp_str_alloc_raw(jl + 1 + pl + 1);
+      memcpy(buf, joined, jl);
+      buf[jl] = '|';
+      memcpy(buf + jl + 1, part, pl);
+      buf[jl + 1 + pl] = 0;
+      sp_str_set_len(buf, jl + 1 + pl);
+      joined = buf;
+    }
   }
-  return re_compile(joined, (int64_t)strlen(joined), 0);
+  return re_compile(joined, (int64_t)sp_str_byte_len(joined), 0);
 }
 sp_PolyArray *sp_re_scan_poly(mrb_regexp_pattern *pat, const char *str) {
   SP_GC_ROOT_STR(str);
@@ -810,6 +831,7 @@ sp_PolyArray *sp_re_scan_poly(mrb_regexp_pattern *pat, const char *str) {
       char *m = sp_str_alloc_raw(len + 1);
       memcpy(m, str + caps[0], len);
       m[len] = 0;
+      sp_str_set_len(m, (size_t)len);
       sp_PolyArray_push(arr, sp_box_str(m));
     }
 else {
@@ -821,6 +843,7 @@ else {
           char *gm = sp_str_alloc_raw(glen + 1);
           memcpy(gm, str + caps[gi * 2], glen);
           gm[glen] = 0;
+          sp_str_set_len(gm, (size_t)glen);
           sp_PolyArray_push(row, sp_box_str(gm));
         }
 else {
@@ -859,6 +882,7 @@ sp_PolyArray *sp_re_match_data(mrb_regexp_pattern *pat, const char *str) {
       char *buf = sp_str_alloc_raw(len + 1);
       memcpy(buf, str + start, len);
       buf[len] = 0;
+      sp_str_set_len(buf, (size_t)len);
       sp_PolyArray_push(arr, sp_box_str(buf));
     }
 else {
@@ -1138,17 +1162,19 @@ const char *sp_MatchData_pre_match(sp_MatchData *m) {SP_GC_ROOT(m);
   int e = m->caps[0];
   if (e <= 0) return sp_str_empty;
   char *b = sp_str_alloc((size_t)e);
-  memcpy(b, m->source, e); b[e] = 0; sp_str_set_len(b, (size_t)e);
+  memcpy(b, m->source, e); b[e] = 0;
+  sp_str_set_len(b, (size_t)e);
   return b;
 }
 const char *sp_MatchData_post_match(sp_MatchData *m) {SP_GC_ROOT(m);
   if (!m) return sp_str_empty;
   int s = m->caps[1];
-  size_t sl = strlen(m->source);
+  size_t sl = sp_str_byte_len(m->source);
   if (s < 0 || (size_t)s >= sl) return sp_str_empty;
   size_t len = sl - (size_t)s;
   char *b = sp_str_alloc(len);
-  memcpy(b, m->source + s, len); b[len] = 0; sp_str_set_len(b, len);
+  memcpy(b, m->source + s, len); b[len] = 0;
+  sp_str_set_len(b, len);
   return b;
 }
 void sp_re_default_error_handler(const char *msg) {SP_GC_ROOT_STR(msg);
@@ -1162,6 +1188,7 @@ void sp_re_default_error_handler(const char *msg) {SP_GC_ROOT_STR(msg);
     char *buf = sp_str_alloc_raw(n + 1);
     memcpy(buf, msg, n);
     buf[n] = 0;
+    sp_str_set_len(buf, (size_t)n);
     msg = buf;
   }
   sp_raise_cls("RegexpError", msg);

@@ -514,7 +514,9 @@ int emit_regex_pat_to_buf(Compiler *c, int nid, Buf *b) {
     buf_printf(g_pre, "const char *_t%d = %s;\n", ts, pv.p ? pv.p : "\"\"");
     free(pv.p);
     emit_indent(g_pre, g_indent);
-    buf_printf(g_pre, "mrb_regexp_pattern *_t%d = re_compile(_t%d, (int64_t)strlen(_t%d), %d);\n", tp, ts, ts, flg);
+    /* the pattern text may hold a NUL (Regexp.new("a\0b")), and strlen would
+       compile only the part before it */
+    buf_printf(g_pre, "mrb_regexp_pattern *_t%d = re_compile(_t%d, (int64_t)sp_str_byte_len(_t%d), %d);\n", tp, ts, ts, flg);
     buf_printf(b, "_t%d", tp);
     return 1;
   }

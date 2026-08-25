@@ -2346,6 +2346,7 @@ re_compile(const char *pattern, mrb_int len, uint32_t flags)
   if (c.stripped) free(c.stripped);
   pat->source = (char *)malloc((size_t)orig_len + 1);
   if (pat->source) { memcpy(pat->source, orig_pattern, (size_t)orig_len); pat->source[orig_len] = 0; }
+  pat->source_len = (uint32_t)orig_len;
   return pat;
 }
 
@@ -2435,6 +2436,13 @@ extern const char *sp_sprintf(const char *fmt, ...);
 const char *sp_re_source(void *vpat) {
   mrb_regexp_pattern *pat = (mrb_regexp_pattern *)vpat;
   return (pat && pat->source) ? pat->source : "";
+}
+/* ...and its byte length, which a caller handing the text to the Ruby side
+   needs: `pat->source` is a plain malloc'd C string, so a NUL inside it would
+   end the value at a strlen. */
+uint32_t sp_re_source_len(void *vpat) {
+  mrb_regexp_pattern *pat = (mrb_regexp_pattern *)vpat;
+  return (pat && pat->source) ? pat->source_len : 0;
 }
 /* #inspect and #to_s render the source between delimiters, so a literal `/`
    that is not already backslash-escaped must be escaped (#3061). Returns a

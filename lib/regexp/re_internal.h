@@ -160,6 +160,8 @@ typedef struct mrb_regexp_pattern {
   int cached_list_capa;         /* capacity of cached thread lists */
   mrb_bool cache_in_use;        /* re-entrancy guard */
   char *source;                 /* the pattern text, for #source/#inspect/#to_s */
+  uint32_t source_len;          /* its BYTE length: the text may hold a NUL,
+                                   which a strlen on `source` would stop at */
 } mrb_regexp_pattern;
 
 /* Regexp flags */
