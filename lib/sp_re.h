@@ -27,7 +27,13 @@ int re_num_named(const mrb_regexp_pattern *pat);
 const char *re_named_name(const mrb_regexp_pattern *pat, int i, int *group_out);
 int re_named_group(const mrb_regexp_pattern *pat, const char *name);
 
-typedef struct { const char *source; int caps[64]; int ncap; const mrb_regexp_pattern *pat; } sp_MatchData;
+/* `caps` holds ncap*2 positions and lives in the SAME block as the struct, so
+   a MatchData costs what its match needs rather than what the widest one
+   would: it was a fixed caps[64], which is 256 bytes whether the pattern has
+   thirty groups or none, and every MatchData paid it. A 1-group match is 40
+   bytes now against 280. Nothing takes sizeof() of this outside sp_md_alloc(),
+   which is what a flexible array member costs. */
+typedef struct { const char *source; int ncap; const mrb_regexp_pattern *pat; int caps[]; } sp_MatchData;
 
 /* ---- match-register state (read by the generated TU and marked by its GC root
    hook). Per-thread in Ruby, so SP_TLS in the threaded build: each worker keeps

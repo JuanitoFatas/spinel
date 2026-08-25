@@ -56,16 +56,17 @@ const char *sp_re_last_paren_match(void) {
   return NULL;
 }
 void sp_MatchData_scan(void *p);   /* defined below */
+static sp_MatchData *sp_md_alloc(int pairs);   /* defined below */
 SP_TLS int sp_re_last_ncap = 0;
 SP_TLS const mrb_regexp_pattern *sp_re_last_pat = NULL;
 /* $~ as a first-class MatchData: build it lazily from the TLS match
    registers (NULL when the last match failed / none ran). */
 sp_MatchData *sp_re_last_matchdata(void) {
   if (!sp_re_last_str || sp_re_last_ncap <= 0 || sp_re_caps[0] < 0) return NULL;
-  sp_MatchData *md = (sp_MatchData *)sp_gc_alloc(sizeof(sp_MatchData), NULL, sp_MatchData_scan);
-  md->source = sp_re_last_str;
   int n = sp_re_last_ncap * 2;
   if (n > 64) n = 64;
+  sp_MatchData *md = sp_md_alloc(n / 2);
+  md->source = sp_re_last_str;
   for (int i = 0; i < n; i++) md->caps[i] = sp_re_caps[i];
   md->ncap = sp_re_last_ncap;
   md->pat = sp_re_last_pat;
@@ -867,6 +868,13 @@ else {
   return arr;
 }
 void sp_MatchData_scan(void *p) { sp_MatchData *m = (sp_MatchData *)p; if (m->source) sp_mark_string(m->source); }
+/* One block for the struct and the positions it carries, sized to the match
+   rather than to the widest one this engine allows. The single allocation is
+   also what keeps the two from ever disagreeing about who owns which. */
+static sp_MatchData *sp_md_alloc(int pairs) {
+  size_t sz = sizeof(sp_MatchData) + (size_t)pairs * 2 * sizeof(int);
+  return (sp_MatchData *)sp_gc_alloc(sz, NULL, sp_MatchData_scan);
+}
 sp_MatchData *sp_re_matchdata(mrb_regexp_pattern *pat, const char *str) {SP_GC_ROOT_STR(str);
   if (!str) return NULL;   /* Regexp#match(nil) is nil, not a walk off NULL (#3633) */
   int64_t slen = (int64_t)sp_str_byte_len(str);
@@ -880,7 +888,7 @@ sp_MatchData *sp_re_matchdata(mrb_regexp_pattern *pat, const char *str) {SP_GC_R
   }
   int pairs = (n > 64 ? 64 : n) / 2;
   sp_re_set_captures(str, caps, pairs);
-  sp_MatchData *m = (sp_MatchData *)sp_gc_alloc(sizeof(sp_MatchData), NULL, sp_MatchData_scan);
+  sp_MatchData *m = sp_md_alloc(pairs);
   m->source = str;
   m->ncap = pairs;
   m->pat = pat;
@@ -905,7 +913,7 @@ sp_MatchData *sp_re_matchdata_at(mrb_regexp_pattern *pat, const char *str, sp_in
   }
   int pairs = (n > 64 ? 64 : n) / 2;
   sp_re_set_captures(str, caps, pairs);
-  sp_MatchData *m = (sp_MatchData *)sp_gc_alloc(sizeof(sp_MatchData), NULL, sp_MatchData_scan);
+  sp_MatchData *m = sp_md_alloc(pairs);
   m->source = str;
   m->ncap = pairs;
   m->pat = pat;
