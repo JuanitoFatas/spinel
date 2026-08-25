@@ -2605,6 +2605,8 @@ else {
     if (rty && sp_streq(rty, "ConstantReadNode") &&
         nt_str(nt, recv, "name") && sp_streq(nt_str(nt, recv, "name"), "Marshal")) {
       if (sp_streq(name, "dump") && argc == 1) return TY_STRING;
+      /* Marshal.dump(obj, io) writes the bytes to io and answers io (#4112) */
+      if (sp_streq(name, "dump") && argc == 2) return TY_IO;
       if (sp_streq(name, "load") && argc == 1) return TY_POLY;
     }
     if (rty && sp_streq(rty, "ConstantReadNode") &&

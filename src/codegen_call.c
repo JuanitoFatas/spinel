@@ -20583,9 +20583,29 @@ else { memcpy(dir, sf, n); dir[n] = 0; } }
       buf_puts(b, "sp_marshal_dump("); emit_boxed(c, argv[0], b); buf_puts(b, ")");
       return;
     }
+    /* Marshal.dump(obj, io): the bytes go to the stream and the stream comes
+       back. Written binary -- a dump is full of NULs, so the length has to
+       come from the header rather than from strlen. */
+    if (sp_streq(name, "dump") && argc == 2 && comp_ntype(c, argv[1]) == TY_IO) {
+      int t = ++g_tmp;
+      buf_printf(b, "({ sp_File *_t%d = ", t); emit_expr(c, argv[1], b);
+      buf_printf(b, "; sp_File_write_bin(_t%d, sp_marshal_dump(", t);
+      emit_boxed(c, argv[0], b);
+      buf_printf(b, ")); _t%d; })", t);
+      return;
+    }
     if (sp_streq(name, "load") && argc == 1) {
       int t = ++g_tmp;
-      buf_printf(b, "({ const char *_t%d = ", t); emit_str_expr(c, argv[0], b);
+      buf_printf(b, "({ const char *_t%d = ", t);
+      /* Marshal.load takes either the bytes or an IO to read them from. The
+         stream form used to reach emit_str_expr, which handed the sp_File*
+         over as though the handle itself were the bytes (#4112). */
+      if (comp_ntype(c, argv[0]) == TY_IO) {
+        buf_puts(b, "sp_File_read("); emit_expr(c, argv[0], b); buf_puts(b, ")");
+      }
+else {
+        emit_str_expr(c, argv[0], b);
+      }
       buf_printf(b, "; sp_marshal_load(_t%d, (sp_int)sp_str_byte_len(_t%d)); })", t, t);
       return;
     }
