@@ -1356,7 +1356,13 @@ compile_atom(re_compiler *c)
       uint16_t group = 0;
       if (capturing) {
         if (c->num_captures >= RE_MAX_CAPTURES) {
-          compile_error(c, "too many capture groups");
+          /* Name the ceiling: without it the message says a pattern is too
+             wide without saying what would fit, and the number is not one a
+             reader can guess. */
+          char buf[64];
+          snprintf(buf, sizeof buf, "too many capture groups (maximum %d)",
+                   RE_MAX_CAPTURES - 1);
+          compile_error(c, buf);
         }
         group = c->num_captures++;
         emit(c, RE_SAVE, 0, group * 2);

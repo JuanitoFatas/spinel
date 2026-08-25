@@ -432,6 +432,17 @@ Building the regexp engine with `-DRE_NO_UNICODE_CASE` (`make
 RE_CASE_FLAGS=-DRE_NO_UNICODE_CASE`) leaves the ~3KB fold table out and folds
 ASCII alone; a non-ASCII literal then matches literally under `/i` too.
 
+**A pattern may have at most 31 capture groups.** The match registers `$~`
+and `$1`..`$9` are built from hold that many, and so does the frame that saves
+them across a call to a method that matches, so a wider pattern is refused
+with `too many capture groups (maximum 31)` rather than compiled and then
+truncated to what fits. CRuby has no ceiling here. 31 is where the registers
+sit rather than where a program is likely to need to stop: of the 8,135 regexp
+literals in CRuby 4.0.4's stdlib and bundled gems, the widest has 8 capture
+groups. `(?:...)` costs nothing against it, and a named group counts as one.
+The refusal is at compile time for a literal and at run time for a pattern
+built there.
+
 **A regexp literal is compiled when the program is.** A pattern the engine
 cannot read is refused at compile time rather than raising `RegexpError` when
 the built program reaches the literal, which is where CRuby reports it too

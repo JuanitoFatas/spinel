@@ -198,13 +198,23 @@ typedef struct mrb_regexp_pattern {
 #define MRB_REGEXP_FRAME_LIMIT 10000
 #endif
 
-/* Maximum captures. Sized for realistic code: complex parsers rarely
-   exceed ~50-100 capture groups. Pathological inputs like depth-500
-   `((((...((a))...))))` raise RegexpError, which is the same
-   "fail-gracefully on absurd input" stance as MRB_REGEXP_STACK_LIMIT
-   above. Runtime memory scales with actual ncap per regex (see
-   re_exec.c comment) so this is purely a compile-time cap. */
-#define RE_MAX_CAPTURES 128
+/* Maximum captures, group 0 included, so 31 groups of one's own.
+
+   The number is what the match registers hold: $~ is built from
+   sp_re_caps[], the frame that saves those across a method call carries a
+   copy, and both are sized by this. A pattern past it used to compile and
+   then be TRUNCATED there, so `m.size` answered 32 where CRuby answered 41
+   and every group above the thirty-first read nil -- the two ceilings, this
+   one and the registers', disagreed and the wider one lost quietly.
+
+   They agree now, and a pattern past it is refused rather than cut. 32 is
+   where the registers sit rather than where a program is likely to need to
+   stop: of the 8,135 regexp literals in CRuby 4.0.4's stdlib and bundled
+   gems the widest has 8 groups, and none has more than 20. Widening it is
+   not free either -- the frame is on the stack of every method that matches,
+   so taking this to 128 takes a matching method's recursion depth from
+   15,000 to 6,000. */
+#define RE_MAX_CAPTURES 32
 
 /* Thread struct for Pike VM. `sp` is the input position the thread is
    waiting for; the outer loop only dispatches a thread when its sp
