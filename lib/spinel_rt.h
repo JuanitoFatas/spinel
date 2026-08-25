@@ -1547,8 +1547,29 @@ static sp_bool sp_poly_truthy(sp_RbVal v) { return !(v.tag == SP_TAG_NIL || (v.t
    has to make it here rather than settling on the truthy arm -- which read
    every Integer, 0 included, as IGNORECASE. A nil out of an Integer slot is
    the sentinel, and nil is no options at all. */
+/* ...and as flag LETTERS, which is what a String argument carries: "mix" in
+   any order and any repetition, and nothing else. An unknown letter is an
+   ArgumentError naming it, as in CRuby, where `n`, `u` and `o` are unknown
+   too. The empty string is no options. */
+static uint32_t sp_re_opts_from_str(const char *s) {
+  uint32_t f = 0;
+  if (!s) return 0u;
+  for (const char *p = s; *p; p++) {
+    switch (*p) {
+    case 'm': f |= 4u; break;   /* the PUBLIC bits, translated below */
+    case 'i': f |= 1u; break;
+    case 'x': f |= 2u; break;
+    default:
+      sp_raise_cls("ArgumentError",
+                   sp_sprintf("unknown regexp option: %c", *p));
+    }
+  }
+  return sp_re_opts_to_flags((sp_int)f);
+}
+
 static uint32_t sp_re_opts_from_poly(sp_RbVal v) {
   if (v.tag == SP_TAG_INT) return v.v.i == SP_INT_NIL ? 0u : sp_re_opts_to_flags(v.v.i);
+  if (v.tag == SP_TAG_STR) return sp_re_opts_from_str(v.v.s);
   return sp_poly_truthy(v) ? 1u : 0u;
 }
 /* poly & / | / ^ dispatch on the receiver's runtime tag: nil/false/true take

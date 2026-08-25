@@ -345,6 +345,10 @@ static void emit_re_opts_flags(Compiler *c, int argc, const int *argv, Buf *out)
     /* internal RE_FLAG_IGNORECASE == 1 */
     buf_puts(out, "(("); emit_expr(c, argv[1], out); buf_puts(out, ") ? 1u : 0u)");
   }
+  else if (ot == TY_STRING) {
+    /* a String carries flag LETTERS, not a truthy value: "x" is EXTENDED */
+    buf_puts(out, "sp_re_opts_from_str("); emit_str_expr(c, argv[1], out); buf_puts(out, ")");
+  }
   else {
     /* The type is not known here, so the choice is made where the value is:
        an Integer is option bits and anything else truthy is IGNORECASE, which
