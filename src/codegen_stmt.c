@@ -4061,12 +4061,33 @@ void emit_case_branch_value(Compiler *c, int stmts, TyKind rt, int cr, Buf *b) {
   int n = 0;
   const int *bb = stmts >= 0 ? nt_arr(nt, stmts, "body", &n) : NULL;
   for (int k = 0; k < n - 1; k++) emit_stmt(c, bb[k], b, 0);
+  TyKind lt = n > 0 ? comp_ntype(c, bb[n - 1]) : TY_NIL;
+  /* An empty `[]`/`{}` tail caches TY_UNKNOWN on its own -- an empty literal
+     carries no element type until something supplies one -- so build it
+     against the case's own result type here, the same role g_ret_type plays
+     for an empty literal in a method's tail position (mirrors
+     emit_ternary_arm's handling of the same literal in an if/unless value
+     position). Falling through to the value-less-tail arm below would run it
+     for effect and leave _crN at rt's default instead. */
+  if (n > 0 && lt == TY_UNKNOWN) {
+    const char *lty = nt_type(nt, bb[n - 1]);
+    int len = 0;
+    if (lty && sp_streq(lty, "ArrayNode")) {
+      nt_arr(nt, bb[n - 1], "elements", &len);
+      const char *rk = rt == TY_POLY_ARRAY ? "Poly" : array_kind(rt);
+      if (len == 0 && rk) { buf_printf(b, "_cr%d = sp_%sArray_new(); ", cr, rk); return; }
+    }
+    else if (lty && (sp_streq(lty, "HashNode") || sp_streq(lty, "KeywordHashNode"))) {
+      nt_arr(nt, bb[n - 1], "elements", &len);
+      const char *hc = ty_hash_cname(rt);
+      if (len == 0 && hc) { buf_printf(b, "_cr%d = sp_%sHash_new(); ", cr, hc); return; }
+    }
+  }
   /* a value-less tail (nil/void/unknown -- e.g. an arm ending in `puts` or
      a writer call, doom's debug-toggle arms in GosuWindow#button_down):
      run it as a statement and leave the arm value at the slot default,
      mirroring the if-as-value emitter. Assigning it would route the tail
      through emit_expr, which has no expression form for it. */
-  TyKind lt = n > 0 ? comp_ntype(c, bb[n - 1]) : TY_NIL;
   if (n > 0 && (lt == TY_NIL || lt == TY_VOID || lt == TY_UNKNOWN)) {
     emit_stmt(c, bb[n - 1], b, 0);
     buf_printf(b, "_cr%d = %s; ", cr, rt == TY_POLY ? "sp_box_nil()" : default_value(rt));
