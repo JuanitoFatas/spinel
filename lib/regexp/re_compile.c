@@ -27,6 +27,9 @@ struct re_compiler_s {
   uint16_t class_capa;
   uint16_t num_captures;
   uint32_t flags;
+  uint32_t orig_flags;  /* the flags re_compile() was called with, for error
+                           messages: unlike `flags`, an inline option such as
+                           `(?i)` does not change this */
   re_named_capture *named_captures;
   uint16_t num_named;
   mrb_bool has_backref;
@@ -82,6 +85,23 @@ void sp_re_set_error_handler(void (*fn)(const char *msg)) {
 
 static __attribute__((noreturn)) void compile_error(re_compiler *c, const char *msg);
 
+/* Write the set flags among m/i/x into `buf` as letters, in the order
+   Regexp#to_s and Regexp#inspect write them, and NUL-terminate. `buf` holds
+   4 bytes. Shared so a compile error can quote a pattern the way
+   Regexp#inspect would, `/pattern/flags`, without a second copy of the order.
+   Regexp#to_s keeps its own loop: it also tracks the flags that are off,
+   which this does not need. (ported from mruby-regexp a23691440) */
+#define RE_FLAGS_STR_SIZE 4
+static void
+re_flags_cat(char *buf, uint32_t flags)
+{
+  int n = 0;
+  if (flags & RE_FLAG_DOTALL) buf[n++] = 'm';
+  if (flags & RE_FLAG_IGNORECASE) buf[n++] = 'i';
+  if (flags & RE_FLAG_EXTENDED) buf[n++] = 'x';
+  buf[n] = 0;
+}
+
 /* CRuby's `invalid group name <...>` quotes the name it could not read.
    Upstream spells the slice through mrb_format's %l; compile_error here takes
    a plain string, so the quoting happens first. */
@@ -98,9 +118,18 @@ compile_error(re_compiler *c, const char *msg)
 {
   /* Build the message before freeing: in /x (extended) mode c->src aliases
      c->stripped, so reading it after the free would be a use-after-free. */
+  /* The suffix uses c->orig_flags, not c->flags: an inline option such as
+     `(?i)` mutates the latter partway through the parse, where CRuby's
+     message (and Regexp#inspect) reports the flags the pattern was compiled
+     WITH. So `Regexp.new("(?-x)a # c[", Regexp::EXTENDED)` still reports /x.
+     Quoting the flags is what lets the message be pasted back into
+     Regexp.new to reproduce the failure. (ported from mruby-regexp
+     24fb9124a) */
+  char fl[RE_FLAGS_STR_SIZE];
+  re_flags_cat(fl, c->orig_flags);
   char buf[1024];
-  snprintf(buf, sizeof(buf), "%s: /%.*s/",
-           msg, (int)(c->src_end - c->src), c->src);
+  snprintf(buf, sizeof(buf), "%s: /%.*s/%s",
+           msg, (int)(c->src_end - c->src), c->src, fl);
   /* Free all half-built compiler state: a catchable RegexpError handler
      longjmps out and `c` never returns to re_compile, so the bytecode,
      char-class ranges, and named-capture names would otherwise leak. (On
@@ -2215,6 +2244,7 @@ re_compile(const char *pattern, mrb_int len, uint32_t flags)
   c.src_end = pattern + len;
   c.p = pattern;
   c.flags = flags;
+  c.orig_flags = flags;
   c.num_captures = 1;  /* group 0 = whole match */
   c.has_named_group = re_src_has_named_group(c.p, c.src_end);
 
@@ -2416,12 +2446,8 @@ static char *sp_re_slash_escaped(const char *src) {
 }
 const char *sp_re_inspect_str(void *vpat) {
   mrb_regexp_pattern *pat = (mrb_regexp_pattern *)vpat;
-  char fl[4]; int n = 0;
-  uint32_t f = pat ? pat->flags : 0;
-  if (f & RE_FLAG_DOTALL) fl[n++] = 'm';
-  if (f & RE_FLAG_IGNORECASE) fl[n++] = 'i';
-  if (f & RE_FLAG_EXTENDED) fl[n++] = 'x';
-  fl[n] = 0;
+  char fl[RE_FLAGS_STR_SIZE];
+  re_flags_cat(fl, pat ? pat->flags : 0);
   char *esc = sp_re_slash_escaped(sp_re_source(pat));
   const char *res = sp_sprintf("/%s/%s", esc ? esc : sp_re_source(pat), fl);
   free(esc);
