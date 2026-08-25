@@ -6893,10 +6893,13 @@ static int emit_class_new_call(Compiler *c, int id, Buf *b) {
         /* String.new(str = "", capacity:, encoding:): always a mutable heap copy.
            The capacity/encoding keyword arguments are hints that do not change
            the value, so the content is the leading positional argument (when it
-           is not itself the keyword hash). */
+           is not itself the keyword hash). emit_str_expr emits it as a plain
+           `const char *` for sp_str_dup_external, unboxing a poly-typed
+           argument through sp_poly_arg_str_chk (which raises TypeError like
+           CRuby for a non-String, non-to_str value). */
         const char *a0ty = argc >= 1 ? nt_type(nt, argv[0]) : NULL;
         int has_content = argc >= 1 && !(a0ty && sp_streq(a0ty, "KeywordHashNode"));
-        if (has_content) { buf_puts(b, "sp_str_dup_external("); emit_expr(c, argv[0], b); buf_puts(b, ")"); }
+        if (has_content) { buf_puts(b, "sp_str_dup_external("); emit_str_expr(c, argv[0], b); buf_puts(b, ")"); }
         else buf_puts(b, "sp_str_dup_external((&(\"\\xff\")[1]))");
         return 1;
       }
