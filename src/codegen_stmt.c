@@ -1488,12 +1488,32 @@ int static_isa_cond(Compiler *c, int pred) {
   return 0;
 }
 
+/* A writer the compiler SYNTHESIZES -- attr_writer / attr_accessor, a Struct
+   member, or one reached through a superclass or an included module -- has no
+   body in the AST, so `obj.foo = v` is a CallNode that the write scan below
+   cannot see. Its only visible write is then whatever the constructor assigns,
+   and a nil there reads as "never true" while the real value arrives through
+   the setter (#4107). A hand-written `def foo=(v); @foo = v; end` is not
+   affected: its body holds a real write node the scan already counts. */
+static int ivar_has_generated_writer(Compiler *c, const char *nm) {
+  const char *base = nm + 1;            /* "@foo" -> "foo" */
+  for (int k = 0; k < c->nclasses; k++) {
+    const ClassInfo *ci = &c->classes[k];
+    for (int w = 0; w < ci->nwriters; w++)
+      if (ci->writers[w] && sp_streq(ci->writers[w], base)) return 1;
+    for (int w = 0; w < ci->nsg_writers; w++)
+      if (ci->sg_writers[w] && sp_streq(ci->sg_writers[w], base)) return 1;
+  }
+  return 0;
+}
+
 /* Scan every program-wide write to ivar `nm` ("@foo"): returns 0 when at least
    one write exists and all of them assign nil (statically falsy), -1 otherwise
    (no writes seen, a non-nil write, or an opaque write form). */
 static int ivar_all_writes_nil(Compiler *c, const char *nm) {
   const NodeTable *nt = c->nt;
   if (!nm) return -1;
+  if (ivar_has_generated_writer(c, nm)) return -1;
   int saw_write = 0;
   for (int id = 0; id < nt->count; id++) {
     const char *ty = nt_type(nt, id);
@@ -1512,6 +1532,21 @@ static int ivar_all_writes_nil(Compiler *c, const char *nm) {
              sp_streq(ty, "InstanceVariableTargetNode")) {
       const char *wn = nt_str(nt, id, "name");
       if (wn && sp_streq(wn, nm)) return -1;  /* other write forms: unknown */
+    }
+    else if (sp_streq(ty, "CallNode")) {
+      /* instance_variable_set writes an ivar the scan cannot attribute
+         syntactically. A literal symbol names its target, so only a matching
+         one disqualifies; a computed name could be any ivar. */
+      const char *cn = nt_str(nt, id, "name");
+      if (!cn || !sp_streq(cn, "instance_variable_set")) continue;
+      int args = nt_ref(nt, id, "arguments");
+      int ac = 0; const int *av = args >= 0 ? nt_arr(nt, args, "arguments", &ac) : NULL;
+      if (ac < 1 || !av) return -1;
+      const char *aty = nt_type(nt, av[0]);
+      if (!aty || !sp_streq(aty, "SymbolNode")) return -1;   /* computed name */
+      const char *sv = nt_str(nt, av[0], "value");
+      if (!sv) return -1;
+      if (sp_streq(sv, nm) || (sv[0] != '@' && sp_streq(sv, nm + 1))) return -1;
     }
   }
   return saw_write ? 0 : -1;
