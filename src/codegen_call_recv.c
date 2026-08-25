@@ -11867,6 +11867,40 @@ int emit_poly_call(Compiler *c, int id, Buf *b) {
       return 1;
     }
   }
+  /* The argument-taking String methods on a poly receiver, outside the argc==0
+     block for the same reason ljust is: that block is guarded on argc == 0, so
+     an arm for these placed inside it can never be entered. Each reuses the
+     runtime function the concrete arm calls, and declines to a user class
+     owning the name, as the neighbours do. */
+  if (recv >= 0 && rt == TY_POLY && !user_defines_or_reads(c, name) &&
+      ((sp_streq(name, "unpack") && argc == 1) ||
+       (sp_streq(name, "byteslice") && (argc == 1 || argc == 2)) ||
+       (sp_streq(name, "scrub") && argc == 1) ||
+       (sp_streq(name, "encode") && (argc == 1 || argc == 2)))) {
+    if (sp_streq(name, "unpack")) {
+      buf_puts(b, "sp_box_poly_array(sp_str_unpack(sp_poly_recv_s(");
+      emit_expr(c, recv, b); buf_puts(b, ", \"unpack\"), ");
+      emit_str_expr(c, argv[0], b); buf_puts(b, "))");
+    }
+    else if (sp_streq(name, "byteslice")) {
+      buf_printf(b, "sp_box_nullable_str(sp_str_byteslice%s(sp_poly_recv_s(",
+                 argc == 1 ? "1" : "");
+      emit_expr(c, recv, b); buf_puts(b, ", \"byteslice\"), ");
+      emit_int_expr(c, argv[0], b);
+      if (argc == 2) { buf_puts(b, ", "); emit_int_expr(c, argv[1], b); }
+      buf_puts(b, "))");
+    }
+    else if (sp_streq(name, "scrub")) {
+      buf_puts(b, "sp_box_str(sp_str_scrub(sp_poly_recv_s(");
+      emit_expr(c, recv, b); buf_puts(b, ", \"scrub\"), ");
+      emit_str_expr(c, argv[0], b); buf_puts(b, "))");
+    }
+    else {  /* encode: every string here is UTF-8, so it only unboxes */
+      buf_puts(b, "sp_box_str(sp_poly_recv_s(");
+      emit_expr(c, recv, b); buf_puts(b, ", \"encode\"))");
+    }
+    return 1;
+  }
   /* Data#with on a poly receiver (a Data read out of a container): build a
      symbol-keyed override hash from the keyword args, then dispatch by cls_id
      to a copy-update constructor (#2890). */

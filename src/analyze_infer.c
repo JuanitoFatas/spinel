@@ -4189,6 +4189,14 @@ else {
            sp_streq(name, "valid_encoding?") || sp_streq(name, "encode") ||
            sp_streq(name, "scrub")))
         return an_poly_concrete(c, name, TY_POLY);
+      /* ...and the same names where they take arguments. unpack answers a
+         boxed array, byteslice a boxed String or nil; the codegen arm for
+         these sits outside its argc==0 block, and this mirrors it. */
+      if ((sp_streq(name, "unpack") && argc == 1) ||
+          (sp_streq(name, "byteslice") && (argc == 1 || argc == 2)) ||
+          (sp_streq(name, "scrub") && argc == 1) ||
+          (sp_streq(name, "encode") && (argc == 1 || argc == 2)))
+        return an_poly_concrete(c, name, TY_POLY);
       /* poly.ljust/rjust/center(width[, pad]): a String read from a container
          widened to poly; emit_poly_call pads via sp_poly_to_s and re-boxes, so
          the result stays poly (#3222). */
