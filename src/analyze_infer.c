@@ -3971,11 +3971,6 @@ else {
   }
 
   /* array receiver methods */
-  /* a bare [] literal receiver types UNKNOWN until pushes promote it, but
-     its blockless each is still an Enumerator */
-  if (recv >= 0 && rt == TY_UNKNOWN && nt_type(nt, recv) && sp_streq(nt_type(nt, recv), "ArrayNode") &&
-      nt_ref(nt, id, "block") < 0 && argc == 0 &&
-      (sp_streq(name, "each") || sp_streq(name, "reverse_each"))) return TY_ENUMERATOR;
   /* Array receivers: the array face of infer_call (analyze_infer_recv.c). */
   { TyKind rr; if (infer_array_call(c, id, rt, &rr)) return rr; }
 
