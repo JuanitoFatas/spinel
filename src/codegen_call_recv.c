@@ -5662,6 +5662,14 @@ else {
         buf_printf(b, "({ sp_%sHash *_t%d = sp_%sHash_dup(", hn, t, hn);
         emit_expr(c, recv, b);
         buf_printf(b, "); SP_GC_ROOT(_t%d);", t);
+        /* except answers a fresh hash: no default, no default proc */
+        {
+          TyKind evt = ty_hash_val(rt);
+          if (evt == TY_POLY)
+            buf_printf(b, " _t%d->default_v = sp_box_nil(); _t%d->dproc = NULL; _t%d->dproc_self = NULL;", t, t, t);
+          else if (evt == TY_STRING) buf_printf(b, " _t%d->default_v = NULL;", t);
+          else buf_printf(b, " _t%d->default_v = SP_INT_NIL;", t);
+        }
         for (int i = 0; i < argc; i++) {
           /* a splatted key list deletes each of its members (#3561) */
           if (nt_type(nt, argv[i]) && sp_streq(nt_type(nt, argv[i]), "SplatNode")) {
@@ -5933,6 +5941,8 @@ else {
           int th = ++g_tmp, tr = ++g_tmp, ti = ++g_tmp;
           buf_printf(b, "({ sp_PolyPolyHash *_t%d = ", th); emit_expr(c, recv, b);
           buf_printf(b, "; sp_PolyPolyHash *_t%d = sp_PolyPolyHash_new(); SP_GC_ROOT(_t%d);", tr, tr);
+          /* compact keeps the default and default proc, like dup */
+          buf_printf(b, " _t%d->default_v = _t%d->default_v; _t%d->dproc = _t%d->dproc; _t%d->dproc_self = _t%d->dproc_self;", tr, th, tr, th, tr, th);
           buf_printf(b, " for (sp_int _t%d = 0; _t%d < _t%d->len; _t%d++) {", ti, ti, th, ti);
           buf_printf(b, " sp_RbVal _v%d = _t%d->vals[_t%d->order[_t%d]];", ti, th, th, ti);
           buf_printf(b, " if (!sp_poly_nil_p(_v%d)) sp_PolyPolyHash_set(_t%d, _t%d->keys[_t%d->order[_t%d]], _v%d); }", ti, tr, th, th, ti, ti);
@@ -5943,6 +5953,7 @@ else {
           int th = ++g_tmp, tr = ++g_tmp, ti = ++g_tmp;
           buf_printf(b, "({ sp_%sHash *_t%d = ", hn, th); emit_expr(c, recv, b);
           buf_printf(b, "; sp_%sHash *_t%d = sp_%sHash_new(); SP_GC_ROOT(_t%d);", hn, tr, hn, tr);
+          buf_printf(b, " _t%d->default_v = _t%d->default_v; _t%d->dproc = _t%d->dproc; _t%d->dproc_self = _t%d->dproc_self;", tr, th, tr, th, tr, th);
           buf_printf(b, " for (sp_int _t%d = 0; _t%d < _t%d->len; _t%d++) {", ti, ti, th, ti);
           buf_printf(b, " sp_RbVal _v%d = sp_%sHash_get(_t%d, _t%d->order[_t%d]);", ti, hn, th, th, ti);
           buf_printf(b, " if (!sp_poly_nil_p(_v%d)) sp_%sHash_set(_t%d, _t%d->order[_t%d], _v%d); }", ti, hn, tr, th, ti, ti);
