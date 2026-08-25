@@ -3464,7 +3464,18 @@ else {
                    k, o, k, k, o, k, t, k, o, k, t, o);
         return 1;
       }
+      /* a typed array never holds an element of another kind: include? is
+         false and index is nil, with both operands still evaluated */
+      int elem_mismatch = 0;
+      if (argc == 1 && rt == TY_STR_ARRAY && a0 != TY_STRING && a0 != TY_UNKNOWN && a0 != TY_POLY) elem_mismatch = 1;
+      if (argc == 1 && (rt == TY_INT_ARRAY || rt == TY_FLOAT_ARRAY) &&
+          a0 != TY_INT && a0 != TY_FLOAT && a0 != TY_UNKNOWN && a0 != TY_POLY) elem_mismatch = 1;
       if ((sp_streq(name, "index") || sp_streq(name, "find_index") || sp_streq(name, "rindex")) && argc == 1 && (rt == TY_INT_ARRAY || rt == TY_STR_ARRAY)) {
+        if (elem_mismatch) {
+          buf_puts(b, "((void)("); emit_expr(c, recv, b);
+          buf_puts(b, "), (void)("); emit_expr(c, argv[0], b); buf_puts(b, "), sp_box_nil())");
+          return 1;
+        }
         /* nil-on-miss -> poly */
         const char *fn = sp_streq(name, "rindex") ? "rindex_poly" : "index_poly";
         buf_printf(b, "sp_%sArray_%s(", k, fn);
@@ -3473,15 +3484,8 @@ else {
         buf_puts(b, ")");
         return 1;
       }
-      if (sp_streq(name, "include?") && argc == 1) {
-        /* a typed array can never contain an element of an incompatible
-           type (numeric vs string), so the answer is statically false;
-           still evaluate both operands for any side effects. */
-        int mismatch = 0;
-        if (rt == TY_STR_ARRAY && a0 != TY_STRING && a0 != TY_UNKNOWN && a0 != TY_POLY) mismatch = 1;
-        if ((rt == TY_INT_ARRAY || rt == TY_FLOAT_ARRAY) &&
-            a0 != TY_INT && a0 != TY_FLOAT && a0 != TY_UNKNOWN && a0 != TY_POLY) mismatch = 1;
-        if (mismatch) {
+      if ((sp_streq(name, "include?") || sp_streq(name, "member?")) && argc == 1) {
+        if (elem_mismatch) {
           buf_puts(b, "((void)("); emit_expr(c, recv, b);
           buf_puts(b, "), (void)("); emit_expr(c, argv[0], b); buf_puts(b, "), 0)");
           return 1;
@@ -3988,7 +3992,13 @@ else {
         buf_puts(b, "sp_PolyArray_get("); emit_expr(c, recv, b); buf_puts(b, ", 0)");
         return 1;
       }
-      if ((sp_streq(name, "to_a") || sp_streq(name, "entries")) && argc == 0) { emit_expr(c, recv, b); return 1; }
+      if ((sp_streq(name, "to_a") || sp_streq(name, "entries") || sp_streq(name, "to_ary") ||
+           sp_streq(name, "deconstruct")) && argc == 0) { emit_expr(c, recv, b); return 1; }
+      if ((sp_streq(name, "union") || sp_streq(name, "difference") || sp_streq(name, "intersection")) &&
+          argc == 0) {
+        buf_puts(b, "sp_PolyArray_dup("); emit_expr(c, recv, b); buf_puts(b, ")");
+        return 1;
+      }
       if (sp_streq(name, "fetch") && (argc == 1 || argc == 2)) {
         int blk = nt_ref(nt, id, "block");
         int ta = ++g_tmp, ti = ++g_tmp, tn = ++g_tmp, tnorm = ++g_tmp;

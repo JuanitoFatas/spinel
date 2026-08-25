@@ -6183,6 +6183,9 @@ TyKind infer_uncached(Compiler *c, int id) {
          non-block empty-literal folds keep working. */
       if (c->empty_arr_recv && id < c->node_cap && c->empty_arr_recv[id])
         return TY_POLY_ARRAY;
+      /* kind fixed by the use context (mark_empty_array_operands) */
+      if (c->arr_want && id < c->node_cap && ty_is_array(c->arr_want[id]))
+        return c->arr_want[id];
       return TY_UNKNOWN;  /* empty: element type comes from usage */
     }
     TyKind e = TY_UNKNOWN;
