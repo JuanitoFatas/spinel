@@ -8623,6 +8623,19 @@ static sp_PolyPolyHash *sp_poly_hash_merge(sp_RbVal a, sp_RbVal b) {
   SP_GC_ROOT_RBVAL(a); SP_GC_ROOT_RBVAL(b);
   sp_PolyPolyHash *r = sp_PolyPolyHash_new();
   SP_GC_ROOT(r);
+  /* merge inherits the receiver's default; cross-layout receivers arrive boxed */
+  if (a.tag == SP_TAG_OBJ && a.v.p) {
+    switch (a.cls_id) {
+      case SP_BUILTIN_STR_INT_HASH: r->default_v = sp_box_int_or_nil(((sp_StrIntHash *)a.v.p)->default_v); break;
+      case SP_BUILTIN_STR_STR_HASH: r->default_v = sp_box_nullable_str(((sp_StrStrHash *)a.v.p)->default_v); break;
+      case SP_BUILTIN_INT_STR_HASH: r->default_v = sp_box_nullable_str(((sp_IntStrHash *)a.v.p)->default_v); break;
+      case SP_BUILTIN_INT_INT_HASH: r->default_v = sp_box_int_or_nil(((sp_IntIntHash *)a.v.p)->default_v); break;
+      case SP_BUILTIN_STR_POLY_HASH: r->default_v = ((sp_StrPolyHash *)a.v.p)->default_v; break;
+      case SP_BUILTIN_SYM_POLY_HASH: r->default_v = ((sp_SymPolyHash *)a.v.p)->default_v; break;
+      case SP_BUILTIN_POLY_POLY_HASH: r->default_v = ((sp_PolyPolyHash *)a.v.p)->default_v; break;
+      default: break;
+    }
+  }
   sp_RbVal hs[2]; hs[0] = a; hs[1] = b;
   for (int h = 0; h < 2; h++) {
     if (hs[h].tag != SP_TAG_OBJ || !sp_poly_is_hash_kind(hs[h].cls_id)) continue;
