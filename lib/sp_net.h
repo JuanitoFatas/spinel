@@ -112,6 +112,14 @@ const char *sp_net_recv_all(int fd, int max_bytes);
 int         sp_net_write_str(int fd, const char *s);
 int         sp_net_write_bytes(int fd, const char *data, int n);
 
+/* Non-blocking write: takes what the socket will accept now and answers how
+ * much that was, so the caller keeps the backpressure policy. write_str /
+ * write_bytes above block until everything is written, which for fan-out
+ * means one slow peer delays every other. Returns >0 bytes accepted, 0 when
+ * the peer is alive but its buffer is full (wait for WRITE readiness and call
+ * again with the remainder), -1 when the connection is gone. */
+int         sp_net_write_partial(int fd, const char *data, int n);
+
 /* ---- poll(2) ----
  * reset clears the slot table; add registers (fd, mode_bits) where
  * 1=READ, 2=WRITE and returns the slot index; run blocks up to
@@ -125,12 +133,46 @@ int         sp_net_write_bytes(int fd, const char *data, int n);
  * "not registered this round" by the return value alone.
  *
  * The set is rebuilt every tick (reset/add/.../run), which costs the caller
- * O(fds) per tick whatever the backend underneath. A persistent-registration
- * shape would cost O(events); see matz/spinel#4103. */
+ * O(fds) per tick whatever the backend underneath. The persistent-registration
+ * calls below cost O(events) instead; prefer them for a connection-holding
+ * server. */
 int sp_net_poll_reset(void);
 int sp_net_poll_add(int fd, int mode_bits);
 int sp_net_poll_run(int timeout_ms);
 int sp_net_poll_ready(int slot);
+
+/* ---- poll(2), persistent registration ----
+ * The four above rebuild the set every tick, so a caller with N parked fds
+ * does O(N) work per tick however few of them are ready. These register once
+ * per connection instead: wait() answers how many fds fired, and
+ * event_fd/event_mode(i) read the i'th of those, so the caller's work is
+ * proportional to EVENTS rather than to connections.
+ *
+ * register(fd, mode_bits) adds or, if fd is already registered, updates it;
+ * modify changes the interest (e.g. adding WRITE while a send is pending);
+ * unregister drops it. mode_bits are 1=READ, 2=WRITE as above, and
+ * event_mode folds POLLHUP/POLLERR into READ as ready() does. register /
+ * modify / unregister answer 0, or -1 for an unregistered fd or an allocator
+ * refusal (which is also reported on stderr). wait returns the ready count,
+ * or -1 if shutdown was requested. registered() is the current set size.
+ *
+ * The events wait() reports are a snapshot, so unregistering an fd while
+ * walking them -- what a server does on every EOF -- does not disturb the
+ * walk. Both sets are per-worker, like the recv buffers: a green thread is
+ * pinned to its worker, so it always polls the fds it registered, and two
+ * threads running their own loops do not share one set.
+ *
+ * The backend is still poll(2). A caller written to this contract does not
+ * change again if epoll/kqueue is put underneath -- which is the point of
+ * the shape rather than of the syscall. Use these OR the four above, not
+ * both: they keep separate sets. (matz/spinel#4103) */
+int sp_net_poll_register(int fd, int mode_bits);
+int sp_net_poll_modify(int fd, int mode_bits);
+int sp_net_poll_unregister(int fd);
+int sp_net_poll_registered(void);
+int sp_net_poll_wait(int timeout_ms);
+int sp_net_poll_event_fd(int i);
+int sp_net_poll_event_mode(int i);
 
 /* ---- process (prefork) ----
  * fork: 0 in child, pid>0 in parent, -1 on failure. exit: _exit(status)

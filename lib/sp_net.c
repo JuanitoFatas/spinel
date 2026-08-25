@@ -557,6 +557,40 @@ int sp_net_write_bytes(int fd, const char *data, int n) {
     return 0;
 }
 
+/* Write what the socket will take right now and answer how much that was,
+ * leaving the rest to the caller. sp_net_write_str / _bytes above keep
+ * writing until everything is gone, parking the green thread whenever the
+ * peer's buffer is full -- correct for a request/response server, and the
+ * wrong shape for fan-out: one slow subscriber holds up delivery to all the
+ * others, and nothing at the Ruby level can see that it is happening.
+ *
+ * Only the caller knows what to do about a peer that cannot keep up -- buffer
+ * the frame, drop it, or disconnect -- so this hands the decision back rather
+ * than making it. Register the fd for WRITE readiness and call again with the
+ * remainder.
+ *
+ *   >0  bytes accepted (may be fewer than n)
+ *    0  nothing could be written now; the peer is alive, its buffer is full
+ *   -1  the connection is gone (or shutdown was requested)
+ */
+int sp_net_write_partial(int fd, const char *data, int n) {
+    if (n <= 0) return 0;
+    for (;;) {
+        ssize_t w = send(fd, data, (size_t)n, 0);
+        if (w >= 0) return (int)w;
+        /* A signal landing mid-call is not a peer event, so retry -- except
+           when it was the shutdown signal, which the caller asked to see.
+           Checking the flag before the send instead would fail writes that
+           would have succeeded, and a draining server still wants those. */
+        if (errno == EINTR) {
+            if (sp_net_term_flag) return -1;
+            continue;
+        }
+        if (errno == EAGAIN || errno == EWOULDBLOCK) return 0;
+        return -1;
+    }
+}
+
 /* Per-worker in the threaded build: Thread runs with real parallelism and no
  * GVL, so two green threads on two OS workers calling this concurrently would
  * otherwise hand back the same buffer and race on its contents. Allocated on
@@ -625,9 +659,15 @@ const char *sp_net_recv_all(int fd, int max_bytes) {
  * no, which is not something a caller can route around, so it is reported
  * rather than returned quietly. */
 #define SP_NET_POLL_INIT 64
-static struct pollfd *sp_net_poll_set;
-static int            sp_net_poll_n   = 0;
-static int            sp_net_poll_cap = 0;
+/* Per-worker, like the recv buffers: a green thread is pinned to its worker
+ * (home_wid, see sp_alloc.h), so a thread that registers fds and then polls
+ * them always finds its own set, while two threads running their own accept
+ * loops on two workers no longer poll each other's fds. Only the pointers and
+ * counts live in TLS -- the sets themselves are malloc'd on first use, so a
+ * worker that never polls costs nothing. */
+static SP_TLS struct pollfd *sp_net_poll_set;
+static SP_TLS int            sp_net_poll_n;
+static SP_TLS int            sp_net_poll_cap;
 
 int sp_net_poll_reset(void) {
     sp_net_poll_n = 0;
@@ -675,6 +715,147 @@ int sp_net_poll_run(int timeout_ms) {
 int sp_net_poll_ready(int slot) {
     if (slot < 0 || slot >= sp_net_poll_n) return 0;
     short rev = sp_net_poll_set[slot].revents;
+    int out = 0;
+    if (rev & (POLLIN | POLLHUP | POLLERR)) out |= 1;
+    if (rev & POLLOUT)                      out |= 2;
+    return out;
+}
+
+/* ---------- poll(2), persistent registration ---------- */
+
+/* The set above is rebuilt every tick: a caller with N parked fds walks all N,
+ * re-registers what has not changed, polls, then walks N again to read the
+ * results -- O(connections) per tick, whatever syscall is underneath. Hiding
+ * epoll behind that contract would keep the rebuild and only improve the
+ * syscall, so the shape is what changes here.
+ *
+ * Registration is paid once per connection. wait() answers how many fds are
+ * ready and event_fd/event_mode read only those, so the caller's work is
+ * proportional to EVENTS rather than to connections. poll(2) stays the
+ * backend; a caller written to this contract does not have to change again if
+ * epoll/kqueue is ever put underneath. (#4103)
+ *
+ * `slot_of` maps fd -> index into `reg`, direct-indexed because fds are small
+ * dense integers the kernel hands out from the bottom; -1 means unregistered.
+ * Removal swaps the last entry into the hole and repairs its map entry, so
+ * every operation is O(1). Because the ready set is a compacted copy rather
+ * than a view, that swap cannot disturb a walk in progress -- which is what
+ * a server does on every EOF: unregister the fd while iterating the events.
+ *
+ * Per-worker for the same reason as the set above. */
+static SP_TLS struct pollfd *sp_net_reg;      /* the registered set */
+static SP_TLS int            sp_net_reg_n;
+static SP_TLS int            sp_net_reg_cap;
+static SP_TLS int           *sp_net_slot_of;  /* fd -> index into sp_net_reg */
+static SP_TLS int            sp_net_slot_cap;
+static SP_TLS struct pollfd *sp_net_ev;       /* the ready ones, compacted */
+static SP_TLS int            sp_net_ev_n;
+
+static short sp_net_mode_to_events(int mode_bits) {
+    short ev = 0;
+    if (mode_bits & 1) ev |= POLLIN;
+    if (mode_bits & 2) ev |= POLLOUT;
+    return ev;
+}
+
+/* Grow the fd map so `fd` can be indexed. Unused entries read -1. */
+static int sp_net_slot_reserve(int fd) {
+    if (fd < 0) return 0;
+    if (fd < sp_net_slot_cap) return 1;
+    int cap = sp_net_slot_cap ? sp_net_slot_cap : 64;
+    while (cap <= fd) cap *= 2;
+    int *grown = (int *)realloc(sp_net_slot_of, (size_t)cap * sizeof *grown);
+    if (!grown) return 0;
+    for (int i = sp_net_slot_cap; i < cap; i++) grown[i] = -1;
+    sp_net_slot_of  = grown;
+    sp_net_slot_cap = cap;
+    return 1;
+}
+
+int sp_net_poll_register(int fd, int mode_bits) {
+    if (fd < 0) return -1;
+    if (!sp_net_slot_reserve(fd)) {
+        fprintf(stderr, "sp_net_poll_register: out of memory indexing fd %d\n", fd);
+        return -1;
+    }
+    if (sp_net_slot_of[fd] >= 0) return sp_net_poll_modify(fd, mode_bits);
+    if (sp_net_reg_n >= sp_net_reg_cap) {
+        int cap = sp_net_reg_cap ? sp_net_reg_cap * 2 : 64;
+        struct pollfd *grown =
+            (struct pollfd *)realloc(sp_net_reg, (size_t)cap * sizeof *grown);
+        struct pollfd *evg =
+            (struct pollfd *)realloc(sp_net_ev, (size_t)cap * sizeof *evg);
+        if (grown) sp_net_reg = grown;
+        if (evg)   sp_net_ev  = evg;
+        if (!grown || !evg) {
+            fprintf(stderr, "sp_net_poll_register: out of memory growing the set "
+                            "to %d entries; fd %d is not being watched\n", cap, fd);
+            return -1;
+        }
+        sp_net_reg_cap = cap;
+    }
+    sp_net_reg[sp_net_reg_n].fd      = fd;
+    sp_net_reg[sp_net_reg_n].events  = sp_net_mode_to_events(mode_bits);
+    sp_net_reg[sp_net_reg_n].revents = 0;
+    sp_net_slot_of[fd] = sp_net_reg_n++;
+    return 0;
+}
+
+int sp_net_poll_modify(int fd, int mode_bits) {
+    if (fd < 0 || fd >= sp_net_slot_cap) return -1;
+    int i = sp_net_slot_of[fd];
+    if (i < 0) return -1;
+    sp_net_reg[i].events  = sp_net_mode_to_events(mode_bits);
+    sp_net_reg[i].revents = 0;
+    return 0;
+}
+
+int sp_net_poll_unregister(int fd) {
+    if (fd < 0 || fd >= sp_net_slot_cap) return -1;
+    int i = sp_net_slot_of[fd];
+    if (i < 0) return -1;
+    int last = --sp_net_reg_n;
+    if (i != last) {
+        sp_net_reg[i] = sp_net_reg[last];
+        sp_net_slot_of[sp_net_reg[i].fd] = i;
+    }
+    sp_net_slot_of[fd] = -1;
+    return 0;
+}
+
+int sp_net_poll_registered(void) { return sp_net_reg_n; }
+
+int sp_net_poll_wait(int timeout_ms) {
+    sp_net_ev_n = 0;
+    int r;
+    for (;;) {
+        /* Don't retry into a pending shutdown -- surface it as -1 so a blocked
+         * tick can break and run shutdown hooks, as sp_net_poll_run does. */
+        if (sp_net_term_flag) return -1;
+        r = poll(sp_net_reg, (nfds_t)sp_net_reg_n, timeout_ms);
+        if (r >= 0) break;
+        if (errno == EINTR) {
+            if (sp_net_term_flag) return -1;
+            continue;
+        }
+        return -1;
+    }
+    /* Compact the ready ones so event_fd/event_mode are O(1) and the caller
+     * walks events rather than registrations. */
+    for (int i = 0; i < sp_net_reg_n && sp_net_ev_n < r; i++) {
+        if (sp_net_reg[i].revents) sp_net_ev[sp_net_ev_n++] = sp_net_reg[i];
+    }
+    return sp_net_ev_n;
+}
+
+int sp_net_poll_event_fd(int i) {
+    if (i < 0 || i >= sp_net_ev_n) return -1;
+    return sp_net_ev[i].fd;
+}
+
+int sp_net_poll_event_mode(int i) {
+    if (i < 0 || i >= sp_net_ev_n) return 0;
+    short rev = sp_net_ev[i].revents;
     int out = 0;
     if (rev & (POLLIN | POLLHUP | POLLERR)) out |= 1;
     if (rev & POLLOUT)                      out |= 2;

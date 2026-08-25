@@ -1,0 +1,19 @@
+register: 0
+again: 0
+registered: 1
+ready: 1
+event fd: 1
+event mode: 2
+beyond fd: -1
+beyond mode: 0
+negative fd: -1
+negative mode: 0
+modify: 0
+registered: 1
+modify absent: -1
+unreg absent: -1
+register bad fd: -1
+many: 599
+back to: 1
+unregister: 0
+registered: 0
