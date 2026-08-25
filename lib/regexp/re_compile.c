@@ -2447,41 +2447,6 @@ uint32_t sp_re_source_len(void *vpat) {
 /* #inspect and #to_s render the source between delimiters, so a literal `/`
    that is not already backslash-escaped must be escaped (#3061). Returns a
    freshly malloc'd buffer the caller frees. */
-static char *sp_re_slash_escaped(const char *src) {
-  size_t n = strlen(src), j = 0;
-  char *out = (char *)malloc(n * 2 + 1);
-  if (!out) return NULL;
-  for (size_t i = 0; i < n; i++) {
-    if (src[i] == '/' && (i == 0 || src[i - 1] != '\\')) out[j++] = '\\';
-    out[j++] = src[i];
-  }
-  out[j] = 0;
-  return out;
-}
-const char *sp_re_inspect_str(void *vpat) {
-  mrb_regexp_pattern *pat = (mrb_regexp_pattern *)vpat;
-  char fl[RE_FLAGS_STR_SIZE];
-  re_flags_cat(fl, pat ? pat->flags : 0);
-  char *esc = sp_re_slash_escaped(sp_re_source(pat));
-  const char *res = sp_sprintf("/%s/%s", esc ? esc : sp_re_source(pat), fl);
-  free(esc);
-  return res;
-}
-const char *sp_re_to_s_str(void *vpat) {
-  mrb_regexp_pattern *pat = (mrb_regexp_pattern *)vpat;
-  char on[4], off[4]; int no = 0, nf = 0;
-  uint32_t f = pat ? pat->flags : 0;
-  if (f & RE_FLAG_DOTALL) on[no++] = 'm'; else off[nf++] = 'm';
-  if (f & RE_FLAG_IGNORECASE) on[no++] = 'i'; else off[nf++] = 'i';
-  if (f & RE_FLAG_EXTENDED) on[no++] = 'x'; else off[nf++] = 'x';
-  on[no] = 0; off[nf] = 0;
-  char *esc = sp_re_slash_escaped(sp_re_source(pat));
-  const char *s = esc ? esc : sp_re_source(pat);
-  const char *res = nf ? sp_sprintf("(?%s-%s:%s)", on, off, s)
-                       : sp_sprintf("(?%s:%s)", on, s);
-  free(esc);
-  return res;
-}
 /* Regexp#options: CRuby's public option bits IGNORECASE=1, EXTENDED=2,
    MULTILINE=4 (the /m "dot matches newline", our internal DOTALL). The
    internal RE_FLAG_MULTILINE (^/$ at line ends) is not a Ruby-visible option. */

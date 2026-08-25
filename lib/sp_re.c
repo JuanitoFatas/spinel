@@ -744,8 +744,25 @@ const char *sp_re_named_capture(const mrb_regexp_pattern *pat, const char *name)
   memcpy(out, sp_re_last_str + b, len);
   return out;
 }
+/* `a|b`, built byte-wise: sp_sprintf's %s ends at an embedded NUL, so a
+   branch carrying one joined short. Used by Regexp.union, both the runtime
+   array form below and the fixed-argument form the emitter builds. */
+const char *sp_re_alt_join(const char *a, const char *b) {SP_GC_ROOT_STR(a);SP_GC_ROOT_STR(b);
+  size_t al = sp_str_byte_len(a), bl = sp_str_byte_len(b);
+  char *buf = sp_str_alloc_raw(al + 1 + bl + 1);
+  memcpy(buf, a, al);
+  buf[al] = '|';
+  memcpy(buf + al + 1, b, bl);
+  buf[al + 1 + bl] = 0;
+  sp_str_set_len(buf, al + 1 + bl);
+  return buf;
+}
+
 const char *sp_re_escape(const char *src) {SP_GC_ROOT_STR(src);
-  size_t i, in_len = strlen(src);
+  /* the text may hold a NUL, and strlen would escape only the part before
+     it -- which stayed invisible while a NUL-free prefix needed no escaping
+     at all and the function returned `src` untouched */
+  size_t i, in_len = sp_str_byte_len(src);
   size_t out_len = 0;
   for (i = 0; i < in_len; i++) {
     unsigned char c = (unsigned char)src[i];
@@ -783,6 +800,7 @@ else {
     }
   }
   buf[j] = 0;
+  sp_str_set_len(buf, j);
   return buf;
 }
 /* Regexp.union over a runtime array (elements known only at run time, e.g. an
@@ -798,19 +816,7 @@ mrb_regexp_pattern *sp_re_union_array(sp_PolyArray *a) {
     if (v.tag == SP_TAG_STR) part = sp_re_escape(v.v.s ? v.v.s : "");
     else if (v.tag == SP_TAG_OBJ && v.cls_id == SP_BUILTIN_REGEX) part = sp_re_to_s_str(v.v.p);
     else { sp_raise_cls("TypeError", "no implicit conversion of element into String or Regexp"); return NULL; }
-    /* sp_sprintf's %s stops at an embedded NUL, so a part carrying one was
-       joined short. Build the alternation byte-wise instead. */
-    if (i == 0) { joined = part; continue; }
-    {
-      size_t jl = sp_str_byte_len(joined), pl = sp_str_byte_len(part);
-      char *buf = sp_str_alloc_raw(jl + 1 + pl + 1);
-      memcpy(buf, joined, jl);
-      buf[jl] = '|';
-      memcpy(buf + jl + 1, part, pl);
-      buf[jl + 1 + pl] = 0;
-      sp_str_set_len(buf, jl + 1 + pl);
-      joined = buf;
-    }
+    joined = (i == 0) ? part : sp_re_alt_join(joined, part);
   }
   return re_compile(joined, (int64_t)sp_str_byte_len(joined), 0);
 }
@@ -891,6 +897,66 @@ else {
   }
   return arr;
 }
+/* Regexp#inspect and #to_s, built byte-wise.
+   These used to live beside the engine in lib/regexp, where the only string
+   builder available is sp_sprintf -- whose %s ends at a NUL, so a pattern
+   holding one rendered short. They belong on this side anyway: the engine is
+   a port from mruby-regexp and these are spinel's own surface. */
+static void sp_re_append_escaped_source(sp_String *b, void *vpat) {
+  const char *src = sp_re_source(vpat);
+  size_t n = sp_re_source_len(vpat);
+  for (size_t i = 0; i < n; i++) {
+    unsigned char c = (unsigned char)src[i];
+    /* a literal `/` is escaped, unless it already is */
+    if (c == '/' && (i == 0 || src[i - 1] != '\\')) {
+      sp_String_append(b, "\\");
+      sp_fd_append_len(b, src + i, 1);
+      continue;
+    }
+    /* CRuby renders a byte that is neither printable nor one of the five
+       whitespace controls as \xNN: measured, what it leaves raw is 0x09-0x0D,
+       0x20-0x7E, and everything above ASCII (a multi-byte character stays
+       itself). A NUL rendered raw would also end any C string the text is
+       handed to. */
+    if (c < 0x09 || (c > 0x0D && c < 0x20) || c == 0x7F) {
+      char hex[8];
+      snprintf(hex, sizeof hex, "\\x%02X", c);
+      sp_String_append(b, hex);
+      continue;
+    }
+    sp_fd_append_len(b, src + i, 1);
+  }
+}
+
+const char *sp_re_inspect_str(void *vpat) {
+  uint32_t f = sp_re_raw_flags(vpat);
+  sp_String *b = sp_String_new(""); SP_GC_ROOT(b);
+  sp_String_append(b, "/");
+  sp_re_append_escaped_source(b, vpat);
+  sp_String_append(b, "/");
+  if (f & SP_RE_F_DOTALL)     sp_String_append(b, "m");
+  if (f & SP_RE_F_IGNORECASE) sp_String_append(b, "i");
+  if (f & SP_RE_F_EXTENDED)   sp_String_append(b, "x");
+  return b->data;
+}
+
+const char *sp_re_to_s_str(void *vpat) {
+  uint32_t f = sp_re_raw_flags(vpat);
+  char on[4], off[4]; int no = 0, nf = 0;
+  if (f & SP_RE_F_DOTALL) on[no++] = 'm'; else off[nf++] = 'm';
+  if (f & SP_RE_F_IGNORECASE) on[no++] = 'i'; else off[nf++] = 'i';
+  if (f & SP_RE_F_EXTENDED) on[no++] = 'x'; else off[nf++] = 'x';
+  on[no] = 0; off[nf] = 0;
+  sp_String *b = sp_String_new(""); SP_GC_ROOT(b);
+  sp_String_append(b, "(?");
+  sp_String_append(b, on);
+  if (nf) { sp_String_append(b, "-"); sp_String_append(b, off); }
+  sp_String_append(b, ":");
+  sp_re_append_escaped_source(b, vpat);
+  sp_String_append(b, ")");
+  return b->data;
+}
+
 void sp_MatchData_scan(void *p) { sp_MatchData *m = (sp_MatchData *)p; if (m->source) sp_mark_string(m->source); }
 /* One block for the struct and the positions it carries, sized to the match
    rather than to the widest one this engine allows. The single allocation is

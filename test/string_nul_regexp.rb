@@ -23,6 +23,19 @@ r("Regexp.new")    { s =~ Regexp.new("a\0b") }
 r("source")        { Regexp.new("a\0b").source.bytes }
 r("match at pos")  { s.match(/\0/, 2)[0].bytes }
 
+# The display surface renders the source rather than ending at the NUL.
+# (What it renders it AS is String#inspect's business: this engine spells a
+# control byte \u0000 where CRuby, reading the name as US-ASCII, spells it
+# \x00 -- the same difference "x".b.inspect already has, and not a truncation.)
+r("source bytes")  { Regexp.new("a\0b").source.bytes }
+r("to_s bytes")    { Regexp.new("a\0b").to_s.bytes }
+r("inspect bytes") { Regexp.new("a\0b").inspect.bytes }
+r("escape")        { Regexp.escape("a\0b").bytes }
+r("union 1")       { Regexp.union("a\0b").source.bytes }
+r("union 2")       { Regexp.union("a\0b", "z").source.bytes }
+r("union match")   { ("a\0b" =~ Regexp.union("a\0b", "z")) }
+r("to_s slash")    { Regexp.new("a/b").to_s }
+
 # String#split on a subject whose pieces START with NUL: the trailing-empty
 # trim read the first byte, so every such piece was dropped.
 big = "\0" * 5 + "x" + "\0" * 5

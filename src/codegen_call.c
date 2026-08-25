@@ -18319,7 +18319,8 @@ else { memcpy(dir, sf, n); dir[n] = 0; } }
       }
       emit_indent(g_pre, g_indent);
       if (i == 0) buf_printf(g_pre, "const char *_t%d = %s;\n", ts, ab.p ? ab.p : "\"\"");
-      else buf_printf(g_pre, "_t%d = sp_sprintf(\"%%s|%%s\", _t%d, %s);\n", ts, ts, ab.p ? ab.p : "\"\"");
+      /* byte-wise: sp_sprintf's %s would end the branch at an embedded NUL */
+      else buf_printf(g_pre, "_t%d = sp_re_alt_join(_t%d, %s);\n", ts, ts, ab.p ? ab.p : "\"\"");
       free(ab.p);
     }
     /* an empty union (`Regexp.union()` or `Regexp.union([])`) never matches */

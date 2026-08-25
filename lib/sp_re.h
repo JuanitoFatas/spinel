@@ -17,6 +17,13 @@
 #include "sp_array.h"   /* sp_StrArray / sp_PolyArray / sp_RbVal + heap */
 #include "sp_str.h"     /* string helpers used by the wrappers */
 
+/* The engine's internal flag bits. re_internal.h is the port island's own
+   header and is not included here, so the three this side reads are named
+   again; sp_re_raw_flags() answers a pattern's set. */
+#define SP_RE_F_IGNORECASE 1
+#define SP_RE_F_DOTALL     4   /* Ruby's /m: dot matches newline */
+#define SP_RE_F_EXTENDED   8
+
 /* ---- regexp engine ABI (implemented in build/regexp/*.o) ---- */
 typedef struct mrb_regexp_pattern mrb_regexp_pattern;
 mrb_regexp_pattern* re_compile(const char *pattern, int64_t len, uint32_t flags);
@@ -82,6 +89,7 @@ sp_RbVal sp_re_rindex_poly(mrb_regexp_pattern *pat, const char *str);
 sp_RbVal sp_re_index_poly(mrb_regexp_pattern *pat, const char *str);
 const char *sp_str_splice_re(mrb_regexp_pattern *pat, const char *s, const char *val);
 const char *sp_str_slice_re(mrb_regexp_pattern *pat, const char *s, const char **rest_out);
+const char *sp_re_alt_join(const char *a, const char *b);  /* `a|b`, NUL-safe */
 const char *sp_re_source(void *pat);
 uint32_t sp_re_source_len(void *pat);   /* its byte length (may hold a NUL) */
 sp_bool sp_re_src_linear_time(const char *src);   /* Regexp.linear_time? on a source string */
