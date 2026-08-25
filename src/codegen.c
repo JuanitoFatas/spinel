@@ -8075,7 +8075,10 @@ char *codegen_program(const NodeTable *nt) {
       buf_puts(&b, ");\n");
     }
     /* Byte count for the :binstr return mode (defined in sp_alloc.c). */
-    if (any_binstr) buf_puts(&b, "extern int sp_ffi_bin_len;\n");
+    /* sp_alloc.h already declares it, and declares it SP_TLS in the threaded
+       build -- re-declaring it here without the storage class is a conflict,
+       so name it the same way. */
+    if (any_binstr) buf_puts(&b, "extern SP_TLS int sp_ffi_bin_len;\n");
 
     /* native_func externs (Path B): prototype each bound C symbol so the
        generated TU needs no package header. Deduped by symbol (generate and

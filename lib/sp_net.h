@@ -14,9 +14,10 @@
  * -----------
  * - fd-based: every call takes/returns a raw socket fd; the framework
  *   owns lifetime.
- * - Static return buffers (per-function), single-threaded server model
- *   -- copy on the caller side if a value must outlive the next call,
- *   same as sp_crypto.
+ * - Static return buffers (per-function) -- copy on the caller side if a
+ *   value must outlive the next call, same as sp_crypto. The buffers are
+ *   per-worker in the threaded build, so two green threads on two OS
+ *   workers do not share one; each still holds only its own last result.
  * - String inputs are NUL-terminated.
  *
  * Naming: all exported symbols use the `sp_net_` prefix.
@@ -113,10 +114,19 @@ int         sp_net_write_bytes(int fd, const char *data, int n);
 
 /* ---- poll(2) ----
  * reset clears the slot table; add registers (fd, mode_bits) where
- * 1=READ, 2=WRITE and returns the slot index (or -1 if full); run
- * blocks up to timeout_ms (-1 = forever, 0 = peek) and returns the
- * ready count; ready(slot) returns the mode bits that fired (POLLHUP/
- * POLLERR fold into READ). */
+ * 1=READ, 2=WRITE and returns the slot index; run blocks up to
+ * timeout_ms (-1 = forever, 0 = peek) and returns the ready count;
+ * ready(slot) returns the mode bits that fired (POLLHUP/POLLERR fold
+ * into READ).
+ *
+ * The set has no fixed ceiling -- it grows with the number of fds added
+ * between resets. add() answers -1 only when the allocator refuses, which
+ * it also reports on stderr, since a caller cannot tell that apart from
+ * "not registered this round" by the return value alone.
+ *
+ * The set is rebuilt every tick (reset/add/.../run), which costs the caller
+ * O(fds) per tick whatever the backend underneath. A persistent-registration
+ * shape would cost O(events); see matz/spinel#4103. */
 int sp_net_poll_reset(void);
 int sp_net_poll_add(int fd, int mode_bits);
 int sp_net_poll_run(int timeout_ms);

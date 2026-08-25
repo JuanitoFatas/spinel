@@ -405,8 +405,14 @@ static inline void sp_str_set_len(char *s, size_t len) {
    string publishes the exact length here just before it returns; the call site
    reads it instead of calling strlen, which would truncate at an embedded NUL.
    Lives here rather than in any one provider because both sp_net (socket
-   reads) and sp_crypto (raw digests) write it. */
-extern int sp_ffi_bin_len;
+   reads) and sp_crypto (raw digests) write it.
+
+   Per-worker in the threaded build, for the same reason the buffers it
+   describes are: the value is written by the provider and read by the call
+   site an expression later, so two workers in the same provider would
+   otherwise hand each other the wrong length. The generated TU is compiled
+   with the matching -DSP_THREADS, so both sides agree on the storage class. */
+extern SP_TLS int sp_ffi_bin_len;
 
 static inline const char *sp_str_from_bytes(const char *data, size_t len) {
   char *s = sp_str_alloc(len);

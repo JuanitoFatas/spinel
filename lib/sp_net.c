@@ -557,8 +557,16 @@ int sp_net_write_bytes(int fd, const char *data, int n) {
     return 0;
 }
 
-static char sp_net_recv_buf[SP_NET_BUFSIZE];
+/* Per-worker in the threaded build: Thread runs with real parallelism and no
+ * GVL, so two green threads on two OS workers calling this concurrently would
+ * otherwise hand back the same buffer and race on its contents. Allocated on
+ * first use rather than reserved in every thread's TLS block, so a worker that
+ * never touches a socket pays nothing (SP_MAX_WORKERS is 256, and three 64 KB
+ * buffers reserved unconditionally would be 48 MB of TLS). */
+static SP_TLS char *sp_net_recv_buf;
 const char *sp_net_recv_some(int fd, int maxlen) {
+    if (!sp_net_recv_buf && !(sp_net_recv_buf = (char *)malloc(SP_NET_BUFSIZE)))
+        return "";
     if (maxlen <= 0 || maxlen >= SP_NET_BUFSIZE) maxlen = SP_NET_BUFSIZE - 1;
     ssize_t n;
     for (;;) {
@@ -583,8 +591,10 @@ const char *sp_net_recv_some(int fd, int maxlen) {
     return sp_net_recv_buf;
 }
 
-static char sp_net_recv_all_buf[SP_NET_BUFSIZE];
+static SP_TLS char *sp_net_recv_all_buf;   /* per-worker, see sp_net_recv_buf */
 const char *sp_net_recv_all(int fd, int max_bytes) {
+    if (!sp_net_recv_all_buf && !(sp_net_recv_all_buf = (char *)malloc(SP_NET_BUFSIZE)))
+        return "";
     if (max_bytes <= 0 || max_bytes >= SP_NET_BUFSIZE) max_bytes = SP_NET_BUFSIZE - 1;
     int total = 0;
     while (total < max_bytes) {
@@ -605,9 +615,19 @@ const char *sp_net_recv_all(int fd, int max_bytes) {
 
 /* ---------- poll(2) ---------- */
 
-#define SP_NET_POLL_MAX 256
-static struct pollfd sp_net_poll_set[SP_NET_POLL_MAX];
-static int           sp_net_poll_n = 0;
+/* The set grows with the caller's connection count rather than sitting at a
+ * fixed size. It used to be a 256-entry array whose overflow answered -1, and
+ * -1 is also what a caller reads as "this fd is not in the set this round":
+ * from the 257th fd on, a connection went deaf with nothing said about it.
+ * A server holding one socket per user reaches 256 on its first busy minute.
+ *
+ * Growth doubles from 64. The only remaining failure is the allocator saying
+ * no, which is not something a caller can route around, so it is reported
+ * rather than returned quietly. */
+#define SP_NET_POLL_INIT 64
+static struct pollfd *sp_net_poll_set;
+static int            sp_net_poll_n   = 0;
+static int            sp_net_poll_cap = 0;
 
 int sp_net_poll_reset(void) {
     sp_net_poll_n = 0;
@@ -615,7 +635,18 @@ int sp_net_poll_reset(void) {
 }
 
 int sp_net_poll_add(int fd, int mode_bits) {
-    if (sp_net_poll_n >= SP_NET_POLL_MAX) return -1;
+    if (sp_net_poll_n >= sp_net_poll_cap) {
+        int cap = sp_net_poll_cap ? sp_net_poll_cap * 2 : SP_NET_POLL_INIT;
+        struct pollfd *grown =
+            (struct pollfd *)realloc(sp_net_poll_set, (size_t)cap * sizeof *grown);
+        if (!grown) {
+            fprintf(stderr, "sp_net_poll_add: out of memory growing the poll set "
+                            "to %d entries; fd %d is not being watched\n", cap, fd);
+            return -1;
+        }
+        sp_net_poll_set = grown;
+        sp_net_poll_cap = cap;
+    }
     short ev = 0;
     if (mode_bits & 1) ev |= POLLIN;
     if (mode_bits & 2) ev |= POLLOUT;
@@ -673,8 +704,10 @@ int sp_net_wait_any(void) {
 
 /* ---------- shell ---------- */
 
-static char sp_net_shell_buf[SP_NET_BUFSIZE];
+static SP_TLS char *sp_net_shell_buf;      /* per-worker, see sp_net_recv_buf */
 const char *sp_net_shell_capture(const char *cmd, int max_bytes) {
+    if (!sp_net_shell_buf && !(sp_net_shell_buf = (char *)malloc(SP_NET_BUFSIZE)))
+        return "";
     if (max_bytes <= 0 || max_bytes >= SP_NET_BUFSIZE) max_bytes = SP_NET_BUFSIZE - 1;
     sp_net_shell_buf[0] = '\0';
     FILE *fp = popen(cmd, "r");

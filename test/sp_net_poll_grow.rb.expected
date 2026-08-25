@@ -1,0 +1,9 @@
+first: 0
+at old cap: 255
+past old cap: 256
+last: 999
+any refused: false
+all in order: true
+beyond set: 0
+negative: 0
+after reset: 0

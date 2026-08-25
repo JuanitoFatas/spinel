@@ -56,7 +56,7 @@ int sp_str_stress_checked = 0;
 
 const char sp_str_empty_data[] = "\xff";
 
-int sp_ffi_bin_len = 0;   /* see sp_alloc.h: byte count for :binstr / :cbinstr */
+SP_TLS int sp_ffi_bin_len = 0;   /* see sp_alloc.h: byte count for :binstr / :cbinstr */
 
 /* Object-heap collection threshold (was per-TU static in spinel_rt.h; now
    shared so sp_gc_alloc can live in sp_alloc.h and lib TUs allocate too). */
