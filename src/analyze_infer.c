@@ -4176,7 +4176,18 @@ else {
            sp_streq(name, "strip") || sp_streq(name, "reverse") ||
            sp_streq(name, "chomp") || sp_streq(name, "chop") ||
            sp_streq(name, "succ") || sp_streq(name, "next") ||
-           sp_streq(name, "chr")))
+           sp_streq(name, "chr") ||
+           /* `strip` was here and its one-sided siblings were not, which is
+              what most of this line is: a String reaching the dispatch
+              through a poly slot answered NoMethodError for a method String
+              has. `to_str` matters most of them -- it is the implicit
+              conversion protocol, so a poly slot holding a String has to
+              answer it. The answers stay boxed, which is why they are POLY
+              here: `ascii_only?` is a boxed boolean and reads as one. */
+           sp_streq(name, "lstrip") || sp_streq(name, "rstrip") ||
+           sp_streq(name, "to_str") || sp_streq(name, "ascii_only?") ||
+           sp_streq(name, "valid_encoding?") || sp_streq(name, "encode") ||
+           sp_streq(name, "scrub")))
         return an_poly_concrete(c, name, TY_POLY);
       /* poly.ljust/rjust/center(width[, pad]): a String read from a container
          widened to poly; emit_poly_call pads via sp_poly_to_s and re-boxes, so

@@ -11634,6 +11634,34 @@ int emit_poly_call(Compiler *c, int id, Buf *b) {
     if (sp_streq(name, "capitalize"))     { buf_puts(b, "sp_poly_case_conv("); emit_expr(c, recv, b); buf_puts(b, ", sp_str_capitalize, \"capitalize\")"); return 1; }
     if (sp_streq(name, "swapcase"))     { buf_puts(b, "sp_poly_case_conv("); emit_expr(c, recv, b); buf_puts(b, ", sp_str_swapcase, \"swapcase\")"); return 1; }
     if (sp_streq(name, "strip"))      { buf_puts(b, "sp_box_str(sp_str_strip(sp_poly_recv_s("); emit_expr(c, recv, b); buf_printf(b, ", \"strip\")))"); return 1; }
+    /* `strip` had an arm and its one-sided siblings did not, which is the
+       shape of most of what follows: a String reaching the dispatch through a
+       poly slot answered NoMethodError naming String, for a method String
+       has. Each of these already works on a concrete receiver and the runtime
+       function is the one that arm calls. */
+    if (sp_streq(name, "lstrip"))     { buf_puts(b, "sp_box_str(sp_str_lstrip(sp_poly_recv_s("); emit_expr(c, recv, b); buf_puts(b, ", \"lstrip\")))"); return 1; }
+    if (sp_streq(name, "rstrip"))     { buf_puts(b, "sp_box_str(sp_str_rstrip(sp_poly_recv_s("); emit_expr(c, recv, b); buf_puts(b, ", \"rstrip\")))"); return 1; }
+    /* to_str is the implicit-conversion protocol, so a poly slot holding a
+       String has to answer it: sp_poly_recv_s raises for anything else, which
+       is what a non-String must do here. */
+    if (sp_streq(name, "to_str") && argc == 0) {
+      buf_puts(b, "sp_box_str(sp_poly_recv_s("); emit_expr(c, recv, b); buf_puts(b, ", \"to_str\"))"); return 1;
+    }
+    if (sp_streq(name, "ascii_only?") && argc == 0) {
+      buf_puts(b, "sp_box_bool(sp_str_ascii_only(sp_poly_recv_s("); emit_expr(c, recv, b); buf_puts(b, ", \"ascii_only?\")))"); return 1;
+    }
+    if (sp_streq(name, "valid_encoding?") && argc == 0) {
+      buf_puts(b, "sp_box_bool(sp_str_valid_encoding(sp_poly_recv_s("); emit_expr(c, recv, b); buf_puts(b, ", \"valid_encoding?\")))"); return 1;
+    }
+    /* encode is a no-op on the concrete arm -- every string here is UTF-8 --
+       so the poly one only has to unbox and re-box, and raise for a
+       non-String the way the others do. */
+    if (sp_streq(name, "encode") && argc == 0) {
+      buf_puts(b, "sp_box_str(sp_poly_recv_s("); emit_expr(c, recv, b); buf_puts(b, ", \"encode\"))"); return 1;
+    }
+    if (sp_streq(name, "scrub") && argc == 0) {
+      buf_puts(b, "sp_box_str(sp_str_scrub(sp_poly_recv_s("); emit_expr(c, recv, b); buf_puts(b, ", \"scrub\"), 0))"); return 1;
+    }
     if (sp_streq(name, "reverse"))    { buf_puts(b, "sp_poly_reverse("); emit_expr(c, recv, b); buf_puts(b, ")"); return 1; }
     /* `encoding` on a boxed String: the concrete arm has answered it since
        #723, and the poly dispatch had no entry -- so a String read out of a

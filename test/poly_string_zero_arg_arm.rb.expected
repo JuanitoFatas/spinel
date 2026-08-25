@@ -1,0 +1,14 @@
+"Vv\tz  "
+"  Vv\tz"
+"  Vv\tz  "
+true
+true
+"  Vv\tz  "
+"  Vv\tz  "
+false
+"日本"
+"日本"
+true
+[true, true, true]
+[true, true]
+NoMethodError
