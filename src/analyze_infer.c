@@ -6287,17 +6287,30 @@ TyKind infer_uncached(Compiler *c, int id) {
     TyKind lt = infer_type(c, lnd);
     TyKind rt = infer_type(c, rnd);
     if (lt == TY_BOOL && rt == TY_BOOL) return TY_BOOL;
-    /* `nil_valued || []` -- the nil-guard fallback. The empty literal alone
-       stays UNKNOWN (its element type comes from later usage), and unifying
-       that with a nil left left the whole expression typed nil, so `.size` on
-       it raised NoMethodError. In this position the literal is the value the
-       expression yields, and it is an Array whatever else happens (#3462). */
-    if (rt == TY_UNKNOWN && (lt == TY_NIL || lt == TY_UNKNOWN)) {
-      const char *rty = rnd >= 0 ? nt_type(nt, rnd) : NULL;
+    /* An empty `[]` / `{}` on the right carries no element type of its own, so
+       it caches UNKNOWN and ty_unify() drops it, answering the LEFT's type.
+       That is what typed `true && []` as BOOL: the array construction was
+       then emitted into a bool slot, which the C compiler met as a
+       pointer/integer mismatch and, for an Integer left, refused outright.
+       Give the literal the container type it is before unifying.
+
+       With a nil (or not-yet-typed) left the answer is the container itself
+       rather than the union: `nil_valued || []` is the nil-guard fallback,
+       where the literal is the value the expression yields and unifying it
+       with nil typed the whole thing nil, so `.size` on it raised
+       NoMethodError (#3462). */
+    if (rt == TY_UNKNOWN && rnd >= 0) {
+      const char *rty = nt_type(nt, rnd);
+      int rn = 0;
       if (rty && sp_streq(rty, "ArrayNode")) {
-        int rn = 0; nt_arr(nt, rnd, "elements", &rn);
-        if (rn == 0) return TY_POLY_ARRAY;
+        nt_arr(nt, rnd, "elements", &rn);
+        if (rn == 0) rt = TY_POLY_ARRAY;
       }
+      else if (rty && sp_streq(rty, "HashNode")) {
+        nt_arr(nt, rnd, "elements", &rn);
+        if (rn == 0) rt = TY_STR_POLY_HASH;
+      }
+      if (rt != TY_UNKNOWN && (lt == TY_NIL || lt == TY_UNKNOWN)) return rt;
     }
     return ty_unify(lt, rt);  /* value form: a || b -> common type */
   }
