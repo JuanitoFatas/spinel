@@ -482,9 +482,12 @@ something in CRuby that this engine does not do. Left as unknown escapes each
 was simply its own letter, so `/\R/` matched an `R` rather than a newline and
 `/\p{Alpha}/` answered a request for a letter with the text of the request.
 They raise `RegexpError` at compile time instead. Inside a character class
-CRuby reads them as the letter too, and so does the class parser here, so
-`[\R]` still matches an `R`. `\G` and `\g<name>` ARE carried and behave as
-CRuby does.
+CRuby reads `\K`, `\R` and `\X` as the letter too, and so does the class
+parser here, so `[\R]` still matches an `R`. `\p{...}` / `\P{...}` differ:
+CRuby reads a property escape inside a class as a property test there too
+(`[\p{Alpha}]` matches letters), so the class parser refuses it the same way
+the bare form is refused, rather than reading it as the letters `p{Alpha}`.
+`\G` and `\g<name>` ARE carried and behave as CRuby does.
 
 The same applies inside a character class, where a `[` never stands for
 itself: `[[a][b]]` (a nested class), `[[.a.]]` (a collating element) and
