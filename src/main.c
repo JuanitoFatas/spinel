@@ -562,15 +562,21 @@ int main(int argc, char **argv) {
      the source-quote line is cc's only way to carry it and goes too, leaving
      the file and line the message already names.
 
-     -fno-show-column is a flag both take, and on gcc it is the whole of it:
-     with no column there is nothing to draw a caret from, so gcc drops the
-     quote line with it. clang draws one anyway and needs to be told, in its
-     own spelling of the flag -- gcc's is an error there, and clang's is one
-     on gcc, which is what cc_is_clang() is asked (#4097 left the build broken
-     for every clang, macOS CI included). */
+     -fno-show-column is a flag both take. The caret needs asking for
+     separately on BOTH, in each one's own spelling: gcc drops the quote line
+     with the column only where #line has remapped the location, since it then
+     has no file it can read the source line out of, and every other
+     diagnostic -- a note from a header, a line of the generated C that no
+     #line covers -- still draws one from the generated file, where a line is
+     as wide as a whole Ruby statement. The two spellings are not
+     interchangeable and an unknown -f flag is an error rather than a warning,
+     so which one to pass is a question, and cc_is_clang() is where it is put
+     (#4097 passed gcc's to clang and left the build broken for every clang,
+     macOS CI included). */
   if (debug || line_map) {
     s_add(&cmd, "-fno-show-column ");
-    if (cc_is_clang(cc_cmd)) s_add(&cmd, "-fno-caret-diagnostics ");
+    s_add(&cmd, cc_is_clang(cc_cmd) ? "-fno-caret-diagnostics "
+                                    : "-fno-diagnostics-show-caret ");
   }
   if (fiber_frame_guard) s_add(&cmd, "-Wframe-larger-than=65536 ");
   snprintf(tmp, sizeof tmp, "-I\"%s\" -I\"%s%cregexp\" ", lib_dir, lib_dir, PATH_SEP); s_add(&cmd, tmp);
