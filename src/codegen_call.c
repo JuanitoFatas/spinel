@@ -346,8 +346,13 @@ static void emit_re_opts_flags(Compiler *c, int argc, const int *argv, Buf *out)
     buf_puts(out, "(("); emit_expr(c, argv[1], out); buf_puts(out, ") ? 1u : 0u)");
   }
   else {
-    /* a truthy non-integer means IGNORECASE; nil/false means none */
-    buf_puts(out, "(sp_poly_truthy("); emit_boxed(c, argv[1], out); buf_puts(out, ") ? 1u : 0u)");
+    /* The type is not known here, so the choice is made where the value is:
+       an Integer is option bits and anything else truthy is IGNORECASE, which
+       is what CRuby decides from the value too. Settling on the truthy arm
+       read every Integer as IGNORECASE, so an option that reached this arm --
+       a block parameter, a hash read, anything the analyzer left poly --
+       answered /i whatever it held. */
+    buf_puts(out, "sp_re_opts_from_poly("); emit_boxed(c, argv[1], out); buf_puts(out, ")");
   }
 }
 

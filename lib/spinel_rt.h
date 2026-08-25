@@ -1541,6 +1541,16 @@ static inline void sp_poly_puts(sp_RbVal v) {
 }
 static sp_bool sp_poly_nil_p(sp_RbVal v) { return v.tag == SP_TAG_NIL; }
 static sp_bool sp_poly_truthy(sp_RbVal v) { return !(v.tag == SP_TAG_NIL || (v.tag == SP_TAG_BOOL && !v.v.b)); }
+/* Regexp.new's option argument where its type is not known until run time: an
+   Integer is option bits, and anything else truthy is IGNORECASE. CRuby makes
+   that choice from the VALUE, so a caller that cannot see the type statically
+   has to make it here rather than settling on the truthy arm -- which read
+   every Integer, 0 included, as IGNORECASE. A nil out of an Integer slot is
+   the sentinel, and nil is no options at all. */
+static uint32_t sp_re_opts_from_poly(sp_RbVal v) {
+  if (v.tag == SP_TAG_INT) return v.v.i == SP_INT_NIL ? 0u : sp_re_opts_to_flags(v.v.i);
+  return sp_poly_truthy(v) ? 1u : 0u;
+}
 /* poly & / | / ^ dispatch on the receiver's runtime tag: nil/false/true take
    the BOOLEAN ops (nil & x == false, nil | x == truthy(x), ...), integers take
    the bitwise ops (#2401). */
