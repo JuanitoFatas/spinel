@@ -78,7 +78,16 @@ void emit_boxed_text(Compiler *c, TyKind t, const char *expr, Buf *b) {
                  expr, ty_object_class(t));
     return;
   }
-  if (ty_is_hash(t) && hash_box_cls(t)) { buf_printf(b, "sp_box_obj(%s, %s)", expr, hash_box_cls(t)); return; }
+  /* A hash slot is a nilable C pointer for the same reason the object arm
+     above is: an omitted optional parameter, or any slot that can hold nil,
+     arrives as NULL. sp_box_obj wrapped that NULL in a truthy SP_TAG_OBJ, so
+     `initheader.nil?` answered false and the first read of it dereferenced
+     NULL. Reduced from a Net::HTTP::Post whose second parameter one call site
+     omitted and another passed a Hash to (#4134). */
+  if (ty_is_hash(t) && hash_box_cls(t)) {
+    buf_printf(b, "sp_box_nullable_obj((void *)(%s), %s)", expr, hash_box_cls(t));
+    return;
+  }
   /* a shared-mutable string HANDLE (#3227 phase 3) */
   if (t == TY_STRBUF) { buf_printf(b, "sp_box_obj(%s, SP_BUILTIN_STRBUF)", expr); return; }
   /* An sp_int slot can hold the nil sentinel a nullable read left behind
@@ -894,8 +903,17 @@ void emit_boxed(Compiler *c, int node, Buf *b) {
     return;
   }
   if (ty_is_hash(t)) {
+    /* Nullable, for the same reason the object arm just above is: a hash slot
+       holding nil is a NULL pointer, and sp_box_obj wrapped that in a truthy
+       SP_TAG_OBJ -- so `h.nil?` answered false and the first read of it
+       dereferenced NULL (#4134). Kept in step with emit_boxed_text. */
     const char *hid = hash_box_cls(t);
-    if (hid) { buf_printf(b, "sp_box_obj("); emit_expr(c, node, b); buf_printf(b, ", %s)", hid); return; }
+    if (hid) {
+      buf_puts(b, "sp_box_nullable_obj((void *)(");
+      emit_expr(c, node, b);
+      buf_printf(b, "), %s)", hid);
+      return;
+    }
     unsupported(c, node, "boxing value into poly"); return;
   }
   /* regex values can appear in poly context (multi-typed local); evaluate for
