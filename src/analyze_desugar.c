@@ -2144,7 +2144,7 @@ int desugar_forwarding_to_rest_callee(Compiler *c) {
     const char *dname = nt_str(nt, def, "name");
     if (!dname) continue;
     int hi = fwd_subtree_max(nt, def) + 1;
-    int calls[64]; int ncalls = 0; int shape = 0; int ok = 1;
+    int calls[n0]; int ncalls = 0; int shape = 0; int ok = 1;
     for (int id = def + 1; id < hi && id < n0; id++) {
       if (!fwd_node_is(nt, id, "CallNode")) continue;
       int args = nt_ref(nt, id, "arguments");
@@ -2155,7 +2155,7 @@ int desugar_forwarding_to_rest_callee(Compiler *c) {
       if (sh < 0 || nt_ref(nt, id, "block") >= 0) { ok = 0; break; }
       if (ncalls && sh != shape) { ok = 0; break; }
       shape = sh;
-      if (ncalls < 64) calls[ncalls++] = id;
+      calls[ncalls++] = id;
     }
     if (!ok || !ncalls || !(shape & 3) || (shape & 4)) continue;
     if (any_call_passes_block(nt, dname)) continue;
@@ -2176,8 +2176,8 @@ int desugar_forwarding_to_rest_callee(Compiler *c) {
       int call = calls[k];
       int args = nt_ref(nt, call, "arguments");
       int ac = 0; const int *av = nt_arr(nt, args, "arguments", &ac);
-      int nargs[66]; int nn = 0;
-      for (int i = 0; i < ac - 1 && nn < 64; i++) nargs[nn++] = av[i];
+      int nargs[ac + 1]; int nn = 0;
+      for (int i = 0; i < ac - 1; i++) nargs[nn++] = av[i];
       if (shape & 1) {
         int sp = fwd_new_node_like(nt, call, "SplatNode");
         if (sp < 0) continue;
