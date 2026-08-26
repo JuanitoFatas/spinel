@@ -119,7 +119,10 @@ A few `require`s name a capability Spinel already provides as core, and are
 Some stdlib ships with Spinel as Ruby source and is spliced when required —
 `set`, `forwardable`, `optparse`, `erb`, `csv`, `pathname`, `digest`, `base64`
 (plus the `stringio`/`strscan`/`json` marker shims for their C-backed
-features). Each lives as an ordinary
+features). `openssl` is there too, and is the one that is
+conditional: it is glue over the system libssl, so it exists only where those
+headers did at build time, and `require "openssl"` is otherwise the
+unsatisfiable require it is for any library Spinel does not carry. Each lives as an ordinary
 spinelgem under `packages/<name>/` beside the compiler (`packages/set/set.rb` with
 its `spin.toml`); `lib/` holds only the C runtime. The `require` pulls in
 the package's file like any other package — pre-installed just means no fetch.
