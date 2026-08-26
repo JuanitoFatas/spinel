@@ -4199,6 +4199,13 @@ else {
           (sp_streq(name, "scrub") && argc == 1) ||
           (sp_streq(name, "encode") && (argc == 1 || argc == 2)))
         return an_poly_concrete(c, name, TY_POLY);
+      /* chomp / chop / delete_prefix / delete_suffix answer a String and are
+         served at argc 0 only, so the separator forms -- `line.chomp("|")`,
+         which is what a line reader does with its own separator -- fell to
+         NoMethodError on a boxed receiver with a clean C build. */
+      if (argc == 1 && (sp_streq(name, "chomp") || sp_streq(name, "delete_prefix") ||
+                        sp_streq(name, "delete_suffix")))
+        return an_poly_concrete(c, name, TY_STRING);
       /* poly.ljust/rjust/center(width[, pad]): a String read from a container
          widened to poly; emit_poly_call pads via sp_poly_to_s and re-boxes, so
          the result stays poly (#3222). */

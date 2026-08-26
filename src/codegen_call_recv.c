@@ -11855,6 +11855,22 @@ int emit_poly_call(Compiler *c, int id, Buf *b) {
      an arm for these placed inside it can never be entered. Each reuses the
      runtime function the concrete arm calls, and declines to a user class
      owning the name, as the neighbours do. */
+  /* The separator forms of the trimming methods. Their argc==0 spellings are
+     in the table above; a line reader chomping with its OWN separator --
+     `line.chomp(eol)` -- passes one, and that reached NoMethodError. */
+  if (recv >= 0 && rt == TY_POLY && argc == 1 && !user_defines_or_reads(c, name) &&
+      (sp_streq(name, "chomp") || sp_streq(name, "delete_prefix") ||
+       sp_streq(name, "delete_suffix"))) {
+    const char *fn = sp_streq(name, "chomp") ? "sp_str_chomp_sep"
+                   : sp_streq(name, "delete_prefix") ? "sp_str_delete_prefix"
+                   : "sp_str_delete_suffix";
+    /* TY_STRING, not boxed: the analyze arm types these as the String they
+       are, so the slot takes a const char * directly. */
+    buf_printf(b, "%s(sp_poly_recv_s(", fn);
+    emit_expr(c, recv, b); buf_printf(b, ", \"%s\"), ", name);
+    emit_str_expr(c, argv[0], b); buf_puts(b, ")");
+    return 1;
+  }
   if (recv >= 0 && rt == TY_POLY && !user_defines_or_reads(c, name) &&
       ((sp_streq(name, "unpack") && argc == 1) ||
        (sp_streq(name, "byteslice") && (argc == 1 || argc == 2)) ||

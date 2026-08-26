@@ -14,6 +14,8 @@
 # answers #to_io, which is why IO.select had to learn that protocol. The
 # handle is an Integer naming a connection in the C table -- no SSL pointer
 # is handed to a garbage-collected world.
+require "openssl/buffering"
+
 module OpenSSL
   module Native
     native_lib "openssl"
@@ -57,9 +59,14 @@ module OpenSSL
     end
 
     class SSLSocket
+      # Not an IO: an ordinary object with the buffered surface mixed in and
+      # the handle behind #to_io, exactly as CRuby has it.
+      include OpenSSL::Buffering
+
       attr_accessor :hostname
 
       def initialize(io, context = nil)
+        super()
         @io = io
         @context = context.nil? ? SSLContext.new : context
         @handle = -1
