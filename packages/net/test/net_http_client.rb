@@ -1,0 +1,77 @@
+# The HTTP client against a server in this same program, so the test is
+# deterministic and needs no network. Every line is diffed against CRuby's own
+# net/http: the request line and Host header a server actually sees, the
+# response parse, Content-Length and chunked bodies, POST with a form body,
+# and the response class family that `res.is_a?(Net::HTTPSuccess)` needs.
+#
+# The https path cannot be here -- it needs a peer with a certificate -- and is
+# exercised by hand against a real host; see the package README note in
+# net/http.rb.
+require "net/http"
+
+server = TCPServer.new("127.0.0.1", 0)
+port = server.addr[1]
+
+t = Thread.new do
+  seen = []
+  4.times do
+    c = server.accept
+    req = c.gets.to_s.strip                 # the request line
+    headers = {}
+    while (line = c.gets)
+      line = line.strip
+      break if line.empty?
+      ci = line.index(":")
+      headers[line[0, ci].downcase] = line[(ci + 1)..-1].to_s.strip unless ci.nil?
+    end
+    body = ""
+    if headers.key?("content-length")
+      n = headers["content-length"].to_i
+      body = c.read(n).to_s if n > 0
+    end
+    # The port is random, so record whether Host carried it rather than its value.
+    hostok = headers["host"] == "127.0.0.1:#{port}"
+    seen << "#{req}|host-has-port=#{hostok}|body=#{body}"
+
+    if req.include?("/chunked")
+      c.write("HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n")
+      c.write("5\r\nhello\r\n")
+      c.write("6\r\n world\r\n")
+      c.write("0\r\n\r\n")
+    elsif req.include?("/notfound")
+      c.write("HTTP/1.1 404 Not Found\r\nContent-Length: 3\r\nConnection: close\r\n\r\nbye")
+    else
+      payload = "ok:#{body}"
+      c.write("HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\n" \
+              "Content-Length: #{payload.bytesize}\r\nConnection: close\r\n\r\n#{payload}")
+    end
+    c.close
+  end
+  seen
+end
+
+# get_response through a URI, the idiom every caller writes.
+res = Net::HTTP.get_response(URI("http://127.0.0.1:#{port}/a?x=1"))
+p [res.code, res.message, res.body]
+p res["content-type"]
+p res["CONTENT-TYPE"]          # header lookup is case-insensitive
+p res.is_a?(Net::HTTPSuccess)
+p res.is_a?(Net::HTTPOK)
+
+# The block form, with an explicit request object.
+Net::HTTP.start("127.0.0.1", port) do |http|
+  r = http.request(Net::HTTP::Get.new("/chunked"))
+  p [r.code, r.body]           # chunked body is reassembled
+end
+
+# POST with a form body.
+r3 = Net::HTTP.post_form(URI("http://127.0.0.1:#{port}/f"), { "a" => "1", "b" => "x y" })
+p [r3.code, r3.body]
+
+# A non-2xx is a response, not an exception -- as CRuby has it.
+r4 = Net::HTTP.get_response(URI("http://127.0.0.1:#{port}/notfound"))
+p [r4.code, r4.message, r4.body]
+p [r4.is_a?(Net::HTTPNotFound), r4.is_a?(Net::HTTPClientError), r4.is_a?(Net::HTTPSuccess)]
+
+t.value.each { |line| puts line }
+server.close

@@ -44,6 +44,14 @@ registry, or stack reification — none of which exist in a flat compiled binary
 | `Monitor#class` | reports `Thread::Mutex` | a Monitor IS a mutex here, with reentrancy switched on per object, and the class name for a `TY_MUTEX` value is decided at compile time from the type rather than read off the object. `#synchronize` (including reentrant use), `#try_enter` and mutual exclusion across threads all behave as CRuby's do; only the name differs. `Monitor#new_cond` / the `MonitorMixin` module are not modelled. |
 | `require` of stdlib `.rb` that leans on metaprogramming / C extensions (e.g. `json/pure`, the `require "time"` parsing extensions like `Time.parse` / `Time.strptime`) | unsupported | such stdlib code runs off the AOT path. A `require` is resolved at parse time by splicing a bundled `lib/X.rb`; the libraries that ship this way — `set`, `forwardable`, `optparse`, `erb`, `csv`, `pathname`, `stringio`, `strscan` — do work. The built-in `Time` class (`Time.now` / `at` / `local` / `utc`, plus `strftime` / `zone`) works *without* any `require`; only the `require "time"` string-parsing additions are missing. |
 
+**`net/http` / `uri`.** An HTTP/1.1 client with `Connection: close`, one
+request per connection: no keep-alive, no pipelining, no HTTP/2, no proxy, no
+cookie jar and no automatic redirect following (a 3xx comes back as the
+response it is, with its Location). Chunked transfer decoding is there;
+content-encoding is not. `URI` parses http, https and a bare form; there is no
+URI::FTP or the scheme registry behind it. An https request needs the
+`openssl` package below.
+
 **TLS / `openssl`.** The `openssl` package binds the system libssl and
 provides `OpenSSL::SSL` only: `SSLContext`, `SSLSocket`, `SSLError` and the
 `VERIFY_*` constants, which is what an outbound HTTPS client reaches.
