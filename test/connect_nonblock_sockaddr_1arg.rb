@@ -1,9 +1,9 @@
 # Socket#connect_nonblock 1-arg form: the packed sockaddr path. Mirrors
 # the 2-arg shape: default raises IO::WaitWritable on EINPROGRESS;
 # `exception: false` returns the :wait_writable symbol instead. A
-# second connect_nonblock after the handshake completes sees EISCONN,
-# which raises Errno::EISCONN by default and returns 0 only when
-# `exception: false` is set. Refusal (ECONNREFUSED) raises immediately
+# second connect_nonblock after the handshake completes answers 0, in both
+# exception modes -- checked against CRuby, including the second connect
+# aimed at a different address. Refusal (ECONNREFUSED) raises immediately
 # regardless of the option, because refusal is a hard error, not
 # "in progress".
 require "socket"
