@@ -3006,9 +3006,19 @@ sp_File *sp_io_wait_events(sp_File *f, double timeout, sp_int kind) {SP_GC_ROOT(
 /* IO.select(read, write, error, timeout) -> [ready_read, ready_write,
    ready_error], or nil when the timeout expires first. A nil array stands for
    "watch nothing", so all three nil is just a sleep. */
+sp_File *(*sp_user_to_io_hook)(sp_RbVal) = NULL;
 static sp_File *sp_select_io_of(sp_RbVal v) {
   if (v.tag == SP_TAG_OBJ && v.cls_id == SP_BUILTIN_IO && v.v.p) return (sp_File *)v.v.p;
-  sp_raise_cls("TypeError", "no implicit conversion into IO");
+  /* A user object that answers #to_io names the handle to wait on -- CRuby
+     waits on wrappers this way, and a TLS socket is one. */
+  if (v.tag == SP_TAG_OBJ && v.cls_id >= 0 && sp_user_to_io_hook) {
+    sp_File *f = sp_user_to_io_hook(v);
+    if (f) return f;
+  }
+  sp_raise_cls("TypeError",
+               sp_sprintf("no implicit conversion of %s into IO",
+                          (v.tag == SP_TAG_OBJ && v.cls_id >= 0 && sp_obj_cls_name_fn)
+                            ? sp_obj_cls_name_fn(v.cls_id) : "nil"));
   return NULL;
 }
 sp_RbVal sp_io_select(sp_PolyArray *rd, sp_PolyArray *wr, sp_PolyArray *er, double timeout) {

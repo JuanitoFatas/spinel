@@ -126,6 +126,10 @@ static int method_name_implicitly_invoked(const char *nm) {
     "to_s", "inspect", "==", "<=>", "eql?", "hash", "each", "coerce",
     "to_str", "to_ary", "to_a", "to_i", "to_int", "to_h", "to_hash", "to_proc", "call",
     "to_path",   /* File, Dir and IO's path slots ask it first (rb_get_path) */
+    "to_io",     /* IO.select waits on whatever answers it; the only caller is
+                    the generated dispatch behind sp_user_to_io_hook, so nothing
+                    in the program names it (#4105-adjacent, the TLS socket
+                    shape) */
     "initialize_copy",
     /* the materializer synthesized for a class that includes Enumerable: the
        generated sp_obj_to_a dispatch calls it for an instance the poly

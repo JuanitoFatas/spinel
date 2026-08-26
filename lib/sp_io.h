@@ -139,4 +139,12 @@ typedef struct { DIR *dp; const char *path; } sp_Dir;
 sp_PolyArray *sp_io_pipe(void);
 sp_int sp_io_sysopen(const char *path);
 
+/* IO.select accepts anything that answers #to_io, which is how CRuby lets a
+   wrapper -- a protocol object holding a socket -- be waited on. The runtime
+   cannot dispatch a user method itself, so codegen emits the cls_id switch and
+   main() installs it here, the same shape as sp_user_exc_parent_fn and the
+   sp_json_*_fn hooks. NULL when the program defines no #to_io, which is when
+   an element that is not an IO is the TypeError it always was. */
+extern sp_File *(*sp_user_to_io_hook)(sp_RbVal);
+
 #endif
