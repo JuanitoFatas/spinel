@@ -74,6 +74,23 @@ dd = Derived.new
 dd.z = "here"
 puts dd.check
 
+# A hand-written setter is the boundary on the other side: its body holds a
+# real write node, which the scan already counts, so nothing about the fold
+# changes for it. (This case comes from bartleusink's #4108, which found the
+# same bug and drew the boundary in both directions.)
+class HandWritten
+  attr_reader :h
+  def initialize
+    @h = nil
+  end
+  def h=(v)
+    @h = v
+  end
+end
+hw = HandWritten.new
+hw.h = [2.0]
+puts(hw.h ? "hand-written-set" : "hand-written-unset")
+
 # The fold itself is still wanted: with no writer of any kind, an ivar written
 # only nil really is statically falsy, and the branch really is dead.
 class NoWriter
