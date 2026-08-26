@@ -222,6 +222,33 @@ sp_int sp_ssl_write(sp_int h, const char *data, sp_int n) {
   return w;
 }
 
+/* One record-layer write that never blocks, the mirror of sp_ssl_read_nb: the
+   reason for writing nothing rides in sp_ssl_want, because a TLS write can
+   need the socket to become READABLE first -- the peer's side of a
+   renegotiation -- and a caller waiting on the wrong direction waits forever.
+   Answers the byte count, or 0 with the reason set. */
+sp_int sp_ssl_write_nb(sp_int h, const char *data, sp_int n) {
+  sp_ssl_conn *c = sp_ssl_at(h);
+  sp_ssl_want_state = 0;
+  if (!c) { sp_ssl_want_state = 4; sp_ssl_note("closed TLS connection"); return 0; }
+  if (n <= 0) return 0;
+  if (!c->nonblock) {
+    int fl = fcntl(c->fd, F_GETFL, 0);
+    if (fl >= 0) fcntl(c->fd, F_SETFL, fl | O_NONBLOCK);
+    c->nonblock = 1;
+  }
+  sp_ssl_errbuf[0] = 0;
+  int w = SSL_write(c->ssl, data, (int)n);
+  if (w > 0) return w;
+  switch (SSL_get_error(c->ssl, w)) {
+    case SSL_ERROR_WANT_READ:   sp_ssl_want_state = 1; break;
+    case SSL_ERROR_WANT_WRITE:  sp_ssl_want_state = 2; break;
+    case SSL_ERROR_ZERO_RETURN: sp_ssl_want_state = 3; break;
+    default:                    sp_ssl_want_state = 4; sp_ssl_note("SSL_write"); break;
+  }
+  return 0;
+}
+
 /* Bytes already decrypted and waiting in the record layer. An event loop that
    selects on the fd alone will miss these: a whole record can arrive in one
    read, leaving the descriptor quiet while the application still has data. */

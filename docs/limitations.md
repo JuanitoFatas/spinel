@@ -45,8 +45,10 @@ registry, or stack reification — none of which exist in a flat compiled binary
 | `require` of stdlib `.rb` that leans on metaprogramming / C extensions (e.g. `json/pure`, the `require "time"` parsing extensions like `Time.parse` / `Time.strptime`) | unsupported | such stdlib code runs off the AOT path. A `require` is resolved at parse time by splicing a bundled `lib/X.rb`; the libraries that ship this way — `set`, `forwardable`, `optparse`, `erb`, `csv`, `pathname`, `stringio`, `strscan` — do work. The built-in `Time` class (`Time.now` / `at` / `local` / `utc`, plus `strftime` / `zone`) works *without* any `require`; only the `require "time"` string-parsing additions are missing. |
 
 **`net/http` / `uri`.** An HTTP/1.1 client with `Connection: close`, one
-request per connection: no keep-alive, no pipelining, no HTTP/2, no proxy, no
-cookie jar and no automatic redirect following (a 3xx comes back as the
+request per connection -- a second request inside one `Net::HTTP.start` block
+reconnects transparently, as CRuby does, rather than failing, but the
+connection is not reused: no keep-alive, no pipelining, no HTTP/2, no proxy,
+no cookie jar and no automatic redirect following (a 3xx comes back as the
 response it is, with its Location). Chunked transfer decoding is there;
 content-encoding is not. `URI` parses http, https and a bare form; there is no
 URI::FTP or the scheme registry behind it. An https request needs the
@@ -58,8 +60,7 @@ provides `OpenSSL::SSL` only: `SSLContext`, `SSLSocket`, `SSLError` and the
 `OpenSSL::Digest::SHA256` / `SHA1` and `OpenSSL::HMAC.hexdigest` are there,
 over the runtime's own crypto rather than libssl -- class-method forms only,
 and no MD5, which CRuby carries and the runtime does not. `Cipher`, `PKey`,
-most of `X509`, `#write_nonblock`, and the incremental digest object API are
-not there, and a
+most of `X509`, and the incremental digest object API are not there, and a
 program that names them fails to compile rather than at run time. Spinel
 implements no TLS and bundles no trust anchors: the chain is validated against
 the operating system's store, so a CA it stops trusting stops being trusted

@@ -66,6 +66,10 @@ class Buffered
     raise IOError, "should not be reached while the buffer has bytes"
   end
 
+  def syswrite_nonblock(data, exception: true)
+    data.to_s.bytesize
+  end
+
   def syswrite(data) = data.bytesize
   def sysclose = nil
 end
@@ -74,3 +78,10 @@ b = Buffered.new("abcdefgh")
 b.read(2)                 # fills the buffer with all 8, consumes 2
 p b.read_nonblock(3)      # served from the buffer, never reaches sysread_nonblock
 p b.read_nonblock(0)
+
+# write_nonblock mirrors it: flush what is buffered, then hand the argument
+# straight to the socket, so a partial write stays the caller's to retry and
+# no buffer standing behind it hides how much actually went.
+w = Buffered.new("")
+p w.write_nonblock("hello")
+p w.write_nonblock("")

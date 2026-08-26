@@ -7,7 +7,11 @@ true
 ["200", "ok:a=1&b=x+y"]
 ["404", "Not Found", "bye"]
 [true, true, false]
+"ok:"
+"ok:"
 GET /a?x=1 HTTP/1.1|host-has-port=true|body=
 GET /chunked HTTP/1.1|host-has-port=true|body=
 POST /f HTTP/1.1|host-has-port=true|body=a=1&b=x+y
 GET /notfound HTTP/1.1|host-has-port=true|body=
+GET /one HTTP/1.1|host-has-port=true|body=
+GET /two HTTP/1.1|host-has-port=true|body=

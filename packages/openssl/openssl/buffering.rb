@@ -10,13 +10,19 @@
 #
 # * a line separator is a String, not a Regexp, and `$/` is not consulted
 # * the `buf` out-parameter of #read / #readpartial is not accepted
-# * #write_nonblock is not here; #read_nonblock is
 # * the Buffer < String subclass is gone. It exists upstream to keep binary
 #   encoding across `<<`, and spinel has one internal representation
 # * #each is absent; #each_line is the same iterator under the name every
 #   caller uses (see the note above it)
 #
 # Everything present behaves as CRuby's does.
+#
+# The contract for a class mixing this in: #sysread, #syswrite and #sysclose,
+# plus #sysread_nonblock and #syswrite_nonblock for the non-blocking pair, and
+# `super()` from its own #initialize. CRuby leaves the sys* primitives
+# implicit because its including class is C; here a class that omits one fails
+# to compile rather than at the first call, which is the better place to hear
+# about it.
 module OpenSSL
   module Buffering
     BLOCK_SIZE = 1024 * 16
@@ -94,6 +100,14 @@ module OpenSSL
       return "" if maxlen == 0
       return sysread_nonblock(maxlen, exception: exception) if @rbuffer.empty?
       consume_rbuff(maxlen)
+    end
+
+    # CRuby flushes what is buffered first, then hands the argument straight
+    # to the socket: a partial write has to be the caller's to retry, and a
+    # buffer standing behind it would hide how much actually went.
+    def write_nonblock(s, exception: true)
+      flush
+      syswrite_nonblock(s, exception: exception)
     end
 
     def gets(eol = "\n", limit = nil, chomp: false)

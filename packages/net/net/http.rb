@@ -160,6 +160,7 @@ module Net
       @read_timeout = 60
       @socket = nil
       @tls = nil
+      @fresh = false
       @started = false
     end
 
@@ -217,6 +218,12 @@ module Net
     end
 
     def start
+      open_connection
+      @started = true
+      self
+    end
+
+    def open_connection
       @socket = TCPSocket.new(@address, @port)
       if @use_ssl
         tls = OpenSSL::SSL::SSLSocket.new(@socket)
@@ -224,8 +231,8 @@ module Net
         tls.connect
         @tls = tls
       end
-      @started = true
-      self
+      @fresh = true
+      nil
     end
 
     def finish
@@ -233,6 +240,7 @@ module Net
       @socket.close unless @socket.nil?
       @tls = nil
       @socket = nil
+      @fresh = false
       @started = false
       nil
     end
@@ -252,8 +260,24 @@ module Net
 
     def request(req)
       raise HTTPError, "not started" unless @started
+      # Every request goes out with `Connection: close`, so the server hangs
+      # up after answering and the socket a second request would use is dead.
+      # CRuby reconnects transparently in that situation, and a caller writing
+      # `start { |http| http.get("/a"); http.get("/b") }` -- which is the
+      # idiom -- has no reason to know. This is one connection per request
+      # rather than keep-alive; what it is not is a failure on the second one.
+      reconnect unless @fresh
+      @fresh = false
       write_request(req)
       read_response
+    end
+
+    def reconnect
+      @tls.sysclose unless @tls.nil?
+      @socket.close unless @socket.nil?
+      @tls = nil
+      @socket = nil
+      open_connection
     end
 
     # ---- the wire ----

@@ -14,7 +14,7 @@ port = server.addr[1]
 
 t = Thread.new do
   seen = []
-  4.times do
+  6.times do
     c = server.accept
     req = c.gets.to_s.strip                 # the request line
     headers = {}
@@ -72,6 +72,15 @@ p [r3.code, r3.body]
 r4 = Net::HTTP.get_response(URI("http://127.0.0.1:#{port}/notfound"))
 p [r4.code, r4.message, r4.body]
 p [r4.is_a?(Net::HTTPNotFound), r4.is_a?(Net::HTTPClientError), r4.is_a?(Net::HTTPSuccess)]
+
+# Several requests inside one `start` block. Every request goes out with
+# `Connection: close`, so the socket the second would use is dead; CRuby
+# reconnects transparently there and so does this. One connection per request
+# rather than keep-alive -- what it must not be is a failure on the second.
+Net::HTTP.start("127.0.0.1", port) do |http|
+  p http.get("/one").body
+  p http.get("/two").body
+end
 
 t.value.each { |line| puts line }
 server.close

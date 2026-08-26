@@ -32,6 +32,7 @@ module OpenSSL
     native_func :cipher,       [:int],                :string, "sp_ssl_cipher"
     native_func :read_nb,      [:int, :int],          :string, "sp_ssl_read_nb"
     native_func :want,         [],                    :int,    "sp_ssl_want"
+    native_func :write_nb,     [:int, :string, :int], :int,    "sp_ssl_write_nb"
     ffi_lib "ssl"
     ffi_lib "crypto"
   end
@@ -153,6 +154,31 @@ module OpenSSL
           raise EOFError, "end of file reached"
         else
           raise SSLError, "SSL_read returned an error: #{Native.last_error}"
+        end
+      end
+
+      # The mirror of sysread_nonblock. A TLS write can need the socket to
+      # become READABLE before it can write -- the peer's side of a
+      # renegotiation -- so this raises the other class too, and a caller that
+      # waits on the wrong direction waits forever.
+      def syswrite_nonblock(data, exception: true)
+        raise SSLError, "not connected" if @handle < 0
+        s = data.to_s
+        return 0 if s.empty?
+        n = Native.write_nb(@handle, s, s.bytesize)
+        return n if n > 0
+        case Native.want
+        when 1
+          return :wait_readable unless exception
+          raise SSLErrorWaitReadable, "read would block"
+        when 2
+          return :wait_writable unless exception
+          raise SSLErrorWaitWritable, "write would block"
+        when 3
+          return nil unless exception
+          raise EOFError, "end of file reached"
+        else
+          raise SSLError, "SSL_write returned an error: #{Native.last_error}"
         end
       end
 
