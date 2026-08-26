@@ -5978,6 +5978,38 @@ static int emit_nullable_int_ternary(Compiler *c, int v, Buf *b) {
    definition wins, with a same-class tie going to the method, exactly as the
    statically typed emitter arbitrates. `objp` is a C expression for the
    receiver as a raw pointer, `src` the value temp, `at` its type. */
+/* An empty `[]` / `{}` has no elements to type it, so inference gives the
+   literal node whatever the reads elsewhere suggest -- which is not the slot it
+   is about to be stored into. The write is the one place that knows the slot,
+   so it lends the literal that variant. Without it the fresh container has one
+   layout and every later read of the slot has another: a module's
+   `@reg ||= {}` built an sp_StrPolyHash for a slot the poly-keyed writes had
+   already made sp_PolyPolyHash, and the C stopped on the pointer types
+   (#4111). Returns 1 when it emitted the literal. */
+static int emit_empty_literal_as(Compiler *c, int v, TyKind slot, Buf *b) {
+  const NodeTable *nt = c->nt;
+  const char *vty = v >= 0 ? nt_type(nt, v) : NULL;
+  if (!vty) return 0;
+  int n = 0;
+  if (sp_streq(vty, "ArrayNode")) {
+    nt_arr(nt, v, "elements", &n);
+    if (n) return 0;
+    if (ty_is_ptr_array(slot))   { buf_puts(b, "sp_PtrArray_new()");  return 1; }
+    if (slot == TY_POLY_ARRAY)   { buf_puts(b, "sp_PolyArray_new()"); return 1; }
+    if (array_kind(slot)) { buf_printf(b, "sp_%sArray_new()", array_kind(slot)); return 1; }
+    return 0;
+  }
+  if (sp_streq(vty, "HashNode") || sp_streq(vty, "KeywordHashNode")) {
+    nt_arr(nt, v, "elements", &n);
+    if (n || !ty_is_hash(slot)) return 0;
+    const char *hcn = ty_hash_cname(slot);
+    if (!hcn) return 0;
+    buf_printf(b, "sp_%sHash_new()", hcn);
+    return 1;
+  }
+  return 0;
+}
+
 static void emit_boxed_writer_arms(Compiler *c, const char *base, const char *nm,
                                    const char *objp, const char *src, TyKind at, Buf *b) {
   for (int k = 0; k < c->nclasses; k++) {
@@ -6619,7 +6651,8 @@ else {
       emit_indent(b, indent);
       if (is_or) buf_printf(b, "if (!%s) %s = ", ref2, ref2);
       else       buf_printf(b, "if (%s) %s = ", ref2, ref2);
-      emit_expr(c, v, b); buf_puts(b, ";\n");
+      if (!emit_empty_literal_as(c, v, ivt2, b)) emit_expr(c, v, b);
+      buf_puts(b, ";\n");
     }
     else if (!is_or) {
       emit_indent(b, indent);
@@ -6759,12 +6792,8 @@ else {
       else if (ivt == TY_STRING) buf_puts(b, "NULL");
       else buf_puts(b, default_value(ivt));
     }
-    else if (v_empty_array && ivt == TY_POLY_ARRAY) buf_puts(b, "sp_PolyArray_new()");
-    else if (v_empty_array && array_kind(ivt)) buf_printf(b, "sp_%sArray_new()", array_kind(ivt));
-    else if (v_empty_hash && ty_is_hash(ivt)) {
-      const char *hcn = ty_hash_cname(ivt);
-      if (hcn) buf_printf(b, "sp_%sHash_new()", hcn);
-      else emit_expr(c, v, b);
+    else if ((v_empty_array || v_empty_hash) && emit_empty_literal_as(c, v, ivt, b)) {
+      /* the literal took the slot's variant */
     }
     else if (ivt == TY_STRBUF) {
       /* shared handle slot: an alias RHS (a shared local/ivar read) copies
