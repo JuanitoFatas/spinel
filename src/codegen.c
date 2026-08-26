@@ -8790,7 +8790,8 @@ char *codegen_program(const NodeTable *nt) {
     if (any) {
       for (int i = 0; i < c->nclasses; i++) {
         if (!class_is_exc_subclass(c, i)) continue;
-        if (c->classes[i].nincluded_mods == 0) continue;
+        if (c->classes[i].nincluded_mods == 0 &&
+            c->classes[i].nincluded_mod_names == 0) continue;
         const char *cn0 = class_ruby_name(c, i);
         if (!cn0) cn0 = c->classes[i].name;
         if (!cn0) continue;
@@ -8803,6 +8804,10 @@ char *codegen_program(const NodeTable *nt) {
           if (!mn) mn = c->classes[mi].name;
           if (mn) buf_printf(&b, "\"%s\", ", mn);
         }
+        /* Builtin modules named by path carry no class index; their qualified
+           string is what the match compares. */
+        for (int m = 0; m < c->classes[i].nincluded_mod_names; m++)
+          buf_printf(&b, "\"%s\", ", c->classes[i].included_mod_names[m]);
         buf_puts(&b, "0 };\n");
         buf_printf(&b, "    if(!strcmp(cls,\"%s\"))return _m%d;\n", cn, i);
         if (c->classes[i].name && !sp_streq(cn, c->classes[i].name))

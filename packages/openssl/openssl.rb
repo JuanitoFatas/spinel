@@ -30,6 +30,8 @@ module OpenSSL
     native_func :peer_subject, [:int],                :string, "sp_ssl_peer_subject"
     native_func :version,      [:int],                :string, "sp_ssl_version"
     native_func :cipher,       [:int],                :string, "sp_ssl_cipher"
+    native_func :read_nb,      [:int, :int],          :string, "sp_ssl_read_nb"
+    native_func :want,         [],                    :int,    "sp_ssl_want"
     ffi_lib "ssl"
     ffi_lib "crypto"
   end
@@ -39,6 +41,26 @@ module OpenSSL
     VERIFY_PEER = 1
 
     class SSLError < OpenSSLError
+    end
+
+    # CRuby raises these, not an SSLError extended with a module at run time.
+    # A non-blocking TLS read can need the socket to become WRITABLE before it
+    # can read -- a renegotiating peer does that -- so the two directions are
+    # separate classes and the caller waits on the right one:
+    #
+    #   begin
+    #     data = ssl.read_nonblock(4096)
+    #   rescue IO::WaitReadable
+    #     IO.select([ssl]); retry
+    #   rescue IO::WaitWritable
+    #     IO.select(nil, [ssl]); retry
+    #   end
+    class SSLErrorWaitReadable < SSLError
+      include IO::WaitReadable
+    end
+
+    class SSLErrorWaitWritable < SSLError
+      include IO::WaitWritable
     end
 
     # Only the members an outbound HTTPS client reaches. set_params is the one
@@ -106,6 +128,32 @@ module OpenSSL
         n = Native.write(@handle, data, data.bytesize)
         raise SSLError, "SSL_write returned an error: #{Native.last_error}" if n < 0
         n
+      end
+
+      # One record-layer read that never blocks. The descriptor must already
+      # be non-blocking -- CRuby says the same -- and this does not set it,
+      # because the fd belongs to the IO the caller handed over.
+      #
+      # `exception: false` answers :wait_readable / :wait_writable instead of
+      # raising, and nil at EOF, which is CRuby's contract for the same call.
+      def sysread_nonblock(maxlen, exception: true)
+        raise SSLError, "not connected" if @handle < 0
+        return "" if maxlen == 0
+        s = Native.read_nb(@handle, maxlen)
+        return s unless s.empty?
+        case Native.want
+        when 1
+          return :wait_readable unless exception
+          raise SSLErrorWaitReadable, "read would block"
+        when 2
+          return :wait_writable unless exception
+          raise SSLErrorWaitWritable, "write would block"
+        when 3
+          return nil unless exception
+          raise EOFError, "end of file reached"
+        else
+          raise SSLError, "SSL_read returned an error: #{Native.last_error}"
+        end
       end
 
       # Bytes already decrypted and waiting inside the record layer. An event

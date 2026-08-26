@@ -332,6 +332,12 @@ typedef struct {
      includes that module. */
   int *included_mods;
   int nincluded_mods, cincluded_mods;
+  /* Modules with no class of their own: a BUILTIN one named through its path,
+     `include IO::WaitReadable`. Those carry no index into c->classes, and the
+     rescue match compares module NAMES anyway, so the qualified string is
+     what gets recorded. */
+  char **included_mod_names;
+  int nincluded_mod_names, cincluded_mod_names;
   /* compiler_state_* declared fields: parallel arrays of field name (no '@')
      and kind ("int"/"str"/"sa"/"ia"). codegen's synthesized init/dump/set
      methods iterate these. */

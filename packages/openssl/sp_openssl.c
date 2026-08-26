@@ -23,6 +23,7 @@
 #include <openssl/err.h>
 #include <openssl/x509v3.h>
 #include <string.h>
+#include <fcntl.h>
 
 #define SP_SSL_MAX 256          /* concurrent TLS connections per process */
 #define SP_SSL_BUF 65536
@@ -32,6 +33,7 @@ typedef struct {
   SSL_CTX *ctx;
   int      fd;
   int      in_use;
+  int      nonblock;      /* O_NONBLOCK armed by the first non-blocking read */
 } sp_ssl_conn;
 
 static sp_ssl_conn sp_ssl_tab[SP_SSL_MAX];
@@ -126,6 +128,7 @@ else {
   sp_ssl_tab[i].ssl = ssl;
   sp_ssl_tab[i].ctx = ctx;
   sp_ssl_tab[i].fd  = (int)fd;
+  sp_ssl_tab[i].nonblock = 0;
   sp_ssl_tab[i].in_use = 1;
   return i;
 }
@@ -153,6 +156,58 @@ const char *sp_ssl_read(sp_int h, sp_int maxlen) {
   out[n] = 0;
   sp_str_set_len(out, (size_t)n);
   return out;
+}
+
+/* Why a non-blocking read needs a status and not just bytes: TLS is a record
+   layer, so "nothing to read yet" and "I must WRITE before I can read" are
+   different answers -- a renegotiating peer makes SSL_read ask for the socket
+   to become writable. The caller has to wait on the right direction, so the
+   reason rides in a separate slot rather than being flattened into "".
+     0 ok   1 want-read   2 want-write   3 eof   4 error */
+static SP_TLS int sp_ssl_want_state = 0;
+
+sp_int sp_ssl_want(void) { return sp_ssl_want_state; }
+
+/* Up to `maxlen` bytes without blocking. The fd must already be non-blocking;
+   this does not set it, because the descriptor belongs to the caller's IO.
+   Answers "" whenever it did not read, with the reason in sp_ssl_want. */
+const char *sp_ssl_read_nb(sp_int h, sp_int maxlen) {
+  sp_ssl_conn *c = sp_ssl_at(h);
+  sp_ssl_want_state = 0;
+  if (!c) { sp_ssl_want_state = 4; sp_ssl_note("closed TLS connection"); return sp_str_dup_external(""); }
+  if (!sp_ssl_rdbuf && !(sp_ssl_rdbuf = (char *)malloc(SP_SSL_BUF))) {
+    sp_ssl_want_state = 4;
+    return sp_str_dup_external("");
+  }
+  if (maxlen <= 0 || maxlen >= SP_SSL_BUF) maxlen = SP_SSL_BUF - 1;
+  sp_ssl_errbuf[0] = 0;
+  /* CRuby's sysread_nonblock arms O_NONBLOCK on the descriptor itself rather
+     than making the caller do it (rb_io_set_nonblock), so this does too --
+     once, on the first non-blocking read, and never back off again, which is
+     also what CRuby leaves behind. */
+  if (!c->nonblock) {
+    int fl = fcntl(c->fd, F_GETFL, 0);
+    if (fl >= 0) fcntl(c->fd, F_SETFL, fl | O_NONBLOCK);
+    c->nonblock = 1;
+  }
+  /* Bytes already decrypted answer immediately: the descriptor can be quiet
+     while a whole record sits in the record layer, so asking the fd first
+     would park a caller that already has data. */
+  int n = SSL_read(c->ssl, sp_ssl_rdbuf, (int)maxlen);
+  if (n > 0) {
+    char *out = sp_str_alloc((size_t)n);
+    memcpy(out, sp_ssl_rdbuf, (size_t)n);
+    out[n] = 0;
+    sp_str_set_len(out, (size_t)n);
+    return out;
+  }
+  switch (SSL_get_error(c->ssl, n)) {
+    case SSL_ERROR_WANT_READ:   sp_ssl_want_state = 1; break;
+    case SSL_ERROR_WANT_WRITE:  sp_ssl_want_state = 2; break;
+    case SSL_ERROR_ZERO_RETURN: sp_ssl_want_state = 3; break;
+    default:                    sp_ssl_want_state = 4; sp_ssl_note("SSL_read"); break;
+  }
+  return sp_str_dup_external("");
 }
 
 /* Write `n` bytes; answers how many went, or -1. Binary: the length comes

@@ -58,7 +58,8 @@ provides `OpenSSL::SSL` only: `SSLContext`, `SSLSocket`, `SSLError` and the
 `OpenSSL::Digest::SHA256` / `SHA1` and `OpenSSL::HMAC.hexdigest` are there,
 over the runtime's own crypto rather than libssl -- class-method forms only,
 and no MD5, which CRuby carries and the runtime does not. `Cipher`, `PKey`,
-most of `X509`, and the incremental digest object API are not there, and a
+most of `X509`, `#write_nonblock`, and the incremental digest object API are
+not there, and a
 program that names them fails to compile rather than at run time. Spinel
 implements no TLS and bundles no trust anchors: the chain is validated against
 the operating system's store, so a CA it stops trusting stops being trusted

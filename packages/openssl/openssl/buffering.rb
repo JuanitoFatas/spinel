@@ -10,9 +10,7 @@
 #
 # * a line separator is a String, not a Regexp, and `$/` is not consulted
 # * the `buf` out-parameter of #read / #readpartial is not accepted
-# * #read_nonblock / #write_nonblock are not here: they answer with
-#   IO::WaitReadable *extended into* an SSLError, which needs singleton
-#   modules on an exception instance
+# * #write_nonblock is not here; #read_nonblock is
 # * the Buffer < String subclass is gone. It exists upstream to keep binary
 #   encoding across `<<`, and spinel has one internal representation
 # * #each is absent; #each_line is the same iterator under the name every
@@ -85,6 +83,16 @@ module OpenSSL
     def readpartial(maxlen)
       return "" if maxlen == 0
       return sysread(maxlen) if @rbuffer.empty?
+      consume_rbuff(maxlen)
+    end
+
+    # What is buffered first, one non-blocking sysread only when it is empty --
+    # CRuby's shape exactly. Anything already decrypted comes back without
+    # touching the socket, which is the case a caller waiting on the
+    # descriptor alone would sleep through.
+    def read_nonblock(maxlen, exception: true)
+      return "" if maxlen == 0
+      return sysread_nonblock(maxlen, exception: exception) if @rbuffer.empty?
       consume_rbuff(maxlen)
     end
 
