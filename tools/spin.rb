@@ -252,7 +252,13 @@ def spinel_hdr_dir
   env = ENV["SPINEL_HDR_DIR"].to_s
   return env if env != "" && File.exist?(File.join(env, "spinel_rt.h"))
   bin = spinel_bin
-  bin = which("spinel") if bin == "spinel"
+  if bin == "spinel"
+    found = which("spinel")
+    # PATH returns the symlink as-is; the lib probe below then walks
+    # relative to a symlinked path and misses the install tree.
+    found = File.realpath(found) if found != "" && File.symlink?(found)
+    bin = found
+  end
   return "" if bin == ""
   d = File.expand_path("..", bin)
   a = File.join(d, "lib")
