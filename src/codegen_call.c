@@ -3781,6 +3781,123 @@ static int emit_poly_builtin_method(Compiler *c, int id, Buf *b) {
                tv, tv, tf, tv, name, tv);
     return 1;
   }
+  /* The Time methods that answer a Time. The surface had the scalar reads and
+     not these, so a receiver narrowed by is_a?(Time) out of an untyped value
+     answered NoMethodError at run time with nothing wrong in the C (#4109).
+     The zone shift is the same helper the typed emitter calls; only the boxing
+     differs, since the receiver here is a poly. */
+  {
+    /* utc / gmtime / localtime convert the receiver IN PLACE and answer it, the
+       way CRuby does; getutc / getgm / getlocal answer a fresh Time and leave
+       the receiver alone. Writing through the box rather than boxing a copy
+       keeps the object identity, so another reference to the same Time sees
+       the conversion, as it does in Ruby. */
+    const char *tconv = NULL;
+    int mutates = 0;
+    if (argc == 0) {
+      if (sp_streq(name, "utc") || sp_streq(name, "gmtime"))
+        { tconv = "sp_time_utc"; mutates = 1; }
+      else if (sp_streq(name, "getutc") || sp_streq(name, "getgm"))
+        tconv = "sp_time_utc";
+      else if (sp_streq(name, "localtime"))
+        { tconv = "sp_time_localtime"; mutates = 1; }
+      else if (sp_streq(name, "getlocal"))
+        tconv = "sp_time_localtime";
+    }
+    if (tconv) {
+      int tv = ++g_tmp;
+      buf_printf(b, "({ sp_RbVal _t%d = ", tv); emit_expr(c, recv, b);
+      buf_printf(b, "; _t%d.tag == SP_TAG_OBJ && _t%d.cls_id == SP_BUILTIN_TIME ? ", tv, tv);
+      if (mutates)
+        buf_printf(b, "(*(sp_Time *)_t%d.v.p = %s(*(sp_Time *)_t%d.v.p), _t%d)",
+                   tv, tconv, tv, tv);
+      else
+        buf_printf(b, "sp_box_time(%s(*(sp_Time *)_t%d.v.p))", tconv, tv);
+      buf_printf(b, " : (sp_raise_nomethod(sp_nomethod_msg(\"%s\", _t%d)), sp_box_nil()); })",
+                 name, tv);
+      return 1;
+    }
+    /* localtime(off) / getlocal(off): a fixed offset, seconds or "+HH:MM". */
+    if (argc == 1 && (sp_streq(name, "localtime") || sp_streq(name, "getlocal"))) {
+      int tv = ++g_tmp, ov = ++g_tmp;
+      buf_printf(b, "({ sp_RbVal _t%d = ", tv); emit_expr(c, recv, b);
+      buf_printf(b, "; sp_int _t%d = ", ov);
+      if (comp_ntype(c, argv[0]) == TY_STRING) {
+        buf_puts(b, "sp_time_offset_from_str("); emit_str_expr(c, argv[0], b); buf_puts(b, ")");
+      }
+      else emit_int_expr(c, argv[0], b);
+      buf_printf(b, "; _t%d.tag == SP_TAG_OBJ && _t%d.cls_id == SP_BUILTIN_TIME"
+                    " ? sp_box_time(sp_time_getlocal_off(*(sp_Time *)_t%d.v.p, _t%d))"
+                    " : (sp_raise_nomethod(sp_nomethod_msg(\"%s\", _t%d)), sp_box_nil()); })",
+                 tv, tv, tv, ov, name, tv);
+      return 1;
+    }
+  }
+  /* The rest of the Time surface on a boxed receiver: the typed emitter serves
+     48 names here and this one served 15, so a Time narrowed out of an untyped
+     value answered NoMethodError for the other 33 with a clean C build. The
+     expressions are the typed ones with the receiver unboxed (#4109). */
+  if (argc == 0) {
+    const char *ti = NULL, *tb = NULL, *ts = NULL;
+    /* Only the names Time alone owns: min / round / floor / ceil are the
+       collections' and the numbers' too, and an arm here would answer for
+       every boxed receiver rather than only for a Time. */
+    if      (sp_streq(name, "tv_usec") || sp_streq(name, "usec"))
+      ti = "((sp_int)((sp_Time *)_tR.v.p)->tv_nsec / 1000)";
+    else if (sp_streq(name, "tv_nsec") || sp_streq(name, "nsec"))
+      ti = "((sp_int)((sp_Time *)_tR.v.p)->tv_nsec)";
+    else if (sp_streq(name, "utc_offset") || sp_streq(name, "gmt_offset") ||
+             sp_streq(name, "gmtoff"))
+      ti = "sp_time_utc_offset(*(sp_Time *)_tR.v.p)";
+    else if (sp_streq(name, "utc?") || sp_streq(name, "gmt?"))
+      tb = "(((sp_Time *)_tR.v.p)->is_utc == 1)";
+    else if (sp_streq(name, "dst?") || sp_streq(name, "isdst"))
+      tb = "(sp_time_isdst(*(sp_Time *)_tR.v.p) != 0)";
+    else if (sp_streq(name, "sunday?"))    tb = "(sp_time_wday(*(sp_Time *)_tR.v.p) == 0)";
+    else if (sp_streq(name, "monday?"))    tb = "(sp_time_wday(*(sp_Time *)_tR.v.p) == 1)";
+    else if (sp_streq(name, "tuesday?"))   tb = "(sp_time_wday(*(sp_Time *)_tR.v.p) == 2)";
+    else if (sp_streq(name, "wednesday?")) tb = "(sp_time_wday(*(sp_Time *)_tR.v.p) == 3)";
+    else if (sp_streq(name, "thursday?"))  tb = "(sp_time_wday(*(sp_Time *)_tR.v.p) == 4)";
+    else if (sp_streq(name, "friday?"))    tb = "(sp_time_wday(*(sp_Time *)_tR.v.p) == 5)";
+    else if (sp_streq(name, "saturday?"))  tb = "(sp_time_wday(*(sp_Time *)_tR.v.p) == 6)";
+    else if (sp_streq(name, "zone"))       ts = "sp_time_zone(*(sp_Time *)_tR.v.p)";
+    else if ((sp_streq(name, "iso8601") || sp_streq(name, "xmlschema")) &&
+             sp_feature_enabled("time"))
+      ts = "sp_time_iso8601(*(sp_Time *)_tR.v.p)";
+    if (ti || tb || ts) {
+      const char *expr = ti ? ti : tb ? tb : ts;
+      const char *cty  = ti ? "sp_int" : tb ? "sp_bool" : "const char *";
+      const char *miss = ti ? "0" : tb ? "FALSE" : "NULL";
+      int tv = ++g_tmp;
+      /* `_tR` in the table above stands for this arm's own temp; splice the
+         real name in rather than threading it through every entry. */
+      Buf body; memset(&body, 0, sizeof body);
+      for (const char *q = expr; *q; ) {
+        const char *hit = strstr(q, "_tR");
+        if (!hit) { buf_puts(&body, q); break; }
+        buf_printf(&body, "%.*s_t%d", (int)(hit - q), q, tv);
+        q = hit + 3;
+      }
+      buf_printf(b, "({ sp_RbVal _t%d = ", tv); emit_expr(c, recv, b);
+      buf_printf(b, "; _t%d.tag == SP_TAG_OBJ && _t%d.cls_id == SP_BUILTIN_TIME ? %s"
+                    " : (%s)(sp_raise_nomethod(sp_nomethod_msg(\"%s\", _t%d)), %s); })",
+                 tv, tv, body.p ? body.p : "0", cty, name, tv, miss);
+      free(body.p);
+      return 1;
+    }
+  }
+  /* Time#subsec: Integer 0 on a whole second, else the exact Rational. */
+  if (argc == 0 && sp_streq(name, "subsec")) {
+    int tv = ++g_tmp;
+    buf_printf(b, "({ sp_RbVal _t%d = ", tv); emit_expr(c, recv, b);
+    buf_printf(b, "; _t%d.tag == SP_TAG_OBJ && _t%d.cls_id == SP_BUILTIN_TIME"
+                  " ? (((sp_Time *)_t%d.v.p)->tv_nsec == 0 ? sp_box_int(0)"
+                  " : sp_box_rational(sp_rational_new((sp_int)((sp_Time *)_t%d.v.p)->tv_nsec, 1000000000)))"
+                  " : (sp_raise_nomethod(sp_nomethod_msg(\"subsec\", _t%d)), sp_box_nil()); })",
+               tv, tv, tv, tv, tv);
+    return 1;
+  }
+
   /* Proc#arity: read the arity field off the boxed proc. */
   if (sp_streq(name, "arity") && argc == 0) {
     int tv = ++g_tmp;

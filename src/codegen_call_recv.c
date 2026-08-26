@@ -9422,34 +9422,17 @@ int emit_value_recv_call(Compiler *c, int id, Buf *b) {
       if (argc == 1) { buf_printf(b, "sp_time_iso8601_frac(%s, ", r); emit_int_expr(c, argv[0], b); buf_puts(b, ")"); }
       else buf_printf(b, "sp_time_iso8601(%s)", r);
     }
-    else if ((sp_streq(name, "floor") || sp_streq(name, "ceil") || sp_streq(name, "round")) && argc == 0) {
-      /* whole-second rounding of the subsecond part */
-      int tt = ++g_tmp;
-      buf_printf(b, "({ sp_Time _t%d = %s; ", tt, r);
-      if (sp_streq(name, "floor")) buf_printf(b, "_t%d.tv_nsec = 0;", tt);
-      else if (sp_streq(name, "ceil")) buf_printf(b, "if (_t%d.tv_nsec > 0) { _t%d.tv_sec += 1; _t%d.tv_nsec = 0; }", tt, tt, tt);
-      else buf_printf(b, "if (_t%d.tv_nsec >= 500000000) _t%d.tv_sec += 1; _t%d.tv_nsec = 0;", tt, tt, tt);
-      buf_printf(b, " _t%d; })", tt);
-    }
-    else if ((sp_streq(name, "floor") || sp_streq(name, "ceil") || sp_streq(name, "round")) && argc == 1) {
-      /* round the subsecond part to `ndigits` decimal places (#3089).
-         scale = 10^(9-ndigits); ndigits >= 9 keeps full nanosecond
-         resolution. A carry past 1e9 bumps the second. */
-      int tt = ++g_tmp, td = ++g_tmp;
-      buf_printf(b, "({ sp_Time _t%d = %s; sp_int _t%d = ", tt, r, td);
-      emit_int_expr(c, argv[0], b);
-      /* a negative digit count is CRuby's ArgumentError, not a clamp to zero
-         (#3700) */
-      buf_printf(b, "; if (_t%d < 0) sp_raise_cls(\"ArgumentError\","
-                    " sp_sprintf(\"negative ndigits given: %%lld\", (long long)_t%d));", td, td);
-      buf_printf(b, " if (_t%d < 9) { if (_t%d < 0) _t%d = 0;"
-                    " int64_t _sc = 1; for (sp_int _k = _t%d; _k < 9; _k++) _sc *= 10;"
-                    " int64_t _ns = _t%d.tv_nsec; ", td, td, td, td, tt);
-      if (sp_streq(name, "floor"))     buf_puts(b, "_ns = _ns / _sc * _sc;");
-      else if (sp_streq(name, "ceil")) buf_puts(b, "if (_ns % _sc) _ns = (_ns / _sc + 1) * _sc;");
-      else                             buf_puts(b, "_ns = (_ns + _sc / 2) / _sc * _sc;");
-      buf_printf(b, " if (_ns >= 1000000000) { _t%d.tv_sec += 1; _ns -= 1000000000; }"
-                    " _t%d.tv_nsec = (int32_t)_ns; } _t%d; })", tt, tt, tt);
+    else if ((sp_streq(name, "floor") || sp_streq(name, "ceil") || sp_streq(name, "round")) &&
+             argc <= 1) {
+      /* The subsecond part to `ndigits` decimal places (#3089); no argument is
+         ndigits 0, whole seconds. A negative count is CRuby's ArgumentError
+         rather than a clamp to zero (#3700). The arithmetic lives in the
+         runtime so the boxed receiver answers exactly the same (#4109). */
+      int mode = sp_streq(name, "floor") ? 0 : sp_streq(name, "ceil") ? 1 : 2;
+      buf_printf(b, "sp_time_round_to(%s, ", r);
+      if (argc == 1) emit_int_expr(c, argv[0], b);
+      else buf_puts(b, "0");
+      buf_printf(b, ", %d)", mode);
     }
     else if (sp_streq(name, "sunday?"))    buf_printf(b, "(sp_time_wday(%s) == 0)", r);
     else if (sp_streq(name, "monday?"))    buf_printf(b, "(sp_time_wday(%s) == 1)", r);
