@@ -624,7 +624,7 @@ cd "$WORK"
 mkdir -p lonely/bin
 cp "$SPIN" lonely/bin/spin                     # spin alone; no spinel beside it
 cd "$WORK/app"
-OUT=$(PATH="$(dirname "$SPIN"):$PATH" "$WORK/lonely/bin/spin" flags 2>&1)
+OUT=$(PATH="$(dirname "$SPIN"):$PATH" SPIN_NO_NATIVE_CACHE=1 "$WORK/lonely/bin/spin" flags 2>&1) || true
 case "$OUT" in
   *"runtime.h"*|*"native compile failed"*)
     fail "headers not found when spin is not beside the compiler: [$OUT]" ;;
@@ -633,6 +633,49 @@ case "$OUT" in
   *--link*) ;;
   *) fail "PATH-resolved compiler: carried C did not build [$OUT]" ;;
 esac
+
+# ... and through a SYMLINK, which is what `spin install` leaves behind: a link
+# in ~/.local/bin pointing into the install tree, with no lib beside the link.
+# PATH hands back the link itself, so the walk for the headers started from the
+# wrong parent and found nothing (#4126).
+#
+# The package has to include "spinel/runtime.h" for this to test anything --
+# the carried C above includes only <stdint.h>, so it compiles with or without
+# the runtime include path, and a check written against it passes either way.
+cd "$WORK"
+mkdir -p spinel-rthdr linked/bin
+printf '[package]\nname = "rthdr"\n' > spinel-rthdr/spin.toml
+cat > spinel-rthdr/rthdr.rb <<'EOF'
+module Rthdr
+  native_lib "rthdr"
+  native_func :len2, [:string], :int, "sp_rthdr_len2"
+end
+EOF
+cat > spinel-rthdr/sp_rthdr.c <<'EOF'
+#include "spinel/runtime.h"
+sp_int sp_rthdr_len2(const char *s) { return (sp_int)sp_str_byte_len(s) * 2; }
+EOF
+ln -sf "$SPIN" linked/bin/spin
+ln -sf "$(dirname "$SPIN")/spinel" linked/bin/spinel
+[ -f "$(dirname "$SPIN")/spinel_rbs_extract" ] && ln -sf "$(dirname "$SPIN")/spinel_rbs_extract" linked/bin/spinel_rbs_extract
+mkdir -p rtapp/bin
+printf '[package]\nname = "rtapp"\n\n[dependencies]\nrthdr = { path = "../spinel-rthdr" }\n' > rtapp/spin.toml
+printf 'require "rthdr"\nputs Rthdr.len2("abc")\n' > rtapp/bin/rtapp.rb
+cd "$WORK/rtapp"
+# SPIN_NO_NATIVE_CACHE, or a cached object is reused and nothing is compiled --
+# exactly the masking #4115 complained about, and it made this check pass
+# against the bug the first time it was written.
+# `|| true`: spin exits non-zero when the compile fails, and under set -e the
+# assignment itself would then end the script before the check below could
+# say what went wrong -- a reproduction that dies silently.
+OUT=$(PATH="$WORK/linked/bin:$PATH" SPIN_NO_NATIVE_CACHE=1 spin flags 2>&1) || true
+case "$OUT" in
+  *"runtime.h"*|*"native compile failed"*)
+    fail "runtime headers not found through a symlinked install: [$OUT]" ;;
+esac
+expect "symlinked install builds and runs" "6" \
+  "$(PATH="$WORK/linked/bin:$PATH" spin run 2>&1 | tail -1)"
+cd "$WORK/app"
 
 # --- the native cache is relocatable and skippable (#4115) --------------------
 # A run behaves differently depending on whether an object is already cached,
