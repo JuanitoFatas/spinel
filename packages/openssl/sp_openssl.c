@@ -25,6 +25,26 @@
 #include <string.h>
 #include <fcntl.h>
 
+/* Version floor and the one API that moved. SSL_get1_peer_certificate is
+   OpenSSL 3.0's name for what 1.1 called SSL_get_peer_certificate, and
+   LibreSSL keeps the old one; the rest of what this file uses
+   (TLS_client_method, SSL_set1_host, SSL_CTX_set_min_proto_version) arrived in
+   OpenSSL 1.1.0 and LibreSSL 3.5. Below that the file will not compile, and a
+   #error says so rather than leaving a page of diagnostics about missing
+   declarations. */
+#if defined(LIBRESSL_VERSION_NUMBER)
+# if LIBRESSL_VERSION_NUMBER < 0x3050000fL
+#  error "sp_openssl.c needs LibreSSL 3.5 or newer"
+# endif
+# define SP_SSL_PEER_CERT(ssl) SSL_get_peer_certificate(ssl)
+#elif OPENSSL_VERSION_NUMBER < 0x10100000L
+# error "sp_openssl.c needs OpenSSL 1.1.0 or newer"
+#elif OPENSSL_VERSION_NUMBER < 0x30000000L
+# define SP_SSL_PEER_CERT(ssl) SSL_get_peer_certificate(ssl)
+#else
+# define SP_SSL_PEER_CERT(ssl) SSL_get1_peer_certificate(ssl)
+#endif
+
 #define SP_SSL_MAX 256          /* concurrent TLS connections per process */
 #define SP_SSL_BUF 65536
 
@@ -262,7 +282,7 @@ sp_int sp_ssl_pending(sp_int h) {
 const char *sp_ssl_peer_subject(sp_int h) {
   sp_ssl_conn *c = sp_ssl_at(h);
   if (!c) return sp_str_dup_external("");
-  X509 *cert = SSL_get1_peer_certificate(c->ssl);
+  X509 *cert = SP_SSL_PEER_CERT(c->ssl);
   if (!cert) return sp_str_dup_external("");
   char buf[512];
   X509_NAME_oneline(X509_get_subject_name(cert), buf, (int)sizeof buf);

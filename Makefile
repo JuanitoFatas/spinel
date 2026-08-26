@@ -68,7 +68,11 @@ SPINEL = bin/spinel
 # GNU Make expands a rule's prerequisites immediately when the rule is read -- a
 # definition further down would expand to empty in `all`'s prereq list. The
 # build rule + rationale live further below (near the runtime archive).
-OPENSSL_AVAILABLE := $(shell printf '\043include <openssl/ssl.h>\nint main(void){return 0;}\n' > /tmp/sp_ossl_probe.c 2>/dev/null && $(CC) -E /tmp/sp_ossl_probe.c >/dev/null 2>&1 && echo yes)
+# The probe compiles AND LINKS a use of the API sp_openssl.c needs, not just
+# the header: a system with headers but no libssl, or one too old for
+# TLS_client_method, would otherwise pass the header check and fail at the
+# package's own link.
+OPENSSL_AVAILABLE := $(shell printf '\043include <openssl/ssl.h>\nint main(void){return TLS_client_method()!=0;}\n' > /tmp/sp_ossl_probe.c 2>/dev/null && $(CC) /tmp/sp_ossl_probe.c -lssl -lcrypto -o /tmp/sp_ossl_probe >/dev/null 2>&1 && echo yes)
 BUNDLED_NATIVE_OBJS = packages/json/sp_json.o packages/stringio/sp_stringio.o packages/strscan/sp_strscan.o packages/base64/sp_base64.o
 ifeq ($(OPENSSL_AVAILABLE),yes)
 BUNDLED_NATIVE_OBJS += packages/openssl/sp_openssl.o
