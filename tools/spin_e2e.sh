@@ -565,4 +565,34 @@ OUT=$("$SPIN" run plain --allow-native-build 2>&1)
 expect "native variant: single-threaded takes the plain object" "1" "$(echo "$OUT" | tail -1)"
 OUT=$("$SPIN" run threaded --allow-native-build 2>&1)
 expect "native variant: threaded takes the _mt object" "2" "$(echo "$OUT" | tail -1)"
+# --- `spin flags`: the handoff to a build spin does not drive (#4105) ---------
+# spin resolves the dependencies and warms the native cache, then prints the
+# flags; whoever is driving the build compiles with them. What it prints has to
+# be what `spin build` compiles with, so the check is that a hand-driven
+# compile produces the same program -- not that the text matches.
+cd "$WORK/app"
+rm -rf "$XDG_CACHE_HOME/spin/native"          # cold: `flags` must compile the carried C
+FLAGS=$("$SPIN" flags 2>/dev/null)
+# One line. A cold cache compiles here, and that progress used to print on
+# stdout, which would splice `cc fast/fast_ext.c` into the flag string.
+[ "$(printf '%s' "$FLAGS" | wc -l)" = "0" ] || fail "spin flags: progress leaked onto stdout"
+case "$FLAGS" in
+  --require-gate*) ;;
+  *) fail "spin flags: does not carry the require gate spin build compiles under" ;;
+esac
+# Absolute throughout: the caller's working directory is its own tree.
+case "$FLAGS" in
+  *" -I ."*|*" -I ../"*|*" --link ."*|*" --link ../"*)
+    fail "spin flags: relative path in [$FLAGS]" ;;
+esac
+case "$FLAGS" in
+  *--link*) ;;
+  *) fail "spin flags: carried-C object missing from [$FLAGS]" ;;
+esac
+SPINEL_BIN=$(dirname "$SPIN")/spinel
+"$SPINEL_BIN" $FLAGS bin/app.rb -o "$WORK/handoff" >/dev/null 2>&1 ||
+  fail "spin flags: hand-driven compile failed"
+expect "spin flags: hand-driven build matches spin build" \
+  "$("$SPIN" run 2>&1 | tail -1)" "$("$WORK/handoff" 2>&1 | tail -1)"
+
 echo "spin-e2e: ALL GREEN"

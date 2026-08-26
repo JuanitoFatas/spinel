@@ -23,6 +23,8 @@ usage: spin <command> [args]
   trust <name>         always allow <name>'s declared native build steps
                        (one run: --allow-native-build / SPIN_ALLOW_NATIVE_BUILD=1)
   clean                remove build/
+  flags                print the compiler flags this project implies, for a
+                       build driven from outside spin (Makefile, script)
   list [--json]        resolved dependency set (name, version, source)
   tree [--json]        dependency tree from this package
   publish [--direct]   validate + test, then submit this release to the index
@@ -324,7 +326,10 @@ def native_objs_for(name, dir, version)
       cmd += " -I '#{hdr}'" if hdr != ""
       cmd += " -o '#{o}'"
       spin_die("native compile failed: " + rel + " (" + name + ")") unless system(cmd)
-      puts "cc #{name}/#{rel}"
+      # stderr, not stdout: `spin flags` prints a flag string on stdout and a
+      # cold cache compiles here first, so progress on stdout would be spliced
+      # into the flags the caller passes to the compiler (#4105).
+      $stderr.puts "cc #{name}/#{rel}"
     end
     objs.push(o)
   end
@@ -904,25 +909,41 @@ end
 
 # The spinel command line that compiles `entry` to `out`. Split out from
 # compile() so `spin test` can collect commands and run them in parallel.
-def compile_cmd(prj, entry, out, extra)
+# Every compiler flag this project implies, with no entry file and no -o: what
+# `spin build` passes, and what `spin flags` prints. One producer for both, so
+# a Makefile driving the compiler itself gets exactly the build spin would have
+# made rather than an approximation of it (#4105).
+#
+# Every path here is absolute -- find_root walks up from Dir.pwd, path
+# dependencies go through File.expand_path, and cache objects are named from
+# the cache root -- which matters for `spin flags`, whose caller's working
+# directory is its own tree, not this project.
+def spin_flags(prj)
   # Inside a spin project the dependency universe is fully known (manifest +
   # lock), so an unresolvable require is a bug, not a maybe: flip the
   # compiler's require gate from warning to hard error. This also makes
   # stdlib features require-gated, i.e. CRuby-style `require "stringio"`
   # before use.
-  cmd = "SPINEL_REQUIRE_GATE=1 #{spinel_bin} #{entry}"
-  prj.dep_paths.each { |d| cmd += " -I #{d}" }
-  cmd += " -I #{prj.root}"
+  f = "--require-gate"
+  prj.dep_paths.each { |d| f += " -I #{d}" }
+  f += " -I #{prj.root}"
   # Feed .rbs sidecars to the compiler's --rbs seed machinery when the project
   # carries any (issue #1788). `.rbs` participates by extension, so a package's
   # type sidecars pin its public surfaces (e.g. a Router#match that would
   # otherwise infer poly) under `spin build`/`test`. --rbs takes one dir and its
   # extractor scans recursively, so the project root covers every sidecar.
   if Dir.glob(File.join(prj.root, "**", "*.rbs")).any?
-    cmd += " --rbs #{prj.root}"
+    f += " --rbs #{prj.root}"
   end
-  prj.native_objs.each { |o| cmd += " --link #{o}" }
-  prj.native_build_libs.split("\n").each { |l| cmd += " --link #{l}" if l != "" }
+  # Reading these compiles any carried C and runs any declared native build
+  # that is not already cached, which is what makes the --link paths real.
+  prj.native_objs.each { |o| f += " --link #{o}" }
+  prj.native_build_libs.split("\n").each { |l| f += " --link #{l}" if l != "" }
+  f
+end
+
+def compile_cmd(prj, entry, out, extra)
+  cmd = "#{spinel_bin} #{entry} #{spin_flags(prj)}"
   cmd += " #{extra}" if extra != ""
   # `spin build --debug` / `-g` (or SPIN_DEBUG=1) forwards the compiler's
   # debug build (#line + -g -O0) so the emitted binary is steppable in
@@ -1567,6 +1588,14 @@ when "lock", "fetch", "vendor"
   lock_from_records(prj) if cmd == "lock"
   puts "fetched " + prj.dep_paths.length.to_s + " package(s)" if cmd == "fetch"
   cmd_vendor(prj) if cmd == "vendor"
+when "flags"
+  # The handoff: spin resolves the dependencies and warms the native cache,
+  # then hands the compiler flags to whoever is driving the build. An
+  # application whose repository spin does not own -- Ruby and C side by side
+  # under one Makefile -- keeps its layout and still consumes packages (#4105).
+  root = find_root(Dir.pwd)
+  spin_die("no spin.toml found") if root == ""
+  puts spin_flags(Project.new(root))
 when "search"
   cmd_search(rest.empty? ? "" : rest[0])
 when "install"

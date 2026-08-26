@@ -16,7 +16,7 @@ scoped to the language, like `mruby-*`.
 
 Status: implemented through M3 — scaffold, path/git/index dependencies with
 MVS selection, `spin.lock`, vendor + offline, snapshot tests, carried native
-C, declared native build steps (R10), `list`/`tree`/`search`. The hermetic
+C, declared native build steps (R10), the flags handoff (R11), `list`/`tree`/`search`. The hermetic
 end-to-end check (`tools/spin_e2e.sh`) runs inside `make check`. Sections below note the
 pieces that are still specification.
 
@@ -397,6 +397,36 @@ libs = ["${build.out}/libggml.a"]   # artifacts reach the R6 --link surface
   recommended packaging convention is cargo's `-sys` shape: a leaf package
   carrying the vendored tree, the `[[build]]` entries, and the raw
   `ffi_*` declarations.
+
+### R11 — the flags handoff (implemented; #4105)
+
+`spin flags` prints the compiler flags this project implies — the `-I` roots
+for every resolved dependency and the project itself, `--rbs` when it carries
+sidecars, `--link` per cached native object, and `--require-gate` — with no
+entry file and no `-o`. It is one producer with `spin build`, so what a caller
+compiles with is what spin would have compiled with rather than an
+approximation of it. Reading the native objects compiles any that are cold,
+which is what makes the printed `--link` paths real; that progress goes to
+stderr, since stdout is the flag string.
+
+**Why it exists.** R2 keeps *an application is a package with executables* —
+one manifest, no second project kind — and that is worth keeping: it is what
+lets role be carried by extension instead of by manifest lists. But it means
+`spin build` owns the directory it sits in, and some applications live in a
+repository whose layout is not spin's to arrange: Ruby and C side by side, one
+Makefile driving both, nothing willing to move. Rather than a second project
+kind, or a manifest that lists sources after all, spin gets a door: it stays
+the supplier of resolved dependencies and compiled native objects, and hands
+the build back.
+
+Every printed path is absolute: `find_root` walks up from the working
+directory, path dependencies resolve through `File.expand_path`, and cache
+objects are named from the cache root. The caller's working directory is its
+own tree, not the project's.
+
+`--require-gate` is the compiler flag spelling of `SPINEL_REQUIRE_GATE`, added
+with this: an env assignment cannot ride inside a flag string, and the gate is
+part of what `spin build` compiles under.
 
 ## 5. Project model
 

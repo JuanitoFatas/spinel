@@ -201,6 +201,37 @@ intptr_t fast_quad(intptr_t x) { return x * 4; }
 objects into every dependent build. External libraries use the existing
 `ffi_lib` declaration and need no manifest entry.
 
+## Building outside spin
+
+`spin build` owns the tree it sits in. When the build is driven from somewhere
+else — a Makefile that also builds a C program, a repository whose layout is
+not spin's to arrange — `spin flags` hands over instead of taking over. It
+resolves the dependencies, compiles any carried C into the cache, and prints
+the compiler flags that implies:
+
+```console
+$ spin flags
+--require-gate -I /path/pkgs/curses -I /path/backend --link ~/.cache/spin/native/curses-0.1.0-cc/sp_curses.o
+```
+
+Every path is absolute, so the caller's working directory can be anywhere:
+
+```make
+SPINFLAGS := $(shell cd spin/backend && spin flags)
+
+ruby_app.exe: ruby_app.rb $(RUBY_SRCS)
+	spinel $(SPINFLAGS) -I . $< -o $@
+```
+
+What it prints is what `spin build` compiles with, minus the entry file and
+`-o`; the two come from one place, so they cannot drift.
+
+Nothing here is required to consume a package by hand. `require "curses"`
+resolves against any `-I` root as `<root>/curses.rb` or
+`<root>/curses/curses.rb`, so `spinel -I spin/packages` finds a package sitting
+at `spin/packages/curses/`, and `--link` takes its compiled object. `spin
+flags` is the part that works out which roots and which objects.
+
 ## Rebuilds
 
 `spin build`/`run`/`test` skip recompilation when nothing changed (input
@@ -219,6 +250,7 @@ objects are reused from the cache. `spin clean` removes `build/`.
 | `spin test [file..] [--regen]` | run `test/*.rb` against snapshots |
 | `spin add` / `remove` | edit `[dependencies]` and relock |
 | `spin lock` / `fetch` / `vendor` | pin / warm the cache / copy into `vendor/` |
+| `spin flags` | print the compiler flags this project implies, for a build driven from outside spin |
 | `spin list` / `tree` / `search` (`--json`) | inspect the resolved set / the index |
 | `spin publish [--direct]` | validate + test, then submit this release to the index |
 | `spin install [name..]` | build and copy `bin/` executables to `~/.local/bin` (`--prefix`, `--uninstall`) |
