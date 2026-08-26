@@ -49,6 +49,27 @@ def find_root(dir)
   end
 end
 
+# `command -v` for one name, without a shell: the PATH entry that would run.
+# mkdir -p for one path, without a shell.
+def mkdir_p_path(path)
+  acc = path.start_with?("/") ? "/" : ""
+  path.split("/").each do |seg|
+    next if seg == ""
+    acc = acc == "/" ? "/" + seg : (acc == "" ? seg : File.join(acc, seg))
+    Dir.mkdir(acc) unless Dir.exist?(acc)
+  end
+  nil
+end
+
+def which(name)
+  ENV["PATH"].to_s.split(":").each do |dir|
+    next if dir == ""
+    cand = File.join(dir, name)
+    return cand if File.file?(cand) && File.executable?(cand)
+  end
+  ""
+end
+
 def spinel_bin
   # spin ships beside the compiler: <dir-of-$0>/spinel. It has to be an
   # executable FILE: a checkout of the compiler repo cloned next to the project
@@ -218,9 +239,21 @@ end
 # installed tree ./lib. $0 does not resolve symlinks, so when spin runs as
 # the /usr/local/bin/spin symlink the sibling is the /usr/local/bin/spinel
 # symlink -- probe the install layout (<prefix>/lib/spinel/lib) from there.
+# Where the runtime headers are: package C includes "spinel/runtime.h", and
+# the compiler ships them beside itself. Resolved from the compiler's own
+# path, which is why a PATH-resolved compiler has to be located rather than
+# given up on -- `spin install` puts spin in ~/.local/bin with no spinel
+# beside it, and returning "" there dropped -I <spinel>/lib from every
+# package-C compile. The package then failed on a missing runtime.h while the
+# same package built fine from a tree where the two sat together (#4115).
+#
+# SPINEL_HDR_DIR overrides the search outright, for a layout this cannot guess.
 def spinel_hdr_dir
+  env = ENV["SPINEL_HDR_DIR"].to_s
+  return env if env != "" && File.exist?(File.join(env, "spinel_rt.h"))
   bin = spinel_bin
-  return "" if bin == "spinel"
+  bin = which("spinel") if bin == "spinel"
+  return "" if bin == ""
   d = File.expand_path("..", bin)
   a = File.join(d, "lib")
   return a if File.exist?(File.join(a, "spinel_rt.h"))
@@ -310,7 +343,24 @@ def newest_native_input(dir, newest, excl)
   newest
 end
 
+# Where a package's compiled objects live. Shared across projects and keyed by
+# (package, version, toolchain), so the same package is not rebuilt for every
+# consumer.
+#
+# SPIN_NATIVE_CACHE relocates it. Two reasons to want that, both from #4115:
+# a build that must not write outside its own tree, and a debugging session
+# where the answer differs depending on whether an object is already there --
+# pointing it at a scratch directory makes every run start from the same
+# state. SPIN_NO_NATIVE_CACHE=1 goes further and rebuilds every time.
 def native_cache_dir(key)
+  override = ENV["SPIN_NATIVE_CACHE"].to_s
+  if override != ""
+    d = File.expand_path(override)
+    mkdir_p_path(d)
+    d = File.join(d, key)
+    Dir.mkdir(d) unless Dir.exist?(d)
+    return d
+  end
   base = ENV["XDG_CACHE_HOME"].to_s
   base = File.join(ENV["HOME"].to_s, ".cache") if base == ""
   Dir.mkdir(base) unless Dir.exist?(base)   # a fresh XDG_CACHE_HOME
@@ -339,7 +389,7 @@ def native_objs_for(name, dir, version)
   cs.split("\n").each do |c|
     rel = c[dir.length + 1..-1].to_s
     o = File.join(odir, rel.gsub("/", "_")[0..-3] + ".o")
-    if !File.exist?(o) || File.mtime(o).to_i < hnew
+    if !File.exist?(o) || File.mtime(o).to_i < hnew || ENV["SPIN_NO_NATIVE_CACHE"].to_s != ""
       cmd = native_cc + " -O2 -c '#{c}' -I '#{dir}'"
       cmd += " -I '#{hdr}'" if hdr != ""
       cmd += " -o '#{o}'"

@@ -277,4 +277,23 @@ objects are reused from the cache. `spin clean` removes `build/`.
 | `spin clean` | remove `build/` |
 
 Environment: `SPIN_INDEX` (index URL), `SPIN_OFFLINE=1` (cache/vendor
-only), `CC` (toolchain for package C).
+only), `CC` (toolchain for package C), `SPIN_NATIVE_CACHE` (where compiled
+package objects go, default `$XDG_CACHE_HOME/spin/native`),
+`SPIN_NO_NATIVE_CACHE=1` (recompile package C every time),
+`SPINEL_HDR_DIR` (where the runtime headers are, when spin cannot work it out
+from the compiler's own path).
+
+### When the cache is in the way
+
+Package `.c` files compile into a shared cache keyed by (package, version,
+toolchain), so the same package is not rebuilt for every consumer. That is
+worth having across projects and unhelpful while debugging one: a run behaves
+differently depending on whether an object happens to be there already, which
+is exactly what you do not want when you are trying to find out why a build
+differs. `SPIN_NO_NATIVE_CACHE=1` makes every run start from the same state,
+and `SPIN_NATIVE_CACHE=<dir>` puts the objects somewhere you can delete.
+
+Note what it does and does not save. The objects are the cheap half: hand-
+written C compiles in milliseconds, while whole-program type inference over
+the Ruby is where the time goes. The cache exists so a package is not
+recompiled once per consuming project, not to make a single build fast.

@@ -614,4 +614,39 @@ printf '[package]\nname = "excl"\n' > spin.toml
 printf '[package]\nname = "excl"\nexclude = ["standalone.c", "cbits"]\n' > spin.toml
 expect "exclude: named file and directory both pruned" "excluded ok" "$("$SPIN" run 2>&1 | tail -1)"
 
+# --- the runtime headers when spin and the compiler are not co-located (#4115) -
+# `spin install` puts spin in ~/.local/bin with no spinel beside it, and package
+# C includes "spinel/runtime.h". spin gave up locating the headers the moment
+# the compiler came from PATH, so -I <spinel>/lib vanished and every package
+# carrying C failed on a missing runtime.h -- while the same package built fine
+# from a tree where the two sat together.
+cd "$WORK"
+mkdir -p lonely/bin
+cp "$SPIN" lonely/bin/spin                     # spin alone; no spinel beside it
+cd "$WORK/app"
+OUT=$(PATH="$(dirname "$SPIN"):$PATH" "$WORK/lonely/bin/spin" flags 2>&1)
+case "$OUT" in
+  *"runtime.h"*|*"native compile failed"*)
+    fail "headers not found when spin is not beside the compiler: [$OUT]" ;;
+esac
+case "$OUT" in
+  *--link*) ;;
+  *) fail "PATH-resolved compiler: carried C did not build [$OUT]" ;;
+esac
+
+# --- the native cache is relocatable and skippable (#4115) --------------------
+# A run behaves differently depending on whether an object is already cached,
+# which is what you least want while working out why a build differs.
+rm -rf "$WORK/ncache"
+OUT=$(SPIN_NATIVE_CACHE="$WORK/ncache" "$SPIN" flags 2>/dev/null)
+case "$OUT" in
+  *"$WORK/ncache"*) ;;
+  *) fail "SPIN_NATIVE_CACHE ignored: [$OUT]" ;;
+esac
+# Cached: the second run compiles nothing. Not cached: it compiles again.
+CC1=$(SPIN_NATIVE_CACHE="$WORK/ncache" "$SPIN" flags 2>&1 >/dev/null | grep -c "^cc " || true)
+expect "native cache reused on the second run" "0" "$CC1"
+CC2=$(SPIN_NATIVE_CACHE="$WORK/ncache" SPIN_NO_NATIVE_CACHE=1 "$SPIN" flags 2>&1 >/dev/null | grep -c "^cc " || true)
+[ "$CC2" -ge 1 ] || fail "SPIN_NO_NATIVE_CACHE did not force a rebuild"
+
 echo "spin-e2e: ALL GREEN"
