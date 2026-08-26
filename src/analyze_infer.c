@@ -4368,9 +4368,39 @@ else {
          the other side. */
       if (found && !an_builtin_only && r != TY_POLY && r != TY_UNKNOWN &&
           recv >= 0 && an_user_defines_or_reads(c, name)) {
-        an_builtin_only = 1;
-        TyKind bt = infer_call(c, id);
-        an_builtin_only = 0;
+        /* Asking costs a full re-inference of the call, and the same node is
+           asked many times inside one fixpoint iteration: counted on a 51k-line
+           Rails emit, 294,164 asks over 18k nodes, 96% of them a repeat of a
+           node already asked in that same iteration.  Memoize per node on the
+           narrow generation, which is bumped once per iteration and so releases
+           every answer when the types move.
+           The answer is stable across the repeats but not perfectly: on the same
+           tree 2 asks of 87,033 saw it change mid-iteration (TY_ENUMERATOR then
+           TY_UNKNOWN, for one name).  The memo pins the first answer, so those
+           take the earlier one.  It changed no output on either app measured. */
+        long bk = narrow_key(3, id, "");
+        int bhit; int bcached = narrow_memo_get(bk, &bhit);
+        TyKind bt;
+        /* A cached answer is trusted only while it says "no disagreement",
+           which is the common case and where the whole win is -- 2 asks of
+           87,033 were measured changing mid-iteration, so the rest hit. The
+           answer that WIDENS is the consequential one, and the one those two
+           were, so confirm it against a fresh ask rather than pinning a stale
+           one. Pinning it widened calls that should have stayed typed: a
+           concrete object became TY_POLY, its direct call became a runtime
+           cls_id switch with a NoMethodError arm, and four rubyspec examples
+           went with it (an identity assertion through .equal? cannot survive
+           the value boxing). */
+        int btrust = bhit && ((TyKind)bcached == TY_UNKNOWN ||
+                              (TyKind)bcached == TY_VOID ||
+                              (TyKind)bcached == r);
+        if (btrust) { bt = (TyKind)bcached; }
+        else {
+          an_builtin_only = 1;
+          bt = infer_call(c, id);
+          an_builtin_only = 0;
+          narrow_memo_put(bk, (int)bt);
+        }
         if (bt != TY_UNKNOWN && bt != TY_VOID && bt != r) return TY_POLY;
       }
       if (found) return r;
