@@ -10404,8 +10404,9 @@ static int elem_miss_call(Compiler *c, int v) {
   }
   if (sp_streq(nm, "[]") || sp_streq(nm, "at")) return argc == 1 && blk < 0;
   if (sp_streq(nm, "dig")) return argc >= 1;
-  if (sp_streq(nm, "first") || sp_streq(nm, "last") || sp_streq(nm, "min") ||
-      sp_streq(nm, "max") || sp_streq(nm, "sample")) return argc == 0 && blk < 0;
+  if (sp_streq(nm, "first") || sp_streq(nm, "last") || sp_streq(nm, "sample"))
+    return argc == 0 && blk < 0;
+  if (sp_streq(nm, "min") || sp_streq(nm, "max")) return argc == 0;
   if (sp_streq(nm, "min_by") || sp_streq(nm, "max_by")) return argc == 0 && blk >= 0;
   if (sp_streq(nm, "find") || sp_streq(nm, "detect")) return blk >= 0;
   return 0;
