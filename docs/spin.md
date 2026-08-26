@@ -201,6 +201,26 @@ intptr_t fast_quad(intptr_t x) { return x * 4; }
 objects into every dependent build. External libraries use the existing
 `ffi_lib` declaration and need no manifest entry.
 
+### Excluding C from the build
+
+`.rb` enters the build by being required; `.c` enters by being there. That is
+what lets a package carry native code without listing it, and it is the wrong
+default when a repository holds a C program of its own — a `main()` beside the
+Ruby will collide with the generated one at link time. `exclude` names what is
+not part of this build:
+
+```toml
+[package]
+name = "myapp"
+exclude = ["standalone_c_app.c", "c_lib*.c", "cbits"]
+```
+
+Globs are relative to the package root; naming a directory prunes all of it.
+`exclude` covers native discovery only — `.rb` needs no entry, since nothing
+compiles it unless something requires it, and an excluded `.h` is still on the
+include path for the C that is compiled. An application scaffolded by
+`spin new` has no `[package]` table; add one to use the field.
+
 ## Building outside spin
 
 `spin build` owns the tree it sits in. When the build is driven from somewhere

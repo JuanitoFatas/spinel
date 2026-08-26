@@ -232,11 +232,22 @@ def spinel_hdr_dir
   ""
 end
 
-# Newline-packed absolute paths of a package's [[build]] workdirs: sources a
-# declared build step compiles its own way are NOT carried C, so the per-file
-# cc sweep must not touch them (they have no include path and would hard-fail
-# the build before [[build]] ever runs -- the toy tinynn bounce, #1845).
-def native_build_workdirs(dir)
+# Newline-packed absolute paths kept out of the per-file cc sweep and out of
+# the staleness scan that decides whether the cached objects are current.
+#
+# Two sources. A [[build]] workdir is compiled by the package's own build
+# system, so it is not carried C: the sweep must not touch it (no include
+# path, and it would hard-fail before [[build]] ever runs -- the toy tinynn
+# bounce, #1845). And `[package] exclude` is the author saying a path is not
+# part of this build at all. Nothing else can say it: `.rb` enters the build by
+# require-reachability, `.c` enters by presence, so an application whose
+# repository also holds a C program of its own -- a `main()` beside the Ruby --
+# had no way to keep it out (#4105).
+#
+# The globs are expanded here rather than matched at each candidate, so
+# path_excluded? stays an exact compare, and naming a directory prunes its
+# whole subtree (collect_c consults it before it recurses).
+def native_excludes(dir)
   mf = File.join(dir, "spin.toml")
   return "" unless File.exist?(mf)
   toml = TomlDoc.parse(File.read(mf))
@@ -249,6 +260,13 @@ def native_build_workdirs(dir)
       out += File.expand_path(wd, dir)
     end
     i += 1
+  end
+  toml.get_array("package", "exclude").split("\n").each do |g|
+    next if g == ""
+    Dir.glob(File.join(dir, g)).each do |hit|
+      out += "\n" unless out == ""
+      out += hit
+    end
   end
   out
 end
@@ -307,7 +325,7 @@ end
 
 # Compile one package's carried C into the cache; returns the object list.
 def native_objs_for(name, dir, version)
-  excl = native_build_workdirs(dir)
+  excl = native_excludes(dir)
   cs = collect_c(dir, excl)
   return [] if cs == ""
   # The cache key names a DIRECTORY, so the compiler part of it has to be

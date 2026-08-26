@@ -595,4 +595,23 @@ SPINEL_BIN=$(dirname "$SPIN")/spinel
 expect "spin flags: hand-driven build matches spin build" \
   "$("$SPIN" run 2>&1 | tail -1)" "$("$WORK/handoff" 2>&1 | tail -1)"
 
+# --- `[package] exclude`: C the package says is not part of this build --------
+# `.rb` enters by require, `.c` by presence, so an application whose repository
+# also holds a C program of its own has no other way to keep it out. Without
+# the field its main() collides with the generated one and the link fails.
+cd "$WORK"
+mkdir -p excl/bin
+printf 'puts "excluded ok"\n' > excl/bin/excl.rb
+cat > excl/standalone.c <<'EOF'
+#include <stdio.h>
+int main(void) { puts("a program of my own"); return 0; }
+EOF
+mkdir -p excl/cbits
+printf 'int cbits_unused(void) { return 7; }\n' > excl/cbits/helper.c
+cd excl
+printf '[package]\nname = "excl"\n' > spin.toml
+"$SPIN" build >/dev/null 2>&1 && fail "exclude: a main()-bearing .c linked in without complaint"
+printf '[package]\nname = "excl"\nexclude = ["standalone.c", "cbits"]\n' > spin.toml
+expect "exclude: named file and directory both pruned" "excluded ok" "$("$SPIN" run 2>&1 | tail -1)"
+
 echo "spin-e2e: ALL GREEN"
