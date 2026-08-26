@@ -572,6 +572,10 @@ re-lit-test: $(SPINEL)
 # then runs the suite. (The old incremental `test` + `retest` split is
 # gone — a stale `.ok` reading PASS was a recurring foot-gun.)
 test:
+	@if [ -z "$(TIMEOUT_BIN)" ]; then \
+	  echo "WARNING: no 'timeout'/'gtimeout' on PATH -- tests run with NO time limit."; \
+	  echo "         A hanging test will hang this run until the CI job's own limit."; \
+	fi
 	+@$(MAKE) --no-print-directory clean-test-results
 	+@$(MAKE) $(TEST_JOBS) --no-print-directory test-run
 
