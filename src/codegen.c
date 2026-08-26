@@ -1481,7 +1481,7 @@ void emit_method_cname(Compiler *c, Scope *s, Buf *b) {
   else if (s->class_id >= 0)
     buf_printf(b, "sp_%s_%s", c->classes[s->class_id].c_name, mc(s->name));
   else
-    buf_printf(b, "sp_%s", mc_top(s->name));
+    buf_printf(b, "sp_%s", mc_top(c, s->name));
 }
 
 /* A poly each-receiver can be a user object at runtime (e.g. a Set operand
