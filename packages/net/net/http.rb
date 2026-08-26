@@ -85,33 +85,82 @@ module Net
     attr_reader :method, :path
     attr_accessor :body
 
-    def initialize(method, path)
+    # `path` is a request path, or a URI -- CRuby takes either, and
+    # `Net::HTTP::Post.new(uri, "Content-Type" => "application/json")` is the
+    # spelling a caller reaches for when it already parsed the URL. A URI
+    # contributes its `request_uri` (the path with the query), not its `to_s`,
+    # which is the whole URL and would go out as an absolute request line.
+    def initialize(method, path, initheader = nil)
       @method = method
-      @path = (path.nil? || path.to_s.empty?) ? "/" : path.to_s
+      @path = if path.is_a?(URI::Generic)
+        path.request_uri
+      else
+        (path.nil? || path.to_s.empty?) ? "/" : path.to_s
+      end
+      # Downcased name => value, with the caller's spelling kept beside it for
+      # the wire. One key per header name makes a duplicate impossible to
+      # construct, which is what "keep the spelling, scan for case variants on
+      # every write" was doing by hand. The response half of this file has
+      # stored them downcased all along.
       @headers = {}
+      @header_names = {}
       @body = ""
+      initheader.each { |k, v| self[k] = v } unless initheader.nil?
     end
 
+    # Header names are case-insensitive on the wire, and CRuby's
+    # Net::HTTPHeader is case-insensitive on both halves -- as the response
+    # half here already is. What is kept, rather than downcased the way the
+    # response stores them, is the caller's spelling: for a request that is
+    # what goes out on the wire.
+    # Header names are case-insensitive on the wire, and CRuby's
+    # Net::HTTPHeader is case-insensitive on both halves. Storing under the
+    # downcased name makes that a lookup rather than a scan, and makes it
+    # impossible to hold one header twice under two spellings -- which is what
+    # `Post.new(uri, "content-type" => …)` followed by `req.content_type = …`
+    # used to do, sending both and leaving the server to pick.
     def []=(name, value)
-      @headers[name.to_s] = value.to_s
+      k = name.to_s.downcase
+      # An Array joins with ", ", the way CRuby serves a multi-valued header:
+      # `req["Accept"] = %w[a b]` reads back "a, b" and goes out as one line.
+      # `to_s` on an Array is its INSPECT form, so without this the wire got
+      # `Accept: ["a", "b"]`.
+      #
+      # CRuby only reaches that path through `#[]=`; its initheader half calls
+      # `value.strip` per value and so raises NoMethodError for an Array. This
+      # package routes initheader through `#[]=` and therefore accepts one -- a
+      # deliberate divergence, in the permissive direction, and one rule for one
+      # value shape rather than two.
+      @headers[k] = value.is_a?(Array) ? value.map { |v| v.to_s }.join(", ") : value.to_s
+      @header_names[k] = name.to_s
+      value
     end
 
     def [](name)
-      @headers[name.to_s]
+      @headers[name.to_s.downcase]
     end
 
+    def key?(name)
+      @headers.key?(name.to_s.downcase)
+    end
+
+    # Yields the spelling the caller wrote, not the downcased key: for a
+    # request that is what goes out on the wire.
     def each_header
-      @headers.each { |k, v| yield k, v }
+      @headers.each do |k, v|
+        name = @header_names[k]
+        yield (name.nil? ? k : name), v
+      end
       nil
     end
 
     def content_type=(v)
-      @headers["Content-Type"] = v.to_s
+      self["Content-Type"] = v
     end
 
     def set_form_data(hash)
       @body = URI.encode_www_form(hash)
-      @headers["Content-Type"] = "application/x-www-form-urlencoded"
+      self["Content-Type"] = "application/x-www-form-urlencoded"
       @body
     end
   end
@@ -120,32 +169,32 @@ module Net
     # CRuby builds requests as Net::HTTP::Get.new(path) and friends. Same
     # spelling here, so the same code compiles.
     class Get < HTTPRequest
-      def initialize(path)
-        super("GET", path)
+      def initialize(path, initheader = nil)
+        super("GET", path, initheader)
       end
     end
 
     class Post < HTTPRequest
-      def initialize(path)
-        super("POST", path)
+      def initialize(path, initheader = nil)
+        super("POST", path, initheader)
       end
     end
 
     class Put < HTTPRequest
-      def initialize(path)
-        super("PUT", path)
+      def initialize(path, initheader = nil)
+        super("PUT", path, initheader)
       end
     end
 
     class Delete < HTTPRequest
-      def initialize(path)
-        super("DELETE", path)
+      def initialize(path, initheader = nil)
+        super("DELETE", path, initheader)
       end
     end
 
     class Head < HTTPRequest
-      def initialize(path)
-        super("HEAD", path)
+      def initialize(path, initheader = nil)
+        super("HEAD", path, initheader)
       end
     end
 
@@ -259,7 +308,24 @@ module Net
     end
 
     def request(req)
-      raise HTTPError, "not started" unless @started
+      # CRuby opens a connection for a #request on an unstarted Net::HTTP, runs
+      # the request over it and closes it again -- so `Net::HTTP.new(host,
+      # port).request(req)` works without a `start`, and is the spelling a
+      # caller writes when the connection is configured somewhere other than
+      # where the request is sent. Doing that here rather than raising keeps
+      # the two spellings interchangeable, as they are there.
+      unless @started
+        # `start` is INSIDE the begin: `open_connection` assigns @socket and
+        # only then completes the TLS handshake, so a handshake failure raises
+        # with a live socket that nothing else will close. `finish` is a no-op
+        # when there is nothing open, which is the other way start can fail.
+        begin
+          start
+          return request(req)
+        ensure
+          finish
+        end
+      end
       # Every request goes out with `Connection: close`, so the server hangs
       # up after answering and the socket a second request would use is dead.
       # CRuby reconnects transparently in that situation, and a caller writing
