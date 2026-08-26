@@ -36,7 +36,8 @@ t = Thread.new do
     # `headers` is keyed downcased, so two spellings of one name collapse
     # here; count the raw lines instead or a duplicate goes unseen.
     ctypes = raw.count { |l| l.downcase.start_with?("content-type:") }
-    seen << "#{req}|host-has-port=#{hostok}|content-type-lines=#{ctypes}|body=#{body}"
+    multi = raw.find { |l| l.downcase.start_with?("x-multi:") }.to_s
+    seen << "#{req}|host-has-port=#{hostok}|content-type-lines=#{ctypes}|#{multi}|body=#{body}"
 
     if req.include?("/chunked")
       c.write("HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n")
@@ -106,6 +107,15 @@ dup = Net::HTTP::Post.new(uri2, "content-type" => "text/plain")
 dup.content_type = "application/json"
 p dup["Content-Type"]
 p dup["content-type"]          # either spelling finds the one value
+# A multi-valued header is ONE line, joined with ", ". `to_s` on an Array is
+# its inspect form, so getting this wrong puts `["a", "b"]` on the wire. Set
+# through `#[]=`, which is the path CRuby supports for an Array: its
+# initheader half calls `value.strip` per value and raises NoMethodError.
+# Folded onto this request rather than a fresh one on purpose -- a request
+# built WITHOUT the optional initheader, beside these that have it, is the
+# arity pair that segfaults (#4134).
+dup["X-Multi"] = [ "one", "two" ]
+p dup["X-Multi"]
 dup.body = "{}"
 r6 = Net::HTTP.new(uri2.host, uri2.port).request(dup)
 p r6.code

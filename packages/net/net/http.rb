@@ -97,7 +97,13 @@ module Net
       else
         (path.nil? || path.to_s.empty?) ? "/" : path.to_s
       end
+      # Downcased name => value, with the caller's spelling kept beside it for
+      # the wire. One key per header name makes a duplicate impossible to
+      # construct, which is what "keep the spelling, scan for case variants on
+      # every write" was doing by hand. The response half of this file has
+      # stored them downcased all along.
       @headers = {}
+      @header_names = {}
       @body = ""
       initheader.each { |k, v| self[k] = v } unless initheader.nil?
     end
@@ -107,48 +113,44 @@ module Net
     # half here already is. What is kept, rather than downcased the way the
     # response stores them, is the caller's spelling: for a request that is
     # what goes out on the wire.
-    # EVERY write goes through here -- `initheader`, `content_type=` and
-    # `set_form_data` included. Writing to `@headers` directly is how the same
-    # header ends up stored twice under two spellings and goes out on the wire
-    # twice: `Post.new(uri, "content-type" => "text/plain")` followed by
-    # `req.content_type = "application/json"` sent BOTH, and a server is free
-    # to believe either one.
+    # Header names are case-insensitive on the wire, and CRuby's
+    # Net::HTTPHeader is case-insensitive on both halves. Storing under the
+    # downcased name makes that a lookup rather than a scan, and makes it
+    # impossible to hold one header twice under two spellings -- which is what
+    # `Post.new(uri, "content-type" => …)` followed by `req.content_type = …`
+    # used to do, sending both and leaving the server to pick.
     def []=(name, value)
-      delete_header(name)
-      @headers[name.to_s] = value.to_s
+      k = name.to_s.downcase
+      # An Array joins with ", ", the way CRuby serves a multi-valued header:
+      # `req["Accept"] = %w[a b]` reads back "a, b" and goes out as one line.
+      # `to_s` on an Array is its INSPECT form, so without this the wire got
+      # `Accept: ["a", "b"]`.
+      #
+      # CRuby only reaches that path through `#[]=`; its initheader half calls
+      # `value.strip` per value and so raises NoMethodError for an Array. This
+      # package routes initheader through `#[]=` and therefore accepts one -- a
+      # deliberate divergence, in the permissive direction, and one rule for one
+      # value shape rather than two.
+      @headers[k] = value.is_a?(Array) ? value.map { |v| v.to_s }.join(", ") : value.to_s
+      @header_names[k] = name.to_s
+      value
     end
 
     def [](name)
-      k = header_name(name)
-      k.nil? ? nil : @headers[k]
+      @headers[name.to_s.downcase]
     end
 
     def key?(name)
-      !header_name(name).nil?
+      @headers.key?(name.to_s.downcase)
     end
 
-    # The stored spelling of a header, in whatever case the caller asks for it,
-    # or nil when it is not set.
-    def header_name(name)
-      want = name.to_s.downcase
-      found = nil
-      @headers.each_key { |k| found = k if k.to_s.downcase == want }
-      found
-    end
-
-    # Remove EVERY spelling of a header, not just one: a collision that
-    # predates this write needs clearing whole, or the duplicate survives the
-    # overwrite that was supposed to replace it.
-    def delete_header(name)
-      want = name.to_s.downcase
-      doomed = []
-      @headers.each_key { |k| doomed << k if k.to_s.downcase == want }
-      doomed.each { |k| @headers.delete(k) }
-      nil
-    end
-
+    # Yields the spelling the caller wrote, not the downcased key: for a
+    # request that is what goes out on the wire.
     def each_header
-      @headers.each { |k, v| yield k, v }
+      @headers.each do |k, v|
+        name = @header_names[k]
+        yield (name.nil? ? k : name), v
+      end
       nil
     end
 
