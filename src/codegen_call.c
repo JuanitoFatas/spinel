@@ -7025,7 +7025,12 @@ static int emit_class_new_call(Compiler *c, int id, Buf *b) {
            CRuby for a non-String, non-to_str value). */
         const char *a0ty = argc >= 1 ? nt_type(nt, argv[0]) : NULL;
         int has_content = argc >= 1 && !(a0ty && sp_streq(a0ty, "KeywordHashNode"));
-        if (has_content) { buf_puts(b, "sp_str_dup_external("); emit_str_expr(c, argv[0], b); buf_puts(b, ")"); }
+        /* sp_str_dup, not sp_str_dup_external: the argument is a spinel
+           string, whose length is in its header. _external sizes with strlen,
+           which is right for a C string from getenv and wrong here -- it cut
+           String.new("a\0b") down to one byte while the same literal kept all
+           three, so a copy silently lost data a literal did not. */
+        if (has_content) { buf_puts(b, "sp_str_dup("); emit_str_expr(c, argv[0], b); buf_puts(b, ")"); }
         else buf_puts(b, "sp_str_dup_external((&(\"\\xff\")[1]))");
         return 1;
       }

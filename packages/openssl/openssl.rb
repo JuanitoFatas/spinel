@@ -15,6 +15,7 @@
 # handle is an Integer naming a connection in the C table -- no SSL pointer
 # is handed to a garbage-collected world.
 require "openssl/buffering"
+require "openssl/digest"
 
 module OpenSSL
   module Native
@@ -37,7 +38,7 @@ module OpenSSL
     VERIFY_NONE = 0
     VERIFY_PEER = 1
 
-    class SSLError < StandardError
+    class SSLError < OpenSSLError
     end
 
     # Only the members an outbound HTTPS client reaches. set_params is the one

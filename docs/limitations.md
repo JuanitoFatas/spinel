@@ -55,7 +55,10 @@ URI::FTP or the scheme registry behind it. An https request needs the
 **TLS / `openssl`.** The `openssl` package binds the system libssl and
 provides `OpenSSL::SSL` only: `SSLContext`, `SSLSocket`, `SSLError` and the
 `VERIFY_*` constants, which is what an outbound HTTPS client reaches.
-`OpenSSL::Digest`, `Cipher`, `PKey` and most of `X509` are not there, and a
+`OpenSSL::Digest::SHA256` / `SHA1` and `OpenSSL::HMAC.hexdigest` are there,
+over the runtime's own crypto rather than libssl -- class-method forms only,
+and no MD5, which CRuby carries and the runtime does not. `Cipher`, `PKey`,
+most of `X509`, and the incremental digest object API are not there, and a
 program that names them fails to compile rather than at run time. Spinel
 implements no TLS and bundles no trust anchors: the chain is validated against
 the operating system's store, so a CA it stops trusting stops being trusted
