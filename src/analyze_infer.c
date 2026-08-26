@@ -4372,7 +4372,20 @@ else {
         long bk = narrow_key(3, id, "");
         int bhit; int bcached = narrow_memo_get(bk, &bhit);
         TyKind bt;
-        if (bhit) { bt = (TyKind)bcached; }
+        /* A cached answer is trusted only while it says "no disagreement",
+           which is the common case and where the whole win is -- 2 asks of
+           87,033 were measured changing mid-iteration, so the rest hit. The
+           answer that WIDENS is the consequential one, and the one those two
+           were, so confirm it against a fresh ask rather than pinning a stale
+           one. Pinning it widened calls that should have stayed typed: a
+           concrete object became TY_POLY, its direct call became a runtime
+           cls_id switch with a NoMethodError arm, and four rubyspec examples
+           went with it (an identity assertion through .equal? cannot survive
+           the value boxing). */
+        int btrust = bhit && ((TyKind)bcached == TY_UNKNOWN ||
+                              (TyKind)bcached == TY_VOID ||
+                              (TyKind)bcached == r);
+        if (btrust) { bt = (TyKind)bcached; }
         else {
           an_builtin_only = 1;
           bt = infer_call(c, id);
