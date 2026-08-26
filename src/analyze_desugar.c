@@ -2089,7 +2089,10 @@ static int fwd_subtree_uses_yield_or_block(const NodeTable *nt, int def) {
   }
   return 0;
 }
-/* bit 1 = *rest, bit 2 = **kwrest, bit 4 = block/yield; -1 no def, -2 defs disagree */
+/* bit 1 = positional forwarding, bit 2 = keyword forwarding, bit 4 =
+   block/yield; -1 no def, -2 defs disagree. Fixed parameters count too:
+   forwarding to `def f(*a, k: 0)` needs both channels, as does forwarding to
+   `def f(x, **k)`. */
 static int def_shape_by_name(const NodeTable *nt, const char *name) {
   int shape = -1;
   for (int id = 0; id < nt->count; id++) {
@@ -2099,6 +2102,12 @@ static int def_shape_by_name(const NodeTable *nt, const char *name) {
     int pn = nt_ref(nt, id, "parameters");
     int sh = 0;
     if (pn >= 0) {
+      int rn = 0; nt_arr(nt, pn, "requireds", &rn);
+      int on = 0; nt_arr(nt, pn, "optionals", &on);
+      int postn = 0; nt_arr(nt, pn, "posts", &postn);
+      int kn = 0; nt_arr(nt, pn, "keywords", &kn);
+      if (rn > 0 || on > 0 || postn > 0) sh |= 1;
+      if (kn > 0) sh |= 2;
       if (fwd_node_is(nt, nt_ref(nt, pn, "rest"), "RestParameterNode")) sh |= 1;
       if (fwd_node_is(nt, nt_ref(nt, pn, "keyword_rest"), "KeywordRestParameterNode")) sh |= 2;
     }
@@ -2150,6 +2159,7 @@ int desugar_forwarding_to_rest_callee(Compiler *c) {
     }
     if (!ok || !ncalls || !(shape & 3) || (shape & 4)) continue;
     if (any_call_passes_block(nt, dname)) continue;
+    int base = nt->count;
     /* def m(a, ...) -> def m(a, *, **) */
     if (shape & 1) {
       int rp = fwd_new_node_like(nt, pn, "RestParameterNode");
@@ -2185,6 +2195,7 @@ int desugar_forwarding_to_rest_callee(Compiler *c) {
       nt_node_set_arr(nt, args, "arguments", nargs, nn);
     }
     comp_grow_node_arrays(c);
+    for (int j = base; j < nt->count; j++) c->nscope[j] = c->nscope[def];
     changed = 1;
   }
   return changed;
