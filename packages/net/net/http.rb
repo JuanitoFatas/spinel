@@ -99,7 +99,7 @@ module Net
       end
       @headers = {}
       @body = ""
-      initheader.each { |k, v| @headers[k.to_s] = v.to_s } unless initheader.nil?
+      initheader.each { |k, v| self[k] = v } unless initheader.nil?
     end
 
     # Header names are case-insensitive on the wire, and CRuby's
@@ -107,15 +107,24 @@ module Net
     # half here already is. What is kept, rather than downcased the way the
     # response stores them, is the caller's spelling: for a request that is
     # what goes out on the wire.
+    # EVERY write goes through here -- `initheader`, `content_type=` and
+    # `set_form_data` included. Writing to `@headers` directly is how the same
+    # header ends up stored twice under two spellings and goes out on the wire
+    # twice: `Post.new(uri, "content-type" => "text/plain")` followed by
+    # `req.content_type = "application/json"` sent BOTH, and a server is free
+    # to believe either one.
     def []=(name, value)
-      existing = header_name(name)
-      @headers.delete(existing) unless existing.nil?
+      delete_header(name)
       @headers[name.to_s] = value.to_s
     end
 
     def [](name)
       k = header_name(name)
       k.nil? ? nil : @headers[k]
+    end
+
+    def key?(name)
+      !header_name(name).nil?
     end
 
     # The stored spelling of a header, in whatever case the caller asks for it,
@@ -127,18 +136,29 @@ module Net
       found
     end
 
+    # Remove EVERY spelling of a header, not just one: a collision that
+    # predates this write needs clearing whole, or the duplicate survives the
+    # overwrite that was supposed to replace it.
+    def delete_header(name)
+      want = name.to_s.downcase
+      doomed = []
+      @headers.each_key { |k| doomed << k if k.to_s.downcase == want }
+      doomed.each { |k| @headers.delete(k) }
+      nil
+    end
+
     def each_header
       @headers.each { |k, v| yield k, v }
       nil
     end
 
     def content_type=(v)
-      @headers["Content-Type"] = v.to_s
+      self["Content-Type"] = v
     end
 
     def set_form_data(hash)
       @body = URI.encode_www_form(hash)
-      @headers["Content-Type"] = "application/x-www-form-urlencoded"
+      self["Content-Type"] = "application/x-www-form-urlencoded"
       @body
     end
   end
@@ -293,8 +313,12 @@ module Net
       # where the request is sent. Doing that here rather than raising keeps
       # the two spellings interchangeable, as they are there.
       unless @started
-        start
+        # `start` is INSIDE the begin: `open_connection` assigns @socket and
+        # only then completes the TLS handshake, so a handshake failure raises
+        # with a live socket that nothing else will close. `finish` is a no-op
+        # when there is nothing open, which is the other way start can fail.
         begin
+          start
           return request(req)
         ensure
           finish

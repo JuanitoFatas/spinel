@@ -14,13 +14,15 @@ port = server.addr[1]
 
 t = Thread.new do
   seen = []
-  7.times do
+  8.times do
     c = server.accept
     req = c.gets.to_s.strip                 # the request line
     headers = {}
+    raw = []
     while (line = c.gets)
       line = line.strip
       break if line.empty?
+      raw << line
       ci = line.index(":")
       headers[line[0, ci].downcase] = line[(ci + 1)..-1].to_s.strip unless ci.nil?
     end
@@ -31,7 +33,10 @@ t = Thread.new do
     end
     # The port is random, so record whether Host carried it rather than its value.
     hostok = headers["host"] == "127.0.0.1:#{port}"
-    seen << "#{req}|host-has-port=#{hostok}|body=#{body}"
+    # `headers` is keyed downcased, so two spellings of one name collapse
+    # here; count the raw lines instead or a duplicate goes unseen.
+    ctypes = raw.count { |l| l.downcase.start_with?("content-type:") }
+    seen << "#{req}|host-has-port=#{hostok}|content-type-lines=#{ctypes}|body=#{body}"
 
     if req.include?("/chunked")
       c.write("HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n")
@@ -92,6 +97,18 @@ p post.path                    # the URI's request_uri, not its whole to_s
 p post["content-type"]
 r5 = Net::HTTP.new(uri.host, uri.port).request(post)
 p [r5.code, r5.body]
+
+# A header set twice under two spellings is ONE header. `initheader` takes the
+# caller's lowercase spelling, `content_type=` then overwrites it; sending both
+# leaves the server to pick, which is not a choice it should have.
+uri2 = URI("http://127.0.0.1:#{port}/dup")
+dup = Net::HTTP::Post.new(uri2, "content-type" => "text/plain")
+dup.content_type = "application/json"
+p dup["Content-Type"]
+p dup["content-type"]          # either spelling finds the one value
+dup.body = "{}"
+r6 = Net::HTTP.new(uri2.host, uri2.port).request(dup)
+p r6.code
 
 t.value.each { |line| puts line }
 server.close
