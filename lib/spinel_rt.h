@@ -4851,7 +4851,7 @@ typedef struct sp_StrPolyHash sp_StrPolyHash;
 typedef sp_RbVal (*sp_strpoly_dproc_t)(sp_StrPolyHash *, const char *, void *);
 struct sp_StrPolyHash{const char**keys;sp_RbVal*vals;const char**order;sp_int len;sp_int cap;sp_int mask;sp_RbVal default_v;sp_strpoly_dproc_t dproc;void *dproc_self;};
 static void sp_StrPolyHash_fin(void*p){sp_StrPolyHash*h=(sp_StrPolyHash*)p;free(h->keys);free(h->vals);free(h->order);}
-static void sp_StrPolyHash_scan(void*p){sp_StrPolyHash*h=(sp_StrPolyHash*)p;for(sp_int i=0;i<h->cap;i++){if(h->keys[i]){sp_mark_string(h->keys[i]);sp_mark_rbval(h->vals[i]);}}sp_mark_rbval(h->default_v);}
+static void sp_StrPolyHash_scan(void*p){sp_StrPolyHash*h=(sp_StrPolyHash*)p;for(sp_int i=0;i<h->cap;i++){if(h->keys[i]){sp_mark_string(h->keys[i]);sp_mark_rbval(h->vals[i]);}}sp_mark_rbval(h->default_v);if(h->dproc_self)sp_gc_mark(h->dproc_self);}
 static sp_StrPolyHash*sp_StrPolyHash_new(void){sp_StrPolyHash*h=(sp_StrPolyHash*)sp_gc_alloc(sizeof(sp_StrPolyHash),sp_StrPolyHash_fin,sp_StrPolyHash_scan);h->cap=16;h->mask=15;h->keys=(const char**)calloc((size_t)h->cap,sizeof(const char*));h->vals=(sp_RbVal*)calloc((size_t)h->cap,sizeof(sp_RbVal));h->order=(const char**)malloc(sizeof(const char*)*h->cap);h->len=0;h->default_v=sp_box_nil();return h;}
 static sp_StrPolyHash*sp_StrPolyHash_new_with_default(sp_RbVal d){sp_StrPolyHash*h=sp_StrPolyHash_new();h->default_v=d;return h;}
 static sp_StrPolyHash*sp_StrPolyHash_new_dproc(sp_strpoly_dproc_t fn,void*self){sp_StrPolyHash*h=sp_StrPolyHash_new();h->dproc=fn;h->dproc_self=self;return h;}
@@ -8615,6 +8615,39 @@ static sp_PolyArray *sp_poly_to_a_arr(sp_RbVal v) {
 /* Hash#merge on a poly hash (a hash read out of a container, any variant):
    fold both operands' pairs into a general PolyPoly hash, the receiver first
    then the argument overriding (#3162). */
+typedef struct sp_poly_hash_dproc_ctx { sp_RbVal source; } sp_poly_hash_dproc_ctx;
+static sp_RbVal sp_penum_call2(sp_Proc *blk, sp_RbVal v, sp_RbVal w);
+static void sp_poly_hash_dproc_ctx_scan(void *p) {
+  sp_poly_hash_dproc_ctx *ctx = (sp_poly_hash_dproc_ctx *)p;
+  sp_mark_rbval(ctx->source);
+}
+static sp_RbVal sp_poly_hash_dproc_bridge(sp_PolyPolyHash *h, sp_RbVal key, void *self) {
+  sp_poly_hash_dproc_ctx *ctx = (sp_poly_hash_dproc_ctx *)self;
+  sp_RbVal source = ctx->source;
+  (void)h;
+  if (source.tag != SP_TAG_OBJ || !source.v.p) return sp_box_nil();
+  if (source.cls_id == SP_BUILTIN_STR_POLY_HASH && key.tag == SP_TAG_STR) {
+    sp_StrPolyHash *sh = (sp_StrPolyHash *)source.v.p;
+    /* default_proc= stores the Proc in dproc_self; pass the merged result to
+       it, rather than the typed source retained by this bridge. */
+    if (sh->dproc_self)
+      return sp_penum_call2((sp_Proc *)sh->dproc_self,
+                            sp_box_obj(h, SP_BUILTIN_POLY_POLY_HASH), key);
+    return sh->dproc(sh, key.v.s, sh->dproc_self);
+  }
+  if (source.cls_id == SP_BUILTIN_SYM_POLY_HASH && key.tag == SP_TAG_SYM) {
+    sp_SymPolyHash *sh = (sp_SymPolyHash *)source.v.p;
+    if (sh->dproc_self)
+      return sp_penum_call2((sp_Proc *)sh->dproc_self,
+                            sp_box_obj(h, SP_BUILTIN_POLY_POLY_HASH), key);
+    return sh->dproc(sh, (sp_sym)key.v.i, sh->dproc_self);
+  }
+  if (source.cls_id == SP_BUILTIN_POLY_POLY_HASH) {
+    sp_PolyPolyHash *ph = (sp_PolyPolyHash *)source.v.p;
+    return ph->dproc(ph, key, ph->dproc_self);
+  }
+  return sp_box_nil();
+}
 static sp_PolyPolyHash *sp_poly_hash_merge(sp_RbVal a, sp_RbVal b) {
   /* Before the allocation, not after: the operands are read for the whole
      loop below and the new hash is the first thing that can collect them.
@@ -8634,6 +8667,20 @@ static sp_PolyPolyHash *sp_poly_hash_merge(sp_RbVal a, sp_RbVal b) {
       case SP_BUILTIN_SYM_POLY_HASH: r->default_v = ((sp_SymPolyHash *)a.v.p)->default_v; break;
       case SP_BUILTIN_POLY_POLY_HASH: r->default_v = ((sp_PolyPolyHash *)a.v.p)->default_v; break;
       default: break;
+    }
+    int has_dproc = 0;
+    switch (a.cls_id) {
+      case SP_BUILTIN_STR_POLY_HASH: has_dproc = ((sp_StrPolyHash *)a.v.p)->dproc != NULL; break;
+      case SP_BUILTIN_SYM_POLY_HASH: has_dproc = ((sp_SymPolyHash *)a.v.p)->dproc != NULL; break;
+      case SP_BUILTIN_POLY_POLY_HASH: has_dproc = ((sp_PolyPolyHash *)a.v.p)->dproc != NULL; break;
+      default: break;
+    }
+    if (has_dproc) {
+      sp_poly_hash_dproc_ctx *ctx = (sp_poly_hash_dproc_ctx *)sp_gc_alloc(
+          sizeof(*ctx), NULL, sp_poly_hash_dproc_ctx_scan);
+      ctx->source = a;
+      r->dproc = sp_poly_hash_dproc_bridge;
+      r->dproc_self = ctx;
     }
   }
   sp_RbVal hs[2]; hs[0] = a; hs[1] = b;
