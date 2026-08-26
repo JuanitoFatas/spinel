@@ -7538,6 +7538,16 @@ static void mark_empty_array_operands(Compiler *c) {
       TyKind at = infer_type(c, av[0]);
       if (ty_is_array(at) && at != TY_POLY_ARRAY) { c->arr_want[recv] = at; continue; }
     }
+    /* When both operands are bare `[]`, the receiver becomes a poly array but
+       the argument has no independently inferred kind. Give that argument the
+       same poly layout before codegen; otherwise `[] == []` / `[] | []` pass
+       the default sp_IntArray* into a path expecting sp_PolyArray*. Seeds keep
+       their existing back-fill behavior through the block parameter. */
+    if (!seed) {
+      for (int k = 0; k < an; k++)
+        if (is_empty_array_literal(nt, av[k], c->node_cap) && c->arr_want[av[k]] == TY_UNKNOWN)
+          c->arr_want[av[k]] = TY_POLY_ARRAY;
+    }
     /* ... any other bare `[]` receiver is an empty poly array */
     c->empty_arr_recv[recv] = 1;
     /* The marking gives the receiver an element type, but a block parameter is
@@ -14106,4 +14116,3 @@ void analyze_program(Compiler *c) {
      uncelled, and the emit refuses. Only sets is_cell, and is idempotent. */
   mark_proc_captures(c);
 }
-

@@ -70,6 +70,11 @@ p([] + c)
 p([] == a)
 p([] <=> a)
 
+# --- when both operands are bare [], they share the poly-array layout
+p([] == [])
+p([] != [])
+p([] | [])
+
 # --- an empty [] argument on a hash receiver is a poly array
 p({}.each_with_object([]) { })
 p({"a" => 1}.each_with_object([]) { |(k, v), m| m << k })

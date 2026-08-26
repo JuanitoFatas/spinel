@@ -423,8 +423,8 @@ typedef struct {
                         slot at the read site); TY_UNKNOWN = not narrowed */
   int *nscope;      /* [node_cap] node id -> owning scope index */
   int *node_cbody;  /* [node_cap] node id -> enclosing class/module-body class id, or -1 */
-  char *empty_arr_recv; /* [node_cap] empty `[]` used as a safe-iterator receiver -> TY_POLY_ARRAY */
-  char *empty_hash_recv; /* [node_cap] empty `{}` used as a hash block-method receiver -> TY_STR_POLY_HASH */
+  char *empty_arr_recv; /* [node_cap] empty `[]` used as a direct receiver/interpolation -> TY_POLY_ARRAY */
+  char *empty_hash_recv; /* [node_cap] empty `{}` used as a direct receiver/interpolation -> TY_STR_POLY_HASH */
   char *empty_hash_arg;  /* [node_cap] empty `{}` passed as a user-method arg -> TY_POLY_POLY_HASH */
   TyKind *hash_want; /* [node_cap] variant a hash literal should take from its use context (#3040) */
   TyKind *arr_want;  /* [node_cap] array kind an empty `[]` literal should take from its use context */
