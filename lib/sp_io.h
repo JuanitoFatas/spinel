@@ -56,6 +56,9 @@ const char *sp_sock_read_nb(sp_File *f, sp_int len, sp_bool exc, sp_bool is_recv
 sp_int sp_sock_write_nb(sp_File *f, const char *data, sp_bool exc);
 sp_int sp_sock_write_nb_bin(sp_File *f, const char *data, sp_bool exc);
 sp_int sp_sock_connect_nb(sp_File *f, const char *host, sp_int port, sp_bool exc);
+/* Addrinfo-form connect_nonblock (already-resolved endpoint) */
+sp_int sp_sock_connect_nb_sa(sp_File *f, const char *sa, sp_int salen,
+                                 sp_bool exc);
 sp_bool sp_io_is_a(sp_File *f, const char *cls);
 sp_bool sp_io_instance_of(sp_File *f, const char *cls);
 sp_File *sp_sock_udp_new(sp_int family);

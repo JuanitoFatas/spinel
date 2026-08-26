@@ -16011,6 +16011,31 @@ static void emit_call_body(Compiler *c, int id, Buf *b) {
         }
         free(rb.p); return;
       }
+      if (sp_streq(name, "connect_nonblock") && pos9 == 1) {
+        /* 1-arg form: a packed sockaddr String. Mirror the 2-arg
+           shape: `exception: false` swaps the IO::WaitWritable raise
+           for the :wait_writable symbol so polling loops can stay
+           non-raising. */
+        int ts = ++g_tmp;
+        if (no_exc) {
+          int tn = ++g_tmp;
+          buf_printf(b, "({ const char *_t%d = ", ts);
+          emit_str_expr(c, argv[0], b);
+          buf_printf(b, "; sp_int _n%d = sp_sock_connect_nb_sa(%s, _t%d,", tn, r, ts);
+          buf_printf(b, " (sp_int)sp_str_byte_len(_t%d), 0);", ts);
+          buf_printf(b, " _n%d == SP_INT_NIL", tn);
+          buf_printf(b, " ? sp_box_sym(sp_sym_intern(\"wait_writable\"))");
+          buf_printf(b, " : sp_box_int(_n%d); })", tn);
+        }
+        else {
+          buf_printf(b, "({ const char *_t%d = ", ts);
+          emit_str_expr(c, argv[0], b);
+          buf_printf(b, "; sp_sock_connect_nb_sa(%s, _t%d,"
+                        " (sp_int)sp_str_byte_len(_t%d), 1); })",
+                        r, ts, ts);
+        }
+        free(rb.p); return;
+      }
       if (sp_streq(name, "connect_nonblock") && pos9 == 2) {
         if (no_exc) {
           int tw = ++g_tmp;
