@@ -14,7 +14,7 @@ port = server.addr[1]
 
 t = Thread.new do
   seen = []
-  6.times do
+  7.times do
     c = server.accept
     req = c.gets.to_s.strip                 # the request line
     headers = {}
@@ -81,6 +81,17 @@ Net::HTTP.start("127.0.0.1", port) do |http|
   p http.get("/one").body
   p http.get("/two").body
 end
+
+# A request object built from a URI with an initial header hash, sent through a
+# Net::HTTP that was never started -- both are CRuby spellings, and together
+# they are how a caller that already parsed the URL writes a POST.
+uri = URI("http://127.0.0.1:#{port}/hook?k=v")
+post = Net::HTTP::Post.new(uri, "Content-Type" => "application/json")
+post.body = "{}"
+p post.path                    # the URI's request_uri, not its whole to_s
+p post["content-type"]
+r5 = Net::HTTP.new(uri.host, uri.port).request(post)
+p [r5.code, r5.body]
 
 t.value.each { |line| puts line }
 server.close

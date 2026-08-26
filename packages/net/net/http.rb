@@ -85,19 +85,46 @@ module Net
     attr_reader :method, :path
     attr_accessor :body
 
-    def initialize(method, path)
+    # `path` is a request path, or a URI -- CRuby takes either, and
+    # `Net::HTTP::Post.new(uri, "Content-Type" => "application/json")` is the
+    # spelling a caller reaches for when it already parsed the URL. A URI
+    # contributes its `request_uri` (the path with the query), not its `to_s`,
+    # which is the whole URL and would go out as an absolute request line.
+    def initialize(method, path, initheader = nil)
       @method = method
-      @path = (path.nil? || path.to_s.empty?) ? "/" : path.to_s
+      @path = if path.is_a?(URI::Generic)
+        path.request_uri
+      else
+        (path.nil? || path.to_s.empty?) ? "/" : path.to_s
+      end
       @headers = {}
       @body = ""
+      initheader.each { |k, v| @headers[k.to_s] = v.to_s } unless initheader.nil?
     end
 
+    # Header names are case-insensitive on the wire, and CRuby's
+    # Net::HTTPHeader is case-insensitive on both halves -- as the response
+    # half here already is. What is kept, rather than downcased the way the
+    # response stores them, is the caller's spelling: for a request that is
+    # what goes out on the wire.
     def []=(name, value)
+      existing = header_name(name)
+      @headers.delete(existing) unless existing.nil?
       @headers[name.to_s] = value.to_s
     end
 
     def [](name)
-      @headers[name.to_s]
+      k = header_name(name)
+      k.nil? ? nil : @headers[k]
+    end
+
+    # The stored spelling of a header, in whatever case the caller asks for it,
+    # or nil when it is not set.
+    def header_name(name)
+      want = name.to_s.downcase
+      found = nil
+      @headers.each_key { |k| found = k if k.to_s.downcase == want }
+      found
     end
 
     def each_header
@@ -120,32 +147,32 @@ module Net
     # CRuby builds requests as Net::HTTP::Get.new(path) and friends. Same
     # spelling here, so the same code compiles.
     class Get < HTTPRequest
-      def initialize(path)
-        super("GET", path)
+      def initialize(path, initheader = nil)
+        super("GET", path, initheader)
       end
     end
 
     class Post < HTTPRequest
-      def initialize(path)
-        super("POST", path)
+      def initialize(path, initheader = nil)
+        super("POST", path, initheader)
       end
     end
 
     class Put < HTTPRequest
-      def initialize(path)
-        super("PUT", path)
+      def initialize(path, initheader = nil)
+        super("PUT", path, initheader)
       end
     end
 
     class Delete < HTTPRequest
-      def initialize(path)
-        super("DELETE", path)
+      def initialize(path, initheader = nil)
+        super("DELETE", path, initheader)
       end
     end
 
     class Head < HTTPRequest
-      def initialize(path)
-        super("HEAD", path)
+      def initialize(path, initheader = nil)
+        super("HEAD", path, initheader)
       end
     end
 
@@ -259,7 +286,20 @@ module Net
     end
 
     def request(req)
-      raise HTTPError, "not started" unless @started
+      # CRuby opens a connection for a #request on an unstarted Net::HTTP, runs
+      # the request over it and closes it again -- so `Net::HTTP.new(host,
+      # port).request(req)` works without a `start`, and is the spelling a
+      # caller writes when the connection is configured somewhere other than
+      # where the request is sent. Doing that here rather than raising keeps
+      # the two spellings interchangeable, as they are there.
+      unless @started
+        start
+        begin
+          return request(req)
+        ensure
+          finish
+        end
+      end
       # Every request goes out with `Connection: close`, so the server hangs
       # up after answering and the socket a second request would use is dead.
       # CRuby reconnects transparently in that situation, and a caller writing
