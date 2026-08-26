@@ -16011,6 +16011,14 @@ static void emit_call_body(Compiler *c, int id, Buf *b) {
         }
         free(rb.p); return;
       }
+      if (sp_streq(name, "connect_nonblock") && pos9 == 1) {
+        int ts = ++g_tmp;
+        buf_printf(b, "({ const char *_t%d = ", ts);
+        emit_str_expr(c, argv[0], b);
+        buf_printf(b, "; sp_sock_connect_nb_sa(%s, _t%d, (sp_int)sp_str_byte_len(_t%d), 1); })",
+                     r, ts, ts);
+        free(rb.p); return;
+      }
       if (sp_streq(name, "connect_nonblock") && pos9 == 2) {
         if (no_exc) {
           int tw = ++g_tmp;
