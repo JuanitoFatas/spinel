@@ -168,7 +168,13 @@ TyKind ie_block_break_next_ty(Compiler *c, int node) {
   if (sp_streq(ty, "BreakNode") || sp_streq(ty, "NextNode")) {
     int a = nt_ref(nt, node, "arguments"); int an = 0;
     const int *av = a >= 0 ? nt_arr(nt, a, "arguments", &an) : NULL;
-    if (an > 0) return infer_type(c, av[0]);
+    if (an > 0) {
+      /* `next *x` delivers the splat-built ARRAY, not the element type that
+         infer_type reports for a SplatNode in an array literal. */
+      const char *aty = nt_type(nt, av[0]);
+      if (aty && sp_streq(aty, "SplatNode")) return TY_POLY_ARRAY;
+      return infer_type(c, av[0]);
+    }
     /* a bare `next` yields nil: `[1,2].map { |v| next if v == 1; v }` is [nil, 2] */
     return sp_streq(ty, "NextNode") ? TY_NIL : TY_UNKNOWN;
   }
