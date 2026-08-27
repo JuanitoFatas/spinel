@@ -1,3 +1,6 @@
-[:main, 0, :main, 1, :main, 2, 3, 4]
+8
+3
+[0, 1, 2, 3, 4]
+false
 main_turns: 4
 done
