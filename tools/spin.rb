@@ -1028,11 +1028,31 @@ def compile_cmd(prj, entry, out, extra)
   cmd
 end
 
+# The hint belongs to ONE failure -- a require nothing provides, which
+# `spin add` fixes -- and it used to be printed for every one. On a parse
+# error or a type error it was the last line the reader saw and it pointed
+# away from the fix (#4136). So the compiler's stderr is captured, replayed,
+# and read: the hint follows only when the failure it describes is the one
+# that happened.
+#
+# Capturing costs the live interleaving of compiler warnings with the rest of
+# the build output; they arrive together at the end of this target instead.
+# That is the price of knowing what the failure was, and warnings are read
+# after a build rather than during one.
 def compile(prj, entry, out, extra)
-  ok = system(compile_cmd(prj, entry, out, extra))
+  tmp = ENV["TMPDIR"].to_s
+  tmp = "/tmp" if tmp == ""
+  err = File.join(tmp, "spin-compile-#{Process.pid}.err")
+  ok = system(compile_cmd(prj, entry, out, extra) + " 2>#{err}")
+  text = File.exist?(err) ? File.read(err) : ""
+  $stderr.print text unless text.empty?
+  File.unlink(err) if File.exist?(err)
   unless ok
-    # close the add-a-package loop: wrap the compiler's unsatisfiable-require error
-    $stderr.puts "spin: build failed (hint: an unresolved require may need a dependency: spin add <name> --path <dir>)"
+    if text.include?("cannot load such file")
+      $stderr.puts "spin: build failed (hint: an unresolved require may need a dependency: spin add <name> --path <dir>)"
+    else
+      $stderr.puts "spin: build failed"
+    end
     exit 1
   end
 end

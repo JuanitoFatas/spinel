@@ -692,4 +692,35 @@ expect "native cache reused on the second run" "0" "$CC1"
 CC2=$(SPIN_NATIVE_CACHE="$WORK/ncache" SPIN_NO_NATIVE_CACHE=1 "$SPIN" flags 2>&1 >/dev/null | grep -c "^cc " || true)
 [ "$CC2" -ge 1 ] || fail "SPIN_NO_NATIVE_CACHE did not force a rebuild"
 
+# --- the build-failed hint belongs to one failure, not to all of them (#4136) -
+# `spin add <name>` fixes an unresolved require and nothing else, so pointing
+# at it after a parse error is the last line the reader sees pointing away from
+# the fix.
+cd "$WORK"
+mkdir -p hintprj/bin
+cd hintprj
+"$SPIN" init >/dev/null 2>&1
+printf 'def f(\nputs 1\n' > bin/hintprj.rb
+OUT=$("$SPIN" build 2>&1) || true
+case "$OUT" in
+  *"spin add"*) fail "parse error got the unresolved-require hint: [$OUT]" ;;
+esac
+case "$OUT" in
+  *"build failed"*) ;;
+  *) fail "parse error did not report a build failure: [$OUT]" ;;
+esac
+printf 'require "nosuchlib_e2e"\nputs 1\n' > bin/hintprj.rb
+OUT=$("$SPIN" build 2>&1) || true
+case "$OUT" in
+  *"spin add"*) ;;
+  *) fail "unresolved require lost its hint: [$OUT]" ;;
+esac
+# The compiler's own diagnostics still reach the user either way.
+case "$OUT" in
+  *"cannot load such file"*) ;;
+  *) fail "compiler stderr not replayed: [$OUT]" ;;
+esac
+printf 'puts 42\n' > bin/hintprj.rb
+expect "a good build still runs" "42" "$("$SPIN" run 2>&1 | tail -1)"
+
 echo "spin-e2e: ALL GREEN"
