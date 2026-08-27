@@ -9471,9 +9471,14 @@ static int promote_shared_stored_strings(Compiler *c) {
     int mt = strbuf_mut_kind(c, tgtn, ws);
     if (ms < 0 || mt < 0) continue;         /* a disqualifying mutator */
     if (ms != 1 && mt != 1) continue;       /* alias set never mutated */
-    if (srcv->type != TY_STRBUF || !srcv->str_shared)
+    /* A slot that has widened past String cannot carry the shared-mutable
+       REPRESENTATION: strbuf is an sp_String handle, and a poly slot may hold
+       anything. Boxing keeps the handle, so identity and in-place mutation
+       still travel; forcing strbuf back on it only fought whatever widened it,
+       every round, to the fixpoint's cap (#4116). */
+    if (srcv->type != TY_POLY && (srcv->type != TY_STRBUF || !srcv->str_shared))
       { srcv->type = TY_STRBUF; srcv->str_shared = 1; changed = 1; }
-    if (tgtv->type != TY_STRBUF || !tgtv->str_shared)
+    if (tgtv->type != TY_POLY && (tgtv->type != TY_STRBUF || !tgtv->str_shared))
       { tgtv->type = TY_STRBUF; tgtv->str_shared = 1; changed = 1; }
   }
   /* local <-> ivar alias pairs: `l = @s` / `@s = l`. When either side is
@@ -9512,7 +9517,7 @@ static int promote_shared_stored_strings(Compiler *c) {
       int iv2 = comp_ivar_index(ci2, ivname);
       if (iv2 < 0 || !ci2->ivar_str_shared[iv2]) continue; }
     if (ch2) changed = 1;
-    if (llv->type != TY_STRBUF || !llv->str_shared)
+    if (llv->type != TY_POLY && (llv->type != TY_STRBUF || !llv->str_shared))
       { llv->type = TY_STRBUF; llv->str_shared = 1; changed = 1; }
   }
   /* external reader alias: `x = obj.reader` where the reader exposes an
@@ -9548,7 +9553,7 @@ static int promote_shared_stored_strings(Compiler *c) {
     { int iv2 = comp_ivar_index(&c->classes[defc], ivn);
       if (iv2 < 0 || !c->classes[defc].ivar_str_shared[iv2]) continue; }
     if (!c->strbuf_box[wv]) { c->strbuf_box[wv] = 1; changed = 1; }
-    if (llv2->type != TY_STRBUF || !llv2->str_shared)
+    if (llv2->type != TY_POLY && (llv2->type != TY_STRBUF || !llv2->str_shared))
       { llv2->type = TY_STRBUF; llv2->str_shared = 1; changed = 1; }
   }
   /* iteration-variable mutation: `arr.each { |x| x << "!" }` mutates the
@@ -9611,7 +9616,7 @@ static int promote_shared_stored_strings(Compiler *c) {
         bpv4->type != TY_STRBUF && bpv4->type != TY_POLY &&
         bpv4->type != TY_STR_ARRAY) continue;
     changed |= strbuf_demand_container_stores(c, contn4, conts4);
-    if (bpv4->type != TY_STRBUF || !bpv4->str_shared)
+    if (bpv4->type != TY_POLY && (bpv4->type != TY_STRBUF || !bpv4->str_shared))
       { bpv4->type = TY_STRBUF; bpv4->str_shared = 1; changed = 1; }
   }
   /* deep-return alias: `r = make_held` where EVERY return path of the
@@ -9683,7 +9688,7 @@ static int promote_shared_stored_strings(Compiler *c) {
         if (!tlv || !strbuf_slot_eligible_shape(c, tvn, tvs, tlv)) continue;
         if (tlv->type != TY_UNKNOWN && tlv->type != TY_STRING &&
             tlv->type != TY_STRBUF && tlv->type != TY_POLY) continue;
-        if (tlv->type != TY_STRBUF || !tlv->str_shared)
+        if (tlv->type != TY_POLY && (tlv->type != TY_STRBUF || !tlv->str_shared))
           { tlv->type = TY_STRBUF; tlv->str_shared = 1; changed = 1; }
       }
       continue;
@@ -9692,7 +9697,7 @@ static int promote_shared_stored_strings(Compiler *c) {
     if (!clv3 || !strbuf_slot_eligible_shape(c, lname3, ls3, clv3)) continue;
     if (!caller_may_be_str) continue;
     c->strbuf_box[wv] = 1; changed = 1;
-    if (clv3->type != TY_STRBUF || !clv3->str_shared)
+    if (clv3->type != TY_POLY && (clv3->type != TY_STRBUF || !clv3->str_shared))
       { clv3->type = TY_STRBUF; clv3->str_shared = 1; changed = 1; }
   }
   /* Container-read alias (`r = rows[0]; r.upcase!`): the local is another name
@@ -9732,7 +9737,7 @@ static int promote_shared_stored_strings(Compiler *c) {
     if (!strbuf_container_stores_string(c, contn5, conts5)) continue;
     changed |= strbuf_demand_container_stores(c, contn5, conts5);
     if (!c->strbuf_box[wv]) { c->strbuf_box[wv] = 1; changed = 1; }
-    if (llv5->type != TY_STRBUF || !llv5->str_shared)
+    if (llv5->type != TY_POLY && (llv5->type != TY_STRBUF || !llv5->str_shared))
       { llv5->type = TY_STRBUF; llv5->str_shared = 1; changed = 1; }
   }
   return changed;
@@ -9811,7 +9816,7 @@ static int convert_byref_handle_params(Compiler *c) {
           if (!alv || !strbuf_slot_eligible_shape(c, vn2, vs2, alv)) continue;
           if (alv->type != TY_UNKNOWN && alv->type != TY_STRING &&
               alv->type != TY_STRBUF && alv->type != TY_POLY) continue;
-          if (alv->type != TY_STRBUF || !alv->str_shared)
+          if (alv->type != TY_POLY && (alv->type != TY_STRBUF || !alv->str_shared))
             { alv->type = TY_STRBUF; alv->str_shared = 1; changed = 1; }
         }
         else if (nt_kind(nt, an2) == NK_InstanceVariableReadNode) {
