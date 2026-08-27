@@ -2759,6 +2759,23 @@ int infer_write_types(Compiler *c) {
       else lv->oa_pin = TY_UNKNOWN;
     }
 
+  /* A slot this round could not derive AT ALL keeps what it had. The reset at
+     the top exists so a slot can narrow when better evidence arrives, and a
+     narrowed slot is concrete -- so restoring the stash where the answer came
+     out UNKNOWN cannot block a narrowing, and it stops the round from throwing
+     away what the rest of the program already established. Without it a write
+     the pass has no rule for (`g = Hash.new(99)`) dropped its slot every round,
+     another pass settled it again, and the fixpoint ran to its cap (#4116).
+     The empty-collection write above already does this for its own case; this
+     is the same rule without the special case. */
+  for (int s = 0; s < c->nscopes; s++)
+    for (int i = 0; i < c->scopes[s].nlocals; i++) {
+      LocalVar *lv = &c->scopes[s].locals[i];
+      if (lv->is_param || lv->is_block_param || lv->rbs_seeded) continue;
+      if (lv->type == TY_UNKNOWN && (TyKind)lv->gc_root != TY_UNKNOWN)
+        lv->type = (TyKind)lv->gc_root;
+    }
+
   /* The shared-mutable / append-accumulator promotion is durable -- the mark
      is, and analyze re-asserts the slot type from it after the fixpoint. Do it
      HERE too, before the comparison below: the reset at the top of this pass
