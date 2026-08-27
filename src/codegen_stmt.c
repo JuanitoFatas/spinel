@@ -5767,6 +5767,12 @@ void emit_begin(Compiler *c, int id, Buf *b, int indent, const char *resultvar) 
       }
       else emit_stmts(c, else_stmts, b, indent + 1);
     }
+    else if (else_c >= 0 && resultvar) {
+      /* an empty else clause is still the begin's value: nil */
+      TyKind bt = comp_ntype(c, id);
+      emit_indent(b, indent + 1);
+      buf_printf(b, "%s = %s;\n", resultvar, bt == TY_POLY ? "sp_box_nil()" : default_value(bt));
+    }
     emit_indent(b, indent); buf_puts(b, "}\n");
     emit_indent(b, indent); buf_puts(b, "else {\n");
     emit_indent(b, indent + 1); buf_puts(b, "sp_exc_top--;\n");
@@ -5924,7 +5930,13 @@ void emit_begin(Compiler *c, int id, Buf *b, int indent, const char *resultvar) 
     else {
       emit_stmts(c, else_stmts, b, indent + 1);
     }
+  }  else if (else_c >= 0 && resultvar) {
+    /* an empty else clause is still the begin's value: nil */
+    TyKind bt = comp_ntype(c, id);
+    emit_indent(b, indent + 1);
+    buf_printf(b, "%s = %s;\n", resultvar, bt == TY_POLY ? "sp_box_nil()" : default_value(bt));
   }
+
   if (ensure_stmts >= 0) emit_stmts(c, ensure_stmts, b, indent + 1);
   emit_indent(b, indent); buf_puts(b, "}\n");
   emit_indent(b, indent); buf_puts(b, "else {\n");

@@ -6428,9 +6428,18 @@ TyKind infer_uncached(Compiler *c, int id) {
     return ty_unify(lt, rt);  /* value form: a || b -> common type */
   }
   if (nk == NK_BeginNode) {
-    /* value = body value unified with each rescue handler's value */
+    /* value = body value unified with each rescue handler's value. With an
+       `else` clause the else's value REPLACES the body's on success, so the
+       else is the value source; the body's divergence still counts, since a
+       body that raises never reaches the else. Typed from the body alone,
+       `begin; :sym; rescue; else; false; end` held false in a Symbol slot and
+       read it back as symbol number 0. */
     int body = nt_ref(nt, id, "statements");
-    TyKind r = body >= 0 ? infer_type(c, body) : TY_NIL;
+    int else_c = nt_ref(nt, id, "else_clause");
+    int else_st = else_c >= 0 ? nt_ref(nt, else_c, "statements") : -1;
+    int vsrc = else_st >= 0 ? else_st : body;
+    TyKind r = vsrc >= 0 ? infer_type(c, vsrc) : TY_NIL;
+    if (else_c >= 0 && else_st < 0) r = TY_NIL;   /* an empty else is the value: nil */
     TyKind body_t = r;
     /* a body whose last statement is a bare raise diverges: the begin's value
        comes from the rescue arms alone, so their type must not widen (#2739) */
@@ -6448,8 +6457,8 @@ TyKind infer_uncached(Compiler *c, int id) {
        because it diverges. Left as "no value" the begin took the handler's
        type alone, and the array pointer went into an sp_int slot (#3496).
        It carries a value, so the two arms are a union: poly. */
-    if (r == TY_UNKNOWN && body >= 0) {
-      int bn2 = 0; const int *bs2 = nt_arr(nt, body, "body", &bn2);
+    if (r == TY_UNKNOWN && vsrc >= 0) {
+      int bn2 = 0; const int *bs2 = nt_arr(nt, vsrc, "body", &bn2);
       if (bs2 && bn2 > 0 && node_is_empty_container(nt, bs2[bn2 - 1])) r = TY_POLY;
     }
     /* A body that carries a value of a type not settled yet is not the same as
@@ -6457,8 +6466,8 @@ TyKind infer_uncached(Compiler *c, int id) {
        begin an Integer when the body answered an array whose local had not been
        typed at this point in the walk, and the array was coerced into an int
        slot (#3708). Stay UNKNOWN and let a later round settle it. */
-    if (r == TY_UNKNOWN && body >= 0) {
-      int bn3 = 0; const int *bs3 = nt_arr(nt, body, "body", &bn3);
+    if (r == TY_UNKNOWN && vsrc >= 0) {
+      int bn3 = 0; const int *bs3 = nt_arr(nt, vsrc, "body", &bn3);
       /* only for a local read: its slot is typed by a write that comes later
          in the walk, so within this round it reads UNKNOWN however concrete it
          really is. Anything else that answers UNKNOWN here genuinely has no
