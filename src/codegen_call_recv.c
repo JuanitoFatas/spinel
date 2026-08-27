@@ -5221,7 +5221,20 @@ else {
                        hn, th, tk, hn, th, tk);
           }
           const char *fp0 = block_param_name(c, blk, 0);  /* fetch yields the key */
-          if (fp0) { buf_printf(b, "lv_%s = _t%d; ", rename_local(fp0), tk); }
+          if (fp0) {
+            /* the block is spliced inline, so the parameter's slot is the
+               enclosing scope's local; a body that reassigns it widened the
+               slot to poly, and the key boxes on the way in */
+            Scope *fbs = comp_scope_of(c, blk);
+            LocalVar *flv = fbs ? scope_local(fbs, fp0) : NULL;
+            if (!flv) { Scope *fes = comp_scope_of(c, id); flv = fes ? scope_local(fes, fp0) : NULL; }
+            TyKind kt = ty_hash_key(rt);
+            if (flv && flv->type == TY_POLY && kt != TY_POLY) {
+              char ktn[32]; snprintf(ktn, sizeof ktn, "_t%d", tk);
+              buf_printf(b, "lv_%s = ", rename_local(fp0)); emit_boxed_text(c, kt, ktn, b); buf_puts(b, "; ");
+            }
+            else buf_printf(b, "lv_%s = _t%d; ", rename_local(fp0), tk);
+          }
           for (int k = 0; k < bn - 1; k++) emit_stmt(c, bb[k], b, 0);  /* leading stmts */
           if (bval >= 0) {
             if ((vt == TY_POLY || mismatch) && bvt != TY_POLY) emit_boxed(c, bval, b);

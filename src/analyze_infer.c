@@ -3769,12 +3769,24 @@ else {
     }
     if (is_fiber) return infer_type(c, argv[1]);
   }
-  /* ENV[key] -> string or nil (use TY_STRING; null means nil) */
+  /* ENV[key] -> string or nil (use TY_STRING; null means nil). ENV.fetch
+     answers its default on a miss, so the call is the union of String with
+     the default's type: a String or nil default keeps the nullable string,
+     anything else boxes. Typed String alone, an Array default was placed in
+     the const char * slot as it stood. (The block form is the ENV snapshot's
+     Hash#fetch, #2742, and types there.) */
   if (recv >= 0 && argc >= 1 && (sp_streq(name, "[]") || sp_streq(name, "fetch"))) {
     const char *rty = nt_type(nt, recv);
     if (rty && sp_streq(rty, "ConstantReadNode")) {
       const char *rn = nt_str(nt, recv, "name");
-      if (rn && sp_streq(rn, "ENV")) return TY_STRING;
+      if (rn && sp_streq(rn, "ENV")) {
+        if (sp_streq(name, "fetch") && argc >= 2) {
+          TyKind dt = infer_type(c, argv[1]);
+          if (dt == TY_UNKNOWN || dt == TY_NIL || dt == TY_VOID) return TY_STRING;
+          return ty_unify(TY_STRING, dt);
+        }
+        return TY_STRING;
+      }
     }
   }
   /* ENV.key?/has_key?/include?/member?(key) -> bool */

@@ -13683,11 +13683,26 @@ static void emit_call_body(Compiler *c, int id, Buf *b) {
     if (rty2 && sp_streq(rty2, "ConstantReadNode")) {
       const char *rn = nt_str(nt, recv, "name");
       if (rn && sp_streq(rn, "ENV")) {
-        int tk = ++g_tmp, tky = ++g_tmp, tv = ++g_tmp;
+        /* The call's type is String joined with the default's: a String or
+           nil default keeps the nullable string, any other default boxes both
+           arms. (The block form is the ENV snapshot's Hash#fetch, #2742.) */
+        int fpoly = comp_ntype(c, id) == TY_POLY;
+        int tk = ++g_tmp, tky = ++g_tmp, tv = ++g_tmp, td = ++g_tmp;
         buf_printf(b, "({ const char *_t%d = ", tky); emit_str_expr(c, argv[0], b);
-        buf_printf(b, "; const char *_t%d = getenv(_t%d)", tk, tky);
-        buf_printf(b, "; const char *_t%d = _t%d ? sp_str_dup_external(_t%d) : ", tv, tk, tk);
-        if (argc >= 2) emit_expr(c, argv[1], b);
+        /* the default is an argument: it evaluates whether or not the
+           variable is set, before the lookup */
+        if (argc >= 2) {
+          buf_puts(b, "; "); emit_ctype(c, fpoly ? TY_POLY : TY_STRING, b);
+          buf_printf(b, " _t%d = ", td);
+          if (fpoly) emit_boxed(c, argv[1], b);
+          else emit_expr(c, argv[1], b);
+        }
+        buf_printf(b, "; const char *_t%d = getenv(_t%d); ", tk, tky);
+        emit_ctype(c, fpoly ? TY_POLY : TY_STRING, b);
+        buf_printf(b, " _t%d = _t%d ? ", tv, tk);
+        if (fpoly) buf_printf(b, "sp_box_str(sp_str_dup_external(_t%d)) : ", tk);
+        else buf_printf(b, "sp_str_dup_external(_t%d) : ", tk);
+        if (argc >= 2) buf_printf(b, "_t%d", td);
         else
           /* no default: CRuby raises KeyError naming the key. Route it through
              sp_raise_key_not_found so the key is staged for #key (#3027). */
