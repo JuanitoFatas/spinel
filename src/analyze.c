@@ -9987,6 +9987,18 @@ static int seed_ret_kind(TyKind t) {
    String slot fed a Symbol) but the emitter has coercions for many such pairs,
    and a false error breaks a build that works; the dynamic half of this is
    -DSP_RBS_CHECK, which needs no such caution because it sees the real tag. */
+/* Defined in codegen_util.c: 1 under SP_COLLECT_ERRORS. Reached by name rather
+   than through codegen_internal.h, which analyze does not include. */
+int collect_mode(void);
+
+/* One contradiction used to end the run. On a seeded tree that is the check hit
+   first, and fixing one signature only buys the next one a whole compile later
+   -- 115 seconds a round on a 347-signature tree (#4140). Under
+   SP_COLLECT_ERRORS, report each one and keep going, then fail once at the end:
+   the run still refuses to emit (a seed is trusted, so acting on a contradicted
+   one is the bug this check exists to prevent), but it hands back the whole
+   list. Same bargain the codegen gaps already make. */
+static int g_seed_bad = 0;
 static void check_seed_contradictions(Compiler *c) {
   const NodeTable *nt = c->nt;
   for (int id = 0; id < nt->count; id++) {
@@ -10016,7 +10028,8 @@ static void check_seed_contradictions(Compiler *c) {
             "rather than convert it.\n"
             "  Fix the signature or the assignment.\n",
             file, ln, nm, ty_name(slot), ty_name(val));
-    exit(1);
+    if (!collect_mode()) exit(1);
+    g_seed_bad = 1;
   }
   /* The same contradiction on a RETURN. A seeded return is trusted, so the
      emitted function carries the pinned C type and the body's value is placed
@@ -10103,7 +10116,8 @@ static void check_seed_contradictions(Compiler *c) {
               "  Fix the signature or the body.\n",
               pos, cn ? cn : "", cn ? "#" : "", sc->name ? sc->name : "?",
               seed_ty_name(c, slot), seed_ty_name(c, val));
-      exit(1);
+      if (!collect_mode()) exit(1);
+      g_seed_bad = 1;
     }
   }
 
@@ -10165,9 +10179,13 @@ static void check_seed_contradictions(Compiler *c) {
               "rather than convert it.\n"
               "  Fix the signature or the call.\n",
               file, ln, m->pnames[i], name, seed_ty_name(c, slot), seed_ty_name(c, val));
-      exit(1);
+      if (!collect_mode()) exit(1);
+      g_seed_bad = 1;
     }
   }
+  /* Collect mode gathered them; the run still fails, and stops before codegen
+     so nothing is emitted from a seed we just refused. */
+  if (g_seed_bad) exit(1);
 }
 
 /* Re-assert the type an --rbs seed declared for a parameter. The seed is the

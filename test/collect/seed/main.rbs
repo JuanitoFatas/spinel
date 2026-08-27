@@ -1,0 +1,4 @@
+module Paths
+  def self.a_path: (Integer id) -> String
+  def self.b_path: (Integer id) -> String
+end

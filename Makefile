@@ -1210,6 +1210,14 @@ collect-errors-test: $(SPINEL)
 	grep -q 'return ' "$$tmp/b.c" || { echo "collect-errors-test: FAIL (the unit after the abandoned one lost its return)"; ok=0; }; \
 	! grep -q '_sp_proc_poly_ret' "$$tmp/b.c" || { echo "collect-errors-test: FAIL (a plain method inherited the abandoned proc's return funnel)"; ok=0; }; \
 	! grep -q '_cap)->c_x' "$$tmp/b.c" || { echo "collect-errors-test: FAIL (a plain method read its local through the abandoned proc's capture struct)"; ok=0; }; \
+	seed=test/collect/seed; \
+	SP_COLLECT_ERRORS=1 $(SPINEL) -c --rbs "$$seed" "$$seed/main.rb" -o "$$tmp/s.c" >"$$tmp/s.err" 2>&1; rc=$$?; \
+	[ $$rc -ne 0 ] || { echo "collect-errors-test: FAIL (a contradicted --rbs seed was collected and then emitted anyway)"; ok=0; }; \
+	n=$$(grep -c 'seed contradicted' "$$tmp/s.err"); \
+	[ "$$n" -eq 2 ] || { echo "collect-errors-test: FAIL (collect mode reported $$n of 2 contradicted seeds)"; ok=0; }; \
+	$(SPINEL) -c --rbs "$$seed" "$$seed/main.rb" -o "$$tmp/s2.c" >"$$tmp/s2.err" 2>&1; \
+	n=$$(grep -c 'seed contradicted' "$$tmp/s2.err"); \
+	[ "$$n" -eq 1 ] || { echo "collect-errors-test: FAIL (without the flag the run reported $$n contradictions instead of stopping at the first)"; ok=0; }; \
 	rm -rf "$$tmp"; \
 	if [ $$ok -eq 1 ]; then echo "collect-errors-test: pass"; else exit 1; fi
 
