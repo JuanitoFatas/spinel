@@ -1193,6 +1193,26 @@ infer-test: $(SPINEL) $(SP_RT_LIB)
 	rm -rf "$$tmp"; \
 	if [ $$ok -eq 1 ]; then echo "infer-test: pass"; else exit 1; fi
 
+# SP_COLLECT_ERRORS recovers from an unsupported construct with a longjmp, and
+# has to put back everything the abandoned unit was pointing at. The globals it
+# missed pointed INTO that unit's stack frame, so the next unit's emission read
+# a dead frame: a SIGSEGV whose site moved with the optimization level, and,
+# short of that, a later method silently emitted with the wrong return
+# convention. Both are checked here (#4141).
+collect-errors-test: $(SPINEL)
+	@tmp=$$(mktemp -d /tmp/spinel-collect.XXXXXX); ok=1; \
+	src=test/collect/gap_inside_capturing_proc.rb; \
+	SP_COLLECT_ERRORS=1 $(SPINEL) "$$src" -c --no-line-map -o "$$tmp/g.c" >"$$tmp/g.err" 2>&1; rc=$$?; \
+	if [ $$rc -ne 0 ]; then echo "collect-errors-test: FAIL (rc=$$rc; a unit abandoned by the longjmp left a global pointing into its dead frame)"; sed -n 1,3p "$$tmp/g.err"; rm -rf "$$tmp"; exit 1; fi; \
+	grep -q 'unsupported class variable read' "$$tmp/g.err" || { echo "collect-errors-test: FAIL (the gap was not reported at all, so nothing was recovered from)"; ok=0; }; \
+	sed -n '/^static inline .* sp_b(const char \* lv_scheme) {/,/^}/p' "$$tmp/g.c" >"$$tmp/b.c"; \
+	[ -s "$$tmp/b.c" ] || { echo "collect-errors-test: FAIL (the unit after the abandoned one was not emitted)"; ok=0; }; \
+	grep -q 'return ' "$$tmp/b.c" || { echo "collect-errors-test: FAIL (the unit after the abandoned one lost its return)"; ok=0; }; \
+	! grep -q '_sp_proc_poly_ret' "$$tmp/b.c" || { echo "collect-errors-test: FAIL (a plain method inherited the abandoned proc's return funnel)"; ok=0; }; \
+	! grep -q '_cap)->c_x' "$$tmp/b.c" || { echo "collect-errors-test: FAIL (a plain method read its local through the abandoned proc's capture struct)"; ok=0; }; \
+	rm -rf "$$tmp"; \
+	if [ $$ok -eq 1 ]; then echo "collect-errors-test: pass"; else exit 1; fi
+
 alloc-report-test: $(SPINEL) $(SP_RT_LIB)
 	@tmp=$$(mktemp -d /tmp/spinel-alloc.XXXXXX); ok=1; \
 	$(SPINEL) test/alloc-report/sites.rb -o "$$tmp/sites" >/dev/null 2>&1 || { echo "alloc-report-test: FAIL (compile)"; exit 1; }; \
@@ -1248,6 +1268,7 @@ gate-test:
 gate-props:
 	+@$(MAKE) --no-print-directory alloc-report-test
 	+@$(MAKE) --no-print-directory infer-test
+	+@$(MAKE) --no-print-directory collect-errors-test
 	+@$(MAKE) --no-print-directory spin-check
 gate-bench:
 	+@$(MAKE) --no-print-directory bench

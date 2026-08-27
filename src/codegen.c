@@ -7848,6 +7848,135 @@ static void scan_prologue_features(Compiler *c) {
   }
 }
 
+/* ---- collect-mode unit state ----
+   A collect-mode longjmp leaves the emission globals wherever the abandoned
+   unit put them, and several of them point INTO that unit's frame: g_pre is
+   aimed at an automatic Buf in some thirty places, g_cap_names at
+   emit_proc_literal's `caps`, g_cap_struct and g_proc_return_home at its stack
+   arrays. The next unit's emit_local_ref then walks a NameSet in a frame that
+   no longer exists -- a crash whose site moves with the optimization level,
+   which is what made it look like a bad pointer rather than corruption
+   (#4141).
+
+   Saving before the setjmp and restoring on recovery is what EMIT_COLLECT_UNIT
+   already does for the buffer length and the conversion hold; these are the
+   same case, and restoring the pre-unit value needs no judgement about what
+   each global's "between units" value ought to be. Scalars are left alone:
+   a stale int is wrong, not undefined, and the next unit assigns its own. */
+typedef struct {
+  Buf *pre;
+  const char *yield_self_fallback;
+  const char *yield_self_deref_fallback;
+  const char *block_param_name;
+  const char *yielder_name;
+  const char *ie_next_var;
+  const char *self;
+  const char *self_deref;
+  const char *inline_recv_expr;
+  const char *dm_subst_name;
+  const char *rescue_cls;
+  const char *rescue_msg;
+  const char *retry_label;
+  const char *loop_break_var;
+  const char *brk_ser_var;
+  const char *block_brk_var;
+  const char *yield_blk_brk_fallback;
+  const char *proc_brk_home;
+  const char *hoist_len_var;
+  const char *hoist_len_recv;
+  const char *result_var;
+  const char *method_pr_label;
+  const char *method_pr_var;
+  const char *proc_return_home;
+  const char *ctor_self;
+  const char *ctor_self_deref;
+  const char *fn_pr_label;
+  const char *fn_pr_var;
+  const char *lowered_blk_name;
+  const char *yield_lowered_blk_fallback;
+  const char *yield_proc_ref;
+  const char *cap_struct;
+  NameSet *cap_names;
+  const char *iow_recv_ref;
+  const char *iow_key_ref;
+} EmitUnitState;
+
+static void emit_unit_state_save(EmitUnitState *s) {
+  s->pre = g_pre;
+  s->yield_self_fallback = g_yield_self_fallback;
+  s->yield_self_deref_fallback = g_yield_self_deref_fallback;
+  s->block_param_name = g_block_param_name;
+  s->yielder_name = g_yielder_name;
+  s->ie_next_var = g_ie_next_var;
+  s->self = g_self;
+  s->self_deref = g_self_deref;
+  s->inline_recv_expr = g_inline_recv_expr;
+  s->dm_subst_name = g_dm_subst_name;
+  s->rescue_cls = g_rescue_cls;
+  s->rescue_msg = g_rescue_msg;
+  s->retry_label = g_retry_label;
+  s->loop_break_var = g_loop_break_var;
+  s->brk_ser_var = g_brk_ser_var;
+  s->block_brk_var = g_block_brk_var;
+  s->yield_blk_brk_fallback = g_yield_blk_brk_fallback;
+  s->proc_brk_home = g_proc_brk_home;
+  s->hoist_len_var = g_hoist_len_var;
+  s->hoist_len_recv = g_hoist_len_recv;
+  s->result_var = g_result_var;
+  s->method_pr_label = g_method_pr_label;
+  s->method_pr_var = g_method_pr_var;
+  s->proc_return_home = g_proc_return_home;
+  s->ctor_self = g_ctor_self;
+  s->ctor_self_deref = g_ctor_self_deref;
+  s->fn_pr_label = g_fn_pr_label;
+  s->fn_pr_var = g_fn_pr_var;
+  s->lowered_blk_name = g_lowered_blk_name;
+  s->yield_lowered_blk_fallback = g_yield_lowered_blk_fallback;
+  s->yield_proc_ref = g_yield_proc_ref;
+  s->cap_struct = g_cap_struct;
+  s->cap_names = g_cap_names;
+  s->iow_recv_ref = g_iow_recv_ref;
+  s->iow_key_ref = g_iow_key_ref;
+}
+
+static void emit_unit_state_restore(const EmitUnitState *s) {
+  g_pre = s->pre;
+  g_yield_self_fallback = s->yield_self_fallback;
+  g_yield_self_deref_fallback = s->yield_self_deref_fallback;
+  g_block_param_name = s->block_param_name;
+  g_yielder_name = s->yielder_name;
+  g_ie_next_var = s->ie_next_var;
+  g_self = s->self;
+  g_self_deref = s->self_deref;
+  g_inline_recv_expr = s->inline_recv_expr;
+  g_dm_subst_name = s->dm_subst_name;
+  g_rescue_cls = s->rescue_cls;
+  g_rescue_msg = s->rescue_msg;
+  g_retry_label = s->retry_label;
+  g_loop_break_var = s->loop_break_var;
+  g_brk_ser_var = s->brk_ser_var;
+  g_block_brk_var = s->block_brk_var;
+  g_yield_blk_brk_fallback = s->yield_blk_brk_fallback;
+  g_proc_brk_home = s->proc_brk_home;
+  g_hoist_len_var = s->hoist_len_var;
+  g_hoist_len_recv = s->hoist_len_recv;
+  g_result_var = s->result_var;
+  g_method_pr_label = s->method_pr_label;
+  g_method_pr_var = s->method_pr_var;
+  g_proc_return_home = s->proc_return_home;
+  g_ctor_self = s->ctor_self;
+  g_ctor_self_deref = s->ctor_self_deref;
+  g_fn_pr_label = s->fn_pr_label;
+  g_fn_pr_var = s->fn_pr_var;
+  g_lowered_blk_name = s->lowered_blk_name;
+  g_yield_lowered_blk_fallback = s->yield_lowered_blk_fallback;
+  g_yield_proc_ref = s->yield_proc_ref;
+  g_cap_struct = s->cap_struct;
+  g_cap_names = s->cap_names;
+  g_iow_recv_ref = s->iow_recv_ref;
+  g_iow_key_ref = s->iow_key_ref;
+}
+
 /* Emit one top-level output unit (a method, constructor, BEGIN/END block, or the
    top-level body). Outside SP_COLLECT_ERRORS this is just the bare call. In
    collect mode each unit runs under a setjmp: an `unsupported` gap longjmps back
@@ -7858,18 +7987,24 @@ static void scan_prologue_features(Compiler *c) {
    On recovery the buffer is rolled back to its length before this unit, so the
    abandoned unit's partial output is dropped. `body` must be the heap pointer
    (not an automatic) so a longjmp doesn't leave it indeterminate (C99 7.13.2.1);
-   _saved_len is set before setjmp and so stays determinate across the jump. */
+   _saved_len is set before setjmp and so stays determinate across the jump --
+   as is _saved_state, which is written once before the setjmp and never after,
+   and which carries the pointer-valued globals the abandoned unit may have
+   aimed at its own frame (see EmitUnitState). */
 #define EMIT_COLLECT_UNIT(emit_call)                          \
   do {                                                        \
     if (!collect_mode()) { emit_call; }                       \
     else {                                                    \
       size_t _saved_len = body->len;                          \
       ConvHold *_saved_hold = g_conv_hold;                    \
+      EmitUnitState _saved_state;                             \
+      emit_unit_state_save(&_saved_state);                    \
       if (setjmp(g_unsup_recover) == 0) {                     \
         g_unsup_armed = 1; emit_call; g_unsup_armed = 0;      \
       } \
       else {                                                \
         g_unsup_armed = 0; g_conv_hold = _saved_hold;         \
+        emit_unit_state_restore(&_saved_state);               \
         body->len = _saved_len;                               \
         if (body->p) body->p[_saved_len] = '\0';              \
       }                                                       \
