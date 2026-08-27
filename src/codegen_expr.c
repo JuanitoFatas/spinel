@@ -276,13 +276,6 @@ void emit_interp(Compiler *c, int id, Buf *b) {
         buf_printf(&conv, "sp_poly_to_s(sp_box_obj(");
         EMIT_IV(); buf_printf(&conv, ", %d))", cid2);
       }
-      else if (t == TY_UNKNOWN && ety && sp_streq(ety, "ArrayNode") &&
-               (nt_arr(nt, expr, "elements", (int[]){0}), 1)) {
-        /* a bare empty array literal interpolates as "[]" */
-        int en = 0; nt_arr(nt, expr, "elements", &en);
-        if (en == 0) { buf_puts(&conv, "(&(\"\\xff\" \"[]\")[1])"); }
-        else { free(conv.p); free(lits.p); free(decls.p); free(wp); free(flat); unsupported(c, pid, "interpolation value"); }
-      }
       else if (t == TY_UNKNOWN) {
         /* An untyped value (e.g. a method resolved only through an included
            module) is already emitted as a boxed sp_RbVal, so stringify it the

@@ -3971,11 +3971,6 @@ else {
   }
 
   /* array receiver methods */
-  /* a bare [] literal receiver types UNKNOWN until pushes promote it, but
-     its blockless each is still an Enumerator */
-  if (recv >= 0 && rt == TY_UNKNOWN && nt_type(nt, recv) && sp_streq(nt_type(nt, recv), "ArrayNode") &&
-      nt_ref(nt, id, "block") < 0 && argc == 0 &&
-      (sp_streq(name, "each") || sp_streq(name, "reverse_each"))) return TY_ENUMERATOR;
   /* Array receivers: the array face of infer_call (analyze_infer_recv.c). */
   { TyKind rr; if (infer_array_call(c, id, rt, &rr)) return rr; }
 
@@ -6177,12 +6172,15 @@ TyKind infer_uncached(Compiler *c, int id) {
     int n = 0;
     const int *els = nt_arr(nt, id, "elements", &n);
     if (n == 0) {
-      /* An empty `[]` used as a whitelisted iterator's receiver must still
-         dispatch (`[].each { }`): type it as an empty poly array. Elsewhere it
-         stays UNKNOWN so `x = []; x << 1` can back-fill the element type and the
-         non-block empty-literal folds keep working. */
+      /* An empty `[]` consumed directly as a receiver or interpolation has no
+         writes to infer from, so mark_empty_array_operands types it as a poly
+         array. An argument may instead take a specific layout through arr_want.
+         Elsewhere it stays UNKNOWN so `x = []; x << 1` can back-fill its kind. */
       if (c->empty_arr_recv && id < c->node_cap && c->empty_arr_recv[id])
         return TY_POLY_ARRAY;
+      /* kind fixed by the use context (mark_empty_array_operands) */
+      if (c->arr_want && id < c->node_cap && ty_is_array(c->arr_want[id]))
+        return c->arr_want[id];
       return TY_UNKNOWN;  /* empty: element type comes from usage */
     }
     TyKind e = TY_UNKNOWN;

@@ -3073,7 +3073,12 @@ int emit_inject_expr(Compiler *c, int id, Buf *b) {
       {
         TyKind want = comp_ntype(c, id);
         char accs[24]; snprintf(accs, sizeof accs, "_t%d", tacc);
-        if (want != TY_POLY && want != TY_UNKNOWN && is_scalar_ret(want))
+        /* no initial value and an empty receiver: nil, as the slot's sentinel */
+        if (init_node < 0 && want == TY_INT)
+          buf_printf(b, "sp_poly_as_int_or_nil(%s)", accs);
+        else if (init_node < 0 && want == TY_FLOAT)
+          buf_printf(b, "sp_poly_as_float_or_nil(%s)", accs);
+        else if (want != TY_POLY && want != TY_UNKNOWN && is_scalar_ret(want))
           emit_unbox_text(c, want, accs, b);
         else
           buf_puts(b, accs);

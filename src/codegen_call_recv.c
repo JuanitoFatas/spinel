@@ -1729,8 +1729,7 @@ int emit_array_call(Compiler *c, int id, Buf *b) {
     if (rt == TY_POLY_ARRAY && sp_streq(name, "sum") && argc == 1 && nt_ref(nt, id, "block") < 0) {
       TyKind init_t = comp_ntype(c, argv[0]);
       /* an Array initial value concatenates one level ([[1],[2]].sum([])) */
-      if (ty_is_array(init_t) ||
-          (init_t == TY_UNKNOWN && nt_type(nt, argv[0]) && sp_streq(nt_type(nt, argv[0]), "ArrayNode"))) {
+      if (ty_is_array(init_t)) {
         buf_puts(b, "sp_PolyArray_sum_concat("); emit_expr(c, recv, b); buf_puts(b, ", ");
         emit_boxed(c, argv[0], b); buf_puts(b, ")");
         return 1;
@@ -2478,12 +2477,11 @@ else {
         }
         return 1;
       }
-      if (sp_streq(name, "+") && argc == 1 && (a0 == rt || a0 == TY_UNKNOWN)) {
-        /* array + array of the same kind -> a fresh concatenation. An empty
-           literal `[]` arg (TY_UNKNOWN) concatenates a null (copies recv). */
+      if (sp_streq(name, "+") && argc == 1 && a0 == rt) {
+        /* array + array of the same kind -> a fresh concatenation */
         buf_printf(b, "sp_%sArray_concat(", k);
         emit_expr(c, recv, b); buf_puts(b, ", ");
-        if (a0 == TY_UNKNOWN) buf_puts(b, "NULL"); else emit_expr(c, argv[0], b);
+        emit_expr(c, argv[0], b);
         buf_puts(b, ")");
         return 1;
       }
@@ -2669,13 +2667,6 @@ else {
         int tb[16]; TyKind at[16]; int nargs = argc < 16 ? argc : 16;
         for (int j = 0; j < nargs; j++) {
           tb[j] = ++g_tmp; at[j] = comp_ntype(c, argv[j]);
-          /* an empty [] argument slots into a PolyArray (kj below); pin its
-             cached type so emit_expr emits sp_PolyArray_new() rather than the
-             sp_IntArray_new() default (#3223) */
-          if (at[j] == TY_UNKNOWN && nt_type(nt, argv[j]) && sp_streq(nt_type(nt, argv[j]), "ArrayNode")) {
-            int aen = 0; nt_arr(nt, argv[j], "elements", &aen);
-            if (aen == 0) { c->ntype[argv[j]] = TY_POLY_ARRAY; at[j] = TY_POLY_ARRAY; }
-          }
         }
         const char *ka = (rt == TY_POLY_ARRAY) ? "Poly" : k;
         buf_printf(b, "({ sp_%sArray *_t%d = ", ka, ta); emit_expr(c, recv, b); buf_puts(b, ";");
@@ -2819,13 +2810,6 @@ else {
       }
       if (sp_streq(name, "product") && argc == 1) {
         TyKind at = comp_ntype(c, argv[0]);
-        /* an empty [] argument defaults to a PolyArray slot (kb below); pin its
-           cached type so emit_expr emits sp_PolyArray_new() rather than the
-           sp_IntArray_new() default, keeping the C well-typed (#3223) */
-        if (at == TY_UNKNOWN && nt_type(nt, argv[0]) && sp_streq(nt_type(nt, argv[0]), "ArrayNode")) {
-          int aen = 0; nt_arr(nt, argv[0], "elements", &aen);
-          if (aen == 0) { c->ntype[argv[0]] = TY_POLY_ARRAY; at = TY_POLY_ARRAY; }
-        }
         const char *kb = (at == TY_POLY_ARRAY) ? "Poly" : (array_kind(at) ? array_kind(at) : "Poly");
         int ta = ++g_tmp, tb = ++g_tmp, tr = ++g_tmp, ti = ++g_tmp, tj = ++g_tmp, tpair = ++g_tmp;
         Buf ra; memset(&ra, 0, sizeof ra); Buf rb2; memset(&rb2, 0, sizeof rb2);
@@ -3464,7 +3448,18 @@ else {
                    k, o, k, k, o, k, t, k, o, k, t, o);
         return 1;
       }
+      /* a typed array never holds an element of another kind: include? is
+         false and index is nil, with both operands still evaluated */
+      int elem_mismatch = 0;
+      if (argc == 1 && rt == TY_STR_ARRAY && a0 != TY_STRING && a0 != TY_UNKNOWN && a0 != TY_POLY) elem_mismatch = 1;
+      if (argc == 1 && (rt == TY_INT_ARRAY || rt == TY_FLOAT_ARRAY) &&
+          a0 != TY_INT && a0 != TY_FLOAT && a0 != TY_UNKNOWN && a0 != TY_POLY) elem_mismatch = 1;
       if ((sp_streq(name, "index") || sp_streq(name, "find_index") || sp_streq(name, "rindex")) && argc == 1 && (rt == TY_INT_ARRAY || rt == TY_STR_ARRAY)) {
+        if (elem_mismatch) {
+          buf_puts(b, "((void)("); emit_expr(c, recv, b);
+          buf_puts(b, "), (void)("); emit_expr(c, argv[0], b); buf_puts(b, "), sp_box_nil())");
+          return 1;
+        }
         /* nil-on-miss -> poly */
         const char *fn = sp_streq(name, "rindex") ? "rindex_poly" : "index_poly";
         buf_printf(b, "sp_%sArray_%s(", k, fn);
@@ -3473,15 +3468,8 @@ else {
         buf_puts(b, ")");
         return 1;
       }
-      if (sp_streq(name, "include?") && argc == 1) {
-        /* a typed array can never contain an element of an incompatible
-           type (numeric vs string), so the answer is statically false;
-           still evaluate both operands for any side effects. */
-        int mismatch = 0;
-        if (rt == TY_STR_ARRAY && a0 != TY_STRING && a0 != TY_UNKNOWN && a0 != TY_POLY) mismatch = 1;
-        if ((rt == TY_INT_ARRAY || rt == TY_FLOAT_ARRAY) &&
-            a0 != TY_INT && a0 != TY_FLOAT && a0 != TY_UNKNOWN && a0 != TY_POLY) mismatch = 1;
-        if (mismatch) {
+      if ((sp_streq(name, "include?") || sp_streq(name, "member?")) && argc == 1) {
+        if (elem_mismatch) {
           buf_puts(b, "((void)("); emit_expr(c, recv, b);
           buf_puts(b, "), (void)("); emit_expr(c, argv[0], b); buf_puts(b, "), 0)");
           return 1;
@@ -3988,7 +3976,13 @@ else {
         buf_puts(b, "sp_PolyArray_get("); emit_expr(c, recv, b); buf_puts(b, ", 0)");
         return 1;
       }
-      if ((sp_streq(name, "to_a") || sp_streq(name, "entries")) && argc == 0) { emit_expr(c, recv, b); return 1; }
+      if ((sp_streq(name, "to_a") || sp_streq(name, "entries") || sp_streq(name, "to_ary") ||
+           sp_streq(name, "deconstruct")) && argc == 0) { emit_expr(c, recv, b); return 1; }
+      if ((sp_streq(name, "union") || sp_streq(name, "difference") || sp_streq(name, "intersection")) &&
+          argc == 0) {
+        buf_puts(b, "sp_PolyArray_dup("); emit_expr(c, recv, b); buf_puts(b, ")");
+        return 1;
+      }
       if (sp_streq(name, "fetch") && (argc == 1 || argc == 2)) {
         int blk = nt_ref(nt, id, "block");
         int ta = ++g_tmp, ti = ++g_tmp, tn = ++g_tmp, tnorm = ++g_tmp;
@@ -4026,13 +4020,6 @@ else {
         int tb[16]; TyKind at[16]; int nargs = argc < 16 ? argc : 16;
         for (int j = 0; j < nargs; j++) {
           tb[j] = ++g_tmp; at[j] = comp_ntype(c, argv[j]);
-          /* an empty [] argument slots into a PolyArray (kj below); pin its
-             cached type so emit_expr emits sp_PolyArray_new() rather than the
-             sp_IntArray_new() default (#3223) */
-          if (at[j] == TY_UNKNOWN && nt_type(nt, argv[j]) && sp_streq(nt_type(nt, argv[j]), "ArrayNode")) {
-            int aen = 0; nt_arr(nt, argv[j], "elements", &aen);
-            if (aen == 0) { c->ntype[argv[j]] = TY_POLY_ARRAY; at[j] = TY_POLY_ARRAY; }
-          }
         }
         Buf ra = expr_buf(c, recv);
         buf_printf(b, "({ sp_PolyArray *_t%d = %s;", ta, ra.p ? ra.p : "NULL"); free(ra.p);
