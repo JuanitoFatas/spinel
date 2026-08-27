@@ -2288,8 +2288,25 @@ int infer_write_types(Compiler *c) {
          binding in bind_call_params, the caller's local too). Widening only:
          an UNKNOWN parameter still takes its type from the call site (#2989). */
       if (lv->is_param) {
-        if (!is_push || !ty_is_array(lv->type) || lv->type == TY_POLY_ARRAY ||
-            lv->rbs_seeded) continue;
+        if (!is_push || lv->rbs_seeded) continue;
+        /* A BOXED parameter is the same hazard with the container hidden:
+           the callee pushes through it into the caller's own array, and the
+           container is not visible here to compare against. Record WHAT is
+           pushed and let the ivar-widening pass, which can see both sides,
+           decide -- an `@rows = []` kept the empty-array default (an int
+           array) while a helper pushed objects into it, and the push failed at
+           run time. Recording the element rather than widening outright is
+           what keeps an ivar that really does hold ints in its typed
+           representation. */
+        if (lv->type == TY_POLY) {
+          if (vt != TY_UNKNOWN) {
+            TyKind was = lv->boxed_push_elem;
+            TyKind now = (was == TY_UNKNOWN) ? vt : (was == vt ? was : TY_POLY);
+            if (now != was) { lv->boxed_push_elem = now; changed = 1; }
+          }
+          continue;
+        }
+        if (!ty_is_array(lv->type) || lv->type == TY_POLY_ARRAY) continue;
         if (vt == TY_UNKNOWN || vt == ty_array_elem(lv->type)) continue;
         lv->type = TY_POLY_ARRAY; lv->push_widened = 1; changed = 1;
         continue;

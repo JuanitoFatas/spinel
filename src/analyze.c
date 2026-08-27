@@ -6216,7 +6216,17 @@ static void widen_ivars_from_pushed_params(Compiler *c) {
     ClassInfo *acls = &c->classes[asc->class_id];
     for (int k = 0; k < an && k < m->nparams; k++) {
       LocalVar *p = m->pnames[k] ? scope_local(m, m->pnames[k]) : NULL;
-      if (!p || !p->push_widened) continue;
+      if (!p) continue;
+      /* Two ways in. A typed parameter that was push-widened says so directly.
+         A BOXED one hid its container from the call site, so it carries the
+         element it pushes instead and the comparison happens here, where the
+         ivar's own element type is in hand -- widen only when the ivar cannot
+         hold what the callee pushes, so an int array stays an int array. */
+      int boxed_hazard = 0;
+      if (!p->push_widened) {
+        if (p->type != TY_POLY || p->boxed_push_elem == TY_UNKNOWN) continue;
+        boxed_hazard = 1;
+      }
       const char *aty = nt_type(nt, av[k]);
       if (!aty) continue;
       char ivbuf[128];
@@ -6233,8 +6243,10 @@ static void widen_ivars_from_pushed_params(Compiler *c) {
       if (!ivn) continue;
       int ivi = comp_ivar_index(acls, ivn);
       if (ivi < 0) continue;
-      if (ty_is_array(acls->ivar_types[ivi]) && acls->ivar_types[ivi] != TY_POLY_ARRAY)
-        acls->ivar_types[ivi] = TY_POLY_ARRAY;
+      TyKind ivt = acls->ivar_types[ivi];
+      if (!ty_is_array(ivt) || ivt == TY_POLY_ARRAY) continue;
+      if (boxed_hazard && ty_array_elem(ivt) == p->boxed_push_elem) continue;
+      acls->ivar_types[ivi] = TY_POLY_ARRAY;
     }
   }
 }

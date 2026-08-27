@@ -69,6 +69,13 @@ typedef struct {
                        its bound type could not hold, so it must stay the POLY
                        ARRAY: the call-site unification would otherwise collapse
                        it to the poly SCALAR and lose the container (#2989) */
+  TyKind boxed_push_elem; /* (params, boxed) the element type a push through
+                       this BOXED parameter carried, unified across the pushes
+                       (TY_POLY if they disagree, TY_UNKNOWN if none). The
+                       container is invisible at the call site when the
+                       parameter arrives poly, so the caller's slot cannot be
+                       checked there; this carries the evidence out to the
+                       ivar-widening pass, which knows both sides. */
   int const_def_write; /* (consts) has a definite (non-or/and) assignment; an
                           or/and-write-only const is nil-defaulted (poly) so its
                           `||=` truthiness check fires on first use */
