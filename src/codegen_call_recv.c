@@ -112,6 +112,77 @@ static void emit_struct_member_by_key(Compiler *c, ClassInfo *sc, const char *rt
                tk0, sc->nivars, tk0, tk0, tk0, tr);
 }
 
+/* 1 when the node is a user object whose class compares -- defines ==, ===
+   or <=> (a Comparable includer) -- so a typed container's lookup would have
+   to call it, and the typed slot has no room for the object. The arms refuse
+   these at compile time, naming the case, rather than hand the C compiler the
+   pointer. */
+static int value_obj_compares(Compiler *c, int node) {
+  TyKind t = comp_ntype(c, node);
+  if (!ty_is_object(t)) return 0;
+  int cid = ty_object_class(t);
+  return cid >= 0 && (comp_method_in_chain(c, cid, "==", NULL) >= 0 ||
+                      comp_method_in_chain(c, cid, "===", NULL) >= 0 ||
+                      comp_method_in_chain(c, cid, "<=>", NULL) >= 0);
+}
+
+/* 1 when a value of the node's static kind can never be == to an element
+   of kind `ek`: a String searched for in an Integer Array, a Symbol in a
+   String Array, nil in either. CRuby compares and finds nothing -- Array#delete
+   answers nil, count 0, all? false -- where the raw value in the typed slot
+   stopped the C build. Integer and Float compare equal across kinds, so they
+   are never a static miss of each other; a user object converts nothing
+   here, and its class may define == (or ===, which the predicates use), so
+   it stays on the comparing path when it does. Also the value slots that
+   compare the same way: Hash#value?, Range#include? and #eql?. */
+static int value_kind_misses(Compiler *c, int node, TyKind ek) {
+  TyKind t = comp_ntype(c, node);
+  if (t == ek || t == TY_POLY || t == TY_UNKNOWN) return 0;
+  int num = ek == TY_INT || ek == TY_FLOAT || ek == TY_BIGINT;
+  if (num && (t == TY_INT || t == TY_FLOAT || (t == TY_BIGINT && ek != TY_INT))) return 0;
+  if (ek == TY_STRING && (t == TY_STRING || t == TY_STRBUF)) return 0;
+  if (!num && ek != TY_STRING) return 0;
+  if (ty_is_object(t)) {
+    /* a class defining <=> is a Comparable includer, whose == the module
+       supplies (the same reading as respond_to?'s) */
+    int cid = ty_object_class(t);
+    return cid >= 0 && comp_method_in_chain(c, cid, "==", NULL) < 0 &&
+           comp_method_in_chain(c, cid, "===", NULL) < 0 &&
+           comp_method_in_chain(c, cid, "<=>", NULL) < 0;
+  }
+  if (ek == TY_INT && t == TY_BIGINT) return 1;  /* no sp_int equals a Bignum */
+  return t == TY_NIL || t == TY_BOOL || t == TY_INT || t == TY_BIGINT || t == TY_FLOAT ||
+         t == TY_SYMBOL || t == TY_STRING || t == TY_STRBUF || t == TY_RANGE ||
+         t == TY_FLOAT_RANGE || t == TY_STR_RANGE || t == TY_TIME || t == TY_REGEX ||
+         ty_is_array(t) || ty_is_hash(t);
+}
+
+/* The direct call of the container conversion obj_container_conv found:
+   the compiled #to_ary / #to_hash of the defining class on the operand. */
+static void emit_obj_container_conv(Compiler *c, int node, int def, const char *conv, Buf *b) {
+  TyKind t = comp_ntype(c, node);
+  buf_printf(b, "sp_%s_%s(", c->classes[def].c_name, mc(conv));
+  if (!comp_ty_value_obj(c, t)) buf_printf(b, "(sp_%s *)", c->classes[def].c_name);
+  buf_puts(b, "("); emit_expr(c, node, b); buf_puts(b, "))");
+}
+
+/* Array#product's operand as an Array: an array passes; an object converts
+   through #to_ary; any other class is CRuby's TypeError. Answers the Array
+   kind the text is typed as. */
+static TyKind emit_product_operand(Compiler *c, int node, TyKind at, Buf *b) {
+  int def = -1;
+  TyKind k = obj_container_conv(c, at, "to_ary", &def);
+  if (k != TY_UNKNOWN) { emit_obj_container_conv(c, node, def, "to_ary", b); return k; }
+  const char *cn = conv_cls_name_of(c, at);
+  if (cn && !ty_is_array(at) && at != TY_POLY_ARRAY) {
+    buf_puts(b, "({ (void)("); emit_expr(c, node, b);
+    buf_printf(b, "); sp_raise_cls(\"TypeError\", \"no implicit conversion of %s into Array\"); (sp_PolyArray *)0; })", cn);
+    return TY_POLY_ARRAY;
+  }
+  emit_expr(c, node, b);
+  return at;
+}
+
 int emit_array_call(Compiler *c, int id, Buf *b) {
   /* The variadic Array mutators accept zero elements and return the receiver
      unchanged; every arm below is written for argc >= 1, so a no-argument call
@@ -810,7 +881,7 @@ int emit_array_call(Compiler *c, int id, Buf *b) {
     buf_printf(b, "; const char *_t%d = sp_str_bytesplice(", tn9);
     emit_expr(c, recv, b);
     buf_printf(b, ", _t%d.first, _t%d.last - _t%d.first + (_t%d.excl ? 0 : 1), ", tr9, tr9, tr9, tr9);
-    emit_expr(c, argv[1], b); buf_puts(b, ")");
+    emit_str_expr(c, argv[1], b); buf_puts(b, ")");
     if (lvw9) { buf_puts(b, "; "); emit_expr(c, recv, b); buf_printf(b, " = _t%d", tn9); }
     buf_printf(b, "; _t%d; })", tn9);
     return 1;
@@ -877,7 +948,7 @@ int emit_array_call(Compiler *c, int id, Buf *b) {
     emit_expr(c, recv, b);
     buf_puts(b, ", "); emit_int_expr(c, argv[0], b);
     buf_puts(b, ", "); emit_int_expr(c, argv[1], b);
-    buf_puts(b, ", "); emit_expr(c, argv[2], b); buf_puts(b, ")");
+    buf_puts(b, ", "); emit_str_expr(c, argv[2], b); buf_puts(b, ")");
     if (lvw) { buf_puts(b, "; "); emit_expr(c, recv, b); buf_printf(b, " = _t%d", tn2); }
     buf_printf(b, "; _t%d; })", tn2);
     return 1;
@@ -1799,7 +1870,7 @@ int emit_array_call(Compiler *c, int id, Buf *b) {
         return 1;
       }
       if (argc == 1) {
-        buf_puts(b, "sp_PolyArray_get("); emit_expr(c, recv, b); buf_puts(b, ", "); emit_expr(c, argv[0], b); buf_puts(b, ")");
+        buf_puts(b, "sp_PolyArray_get("); emit_expr(c, recv, b); buf_puts(b, ", "); emit_int_expr(c, argv[0], b); buf_puts(b, ")");
       }
       else {
         /* each later step goes through the dig-specific helper so a scalar
@@ -1807,7 +1878,7 @@ int emit_array_call(Compiler *c, int id, Buf *b) {
         /* the key goes boxed: a Struct member can be named, and a String or
            Symbol reached the integer offset slot as a pointer (#3575) */
         for (int di = argc - 1; di >= 1; di--) buf_printf(b, "sp_poly_dig_step_key(");
-        buf_puts(b, "sp_PolyArray_get("); emit_expr(c, recv, b); buf_puts(b, ", "); emit_expr(c, argv[0], b); buf_puts(b, ")");
+        buf_puts(b, "sp_PolyArray_get("); emit_expr(c, recv, b); buf_puts(b, ", "); emit_int_expr(c, argv[0], b); buf_puts(b, ")");
         for (int di = 1; di < argc; di++) { buf_puts(b, ", "); emit_boxed(c, argv[di], b); buf_puts(b, ")"); }
       }
       return 1;
@@ -2684,9 +2755,35 @@ else {
              TypeError naming its class. Read as a container regardless, a nil
              became a column of nils, silently, and an Integer or a String
              stopped the C build. */
+          if (ty_is_object(at[j])) {
+            /* an object answering #to_ary zips as that Array; one answering
+               #each enumerates; any other is the scalar's TypeError */
+            int zdef = -1;
+            TyKind zk = obj_container_conv(c, at[j], "to_ary", &zdef);
+            if (zk != TY_UNKNOWN) {
+              const char *kz = zk == TY_POLY_ARRAY ? "Poly" : array_kind(zk);
+              buf_printf(b, " sp_%sArray *_t%d = ", kz ? kz : "Poly", tb[j]);
+              emit_obj_container_conv(c, argv[j], zdef, "to_ary", b);
+              /* rooted: the answer is the conversion's own allocation, read
+                 across every row the loop below allocates */
+              buf_printf(b, "; SP_GC_ROOT(_t%d);", tb[j]);
+              at[j] = kz ? zk : TY_POLY_ARRAY;
+              continue;
+            }
+            int zcid = ty_object_class(at[j]);
+            if (zcid >= 0 && comp_method_in_chain(c, zcid, "each", NULL) < 0) {
+              /* sp_zip_arg would send :each and answer NoMethodError; the
+                 class is settled, so name CRuby's TypeError here */
+              buf_printf(b, " sp_PolyArray *_t%d = ({ (void)(", tb[j]); emit_expr(c, argv[j], b);
+              buf_printf(b, "); sp_raise_cls(\"TypeError\", \"wrong argument type %s (must respond to :each)\"); (sp_PolyArray *)0; });",
+                         class_ruby_name(c, zcid));
+              at[j] = TY_POLY_ARRAY;
+              continue;
+            }
+          }
           if (at[j] == TY_NIL || at[j] == TY_BOOL || at[j] == TY_INT ||
               at[j] == TY_FLOAT || at[j] == TY_STRING || at[j] == TY_STRBUF ||
-              at[j] == TY_SYMBOL || at[j] == TY_VOID ||
+              at[j] == TY_SYMBOL || at[j] == TY_VOID || ty_is_object(at[j]) ||
               /* a Hash or an Enumerator DOES respond to :each; the same helper
                  materializes it, where the typed line below spelled the slot
                  sp_PolyArray* and assigned an sp_SymPolyHash* to it */
@@ -2750,13 +2847,15 @@ else {
             c->ntype[argv[0]] = TY_POLY_ARRAY;
         }
         TyKind at = comp_ntype(c, argv[0]);
+        Buf ra; memset(&ra, 0, sizeof ra);
+        emit_expr(c, recv, &ra);  /* the receiver's prelude first, as Ruby evaluates */
+        Buf rb2; memset(&rb2, 0, sizeof rb2);
+        at = emit_product_operand(c, argv[0], at, &rb2);
         const char *kb = (at == TY_POLY_ARRAY) ? "Poly" : (array_kind(at) ? array_kind(at) : "Poly");
         int bbody = nt_ref(nt, blk, "body");
         int bn = 0; const int *bb = bbody >= 0 ? nt_arr(nt, bbody, "body", &bn) : NULL;
         const char *fp0 = block_param_name(c, blk, 0);
         int ta = ++g_tmp, tb = ++g_tmp, ti = ++g_tmp, tj = ++g_tmp, tpair = ++g_tmp;
-        Buf ra; memset(&ra, 0, sizeof ra); Buf rb2; memset(&rb2, 0, sizeof rb2);
-        emit_expr(c, recv, &ra); emit_expr(c, argv[0], &rb2);
         buf_printf(b, "({ sp_%sArray *_t%d = %s; SP_GC_ROOT(_t%d); sp_%sArray *_t%d = %s; SP_GC_ROOT(_t%d);",
                    k, ta, ra.p ? ra.p : "NULL", ta, kb, tb, rb2.p ? rb2.p : "NULL", tb);
         free(ra.p); free(rb2.p);
@@ -2810,12 +2909,14 @@ else {
       }
       if (sp_streq(name, "product") && argc == 1) {
         TyKind at = comp_ntype(c, argv[0]);
+        Buf ra; memset(&ra, 0, sizeof ra);
+        emit_expr(c, recv, &ra);  /* the receiver's prelude first, as Ruby evaluates */
+        Buf rb2; memset(&rb2, 0, sizeof rb2);
+        at = emit_product_operand(c, argv[0], at, &rb2);
         const char *kb = (at == TY_POLY_ARRAY) ? "Poly" : (array_kind(at) ? array_kind(at) : "Poly");
         int ta = ++g_tmp, tb = ++g_tmp, tr = ++g_tmp, ti = ++g_tmp, tj = ++g_tmp, tpair = ++g_tmp;
-        Buf ra; memset(&ra, 0, sizeof ra); Buf rb2; memset(&rb2, 0, sizeof rb2);
-        emit_expr(c, recv, &ra); emit_expr(c, argv[0], &rb2);
-        buf_printf(b, "({ sp_%sArray *_t%d = %s; sp_%sArray *_t%d = %s;",
-                   k, ta, ra.p ? ra.p : "NULL", kb, tb, rb2.p ? rb2.p : "NULL");
+        buf_printf(b, "({ sp_%sArray *_t%d = %s; SP_GC_ROOT(_t%d); sp_%sArray *_t%d = %s; SP_GC_ROOT(_t%d);",
+                   k, ta, ra.p ? ra.p : "NULL", ta, kb, tb, rb2.p ? rb2.p : "NULL", tb);
         free(ra.p); free(rb2.p);
         buf_printf(b, " sp_PolyArray *_t%d = sp_PolyArray_new(); SP_GC_ROOT(_t%d);", tr, tr);
         buf_printf(b, " sp_PolyArray *_t%d = NULL;", tpair);
@@ -2941,6 +3042,19 @@ else {
         if (dblk >= 0 && nt_type(nt, dblk) && sp_streq(nt_type(nt, dblk), "BlockNode")) {
           int dbody = nt_ref(nt, dblk, "body");
           int dbn = 0; const int *dbb = dbody >= 0 ? nt_arr(nt, dbody, "body", &dbn) : NULL;
+          if (value_obj_compares(c, argv[0])) {
+            unsupported_feature(c, id, "Array#delete of a user object defining == from a typed Array");
+            return 0;
+          }
+          if (dbn >= 1 && value_kind_misses(c, argv[0], ty_array_elem(rt))) {
+            /* nothing to delete: the block, handed the value, supplies the answer */
+            const char *dp0 = block_param_name(c, dblk, 0);
+            buf_puts(b, "({ (void)("); emit_expr(c, recv, b); buf_puts(b, "); ");
+            if (dp0) { buf_printf(b, "lv_%s = ", rename_local(dp0)); emit_boxed(c, argv[0], b); buf_puts(b, "; "); }
+            else { buf_puts(b, "(void)("); emit_expr(c, argv[0], b); buf_puts(b, "); "); }
+            emit_boxed(c, dbb[dbn - 1], b); buf_puts(b, "; })");
+            return 1;
+          }
           if (dbn >= 1) {
             int tdr = ++g_tmp;
             if (rt == TY_INT_ARRAY) {
@@ -2957,6 +3071,15 @@ else {
             buf_puts(b, "; })");
             return 1;
           }
+        }
+        if (value_obj_compares(c, argv[0])) {
+          unsupported_feature(c, id, "Array#delete of a user object defining == from a typed Array");
+          return 0;
+        }
+        if (value_kind_misses(c, argv[0], ty_array_elem(rt))) {
+          buf_puts(b, "({ (void)("); emit_expr(c, recv, b); buf_puts(b, "); (void)("); emit_expr(c, argv[0], b);
+          buf_printf(b, "); %s; })", rt == TY_INT_ARRAY ? "SP_INT_NIL" : rt == TY_STR_ARRAY ? "(const char *)0" : "sp_float_nil()");
+          return 1;
         }
         buf_printf(b, "sp_%sArray_delete(", k); emit_expr(c, recv, b); buf_puts(b, ", "); emit_expr(c, argv[0], b); buf_puts(b, ")");
         return 1;
@@ -2978,7 +3101,7 @@ else {
         /* slice!(start, len): remove and return the subarray (raises
            FrozenError inside the runtime helper when the array is frozen) */
         buf_printf(b, "sp_%sArray_slice_bang(", k); emit_expr(c, recv, b);
-        buf_puts(b, ", "); emit_expr(c, argv[0], b); buf_puts(b, ", "); emit_expr(c, argv[1], b); buf_puts(b, ")");
+        buf_puts(b, ", "); emit_int_expr(c, argv[0], b); buf_puts(b, ", "); emit_int_expr(c, argv[1], b); buf_puts(b, ")");
         return 1;
       }
       if (sp_streq(name, "slice!") && argc == 1 && comp_ntype(c, argv[0]) == TY_RANGE) {
@@ -3293,6 +3416,18 @@ else {
         Buf ra = expr_buf(c, recv);
         buf_printf(b, "({ sp_%sArray *_t%d = %s;", k, ta, ra.p ? ra.p : "NULL"); free(ra.p);
         emit_indent(g_pre, 0);
+        if (value_obj_compares(c, argv[0])) {
+          unsupported_feature(c, id, "a user object defining == compared against a typed Array's elements");
+          return 0;
+        }
+        if (value_kind_misses(c, argv[0], ty_array_elem(rt))) {
+          /* a value no element can equal: only an empty array is all? of it */
+          buf_puts(b, " (void)("); emit_expr(c, argv[0], b); buf_puts(b, ");");
+          if (sp_streq(name, "all?"))       buf_printf(b, " sp_%sArray_length(_t%d) == 0; })", k, ta);
+          else if (sp_streq(name, "none?")) buf_puts(b, " 1; })");
+          else                              buf_puts(b, " 0; })");
+          return 1;
+        }
         buf_printf(b, " "); emit_ctype(c, ty_array_elem(rt), b);
         buf_printf(b, " _t%d = ", tv); emit_expr(c, argv[0], b); buf_puts(b, ";");
         buf_printf(b, " sp_int _t%d = 0;", tc);
@@ -3462,6 +3597,15 @@ else {
         }
         /* nil-on-miss -> poly */
         const char *fn = sp_streq(name, "rindex") ? "rindex_poly" : "index_poly";
+        if (value_obj_compares(c, argv[0])) {
+          unsupported_feature(c, id, "Array#index of a user object defining == in a typed Array");
+          return 0;
+        }
+        if (value_kind_misses(c, argv[0], ty_array_elem(rt))) {
+          buf_puts(b, "({ (void)("); emit_expr(c, recv, b); buf_puts(b, "); (void)("); emit_expr(c, argv[0], b);
+          buf_puts(b, "); sp_box_nil(); })");
+          return 1;
+        }
         buf_printf(b, "sp_%sArray_%s(", k, fn);
         emit_expr(c, recv, b); buf_puts(b, ", ");
         if (sp_streq(k, "Int")) emit_int_expr(c, argv[0], b); else emit_expr(c, argv[0], b);
@@ -4037,9 +4181,35 @@ else {
              TypeError naming its class. Read as a container regardless, a nil
              became a column of nils, silently, and an Integer or a String
              stopped the C build. */
+          if (ty_is_object(at[j])) {
+            /* an object answering #to_ary zips as that Array; one answering
+               #each enumerates; any other is the scalar's TypeError */
+            int zdef = -1;
+            TyKind zk = obj_container_conv(c, at[j], "to_ary", &zdef);
+            if (zk != TY_UNKNOWN) {
+              const char *kz = zk == TY_POLY_ARRAY ? "Poly" : array_kind(zk);
+              buf_printf(b, " sp_%sArray *_t%d = ", kz ? kz : "Poly", tb[j]);
+              emit_obj_container_conv(c, argv[j], zdef, "to_ary", b);
+              /* rooted: the answer is the conversion's own allocation, read
+                 across every row the loop below allocates */
+              buf_printf(b, "; SP_GC_ROOT(_t%d);", tb[j]);
+              at[j] = kz ? zk : TY_POLY_ARRAY;
+              continue;
+            }
+            int zcid = ty_object_class(at[j]);
+            if (zcid >= 0 && comp_method_in_chain(c, zcid, "each", NULL) < 0) {
+              /* sp_zip_arg would send :each and answer NoMethodError; the
+                 class is settled, so name CRuby's TypeError here */
+              buf_printf(b, " sp_PolyArray *_t%d = ({ (void)(", tb[j]); emit_expr(c, argv[j], b);
+              buf_printf(b, "); sp_raise_cls(\"TypeError\", \"wrong argument type %s (must respond to :each)\"); (sp_PolyArray *)0; });",
+                         class_ruby_name(c, zcid));
+              at[j] = TY_POLY_ARRAY;
+              continue;
+            }
+          }
           if (at[j] == TY_NIL || at[j] == TY_BOOL || at[j] == TY_INT ||
               at[j] == TY_FLOAT || at[j] == TY_STRING || at[j] == TY_STRBUF ||
-              at[j] == TY_SYMBOL || at[j] == TY_VOID ||
+              at[j] == TY_SYMBOL || at[j] == TY_VOID || ty_is_object(at[j]) ||
               /* a Hash or an Enumerator DOES respond to :each; the same helper
                  materializes it, where the typed line below spelled the slot
                  sp_PolyArray* and assigned an sp_SymPolyHash* to it */
@@ -4803,6 +4973,7 @@ int emit_hash_call(Compiler *c, int id, Buf *b) {
           TyKind vt = ty_hash_val(rt);
           int t = ++g_tmp;
           buf_printf(b, "({ %s _t%d = ", c_type_name(rt), t); emit_expr(c, recv, b); buf_puts(b, "; ");
+          buf_puts(b, "(void)("); emit_expr(c, argv[0], b); buf_puts(b, "); ");  /* the key still evaluates */
           if (vt == TY_INT) buf_printf(b, "_t%d ? _t%d->default_v : SP_INT_NIL; })", t, t);
           /* absent means the hash's default, which is nil unless one was
              given -- not the empty string (#3790) */
@@ -4839,9 +5010,10 @@ int emit_hash_call(Compiler *c, int id, Buf *b) {
         TyKind arg0t = comp_ntype(c, argv[0]);
         if ((kt == TY_SYMBOL && arg0t == TY_STRING) ||
             (kt == TY_STRING && arg0t == TY_SYMBOL)) {
-          if (vt == TY_INT) buf_puts(b, "SP_INT_NIL");
-          else if (vt == TY_STRING) buf_puts(b, "NULL");
-          else buf_puts(b, "sp_box_nil()");
+          buf_puts(b, "({ (void)("); emit_expr(c, recv, b); buf_puts(b, "); (void)("); emit_expr(c, argv[0], b);
+          if (vt == TY_INT) buf_puts(b, "); SP_INT_NIL; })");
+          else if (vt == TY_STRING) buf_puts(b, "); NULL; })");
+          else buf_puts(b, "); sp_box_nil(); })");
           return 1;
         }
         const char *getter = vt == TY_INT ? "get_opt" : "get";
@@ -4908,7 +5080,7 @@ int emit_hash_call(Compiler *c, int id, Buf *b) {
             }
             else {
               buf_printf(b, " sp_int _t%d = ", tk);
-              emit_expr(c, argv[di], b);
+              emit_int_expr(c, argv[di], b);
               buf_printf(b, "; _t%d = sp_poly_arr_get_hash(_t%d, _t%d);", tr, tr, tk);
             }
           }
@@ -4942,6 +5114,24 @@ int emit_hash_call(Compiler *c, int id, Buf *b) {
             buf_printf(b, " %s _t%d = ", c_type_name(kt), tk);
             if (kt == TY_STRING) buf_printf(b, "sp_poly_to_s(sp_PolyArray_get(_t%d, _t%d));", ts, ti);
             else buf_printf(b, "(%s)sp_poly_to_i(sp_PolyArray_get(_t%d, _t%d));", c_type_name(kt), ts, ti);
+          }
+          else if (hash_key_misses(c, argv[a], kt)) {
+            /* a key of a kind the table cannot hold: values_at answers nil,
+               fetch_values raises naming the key, boxed once here */
+            int fv_blk = nt_ref(nt, id, "block");
+            if (is_fetch && fv_blk >= 0) {
+              unsupported_feature(c, id, "Hash#fetch_values with a block and a key of another class than the hash's keys");
+              return 0;
+            }
+            buf_printf(b, " sp_RbVal _t%d = ", tk); emit_boxed(c, argv[a], b); buf_puts(b, ";");
+            if (is_fetch) {
+              char htmp[32]; snprintf(htmp, sizeof htmp, "_t%d", th);
+              buf_puts(b, " sp_exc_stage_recv(");
+              emit_boxed_text(c, rt, htmp, b);
+              buf_printf(b, "); sp_raise_key_not_found(_t%d);", tk);
+            }
+            else buf_printf(b, " sp_PolyArray_push(_t%d, sp_box_nil());", tr);
+            continue;
           }
           else {
             buf_printf(b, " %s _t%d = ", c_type_name(kt), tk); emit_hash_key(c, argv[a], kt, b); buf_puts(b, ";");
@@ -5001,6 +5191,12 @@ int emit_hash_call(Compiler *c, int id, Buf *b) {
            exactly that rule. */
       if (sp_streq(name, "fetch") && (argc == 1 || (argc == 2 && nt_ref(nt, id, "block") >= 0))) {
         int blk = nt_ref(nt, id, "block");
+        if (blk >= 0 && hash_key_misses(c, argv[0], ty_hash_key(rt))) {
+          /* the block receives the missing key, and its parameter is typed
+             as the table's key kind; a key of another kind has no slot */
+          unsupported_feature(c, id, "Hash#fetch with a block and a key of another class than the hash's keys");
+          return 0;
+        }
         if (blk >= 0) {
           /* fetch(key) { default } -> has_key? ? get : block-default */
           TyKind vt = ty_hash_val(rt);
@@ -5038,13 +5234,23 @@ else {
         /* fetch(key) with no default raises KeyError on a miss */
         TyKind vt = ty_hash_val(rt);
         int th = ++g_tmp, tk = ++g_tmp;
-        buf_printf(b, "({ %s _t%d = ", c_type_name(rt), th); emit_expr(c, recv, b);
-        buf_printf(b, "; %s _t%d = ", c_type_name(ty_hash_key(rt)), tk); emit_hash_key(c, argv[0], ty_hash_key(rt), b);
-        buf_printf(b, "; sp_%sHash_has_key(_t%d, _t%d) ? sp_%sHash_get(_t%d, _t%d) : (",
-                   hn, th, tk, hn, th, tk);
         char keytmp[32], htmp[32];
         snprintf(keytmp, sizeof keytmp, "_t%d", tk);
         snprintf(htmp, sizeof htmp, "_t%d", th);
+        buf_printf(b, "({ %s _t%d = ", c_type_name(rt), th); emit_expr(c, recv, b);
+        if (hash_key_misses(c, argv[0], ty_hash_key(rt))) {
+          /* a key of a kind the table cannot hold: the KeyError names the
+             key itself, so box it once rather than look it up */
+          buf_printf(b, "; sp_RbVal _t%d = ", tk); emit_boxed(c, argv[0], b);
+          buf_puts(b, "; sp_exc_stage_recv(");
+          emit_boxed_text(c, rt, htmp, b);
+          buf_printf(b, "); sp_raise_key_not_found(_t%d); %s; })", tk,
+                     vt == TY_POLY ? "sp_box_nil()" : default_value(vt));
+          return 1;
+        }
+        buf_printf(b, "; %s _t%d = ", c_type_name(ty_hash_key(rt)), tk); emit_hash_key(c, argv[0], ty_hash_key(rt), b);
+        buf_printf(b, "; sp_%sHash_has_key(_t%d, _t%d) ? sp_%sHash_get(_t%d, _t%d) : (",
+                   hn, th, tk, hn, th, tk);
         buf_puts(b, "sp_exc_stage_recv(");
         emit_boxed_text(c, rt, htmp, b);
         buf_puts(b, "), sp_raise_key_not_found(");
@@ -5146,9 +5352,12 @@ else {
            sp_streq(name, "include?") || sp_streq(name, "member?")) && argc == 1) {
         TyKind arg_kt = comp_ntype(c, argv[0]);
         TyKind hash_kt = ty_hash_key(rt);
-        if (hash_kt != TY_POLY && arg_kt != TY_POLY && arg_kt != TY_UNKNOWN && arg_kt != hash_kt) {
-          /* type mismatch (e.g. string arg on sym-keyed hash): always false */
-          buf_puts(b, "0"); return 1;
+        if (hash_key_misses(c, argv[0], hash_kt)) {
+          /* a key of a class the table cannot hold: false, the receiver and
+             the key still evaluated */
+          buf_puts(b, "({ (void)("); emit_expr(c, recv, b); buf_puts(b, "); (void)("); emit_expr(c, argv[0], b);
+          buf_puts(b, "); 0; })");
+          return 1;
         }
         buf_printf(b, "sp_%sHash_has_key(", hn);
         emit_expr(c, recv, b); buf_puts(b, ", "); emit_hash_key(c, argv[0], hash_kt, b); buf_puts(b, ")");
@@ -5157,6 +5366,14 @@ else {
       if ((sp_streq(name, "value?") || sp_streq(name, "has_value?")) && argc == 1) {
         int poly = (rt == TY_SYM_POLY_HASH || rt == TY_STR_POLY_HASH ||
                     rt == TY_POLY_POLY_HASH);  /* boxed-value variants (#2373) */
+        if (!poly && value_obj_compares(c, argv[0])) {
+          unsupported_feature(c, id, "Hash#value? of a user object defining == in a typed Hash");
+          return 0;
+        }
+        if (!poly && value_kind_misses(c, argv[0], ty_hash_val(rt))) {
+          buf_puts(b, "({ (void)("); emit_expr(c, recv, b); buf_puts(b, "); (void)("); emit_expr(c, argv[0], b); buf_puts(b, "); 0; })");
+          return 1;
+        }
         buf_printf(b, "sp_%sHash_has_value(", hn);
         emit_expr(c, recv, b); buf_puts(b, ", ");
         if (poly) emit_boxed(c, argv[0], b); else emit_expr(c, argv[0], b);
@@ -5587,6 +5804,30 @@ else {
           buf_puts(b, ", "); emit_boxed(c, argv[0], b); buf_puts(b, ")");
           return 1;
         }
+        if (!ty_is_hash(at) && at != TY_POLY && at != TY_UNKNOWN) {
+          /* an object answering #to_hash of the receiver's own layout merges
+             as that Hash; any other class is CRuby's TypeError */
+          int mdef = -1;
+          TyKind mk = obj_container_conv(c, at, "to_hash", &mdef);
+          if (mk == rt) {
+            buf_printf(b, "sp_%sHash_merge(", hn); emit_expr(c, recv, b); buf_puts(b, ", ");
+            emit_obj_container_conv(c, argv[0], mdef, "to_hash", b); buf_puts(b, ")");
+            return 1;
+          }
+          if (mk != TY_UNKNOWN) {
+            /* the analysis typed this call as the receiver's layout; a
+               #to_hash of another layout would widen it, which is an
+               inference question, so say so rather than miscompile */
+            unsupported_feature(c, id, "Hash#merge with a #to_hash of another layout than the receiver");
+            return 0;
+          }
+          const char *mcn = conv_cls_name_of(c, at);
+          if (mcn) {
+            buf_puts(b, "({ (void)("); emit_expr(c, recv, b); buf_puts(b, "); (void)("); emit_expr(c, argv[0], b);
+            buf_printf(b, "); sp_raise_cls(\"TypeError\", \"no implicit conversion of %s into Hash\"); (%s)0; })", mcn, c_type_name(rt));
+            return 1;
+          }
+        }
         buf_printf(b, "sp_%sHash_merge(", hn); emit_expr(c, recv, b); buf_puts(b, ", ");
         /* a str_poly receiver may be merged with a concrete str-keyed hash;
            coerce the argument to the receiver's variant first */
@@ -5891,7 +6132,9 @@ else {
           if (rt == TY_POLY_POLY_HASH)
             buf_printf(b, " if (sp_rbval_eql_key(_t%d->keys[_t%d->order[_t%d]], _t%d)) {", th, th, ti, ta);
           else if (kt == TY_STRING)
-            buf_printf(b, " if (!strcmp(_t%d->order[_t%d], _t%d)) {", th, ti, ta);
+            /* sp_str_eq, not strcmp: a key of a class the table cannot hold
+               reaches here as the NULL miss sentinel emit_hash_key answers */
+            buf_printf(b, " if (sp_str_eq(_t%d->order[_t%d], _t%d)) {", th, ti, ta);
           else
             buf_printf(b, " if (_t%d->order[_t%d] == _t%d) {", th, ti, ta);
         }
@@ -5959,6 +6202,11 @@ else {
         /* returns the deleted value (or nil on a miss), then removes the key */
         TyKind vt = ty_hash_val(rt);
         int th = ++g_tmp, tk = ++g_tmp, tv = ++g_tmp;
+        if (nt_ref(nt, id, "block") >= 0 && hash_key_misses(c, argv[0], ty_hash_key(rt))) {
+          /* the block receives the missing key, typed as the table's key kind */
+          unsupported_feature(c, id, "Hash#delete with a block and a key of another class than the hash's keys");
+          return 0;
+        }
         buf_printf(b, "({ %s _t%d = ", c_type_name(rt), th); emit_expr(c, recv, b);
         buf_printf(b, "; if (sp_gc_is_frozen(_t%d)) sp_raise_frozen_hash_at(_t%d, %s);", th, th, hash_box_cls(rt));   /* (#3001) */
         buf_printf(b, " %s _t%d = ", c_type_name(ty_hash_key(rt)), tk); emit_hash_key(c, argv[0], ty_hash_key(rt), b);
@@ -6129,6 +6377,33 @@ int nil_answers_name(const char *n) {
   return 0;
 }
 
+/* A String slot of the pattern family (String#split's separator): a
+   String or nil passes as the String slot does, but a value of any other
+   class -- true and false included -- is CRuby's "wrong argument type X
+   (expected Regexp)", not the implicit-conversion wording. A Regexp is the
+   one class the family is not wrong about, and it belongs to the arm's own
+   Regexp path, never here. */
+void emit_str_pattern_expr(Compiler *c, int node, Buf *b) {
+  TyKind t = comp_ntype(c, node);
+  if (t == TY_REGEX) unsupported_feature(c, node, "a Regexp separator reached the String pattern slot");
+  if (t == TY_BOOL) {
+    int tb = ++g_tmp;
+    buf_printf(b, "({ int _t%d = (", tb); emit_expr(c, node, b);
+    buf_printf(b, "); sp_raise_cls(\"TypeError\", _t%d"
+                  " ? \"wrong argument type true (expected Regexp)\""
+                  " : \"wrong argument type false (expected Regexp)\");"
+                  " (const char *)0; })", tb);
+    return;
+  }
+  const char *cn = conv_wrong_cls_name(t);
+  if (cn && t != TY_STRING && t != TY_STRBUF) {
+    buf_puts(b, "({ (void)("); emit_expr(c, node, b);
+    buf_printf(b, "); sp_raise_cls(\"TypeError\", \"wrong argument type %s (expected Regexp)\"); (const char *)0; })", cn);
+    return;
+  }
+  emit_str_expr_nilable(c, node, b);
+}
+
 int emit_scalar_call(Compiler *c, int id, Buf *b) {
   /* Shared-mutable shim (#3227): setbyte on a strbuf local -- shadow-copy
      re-entry, same as emit_array_call's. */
@@ -6223,6 +6498,11 @@ int emit_scalar_call(Compiler *c, int id, Buf *b) {
         g_tmpid = ++g_tmp;
         snprintf(g_rname, sizeof g_rname, "_t%d", g_tmpid);
         g_outer_b = b; b = &gbody; r = g_rname;
+        /* conversions the arms emit belong BELOW the guard's nil check --
+           CRuby raises its NoMethodError without asking #to_str -- so the
+           call-level hold, which would hoist them above it, stands down and
+           they render inline inside the guarded body */
+        if (g_conv_hold) g_conv_hold->guarded = 1;
       }
     }
     int handled = 1;
@@ -6230,7 +6510,7 @@ int emit_scalar_call(Compiler *c, int id, Buf *b) {
     if (rt == TY_STRING) {
       /* blockless "a".upto("c") materializes the succ-sequence as an array */
       if (sp_streq(name, "upto") && argc == 1 && nt_ref(nt, id, "block") < 0) {
-        buf_printf(b, "sp_StrArray_from_string_range(%s, ", r); emit_expr(c, argv[0], b); buf_puts(b, ", 0)");
+        buf_printf(b, "sp_StrArray_from_string_range(%s, ", r); emit_str_expr(c, argv[0], b); buf_puts(b, ", 0)");
       }
       /* a nil / true / false PATTERN in the regexp-expected family is CRuby's
          TypeError ("wrong argument type nil (expected Regexp)") -- it used to
@@ -6469,7 +6749,7 @@ int emit_scalar_call(Compiler *c, int id, Buf *b) {
           buf_puts(b, r);
         }
         else {
-          buf_printf(b, "sp_str_chomp_sep(%s, ", r); emit_expr(c, argv[0], b); buf_puts(b, ")");
+          buf_printf(b, "sp_str_chomp_sep(%s, ", r); emit_str_expr(c, argv[0], b); buf_puts(b, ")");
         }
       }
       else if (sp_streq(name, "chomp"))      buf_printf(b, "sp_str_chomp(%s)", r);
@@ -6562,7 +6842,7 @@ int emit_scalar_call(Compiler *c, int id, Buf *b) {
       }
       else if (sp_streq(name, "index") && argc == 2) {
         buf_printf(b, "sp_str_index_from_opt(%s, ", r);
-        emit_expr(c, argv[0], b); buf_puts(b, ", ");
+        emit_str_expr(c, argv[0], b); buf_puts(b, ", ");
         emit_int_expr(c, argv[1], b); buf_puts(b, ")");
       }
       /* byteindex/byterindex over a String needle: BYTE-offset search (result +
@@ -6619,12 +6899,12 @@ int emit_scalar_call(Compiler *c, int id, Buf *b) {
       else if (sp_streq(name, "rindex") && argc == 1 && re_lit_index(c, argv[0]) >= 0) {
         buf_printf(b, "sp_re_rindex_opt(sp_re_pat_%d, %s)", re_lit_index(c, argv[0]), r);
       }
-      else if (sp_streq(name, "rindex") && argc == 1) { buf_printf(b, "sp_str_rindex_opt(%s, ", r); emit_expr(c, argv[0], b); buf_puts(b, ")"); }
+      else if (sp_streq(name, "rindex") && argc == 1) { buf_printf(b, "sp_str_rindex_opt(%s, ", r); emit_str_expr(c, argv[0], b); buf_puts(b, ")"); }
       else if (sp_streq(name, "rindex") && argc == 2 && re_lit_index(c, argv[0]) >= 0) {
         buf_printf(b, "sp_re_rindex_from_opt(sp_re_pat_%d, %s, ", re_lit_index(c, argv[0]), r);
         emit_int_expr(c, argv[1], b); buf_puts(b, ")");
       }
-      else if (sp_streq(name, "rindex") && argc == 2) { buf_printf(b, "sp_str_rindex_from(%s, ", r); emit_expr(c, argv[0], b); buf_puts(b, ", "); emit_int_expr(c, argv[1], b); buf_puts(b, ")"); }
+      else if (sp_streq(name, "rindex") && argc == 2) { buf_printf(b, "sp_str_rindex_from(%s, ", r); emit_str_expr(c, argv[0], b); buf_puts(b, ", "); emit_int_expr(c, argv[1], b); buf_puts(b, ")"); }
       else if (sp_streq(name, "crypt") && argc == 1) { buf_printf(b, "sp_str_crypt(%s, ", r); emit_str_expr(c, argv[0], b); buf_puts(b, ")"); }
       /* scrub! mutates in place, so a frozen receiver raises -- but only when
          it would actually replace something: CRuby returns a frozen string
@@ -6632,10 +6912,10 @@ int emit_scalar_call(Compiler *c, int id, Buf *b) {
       else if (sp_streq(name, "scrub!") && argc == 0)
         buf_printf(b, "sp_str_scrub_bang(%s, 0)", r);
       else if (sp_streq(name, "scrub!") && argc == 1) {
-        buf_printf(b, "sp_str_scrub_bang(%s, ", r); emit_expr(c, argv[0], b); buf_puts(b, ")");
+        buf_printf(b, "sp_str_scrub_bang(%s, ", r); emit_str_expr_nilable(c, argv[0], b); buf_puts(b, ")");
       }
       else if (sp_streq(name, "scrub") && argc == 0) buf_printf(b, "sp_str_scrub(%s, 0)", r);
-      else if (sp_streq(name, "scrub") && argc == 1) { buf_printf(b, "sp_str_scrub(%s, ", r); emit_expr(c, argv[0], b); buf_puts(b, ")"); }
+      else if (sp_streq(name, "scrub") && argc == 1) { buf_printf(b, "sp_str_scrub(%s, ", r); emit_str_expr_nilable(c, argv[0], b); buf_puts(b, ")"); }
       else if ((sp_streq(name, "[]") || sp_streq(name, "slice")) && argc == 1 && re_lit_index(c, argv[0]) >= 0) {
         /* s[/re/] -> the matched substring, or nil (NULL) on no match */
         buf_printf(b, "(sp_re_match(sp_re_pat_%d, %s) >= 0 ? sp_re_match_str : NULL)", re_lit_index(c, argv[0]), r);
@@ -6714,10 +6994,10 @@ int emit_scalar_call(Compiler *c, int id, Buf *b) {
         int ws = nil_arg || (aty && sp_streq(aty, "StringNode") && nt_str(c->nt, argv[0], "content") &&
                  sp_streq(nt_str(c->nt, argv[0], "content"), " "));
         if (ws) buf_printf(b, "sp_str_split_ws(%s)", r);
-        else { buf_printf(b, "sp_str_split_drop_trailing(%s, ", r); emit_str_expr(c, argv[0], b); buf_puts(b, ")"); }
+        else { buf_printf(b, "sp_str_split_drop_trailing(%s, ", r); emit_str_pattern_expr(c, argv[0], b); buf_puts(b, ")"); }
       }
       else if (sp_streq(name, "split") && argc == 2) {
-        buf_printf(b, "sp_str_split_limit(%s, ", r); emit_expr(c, argv[0], b); buf_puts(b, ", "); emit_int_expr(c, argv[1], b); buf_puts(b, ")");
+        buf_printf(b, "sp_str_split_limit(%s, ", r); emit_str_pattern_expr(c, argv[0], b); buf_puts(b, ", "); emit_int_expr(c, argv[1], b); buf_puts(b, ")");
       }
       else if (sp_streq(name, "clamp") && (argc == 2 ||
                (argc == 1 && nt_type(c->nt, argv[0]) && sp_streq(nt_type(c->nt, argv[0]), "RangeNode")))) {
@@ -6929,7 +7209,7 @@ int emit_scalar_call(Compiler *c, int id, Buf *b) {
         if (one && u1t == TY_INT)        buf_puts(b, "sp_poly_to_i(sp_PolyArray_get(");
         else if (one && u1t == TY_FLOAT) buf_puts(b, "sp_poly_to_f_opt(sp_PolyArray_get(");
         else if (one)                    buf_puts(b, "sp_PolyArray_get(");
-        buf_printf(b, "sp_str_unpack_off(%s, ", r); emit_expr(c, argv[0], b);
+        buf_printf(b, "sp_str_unpack_off(%s, ", r); emit_str_expr(c, argv[0], b);
         buf_puts(b, ", "); emit_int_expr(c, offv, b); buf_puts(b, ")");
         if (one) buf_puts(b, (u1t == TY_INT || u1t == TY_FLOAT) ? ", 0))" : ", 0)");
       }
@@ -6942,7 +7222,7 @@ int emit_scalar_call(Compiler *c, int id, Buf *b) {
         if (u1t == TY_INT)        buf_printf(b, "sp_poly_to_i(sp_PolyArray_get(sp_str_unpack(%s, ", r);
         else if (u1t == TY_FLOAT) buf_printf(b, "sp_poly_to_f_opt(sp_PolyArray_get(sp_str_unpack(%s, ", r);
         else                      buf_printf(b, "sp_PolyArray_get(sp_str_unpack(%s, ", r);
-        emit_expr(c, argv[0], b);
+        emit_str_expr(c, argv[0], b);
         buf_puts(b, (u1t == TY_INT || u1t == TY_FLOAT) ? "), 0))" : "), 0)");
       }
       else if (sp_streq(name, "sum") && argc <= 1) {
@@ -6980,19 +7260,19 @@ int emit_scalar_call(Compiler *c, int id, Buf *b) {
         buf_printf(b, "sp_str_center(%s, ", r); emit_int_expr(c, argv[0], b); buf_puts(b, ")");
       }
       else if (sp_streq(name, "center") && argc == 2) {
-        buf_printf(b, "sp_str_center2(%s, ", r); emit_int_expr(c, argv[0], b); buf_puts(b, ", "); emit_expr(c, argv[1], b); buf_puts(b, ")");
+        buf_printf(b, "sp_str_center2(%s, ", r); emit_int_expr(c, argv[0], b); buf_puts(b, ", "); emit_str_expr(c, argv[1], b); buf_puts(b, ")");
       }
       else if (sp_streq(name, "ljust") && argc == 1) {
         buf_printf(b, "sp_str_ljust(%s, ", r); emit_int_expr(c, argv[0], b); buf_puts(b, ")");
       }
       else if (sp_streq(name, "ljust") && argc == 2) {
-        buf_printf(b, "sp_str_ljust2(%s, ", r); emit_int_expr(c, argv[0], b); buf_puts(b, ", "); emit_expr(c, argv[1], b); buf_puts(b, ")");
+        buf_printf(b, "sp_str_ljust2(%s, ", r); emit_int_expr(c, argv[0], b); buf_puts(b, ", "); emit_str_expr(c, argv[1], b); buf_puts(b, ")");
       }
       else if (sp_streq(name, "rjust") && argc == 1) {
         buf_printf(b, "sp_str_rjust(%s, ", r); emit_int_expr(c, argv[0], b); buf_puts(b, ")");
       }
       else if (sp_streq(name, "rjust") && argc == 2) {
-        buf_printf(b, "sp_str_rjust2(%s, ", r); emit_int_expr(c, argv[0], b); buf_puts(b, ", "); emit_expr(c, argv[1], b); buf_puts(b, ")");
+        buf_printf(b, "sp_str_rjust2(%s, ", r); emit_int_expr(c, argv[0], b); buf_puts(b, ", "); emit_str_expr(c, argv[1], b); buf_puts(b, ")");
       }
       /* String#eql?(x): byte-equal only when x is itself String-typed (no
          coercion, unlike ==). A poly arg checks its tag; any other concrete
@@ -7185,7 +7465,7 @@ int emit_scalar_call(Compiler *c, int id, Buf *b) {
           buf_puts(b, "({ (void)("); emit_expr(c, argv[0], b);
           buf_printf(b, "); (sp_int)((%s) < 0 ? 1 : 0); })", r);
         }
-        else { buf_printf(b, "sp_int_bit((%s), ", r); emit_expr(c, argv[0], b); buf_puts(b, ")"); }
+        else { buf_printf(b, "sp_int_bit((%s), ", r); emit_int_expr(c, argv[0], b); buf_puts(b, ")"); }
       }
       else if (sp_streq(name, "bit_length") && argc == 0) buf_printf(b, "sp_int_bit_length(%s)", r);
       else if (sp_streq(name, "fdiv") && argc == 1) { buf_printf(b, "((sp_float)(%s) / (", r); emit_float_expr(c, argv[0], b); buf_puts(b, "))"); }
@@ -7947,7 +8227,7 @@ int emit_scalar_call(Compiler *c, int id, Buf *b) {
                         " sp_FloatArray_push(_t%d, (%s)); _t%d; })", o, o, ta, o, r, o);
         }
       }
-      else if (sp_streq(name, "fdiv") && argc == 1) { buf_printf(b, "((%s) / (", r); emit_float_expr(c, argv[0], b); buf_puts(b, "))"); }
+      else if (sp_streq(name, "fdiv") && argc == 1) { buf_printf(b, "((%s) / (", r); emit_float_coerce_expr(c, argv[0], b); buf_puts(b, "))"); }
       /* Float#eql?(x): true only when x is itself a Float of equal value (no
          numeric coercion, unlike ==). A float-typed arg compares directly; any
          other arg is boxed and rejected unless it is tagged float at runtime. */
@@ -9586,7 +9866,7 @@ int emit_value_recv_call(Compiler *c, int id, Buf *b) {
       #undef SG_EMIT_KEY
       buf_printf(b, " sp_box_obj(_t%d, SP_BUILTIN_SYM_POLY_HASH); })", th);
     }
-    else if (sp_streq(name, "strftime") && argc == 1) { buf_printf(b, "sp_time_strftime(%s, ", r); emit_expr(c, argv[0], b); buf_puts(b, ")"); }
+    else if (sp_streq(name, "strftime") && argc == 1) { buf_printf(b, "sp_time_strftime(%s, ", r); emit_str_expr(c, argv[0], b); buf_puts(b, ")"); }
     /* Comparable#between? / #clamp compare a Time with a Time; CRuby raises
        ArgumentError ("comparison of Time with 1 failed") for anything else,
        where reading the operand as an sp_Time did not compile (#3865). */
@@ -9765,7 +10045,8 @@ int emit_value_recv_call(Compiler *c, int id, Buf *b) {
       int by_name = (kt2 == TY_STRING || kt2 == TY_SYMBOL);
       buf_printf(b, "sp_MatchData_%s%s(%s, ", name, by_name ? "_name" : "", r);
       if (kt2 == TY_SYMBOL) { buf_puts(b, "sp_sym_to_s("); emit_expr(c, argv[0], b); buf_puts(b, ")"); }
-      else emit_expr(c, argv[0], b);
+      else if (by_name) emit_expr(c, argv[0], b);
+      else emit_int_expr(c, argv[0], b);
       buf_puts(b, ")");
     }
     else if (sp_streq(name, "values_at") && argc >= 1) {
@@ -9812,7 +10093,7 @@ int emit_value_recv_call(Compiler *c, int id, Buf *b) {
         }
         else {
           buf_printf(b, " sp_PolyArray_push(_t%d, sp_box_nullable_str(sp_MatchData_aref(_t%d, ", at, mt);
-          emit_expr(c, argv[i], b); buf_puts(b, ")));");
+          emit_int_expr(c, argv[i], b); buf_puts(b, ")));");
         }
       }
       buf_printf(b, " _t%d; })", at);
@@ -10568,13 +10849,20 @@ int emit_range_call(Compiler *c, int id, Buf *b) {
           TyKind at0 = comp_ntype(c, argv[0]);
           int arg_is_float = at0 == TY_FLOAT;
           int arg_is_poly = at0 == TY_POLY;
-          buf_printf(b, "sp_range_include(&_t%d, ", t);
-          if (arg_is_float) buf_puts(b, "(sp_int)(");
-          if (arg_is_poly) buf_puts(b, "sp_poly_to_i(");
-          emit_expr(c, argv[0], b);
-          if (arg_is_poly) buf_puts(b, ")");
-          if (arg_is_float) buf_puts(b, ")");
-          buf_puts(b, ")");
+          if (value_obj_compares(c, argv[0])) unsupported_feature(c, id, "Range#include? of a user object defining <=>");
+          if (value_kind_misses(c, argv[0], TY_INT)) {
+            /* an Integer compares with nothing of this class: not covered */
+            buf_puts(b, "({ (void)("); emit_expr(c, argv[0], b); buf_puts(b, "); 0; })");
+          }
+          else {
+            buf_printf(b, "sp_range_include(&_t%d, ", t);
+            if (arg_is_float) buf_puts(b, "(sp_int)(");
+            if (arg_is_poly) buf_puts(b, "sp_poly_to_i(");
+            emit_expr(c, argv[0], b);
+            if (arg_is_poly) buf_puts(b, ")");
+            if (arg_is_float) buf_puts(b, ")");
+            buf_puts(b, ")");
+          }
         }
       }
       else if (sp_streq(name, "min"))  /* smallest enumerated element (direction-aware) */
@@ -10657,7 +10945,12 @@ int emit_range_call(Compiler *c, int id, Buf *b) {
       else if (sp_streq(name, "eql?") || sp_streq(name, "equal?")) {
         /* the unboxed sp_Range has no object identity: equal? compares
            components, like the Complex/Rational value arms */
-        buf_printf(b, "sp_range_eq(_t%d, ", t); emit_expr(c, argv[0], b); buf_puts(b, ")");
+        if (argc == 1 && comp_ntype(c, argv[0]) != TY_RANGE && comp_ntype(c, argv[0]) != TY_POLY &&
+            comp_ntype(c, argv[0]) != TY_UNKNOWN) {
+          /* a value of another class is never eql? to a Range */
+          buf_puts(b, "({ (void)("); emit_expr(c, argv[0], b); buf_puts(b, "); 0; })");
+        }
+        else { buf_printf(b, "sp_range_eq(_t%d, ", t); emit_expr(c, argv[0], b); buf_puts(b, ")"); }
       }
       else if (sp_streq(name, "overlap?")) {
         int t2 = ++g_tmp;

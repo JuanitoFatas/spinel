@@ -3091,10 +3091,11 @@ static int emit_complex_rational_call(Compiler *c, int id, Buf *b) {
       return 1;
     }
     if (crt == TY_FLOAT && sp_streq(name, "quo") && argc == 1) {
-      /* Float#quo == / (float division) */
+      /* Float#quo == / (float division); a non-numeric operand is the
+         arithmetic coercion failure, not the float slot's conversion one */
       buf_puts(b, "((");
       emit_expr(c, recv, b); buf_puts(b, ") / (sp_float)(");
-      emit_float_expr(c, argv[0], b); buf_puts(b, "))");
+      emit_float_coerce_expr(c, argv[0], b); buf_puts(b, "))");
       return 1;
     }
     /* Integer ** <negative literal>: a Rational in CRuby (2 ** -2 == (1/4)).
@@ -6144,7 +6145,7 @@ static int emit_time_civil_ctor(Compiler *c, int id, int is_utc, int is_new, Buf
   if (!is_new && argc == 10) {
     buf_printf(b, "sp_time_new%s(", is_utc ? "_utc" : "");
     for (int i = 5; i >= 0; i--) {
-      emit_expr(c, argv[i], b);
+      emit_int_expr(c, argv[i], b);
       if (i) buf_puts(b, ", ");
     }
     buf_puts(b, ")");
@@ -6166,7 +6167,8 @@ static int emit_time_civil_ctor(Compiler *c, int id, int is_utc, int is_new, Buf
         TyKind fit = comp_ntype(c, argv[i]);
         if (fit == TY_STRING) { buf_puts(b, "(int64_t)strtoll("); emit_expr(c, argv[i], b); buf_puts(b, ", NULL, 10)"); }
         else if (fit == TY_POLY || fit == TY_UNKNOWN) { buf_puts(b, "sp_poly_to_i("); emit_boxed(c, argv[i], b); buf_puts(b, ")"); }
-        else emit_expr(c, argv[i], b);
+        else if (fit == TY_NIL) buf_puts(b, (i == 1 || i == 2) ? "1" : "0");  /* a nil field is its default */
+        else emit_int_expr(c, argv[i], b);
       }
       buf_printf(b, ", (int64_t)_t%d); _t%da.tv_nsec = (int32_t)((_t%d - (double)(int64_t)_t%d) * 1e9 + 0.5); _t%da; })",
                  ts, ts, ts, ts, ts);
@@ -6267,7 +6269,8 @@ else buf_printf(b, "sp_time_new%s(", is_utc ? "_utc" : "");
       if (fit == TY_STRING && i == 1) { buf_puts(b, "sp_time_month_arg("); emit_expr(c, argv[i], b); buf_puts(b, ")"); }
       else if (fit == TY_STRING) { buf_puts(b, "(int64_t)strtoll("); emit_expr(c, argv[i], b); buf_puts(b, ", NULL, 10)"); }
       else if (fit == TY_POLY || fit == TY_UNKNOWN) { buf_puts(b, "sp_poly_to_i("); emit_boxed(c, argv[i], b); buf_puts(b, ")"); }
-      else emit_expr(c, argv[i], b);
+      else if (fit == TY_NIL) buf_puts(b, (i == 1 || i == 2) ? "1" : "0");  /* a nil field is its default */
+      else emit_int_expr(c, argv[i], b);
     }
     else buf_puts(b, (i == 1 || i == 2) ? "1" : "0");
   }
@@ -12200,6 +12203,29 @@ static int emit_operands_in_order(Compiler *c, int id, Buf *b) {
   return 1;
 }
 
+/* File.utime's time operands: a Time's seconds, nil the current time, a
+   number as seconds, and any other class CRuby's "can't convert X into time". */
+static void emit_utime_arg(Compiler *c, int node, Buf *b) {
+  TyKind t = comp_ntype(c, node);
+  if (t == TY_TIME) { buf_puts(b, "(double)("); emit_expr(c, node, b); buf_puts(b, ").tv_sec"); return; }
+  if (t == TY_NIL) { buf_puts(b, "({ (void)("); emit_expr(c, node, b); buf_puts(b, "); (double)time(NULL); })"); return; }  /* nil is now */
+  if (t == TY_INT || t == TY_FLOAT || t == TY_BIGINT || t == TY_POLY || t == TY_UNKNOWN) {
+    buf_puts(b, "(double)("); emit_float_expr(c, node, b); buf_puts(b, ")");
+    return;
+  }
+  if (t == TY_BOOL) {
+    /* CRuby names the class, which a static bool only knows at run time */
+    buf_puts(b, "({ sp_raise_cls(\"TypeError\", (");
+    emit_expr(c, node, b);
+    buf_puts(b, ") ? \"can't convert TrueClass into time\""
+                " : \"can't convert FalseClass into time\"); 0.0; })");
+    return;
+  }
+  const char *cn = conv_cls_name_of(c, t);
+  buf_puts(b, "({ (void)("); emit_expr(c, node, b);
+  buf_printf(b, "); sp_raise_cls(\"TypeError\", \"can't convert %s into time\"); 0.0; })", cn ? cn : "Object");
+}
+
 static void emit_call_body(Compiler *c, int id, Buf *b);
 
 /* Every String a call's operands convert to is declared in a rooted temp in
@@ -12227,7 +12253,7 @@ void emit_call(Compiler *c, int id, Buf *b) {
      is not this call's value */
   const char *head = ob.p ? ob.p : "";
   while (*head == '(') head++;
-  int ok = hold.n > 0 && strncmp(head, "sp_raise_nomethod(", 18) != 0 &&
+  int ok = hold.n > 0 && !hold.guarded && strncmp(head, "sp_raise_nomethod(", 18) != 0 &&
            strncmp(head, "sp_raise_cls(", 13) != 0;
   for (int i = 0; i < hold.n && ok; i++)
     if (g_pre && g_pre->p && g_pre->len > pre_mark && text_uses_tmp(g_pre->p + pre_mark, hold.tmp[i])) ok = 0;
@@ -13295,9 +13321,18 @@ static void emit_call_body(Compiler *c, int id, Buf *b) {
 
   /* system(cmd, ...) expr: run and return bool */
   if (recv < 0 && sp_streq(name, "system") && argc >= 1 && !bare_call_class_owned(c, id)) {
+    if (ty_is_hash(comp_ntype(c, argv[0]))) { unsupported_feature(c, id, "system with an environment Hash"); return; }
+    if (ty_is_array(comp_ntype(c, argv[0]))) { unsupported_feature(c, id, "system with a [command, argv0] pair"); return; }
+    /* each argument converts and is rooted before the next converts: a
+       #to_str's answer is a heap String the following conversion may collect */
     int ts = ++g_tmp;
-    buf_printf(b, "({ const char *_sys_%d[] = { ", ts);
-    for (int k = 0; k < argc; k++) { if (k > 0) buf_puts(b, ", "); emit_expr(c, argv[k], b); }
+    buf_puts(b, "({ ");
+    for (int k = 0; k < argc; k++) {
+      buf_printf(b, "const char *_sys_%d_%d = ", ts, k); emit_str_expr(c, argv[k], b);
+      buf_printf(b, "; SP_GC_ROOT_STR(_sys_%d_%d); ", ts, k);
+    }
+    buf_printf(b, "const char *_sys_%d[] = { ", ts);
+    for (int k = 0; k < argc; k++) { if (k > 0) buf_puts(b, ", "); buf_printf(b, "_sys_%d_%d", ts, k); }
     buf_printf(b, ", NULL }; (sp_bool)sp_system_args(%d, _sys_%d); })", argc, ts);
     return;
   }
@@ -13490,7 +13525,7 @@ static void emit_call_body(Compiler *c, int id, Buf *b) {
       if (enm && sp_streq(enm, "delete") && eac == 1) {
         int t1 = ++g_tmp, t2 = ++g_tmp;
         int dblk = nt_ref(nt, id, "block");
-        buf_printf(b, "({ const char *_t%d = ", t1); emit_expr(c, eav[0], b);
+        buf_printf(b, "({ const char *_t%d = ", t1); emit_str_expr(c, eav[0], b);
         buf_printf(b, "; const char *_t%d = getenv(_t%d);"
                       " _t%d = _t%d ? sp_str_dup_external(_t%d) : NULL;"
                       " unsetenv(_t%d); ", t2, t1, t2, t2, t2, t1);
@@ -13532,7 +13567,7 @@ static void emit_call_body(Compiler *c, int id, Buf *b) {
       /* ENV.store(k, v) is []= */
       if (enm && sp_streq(enm, "store") && eac == 2) {
         buf_puts(b, "sp_env_aset(");
-        emit_expr(c, eav[0], b); buf_puts(b, ", ");
+        emit_str_expr(c, eav[0], b); buf_puts(b, ", ");
         emit_boxed(c, eav[1], b); buf_puts(b, ")");
         return;
       }
@@ -13544,7 +13579,7 @@ static void emit_call_body(Compiler *c, int id, Buf *b) {
     if (rty2 && sp_streq(rty2, "ConstantReadNode")) {
       const char *rn = nt_str(nt, recv, "name");
       if (rn && sp_streq(rn, "ENV")) {
-        buf_puts(b, "sp_str_dup_external(getenv("); emit_expr(c, argv[0], b); buf_puts(b, "))");
+        buf_puts(b, "sp_str_dup_external(getenv("); emit_str_expr(c, argv[0], b); buf_puts(b, "))");
         return;
       }
     }
@@ -13599,7 +13634,7 @@ static void emit_call_body(Compiler *c, int id, Buf *b) {
     if (rty2 && sp_streq(rty2, "ConstantReadNode")) {
       const char *rn = nt_str(nt, recv, "name");
       if (rn && sp_streq(rn, "ENV")) {
-        buf_puts(b, "(getenv("); emit_expr(c, argv[0], b); buf_puts(b, ") != NULL)");
+        buf_puts(b, "(getenv("); emit_str_expr(c, argv[0], b); buf_puts(b, ") != NULL)");
         return;
       }
     }
@@ -15590,9 +15625,14 @@ static void emit_call_body(Compiler *c, int id, Buf *b) {
         buf_puts(b, "sp_bigint_rand(sp_random_default_get(), ");
         emit_expr(c, argv[0], b); buf_puts(b, ")");
       }
+      else if (argc >= 1 && comp_ntype(c, argv[0]) == TY_NIL) {
+        /* rand(nil) is CRuby's ArgumentError, not the int slot's TypeError */
+        buf_puts(b, "({ (void)("); emit_expr(c, argv[0], b);
+        buf_puts(b, "); sp_raise_cls(\"ArgumentError\", \"invalid argument - \"); (sp_int)0; })");
+      }
       else if (argc >= 1) {
         buf_puts(b, "sp_Random_rand_int(sp_random_default_get(), ");
-        emit_expr(c, argv[0], b); buf_puts(b, ")");
+        emit_int_expr(c, argv[0], b); buf_puts(b, ")");
       }
       else buf_puts(b, "sp_Random_rand_float(sp_random_default_get())");
       return;
@@ -15670,9 +15710,13 @@ static void emit_call_body(Compiler *c, int id, Buf *b) {
         buf_puts(b, "sp_bigint_rand("); emit_expr(c, recv, b); buf_puts(b, ", ");
         emit_expr(c, argv[0], b); buf_puts(b, ")");
       }
+      else if (argc >= 1 && comp_ntype(c, argv[0]) == TY_NIL) {
+        buf_puts(b, "({ (void)("); emit_expr(c, recv, b); buf_puts(b, "); (void)("); emit_expr(c, argv[0], b);
+        buf_puts(b, "); sp_raise_cls(\"ArgumentError\", \"invalid argument - \"); (sp_int)0; })");
+      }
       else if (argc >= 1) {
         buf_puts(b, "sp_Random_rand_int("); emit_expr(c, recv, b); buf_puts(b, ", ");
-        emit_expr(c, argv[0], b); buf_puts(b, ")");
+        emit_int_expr(c, argv[0], b); buf_puts(b, ")");
       }
       else {
         buf_puts(b, "sp_Random_rand_float("); emit_expr(c, recv, b); buf_puts(b, ")");
@@ -16176,7 +16220,7 @@ static void emit_call_body(Compiler *c, int id, Buf *b) {
       if (argc == 0 && !is_rdl) buf_printf(b, "sp_File_gets(%s)", r);
       else {
         buf_printf(b, "sp_File_%s(%s, ", is_rdl ? "readline_sep" : "gets_sep", r);
-        if (gsep >= 0) emit_expr(c, gsep, b); else buf_puts(b, "\"\\n\"");
+        if (gsep >= 0) emit_str_expr_nilable(c, gsep, b); else buf_puts(b, "\"\\n\"");
         buf_puts(b, ", ");
         if (glim >= 0) emit_int_expr(c, glim, b); else buf_puts(b, "0");
         buf_printf(b, ", %d)", gchomp);
@@ -17232,8 +17276,10 @@ else { memcpy(dir, sf, n); dir[n] = 0; } }
       emit_indent(g_pre, g_indent);
       buf_printf(g_pre, "const char *_t%d = ", tf);
       Buf fb; memset(&fb, 0, sizeof fb);
-      emit_expr(c, av[0], &fb);
-      buf_printf(g_pre, "%s;\n", fb.p ? fb.p : "");
+      emit_str_expr(c, av[0], &fb);
+      /* rooted too: a #to_str's answer lives on the heap, and every arg
+         below boxes */
+      buf_printf(g_pre, "%s; SP_GC_ROOT_STR(_t%d);\n", fb.p ? fb.p : "", tf);
       free(fb.p);
       emit_indent(g_pre, g_indent);
       /* Rooted: every arg below boxes, and a box allocates. */
@@ -17364,7 +17410,26 @@ else { memcpy(dir, sf, n); dir[n] = 0; } }
     buf_puts(b, "((void)sp_sleep(");
     if (st == TY_INT) { buf_puts(b, "(double)"); emit_expr(c, argv[0], b); }
     else if (st == TY_POLY) { buf_puts(b, "sp_poly_to_f("); emit_expr(c, argv[0], b); buf_puts(b, ")"); }
-    else emit_expr(c, argv[0], b);
+    else if (st == TY_NIL) {
+      /* CRuby's sleep(nil) sleeps forever, as bare sleep does; both take the
+         no-op shape here (sp_sleep returns at once for a non-positive
+         duration), so nil follows the bare form rather than raising */
+      buf_puts(b, "({ (void)("); emit_expr(c, argv[0], b); buf_puts(b, "); 0.0; })");
+    }
+    else if (st == TY_BOOL) {
+      buf_puts(b, "({ sp_raise_cls(\"TypeError\", (");
+      emit_expr(c, argv[0], b);
+      buf_puts(b, ") ? \"can't convert TrueClass into time interval\""
+                  " : \"can't convert FalseClass into time interval\"); 0.0; })");
+    }
+    else if (st != TY_FLOAT && st != TY_BIGINT && conv_cls_name_of(c, st)) {
+      /* rb_time_interval's wording, which names the class -- not the Float
+         slot's ("can't convert String into time interval") */
+      buf_puts(b, "({ (void)("); emit_expr(c, argv[0], b);
+      buf_printf(b, "); sp_raise_cls(\"TypeError\", \"can't convert %s into time interval\"); 0.0; })",
+                 conv_cls_name_of(c, st));
+    }
+    else emit_float_expr(c, argv[0], b);
     buf_puts(b, "), (sp_int)0)");
     return;
   }
@@ -17388,7 +17453,7 @@ else { memcpy(dir, sf, n); dir[n] = 0; } }
     TyKind xt = comp_ntype(c, argv[0]);
     if (xt == TY_POLY) { buf_printf(b, "({ %s((int)sp_poly_to_i(", xfn); emit_expr(c, argv[0], b); buf_puts(b, ")); (sp_int)0; })"); }
     else if (xt == TY_BOOL) { buf_printf(b, "({ %s((", xfn); emit_expr(c, argv[0], b); buf_puts(b, ") ? 0 : 1); (sp_int)0; })"); }
-    else { buf_printf(b, "({ %s((int)(", xfn); emit_expr(c, argv[0], b); buf_puts(b, ")); (sp_int)0; })"); }
+    else { buf_printf(b, "({ %s((int)(", xfn); emit_int_expr(c, argv[0], b); buf_puts(b, ")); (sp_int)0; })"); }
     return;
     }
   }
@@ -17399,7 +17464,7 @@ else { memcpy(dir, sf, n); dir[n] = 0; } }
       TyKind at2 = comp_ntype(c, argv[0]);
       buf_puts(b, "({ sp_abort_raise(");
       if (at2 == TY_STRING) emit_expr(c, argv[0], b);
-      else { buf_puts(b, "sp_to_s("); emit_expr(c, argv[0], b); buf_puts(b, ")"); }
+      else emit_str_expr(c, argv[0], b);
       buf_puts(b, "); (sp_int)0; })");
     }
     else buf_puts(b, "({ sp_abort_raise((const char *)0); (sp_int)0; })");
@@ -18430,7 +18495,13 @@ else { memcpy(dir, sf, n); dir[n] = 0; } }
       nt_str(nt, recv, "name") && sp_streq(nt_str(nt, recv, "name"), "Regexp")) {
     TyKind _re_at = comp_ntype(c, argv[0]);
     if (_re_at == TY_POLY) { buf_puts(b, "sp_re_escape(sp_poly_to_s("); emit_expr(c, argv[0], b); buf_puts(b, "))"); }
-    else { buf_puts(b, "sp_re_escape("); emit_expr(c, argv[0], b); buf_puts(b, ")"); }
+    else if (_re_at == TY_SYMBOL) {
+      /* rb_reg_operand takes a Symbol by its name -- Regexp.escape(:"a.b")
+         is "a\\.b" -- where the #to_str protocol of the String slot would
+         refuse it (Regexp.union really does refuse a Symbol; escape does not) */
+      buf_puts(b, "sp_re_escape(sp_sym_to_s("); emit_expr(c, argv[0], b); buf_puts(b, "))");
+    }
+    else { buf_puts(b, "sp_re_escape("); emit_str_expr(c, argv[0], b); buf_puts(b, ")"); }
     return;
   }
   /* Regexp.union(pat, ...) -> a pattern matching the alternation of its operands.
@@ -21194,12 +21265,8 @@ else {
     if (sp_streq(name, "utime") && argc >= 3) {
       /* File.utime(atime, mtime, *paths): set the times on every path, return
          the count. Time args carry .tv_sec; numeric args are seconds. */
-      buf_puts(b, "({ double _ua = ");
-      if (comp_ntype(c, argv[0]) == TY_TIME) { buf_puts(b, "(double)("); emit_expr(c, argv[0], b); buf_puts(b, ").tv_sec"); }
-      else { buf_puts(b, "(double)("); emit_expr(c, argv[0], b); buf_puts(b, ")"); }
-      buf_puts(b, "; double _um = ");
-      if (comp_ntype(c, argv[1]) == TY_TIME) { buf_puts(b, "(double)("); emit_expr(c, argv[1], b); buf_puts(b, ").tv_sec"); }
-      else { buf_puts(b, "(double)("); emit_expr(c, argv[1], b); buf_puts(b, ")"); }
+      buf_puts(b, "({ double _ua = "); emit_utime_arg(c, argv[0], b);
+      buf_puts(b, "; double _um = "); emit_utime_arg(c, argv[1], b);
       buf_puts(b, "; ");
       for (int k = 2; k < argc; k++) {
         buf_puts(b, "sp_file_utime(_ua, _um, "); emit_path_expr(c, argv[k], b); buf_puts(b, "); ");
@@ -21523,6 +21590,20 @@ else {
         buf_puts(b, "sp_time_at_float(sp_poly_to_f("); emit_expr(c, argv[0], b);
         buf_puts(b, "))");
         return;
+      }
+      if (at != TY_INT && at != TY_FLOAT && at != TY_BIGINT && at != TY_UNKNOWN) {
+        /* an object answering #to_int is its Integer; any other class is
+           CRuby's "can't convert X into an exact number" */
+        if (ty_is_object(at) && obj_conv_method(c, at, "to_int", TY_INT, NULL) >= 0) {
+          buf_puts(b, "sp_time_at_int("); emit_int_expr(c, argv[0], b); buf_puts(b, ")");
+          return;
+        }
+        const char *ocn = conv_cls_name_of(c, at);
+        if (ocn) {
+          buf_puts(b, "({ (void)("); emit_expr(c, argv[0], b);
+          buf_printf(b, "); sp_raise_cls(\"TypeError\", \"can't convert %s into an exact number\"); (sp_Time){0, 0, 0}; })", ocn);
+          return;
+        }
       }
       buf_printf(b, "sp_time_at_%s(", at == TY_FLOAT ? "float" : "int");
       emit_expr(c, argv[0], b); buf_puts(b, ")");
@@ -22320,7 +22401,7 @@ else {
     }
     if (rre >= 0 && sp_streq(name, "match?") && argc == 2) {
       buf_printf(b, "sp_re_match_p_at(sp_re_pat_%d, ", rre); emit_expr(c, argv[0], b);
-      buf_puts(b, ", "); emit_expr(c, argv[1], b); buf_puts(b, ")");
+      buf_puts(b, ", "); emit_int_expr(c, argv[1], b); buf_puts(b, ")");
       return;
     }
     /* /re/ =~ str -> match offset or nil (poly) */
@@ -22629,7 +22710,7 @@ else {
       }
       else {
         buf_printf(b, "sp_re_matchdata_at(sp_re_pat_%d, ", are); emit_str_expr(c, recv, b);
-        buf_puts(b, ", "); emit_expr(c, argv[1], b); buf_puts(b, ")");
+        buf_puts(b, ", "); emit_int_expr(c, argv[1], b); buf_puts(b, ")");
       }
       return;
     }
@@ -22874,7 +22955,7 @@ else {
                untyped block param is enough -- so unbox it into the const
                char * slot the way match? and =~ already do */
             if (argc == 1) { buf_printf(b, "sp_re_matchdata(%s, ", rp.p); emit_str_expr_nilable(c, argv[0], b); buf_puts(b, ")"); }
-            else { buf_printf(b, "sp_re_matchdata_at(%s, ", rp.p); emit_str_expr_nilable(c, argv[0], b); buf_puts(b, ", "); emit_expr(c, argv[1], b); buf_puts(b, ")"); }
+            else { buf_printf(b, "sp_re_matchdata_at(%s, ", rp.p); emit_str_expr_nilable(c, argv[0], b); buf_puts(b, ", "); emit_int_expr(c, argv[1], b); buf_puts(b, ")"); }
             free(rp.p); return;
           }
           free(rp.p);
@@ -23982,7 +24063,7 @@ else {
       buf_puts(b, ", ");
       if (at0 == TY_POLY) { buf_puts(b, "sp_poly_to_i("); emit_expr(c, argv[0], b); buf_puts(b, ")"); }
       else if (at0 == TY_FLOAT) { buf_puts(b, "(sp_int)("); emit_expr(c, argv[0], b); buf_puts(b, ")"); }
-      else emit_expr(c, argv[0], b);
+      else emit_int_expr(c, argv[0], b);
       buf_puts(b, ")");
       return;
     }

@@ -667,15 +667,22 @@ else if (at == TY_POLY) {
       buf_puts(b, "putchar((int)(sp_poly_to_i("); emit_expr(c, argv[0], b); buf_puts(b, ") & 0xff));\n");
     }
 else {
-      buf_puts(b, "putchar((int)(("); emit_expr(c, argv[0], b); buf_puts(b, ") & 0xff));\n");
+      buf_puts(b, "putchar((int)(("); emit_int_expr(c, argv[0], b); buf_puts(b, ") & 0xff));\n");
     }
     return 1;
   }
   if (sp_streq(name, "system") && argc >= 1) {
+    if (ty_is_hash(comp_ntype(c, argv[0]))) { unsupported_feature(c, id, "system with an environment Hash"); return 0; }
+    if (ty_is_array(comp_ntype(c, argv[0]))) { unsupported_feature(c, id, "system with a [command, argv0] pair"); return 0; }
     int ts = ++g_tmp;
     emit_indent(b, indent);
-    buf_printf(b, "{ const char *_sys_%d[] = { ", ts);
-    for (int k = 0; k < argc; k++) { if (k > 0) buf_puts(b, ", "); emit_expr(c, argv[k], b); }
+    buf_puts(b, "{ ");
+    for (int k = 0; k < argc; k++) {
+      buf_printf(b, "const char *_sys_%d_%d = ", ts, k); emit_str_expr(c, argv[k], b);
+      buf_printf(b, "; SP_GC_ROOT_STR(_sys_%d_%d); ", ts, k);
+    }
+    buf_printf(b, "const char *_sys_%d[] = { ", ts);
+    for (int k = 0; k < argc; k++) { if (k > 0) buf_puts(b, ", "); buf_printf(b, "_sys_%d_%d", ts, k); }
     buf_printf(b, ", NULL }; sp_system_args(%d, _sys_%d); }\n", argc, ts);
     return 1;
   }
@@ -706,7 +713,7 @@ else {
         }
         emit_indent(b, indent);
         buf_puts(b, "  fputs(sp_str_format_polyarr(");
-        emit_expr(c, argv[0], b);
+        emit_str_expr(c, argv[0], b);
         buf_printf(b, ", _t%d), stdout); }\n", tpa);
         return 1;
       }
@@ -762,7 +769,7 @@ else {
       TyKind xt = comp_ntype(c, argv[0]);
       if (xt == TY_POLY) { buf_printf(b, "%s((int)sp_poly_to_i(", xfn); emit_expr(c, argv[0], b); buf_puts(b, "));\n"); }
       else if (xt == TY_BOOL) { buf_printf(b, "%s((", xfn); emit_expr(c, argv[0], b); buf_puts(b, ") ? 0 : 1);\n"); }
-      else { buf_printf(b, "%s((int)(", xfn); emit_expr(c, argv[0], b); buf_puts(b, "));\n"); }
+      else { buf_printf(b, "%s((int)(", xfn); emit_int_expr(c, argv[0], b); buf_puts(b, "));\n"); }
     }
     return 1;
   }
@@ -773,7 +780,7 @@ else {
       buf_puts(b, "sp_abort_raise(");
       TyKind at = comp_ntype(c, argv[0]);
       if (at == TY_STRING) emit_expr(c, argv[0], b);
-      else { buf_puts(b, "sp_to_s("); emit_expr(c, argv[0], b); buf_puts(b, ")"); }
+      else emit_str_expr(c, argv[0], b);
       buf_puts(b, ");\n");
     }
     else buf_puts(b, "sp_abort_raise((const char *)0);\n");
