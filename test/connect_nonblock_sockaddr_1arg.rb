@@ -46,14 +46,25 @@ default =
     :wait_writable
   end
 p default
-# Second call after the handshake completes. The kernel now reports
-# EISCONN, which the default mode raises as Errno::EISCONN.
-begin
-  s2.connect_nonblock(sockaddr_in(port, "127.0.0.1"))
-  p :ok
-rescue Errno::EISCONN
-  p :eisconn
-end
+# Second call AFTER waiting for writability. Without the wait the handshake
+# may still be in flight, and a second connect then reports EALREADY rather
+# than a finished connection -- which is what happens on macOS, where the
+# loopback handshake does not complete inside the first call the way it does
+# on Linux. That raised IO::EINPROGRESSWaitWritable past a rescue looking only
+# for Errno::EISCONN, and the program died mid-test.
+#
+# Once connected, "already connected" is reported as 0 by some kernels and as
+# EISCONN by others. Both mean the same thing, so the test says that rather
+# than pinning whichever one this machine produces.
+IO.select(nil, [s2], nil, 5)
+second =
+  begin
+    s2.connect_nonblock(sockaddr_in(port, "127.0.0.1"))
+    :connected
+  rescue Errno::EISCONN
+    :connected
+  end
+p second
 t.value.close rescue nil
 srv.close
 s2.close
