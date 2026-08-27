@@ -6012,7 +6012,14 @@ void emit_line_directive(Compiler *c, int id, Buf *b) {
 
 void emit_stmt(Compiler *c, int id, Buf *b, int indent) {
   emit_line_directive(c, id, b);
+  /* saved and restored like the other re-entry markers: a block body inlined
+     at two sites shares its node ids, so a setter that is a statement at one
+     site must still yield its value at a value-position site */
+  int saved_setter = g_setter_stmt_id;
+  if (nt_kind(c->nt, id) == NK_CallNode && name_is_plain_setter(nt_str(c->nt, id, "name")))
+    g_setter_stmt_id = id;
   emit_with_prelude(c, id, b, indent, emit_stmt_inner);
+  g_setter_stmt_id = saved_setter;
 }
 void emit_stmt_tail(Compiler *c, int id, Buf *b, int indent) {
   emit_line_directive(c, id, b);
@@ -6079,8 +6086,8 @@ static int emit_empty_literal_as(Compiler *c, int v, TyKind slot, Buf *b) {
   return 0;
 }
 
-static void emit_boxed_writer_arms(Compiler *c, const char *base, const char *nm,
-                                   const char *objp, const char *src, TyKind at, Buf *b) {
+void emit_boxed_writer_arms(Compiler *c, const char *base, const char *nm,
+                            const char *objp, const char *src, TyKind at, Buf *b) {
   for (int k = 0; k < c->nclasses; k++) {
     int wmdc = -1, kmi = -1;
     int kind = comp_resolve_member(c, k, base, 1, &wmdc, &kmi);
@@ -9610,27 +9617,9 @@ void emit_stmt_tail_inner(Compiler *c, int id, Buf *b, int indent) {
     return;
   }
 
-  /* setter call at tail position (obj.x = v): side-effect only, no return value.
-     A setter name ends in a bare '=' that is not part of ==, !=, <=, >=. */
-  if (sp_streq(ty, "CallNode")) {
-    const char *_setnm = nt_str(nt, id, "name");
-    int _setrecv = nt_ref(nt, id, "receiver");
-    size_t _setlen = _setnm ? strlen(_setnm) : 0;
-    if (_setrecv >= 0 && _setnm && _setlen >= 2 && _setnm[_setlen - 1] == '=' &&
-        _setnm[_setlen - 2] != '=' && _setnm[_setlen - 2] != '!' &&
-        _setnm[_setlen - 2] != '<' && _setnm[_setlen - 2] != '>') {
-      TyKind _setrt = comp_ntype(c, _setrecv);
-      if (ty_is_object(_setrt) || _setrt == TY_POLY) {
-        /* `[]=` in tail position yields the ASSIGNED VALUE (CRuby): fall
-           through to the generic value path below, whose return-slot
-           conversions apply (#3316). Other setters stay statements. */
-        if (!sp_streq(_setnm, "[]=")) {
-          emit_stmt(c, id, b, indent);
-          return;
-        }
-      }
-    }
-  }
+  /* No carve-out for a setter call at tail position (obj.x = v): it yields
+     the ASSIGNED VALUE, like `[]=` (#3316), through the generic value path
+     below, whose return-slot conversions apply. */
 
   /* string << at tail position: mutate receiver, then return it */
   if (sp_streq(ty, "CallNode")) {

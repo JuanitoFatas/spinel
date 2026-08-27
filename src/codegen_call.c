@@ -5111,6 +5111,11 @@ static int emit_poly_method_dispatch(Compiler *c, int id, Buf *b) {
     if (ncand > 0 || is_index || is_pdelete || is_pdig || is_pvalues_at || is_pfirstn || is_include || is_fetch || is_push || is_pjoin || is_ppack || is_pred || is_strftime || is_intersect || is_arr_index || is_cover || is_gcdlcm || is_pmerge) {
       TyKind ret = comp_ntype(c, id);
       int tv = ++g_tmp, tr = ++g_tmp;
+      /* `x = v` through a writer: the value is v as written, so the arms call
+         the writer for effect and the argument's temp is the result (the
+         static-receiver twin is setter_value_open). */
+      int is_setter_val = argc == 1 && !has_splat_arg && name_is_plain_setter(name) &&
+                          nt_ref(nt, id, "block") < 0;
       int *atmp = malloc(sizeof(int) * argc);
       TyKind *atmp_ty = malloc(sizeof(TyKind) * argc);
       /* Root the receiver temp across the arms, as the zero-arg dispatch does:
@@ -5159,19 +5164,22 @@ static int emit_poly_method_dispatch(Compiler *c, int id, Buf *b) {
           }
         }
       }
-      emit_ctype(c, is_scalar_ret(ret) ? ret : TY_INT, b);
-      /* Seed the result temp. For `fetch(key, default)` the seed IS the
+      /* Seed the result temp (a setter dispatch yields the argument's temp
+         instead and declares none). For `fetch(key, default)` the seed IS the
          supplied default, so a receiver whose runtime variant matches no switch
          arm (e.g. an empty `{}` that boxed as PolyPolyHash) still yields the
          default rather than a bare default_value() (an empty string). */
-      buf_printf(b, " _t%d = ", tr);
-      if (is_fetch && argc == 2) {
-        char dn[40]; snprintf(dn, sizeof dn, "_t%d", atmp[1]);
-        if (ret == TY_POLY) emit_boxed_text(c, infer_type(c, argv[1]), dn, b);
-        else buf_puts(b, dn);
+      if (!is_setter_val) {
+        emit_ctype(c, is_scalar_ret(ret) ? ret : TY_INT, b);
+        buf_printf(b, " _t%d = ", tr);
+        if (is_fetch && argc == 2) {
+          char dn[40]; snprintf(dn, sizeof dn, "_t%d", atmp[1]);
+          if (ret == TY_POLY) emit_boxed_text(c, infer_type(c, argv[1]), dn, b);
+          else buf_puts(b, dn);
+        }
+        else buf_puts(b, is_scalar_ret(ret) ? default_value(ret) : "0");
+        buf_puts(b, "; ");
       }
-      else buf_puts(b, is_scalar_ret(ret) ? default_value(ret) : "0");
-      buf_puts(b, "; ");
       /* Range#cover? on a runtime Range receiver (#3234) */
       if (is_cover) {
         char ix[64];
@@ -5548,8 +5556,8 @@ else {
         /* a proc form carries its own inferred return type (#3399) */
         int pf8 = pfi8 >= 0;
         TyKind mret8 = pf8 ? c->scopes[pfi8].ret : mret;
-        if ((mret8 == TY_VOID || mret8 == TY_NIL ||
-             method_is_void(&c->scopes[pf8 ? pfi8 : mi]))) buf_puts(b, cb.p);  /* no usable value */
+        if (is_setter_val || mret8 == TY_VOID || mret8 == TY_NIL ||
+            method_is_void(&c->scopes[pf8 ? pfi8 : mi])) buf_puts(b, cb.p);  /* no usable value */
         else {
           buf_printf(b, "_t%d = ", tr);
           if (ret == TY_POLY && mret8 != TY_POLY) emit_boxed_text(c, mret8, cb.p, b);
@@ -5975,7 +5983,7 @@ else {
                buf_puts(b, "; break;"); }
         free(kb.p); free(db.p);
       }
-      buf_printf(b, " } _t%d; })", tr);
+      buf_printf(b, " } _t%d; })", is_setter_val ? atmp[0] : tr);
       free(atmp);
       free(atmp_ty);
       free(kwtmp);

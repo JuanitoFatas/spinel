@@ -722,6 +722,8 @@ void       comp_add_reader(ClassInfo *ci, const char *name);
 void       comp_add_writer(ClassInfo *ci, const char *name);
 int        comp_is_reader(ClassInfo *ci, const char *name);
 int        comp_is_writer(ClassInfo *ci, const char *name);
+int        name_is_plain_setter(const char *name);
+int        setter_base_name(const char *name, char *out, size_t cap);
 void       comp_add_undef(ClassInfo *ci, const char *name);
 int        comp_is_undeffed_in_chain(Compiler *c, int class_id, const char *name);
 void       comp_add_sg_reader(ClassInfo *ci, const char *name);

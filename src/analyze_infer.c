@@ -4272,6 +4272,21 @@ else {
          this, `fetch` fell through to the non-hash `fetch(k, default)` rule or
          to nil, and its value-position result was dropped). */
       if (sp_streq(name, "fetch") && (argc == 1 || argc == 2)) return an_poly_concrete(c, name, TY_POLY);
+      /* `x = v` through a writer on a poly receiver is the assigned value as
+         written, like `[]=` below: the dispatch calls the writer for effect
+         and yields the argument's own temp, so no arm's return widens it.
+         Only when some class has the writer -- otherwise the call is the
+         NoMethodError the dispatch raises. */
+      if (argc == 1 && name_is_plain_setter(name) && nt_ref(nt, id, "block") < 0) {
+        int owned = 0;
+        char sbase[256];
+        int has_base = setter_base_name(name, sbase, sizeof sbase);
+        for (int k = 0; k < c->nclasses && !owned; k++)
+          owned = comp_method_in_chain(c, k, name, NULL) >= 0 ||
+                  (has_base && comp_writer_in_chain(c, k, sbase, NULL));
+        TyKind at = owned ? infer_type(c, argv[0]) : TY_UNKNOWN;
+        if (at != TY_UNKNOWN) return at;
+      }
       /* []= on a poly receiver yields the assigned value, emitted boxed */
       if (sp_streq(name, "[]=") && (argc == 2 || argc == 3)) return an_poly_concrete(c, name, TY_POLY);
       if (sp_streq(name, "dig") && argc >= 1) return an_poly_concrete(c, name, TY_POLY);

@@ -125,6 +125,9 @@ int sp_yield_site_type(const Compiler *c, int id, TyKind *out);
 extern int  g_argov_node[MAX_ARG_OVERRIDE];
 extern char g_argov_text[MAX_ARG_OVERRIDE][16];
 extern int  g_n_argov;
+/* The setter call (`obj.x = v`) emit_stmt is lowering: nothing reads its value,
+   so emit_object_call leaves the value temp out (see setter_value_open). */
+extern int  g_setter_stmt_id;
 extern int  g_sn_skip;   /* safe-nav re-entry marker (see codegen_util.c) */
 extern int  g_pd_skip;
 extern int  g_cls_tag_skip;   /* poly-dispatch builtin-arm re-entry marker */
@@ -393,6 +396,10 @@ int  emit_inline_expr(Compiler *c, int id, Buf *b);
 void emit_cond(Compiler *c, int id, Buf *b);
 void emit_fiber_new(Compiler *c, int id, Buf *b, int as_gen, int size_node);
 int  needs_root(TyKind t);
+/* The per-class `case` arms that store `src` into each candidate class's
+   `base` writer slot through the object pointer text `objp` (codegen_stmt.c). */
+void emit_boxed_writer_arms(Compiler *c, const char *base, const char *nm,
+                            const char *objp, const char *src, TyKind at, Buf *b);
 int  method_is_void(Scope *s);
 void emit_index_op_write(Compiler *c, int id, Buf *b, int indent);
 void emit_index_and_or_write(Compiler *c, int id, Buf *b, int indent, int is_or);

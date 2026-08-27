@@ -844,6 +844,24 @@ void comp_add_writer(ClassInfo *ci, const char *name) {
 }
 int comp_is_reader(ClassInfo *ci, const char *name) { return name_in(ci->readers, ci->nreaders, name); }
 int comp_is_writer(ClassInfo *ci, const char *name) { return name_in(ci->writers, ci->nwriters, name); }
+
+/* A plain setter name: `x=`, but not the operators that also end in `=`
+   (`==`, `!=`, `<=`, `>=`, `===`) and not `[]=`, whose value form is its own. */
+int name_is_plain_setter(const char *name) {
+  size_t ln = name ? strlen(name) : 0;
+  if (ln < 2 || name[ln - 1] != '=') return 0;
+  char p = name[ln - 2];
+  return p != '=' && p != '!' && p != '<' && p != '>' && p != ']';
+}
+/* The attribute a setter name writes: "x=" -> "x". 0 when the name is not a
+   plain setter or does not fit. */
+int setter_base_name(const char *name, char *out, size_t cap) {
+  if (!name_is_plain_setter(name)) return 0;
+  size_t ln = strlen(name) - 1;
+  if (ln >= cap) return 0;
+  memcpy(out, name, ln); out[ln] = '\0';
+  return 1;
+}
 void comp_add_undef(ClassInfo *ci, const char *name) {
   if (name_in(ci->undefs, ci->nundefs, name)) return;
   if (ci->nundefs >= ci->cundefs) {
