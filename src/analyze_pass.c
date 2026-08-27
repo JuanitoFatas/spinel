@@ -8208,6 +8208,14 @@ int infer_return_types(Compiler *c) {
        backprop). Re-deriving VOID here would flip the slot every iteration
        and the fixpoint never converges. */
     if (r == TY_VOID && sc->ret != TY_UNKNOWN && sc->ret != TY_VOID) continue;
+    /* A tail that nothing resolves derives UNKNOWN every round. The arm at the
+       end of this pass owns that case -- it gives such a method POLY when a
+       caller reads its value -- and its own guard then skips the method. Undo
+       that here and the two take turns to the fixpoint's cap (#4116). Narrow
+       on purpose: only an established POLY, and only for the shape that arm
+       claims, so a return that re-derives UNKNOWN for any other reason still
+       corrects downward. */
+    if (r == TY_UNKNOWN && sc->ret == TY_POLY && scope_tail_unresolved_call(c, s)) continue;
     if (r != sc->ret) { sc->ret = r; changed = 1; }
     /* For a method with a &block param, record the value type its block yields
        (unified across all call sites). Blocks passed to it are emitted returning
@@ -8301,7 +8309,10 @@ int infer_return_types(Compiler *c) {
         const char *nnm = nt_str(c->nt, n, "name");
         if (nnm && sp_streq(nnm, sc->name)) value_used = 1;
       }
-      if (value_used) { sc->ret = TY_POLY; changed = 1; }
+      /* Only when it moves. This assigned and reported unconditionally, so a
+         return already settled on POLY answered "changed" every round and the
+         fixpoint ran to its cap (#4116). */
+      if (value_used && sc->ret != TY_POLY) { sc->ret = TY_POLY; changed = 1; }
     }
     free(stmt_pos);
   }
