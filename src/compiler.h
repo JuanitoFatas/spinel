@@ -706,6 +706,7 @@ int        comp_method_vis(ClassInfo *ci, const char *name);
    class with an explicit entry wins (a subclass may re-`public` an inherited
    private method), defaulting to SP_VIS_PUBLIC when none records it. */
 int        comp_method_vis_in_chain(Compiler *c, int class_id, const char *name);
+int        comp_method_vis_declared(Compiler *c, int class_id, const char *name, int *at);
 /* Detect an instance_eval/exec trampoline (def m(args,&b); instance_eval/exec(args,&b); end).
    Returns 1 (eval) / 2 (exec) / 0; sets *def_class to the defining class. */
 int        comp_trampoline_kind(Compiler *c, int class_id, const char *name, int *def_class);

@@ -11513,6 +11513,65 @@ int emit_blockless_enumerator(Compiler *c, int id, Buf *b) {
    Split out of emit_call; pure code movement, no logic change. Called at the
    point these arms occupied, and declining (0) falls through to the arms that
    followed them. */
+/* Visibility, the way CRuby enforces it. A public_send-lowered call (stamped
+   vis_enforce by the desugars) admits only a public target whatever the
+   caller. An ordinary call with an explicit receiver admits a private target
+   only through literal `self.` and a protected one only from a method whose
+   self is an instance of the declaring class; a receiverless call and
+   send/__send__ (send_blind, and the dynamic-send arms) are not asked. The
+   table has known every declaration all along -- respond_to? answered from
+   it -- but only public_send consulted it, so `obj.helper` reached any
+   private method. Emits the raise as an expression and answers 1 when the
+   call is refused; the receiver still evaluates for its effects, and the
+   never-taken comma value keeps the expression's static type. */
+int emit_vis_refusal(Compiler *c, int id, Buf *b) {
+  const NodeTable *nt = c->nt;
+  int vrecv = nt_ref(nt, id, "receiver");
+  const char *vrty = vrecv >= 0 ? nt_type(nt, vrecv) : NULL;
+  int stamped = nt_str(nt, id, "vis_enforce") != NULL;
+  int plain = !stamped && vrecv >= 0 && !nt_str(nt, id, "send_blind") &&
+              !nt_int(nt, id, "dyn_arm", 0) && !(vrty && sp_streq(vrty, "SelfNode"));
+  if (!stamped && !plain) return 0;
+  const char *vnm = nt_str(nt, id, "name");
+  int vcid = -1;
+  if (vrecv >= 0) {
+    TyKind vrt = comp_ntype(c, vrecv);
+    if (ty_is_object(vrt)) vcid = ty_object_class(vrt);
+  }
+  else {
+    Scope *vs = comp_scope_of(c, id);
+    if (vs && vs->class_id >= 0 && !vs->is_cmethod) vcid = vs->class_id;
+  }
+  if (!vnm || vcid < 0) return 0;
+  int owner = -1;
+  int vis = comp_method_vis_declared(c, vcid, vnm, &owner);
+  if (vis == SP_VIS_PROTECTED && plain) {
+    /* the caller's self must be an instance of the declaring class: that
+       class itself or a descendant */
+    Scope *cs = comp_scope_of(c, id);
+    int caller = (cs && !cs->is_cmethod) ? cs->class_id : -1;
+    if (caller >= 0 && owner >= 0 && is_descendant(c, caller, owner)) vis = SP_VIS_PUBLIC;
+    /* a module's protected method: the caller is an instance of the module
+       when its class took the method from it */
+    if (vis == SP_VIS_PROTECTED && caller >= 0 && owner >= 0) {
+      int cmi = comp_method_in_chain(c, caller, vnm, NULL);
+      if (cmi >= 0 && cmi < c->nscopes && c->scopes[cmi].origin_module_ci == owner + 1) vis = SP_VIS_PUBLIC;
+    }
+  }
+  if (vis == SP_VIS_PUBLIC) return 0;
+  const char *vrn = class_ruby_name(c, vcid) ? class_ruby_name(c, vcid) : c->classes[vcid].name;
+  buf_puts(b, "(");
+  /* the receiver rides the error as NoMethodError#receiver */
+  if (vrecv >= 0) { buf_puts(b, "sp_exc_stage_recv("); emit_boxed(c, vrecv, b); buf_puts(b, "), "); }
+  /* the arguments evaluate before the lookup refuses, as CRuby's do */
+  { int vac; const int *vav = call_args(nt, id, &vac);
+    for (int k = 0; k < vac; k++) { buf_puts(b, "(void)("); emit_expr(c, vav[k], b); buf_puts(b, "), "); } }
+  buf_printf(b, "sp_raise_cls(\"NoMethodError\", (&(\"\\xff\" \"%s method '%s' called for an instance of %s\")[1])), %s)",
+             vis == SP_VIS_PRIVATE ? "private" : "protected", vnm, vrn,
+             default_value(comp_ntype(c, id)));
+  return 1;
+}
+
 int emit_unresolved_call(Compiler *c, int id, Buf *b) {
   const NodeTable *nt = c->nt;
   const char *name = nt_str(nt, id, "name");
@@ -12694,36 +12753,7 @@ static void emit_call_body(Compiler *c, int id, Buf *b) {
     }
   }
   if (emit_dynamic_send(c, id, b)) return;   /* recv.send(runtime_name, args) static dispatch */
-  /* a public_send-lowered call (stamped by the desugars): a private or
-     protected target raises NoMethodError like CRuby, which enforces
-     visibility on public_send regardless of caller context. The receiver
-     still evaluates for its effects; the never-taken comma value keeps the
-     expression's static type. */
-  if (nt_str(nt, id, "vis_enforce")) {
-    const char *vnm = nt_str(nt, id, "name");
-    int vrecv = nt_ref(nt, id, "receiver");
-    int vcid = -1;
-    if (vrecv >= 0) {
-      TyKind vrt = comp_ntype(c, vrecv);
-      if (ty_is_object(vrt)) vcid = ty_object_class(vrt);
-    }
-    else {
-      Scope *vs = comp_scope_of(c, id);
-      if (vs && vs->class_id >= 0 && !vs->is_cmethod) vcid = vs->class_id;
-    }
-    if (vnm && vcid >= 0) {
-      int vis = comp_method_vis_in_chain(c, vcid, vnm);
-      if (vis != SP_VIS_PUBLIC) {
-        const char *vrn = class_ruby_name(c, vcid) ? class_ruby_name(c, vcid) : c->classes[vcid].name;
-        buf_puts(b, "(");
-        if (vrecv >= 0) { buf_puts(b, "(void)("); emit_expr(c, vrecv, b); buf_puts(b, "), "); }
-        buf_printf(b, "sp_raise_cls(\"NoMethodError\", (&(\"\\xff\" \"%s method '%s' called for an instance of %s\")[1])), %s)",
-                   vis == SP_VIS_PRIVATE ? "private" : "protected", vnm, vrn,
-                   default_value(comp_ntype(c, id)));
-        return;
-      }
-    }
-  }
+  if (emit_vis_refusal(c, id, b)) return;
   /* k = Struct.new(:a, :b): the registered anonymous struct class, as a
      first-class class value */
   {
@@ -22250,6 +22280,7 @@ else {
           }
         }
         if (_awins) {
+          if (emit_vis_refusal(c, id, b)) return;   /* `private :x=` on the writer */
           char _aivn[258]; snprintf(_aivn, sizeof _aivn, "@%s", _abase);
           int _aiv = comp_ivar_index(&c->classes[_adefc < 0 ? _arc : _adefc], _aivn);
           TyKind _aivt = _aiv >= 0 ? c->classes[_adefc < 0 ? _arc : _adefc].ivar_types[_aiv] : TY_UNKNOWN;

@@ -493,11 +493,27 @@ int comp_method_vis(ClassInfo *ci, const char *name) {
 }
 
 int comp_method_vis_in_chain(Compiler *c, int class_id, const char *name) {
+  return comp_method_vis_declared(c, class_id, name, NULL);
+}
+/* The same, reporting the class that declared the visibility in *at. A
+   method copied in from an included module carries the module's declaration:
+   the copy's scope names the module (origin_module_ci) and the module's own
+   table holds the `private`/`protected` its body said. */
+int comp_method_vis_declared(Compiler *c, int class_id, const char *name, int *at) {
   name = comp_resolve_alias(c, class_id, name);
   for (int cid = class_id; cid >= 0; cid = c->classes[cid].parent) {
     ClassInfo *ci = &c->classes[cid];
     for (int i = 0; i < ci->nvis; i++)
-      if (sp_streq(ci->vis_names[i], name)) return ci->vis_kinds[i];
+      if (sp_streq(ci->vis_names[i], name)) { if (at) *at = cid; return ci->vis_kinds[i]; }
+  }
+  int mi = comp_method_in_chain(c, class_id, name, NULL);
+  if (mi >= 0 && mi < c->nscopes && c->scopes[mi].origin_module_ci > 0) {
+    int mci = c->scopes[mi].origin_module_ci - 1;
+    if (mci >= 0 && mci < c->nclasses) {
+      ClassInfo *mi_ci = &c->classes[mci];
+      for (int i = 0; i < mi_ci->nvis; i++)
+        if (sp_streq(mi_ci->vis_names[i], name)) { if (at) *at = mci; return mi_ci->vis_kinds[i]; }
+    }
   }
   return SP_VIS_PUBLIC;
 }

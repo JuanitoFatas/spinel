@@ -6443,6 +6443,13 @@ void emit_stmt_inner(Compiler *c, int id, Buf *b, int indent) {
             int writer_wins =
                 comp_resolve_member(c, ty_object_class(rt), base, 1, NULL, NULL) == SP_MEMBER_ATTR;
             if (writer_wins) {
+              /* `private :x=` on the writer: the refusal, as a statement */
+              Buf vb; memset(&vb, 0, sizeof vb);
+              if (emit_vis_refusal(c, id, &vb)) {
+                emit_indent(b, indent); buf_puts(b, vb.p); buf_puts(b, ";\n");
+                free(vb.p);
+                return;
+              }
               if (an >= 1) {
                 int rc = ty_object_class(rt);
                 char ivn[256]; snprintf(ivn, sizeof ivn, "@%s", base);
