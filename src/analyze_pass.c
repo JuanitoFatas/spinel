@@ -6305,6 +6305,12 @@ int infer_block_params(Compiler *c) {
       /* tap/then/yield_self yield self to the block param for ANY receiver
          type (a string, an int, an object), so type the param as rt. */
       if (rt == TY_UNKNOWN) intern_only = 1;
+      /* A nil receiver yields nil, and TY_NIL is not a slot type -- it has no
+         storage and the body still reads the parameter. Poly holds it. The
+         `then` / `yield_self` arm further down already says this; without it
+         here the two arms typed the same parameter differently on every round
+         and the fixpoint ran to its cap (#4116). */
+      if (rt == TY_NIL) rt = TY_POLY;
     }
     else {
       if (!ty_is_object(rt)) continue;
