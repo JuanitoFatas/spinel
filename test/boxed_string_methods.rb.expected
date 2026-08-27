@@ -1,0 +1,32 @@
+72
+"Hello"
+"Hallo"
+"Hallo world"
+"Hallo world"
+"abc"
+[1, 2, 3]
+">ab"
+[0, 1, 2]
+"cba"
+[3, 2, 1]
+"bcd"
+[2, 3]
+"x"
+7
+"QR"
+9
+[6, 7]
+no implicit conversion of String into Array
+no implicit conversion of Array into String
+undefined method 'reverse!' for an instance of Integer
+"bcd"
+"aef"
+"a�b"
+"a�b"
+"cba>"
+"cba>"
+no implicit conversion of true into Array
+no implicit conversion of nil into String
+no implicit conversion of true into Array
+no implicit conversion of nil into Array
+no implicit conversion of Float into Array

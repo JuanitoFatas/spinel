@@ -55,6 +55,9 @@ enum {
   PF_MUT      = 1 << 8,  /* mutates the receiver: the result is written back through the box */
   PF_STR_BANG = 1 << 9,  /* String value-form bang: re-enter the plain name, nil when unchanged */
   PF_STR_SELF = 1 << 10, /* ... but a bang that answers self (succ!/next!): never nil */
+  PF_ARGS_OWN = 1 << 11, /* the arguments must be of the owner's own kind (concat) */
+  PF_VAL_SELF = 1 << 12, /* a String mutator whose value is the receiver's new contents */
+  PF_SAME_OK  = 1 << 14, /* ... and contents that are the receiver's own mean no write, so no frozen check (scrub!) */
   PF_LAST     = 1 << 13  /* answers only once no poly-receiver emitter of its own has claimed the name */
 };
 typedef struct {
@@ -72,6 +75,9 @@ typedef struct {
    answers it, which is how the name lists this table replaced answered.
    0 when no row matches. */
 unsigned ty_poly_face_owners(const char *name, int argc, int has_blk, int plain, int with_last);
+/* The flags of the rows that give `owner` the name at this call shape: the
+   owner's own write-back and argument rules, apart from the other owners'. */
+unsigned ty_poly_face_owner_flags(const char *name, int argc, int has_blk, int plain, unsigned owner);
 /* Does the read-only Hash face answer `name` in some form? The face sites
    ask by name alone, before the call's shape is known. */
 int ty_poly_hash_face_name(const char *nm);
