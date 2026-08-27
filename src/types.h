@@ -114,6 +114,11 @@ int ty_is_array(TyKind t);
 /* Set while the type fixpoint iterates; defined in analyze.c. Declared here
    because ty_array_of consults it -- see the TY_UNKNOWN case. */
 extern int g_infer_optimistic;
+/* The highest round the inference fixpoint reached. 128 means it hit the cap
+   and stopped because the cap said so, not because it converged -- which costs
+   compile time and, where the cap lands mid-oscillation, can decide which of
+   two typings gets emitted. SP_FIXPOINT_LOG=1 prints it. (#4116) */
+extern int g_fixpoint_rounds;
 
 TyKind ty_array_of(TyKind elem);       /* element type -> array kind */
 TyKind ty_array_elem(TyKind arr);      /* array kind -> element type */

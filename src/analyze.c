@@ -22,6 +22,7 @@ int g_final_bind_pass = 0;
    boxes. Cleared once the fixpoint converges and iteration continues, so a
    slot whose evidence really never arrives still takes the pessimistic type. */
 int g_infer_optimistic = 0;
+int g_fixpoint_rounds = 0;
 
 /* Defined in codegen.c (linked into the same binary). Used to specialize a
    `rescue <UserExc> => e` binding to the exception subclass's object type. */
@@ -11932,6 +11933,7 @@ void analyze_program(Compiler *c) {
      hottest (called per node, every fixpoint iteration). */
   comp_scope_index_set_frozen(1);
 
+  g_fixpoint_rounds = 0;
   /* Two rounds. The proc-form clones are made between them: knowing which
      methods a poly dispatch will name needs settled receiver types, and the
      clones' own bodies then need inferring like any other. The second round is
@@ -11940,6 +11942,7 @@ void analyze_program(Compiler *c) {
   if (pf_round == 1 && !make_yield_proc_forms(c)) break;
   g_infer_optimistic = 1;
   for (int iter = 0; iter < 128; iter++) {
+    if (iter + 1 > g_fixpoint_rounds) g_fixpoint_rounds = iter + 1;
     int ch = 0;
     sp_narrow_memo_bump();  /* invalidate per-iteration narrow-helper memo */
     build_ie_map(c);  /* refresh instance_exec receiver-class map each pass */
@@ -14136,4 +14139,7 @@ void analyze_program(Compiler *c) {
      the cls_id dispatch (a real proc) while analyze left its captures
      uncelled, and the emit refuses. Only sets is_cell, and is idempotent. */
   mark_proc_captures(c);
+  if (getenv("SP_FIXPOINT_LOG"))
+    fprintf(stderr, "[fp] rounds=%d%s\n", g_fixpoint_rounds,
+            g_fixpoint_rounds >= 128 ? " (CAP -- did not converge)" : "");
 }

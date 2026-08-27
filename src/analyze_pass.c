@@ -857,6 +857,10 @@ static int pm_is_container_pat(const NodeTable *nt, int pat) {
                  sp_streq(pty, "HashPatternNode"));
 }
 
+/* Both callers run this INSIDE infer_write_types, after its per-round reset of
+   every non-param local to UNKNOWN -- so the sites here that type such a local
+   must not report `changed` either, for the same reason and with the same
+   sweep reporting for them. See the comment on that reset. (#4116) */
 static int infer_case_pattern_locals(Compiler *c) {
   const NodeTable *nt = c->nt;
   int changed = 0;
@@ -1002,7 +1006,7 @@ static int infer_case_pattern_locals(Compiler *c) {
           if (!lv || lv->is_param || lv->is_block_param) continue;
           TyKind et = (elem_t != TY_UNKNOWN) ? elem_t : TY_POLY;
           TyKind mg = ty_unify(lv->type, et);
-          if (mg != lv->type) { lv->type = mg; changed = 1; }
+          if (mg != lv->type) lv->type = mg;
         }
       }
       /* Bind simple LV target to scrutinee type */
@@ -1011,7 +1015,7 @@ static int infer_case_pattern_locals(Compiler *c) {
         LocalVar *lv = lnm ? scope_local(ms, lnm) : NULL;
         if (lv && !lv->is_param && !lv->is_block_param) {
           TyKind mg = ty_unify(lv->type, scrutinee_t);
-          if (mg != lv->type) { lv->type = mg; changed = 1; }
+          if (mg != lv->type) lv->type = mg;
         }
       }
       /* Handle ArrayPatternNode requireds and rest splat */
@@ -1042,7 +1046,7 @@ static int infer_case_pattern_locals(Compiler *c) {
                     : (darr != TY_UNKNOWN) ? ty_array_elem(darr)
                     : ty_is_object(array_scrutinee) ? TY_INT : TY_POLY;
           TyKind mg = ty_unify(lv->type, et);
-          if (mg != lv->type) { lv->type = mg; changed = 1; }
+          if (mg != lv->type) lv->type = mg;
         }
         /* rest splat: *name gets array type */
         int rest_nid = nt_ref(nt, array_pat, "rest");
@@ -1065,7 +1069,7 @@ static int infer_case_pattern_locals(Compiler *c) {
                               : (darr2 != TY_UNKNOWN) ? darr2
                               : ty_is_object(array_scrutinee) ? TY_INT_ARRAY : TY_POLY_ARRAY;
               TyKind mg = ty_unify(lv->type, rest_arr);
-              if (mg != lv->type) { lv->type = mg; changed = 1; }
+              if (mg != lv->type) lv->type = mg;
             }
           }
         }
@@ -1396,6 +1400,15 @@ int infer_write_types(Compiler *c) {
          write in node order and would re-derive from UNKNOWN forever (#2723) */
       if (!lv->is_param && !lv->is_block_param && !lv->rbs_seeded) { lv->gc_root = (int)lv->type; lv->type = TY_UNKNOWN; }
     }
+  /* Because of that reset, a site below that types a non-param local must NOT
+     report `changed` itself: it is comparing against UNKNOWN, so it answers
+     "changed" every round even when it re-derives exactly last round's type,
+     and the fixpoint never converges. The sweep at the end of this function
+     is the one that reports, by comparing against the type stashed above.
+     Eight sites did report, and between them they were why 70 of the repo's
+     own test programs ran the fixpoint to its 128-round cap (#4116). Ivars,
+     class variables, constants and parameters are NOT reset, so those sites
+     report normally. */
   /* Re-seed loop-growth bigint locals inside the recompute frame (the
      reset above would otherwise wipe the promotion each iteration). */
   infer_bigint_loop_locals(c);
@@ -1579,7 +1592,7 @@ int infer_write_types(Compiler *c) {
           if (!sp_streq(nt_type(nt, lefts[i]) ? nt_type(nt, lefts[i]) : "", "LocalVariableTargetNode")) continue;
           const char *lnm = nt_str(nt, lefts[i], "name");
           LocalVar *lv = lnm ? scope_local_intern(comp_scope_of(c, id), lnm) : NULL;
-          if (lv && lv->type != TY_IO) { lv->type = TY_IO; changed = 1; }
+          if (lv) lv->type = TY_IO;   /* the end-of-pass sweep reports it */
         }
         continue;
       }
@@ -1661,7 +1674,7 @@ int infer_write_types(Compiler *c) {
                 TyKind rat = ty_array_of(st);
                 if (rat == TY_UNKNOWN) rat = TY_POLY_ARRAY;
                 TyKind mg_r = ty_unify(rlv_ms->type, rat);
-                if (mg_r != rlv_ms->type) { rlv_ms->type = mg_r; changed = 1; }
+                rlv_ms->type = mg_r;
               }
             }
           }
@@ -1830,7 +1843,7 @@ int infer_write_types(Compiler *c) {
       LocalVar *lv = lnm ? scope_local(usc, lnm) : NULL;
       if (!lv || lv->is_param || lv->is_block_param) continue;
       TyKind mg = ty_unify(lv->type, TY_POLY);
-      if (mg != lv->type) { lv->type = mg; changed = 1; }
+      if (mg != lv->type) lv->type = mg;
     }
     /* rights targets (post-splat fixed targets) */
     int rn = 0;
@@ -1931,7 +1944,7 @@ int infer_write_types(Compiler *c) {
         TyKind et = (els && i < rn && i < en) ? infer_type(c, els[i]) : arr_elem;
         if (et == TY_UNKNOWN || et == TY_NIL) continue;
         TyKind mg = ty_unify(lv->type, et);
-        if (mg != lv->type) { lv->type = mg; changed = 1; }
+        if (mg != lv->type) lv->type = mg;
       }
       /* `*mid` binds the middle slice as the scrutinee's array kind */
       int ap_rest = nt_ref(nt, pattern, "rest");
@@ -1946,7 +1959,7 @@ int infer_write_types(Compiler *c) {
                     : (arr_elem == TY_POLY ? TY_POLY_ARRAY : TY_UNKNOWN);
           if (rlv && !rlv->is_param && !rlv->is_block_param && at != TY_UNKNOWN) {
             TyKind mg = ty_unify(rlv->type, at);
-            if (mg != rlv->type) { rlv->type = mg; changed = 1; }
+            if (mg != rlv->type) rlv->type = mg;
           }
         }
       }
@@ -1988,7 +2001,7 @@ int infer_write_types(Compiler *c) {
         }
         if (et == TY_UNKNOWN || et == TY_NIL) continue;
         TyKind mg = ty_unify(lv->type, et);
-        if (mg != lv->type) { lv->type = mg; changed = 1; }
+        if (mg != lv->type) lv->type = mg;
       }
       /* `**rest` binds the leftover pairs as a hash of the scrutinee's variant */
       int hp_rest = nt_ref(nt, pattern, "rest");
@@ -2002,7 +2015,7 @@ int infer_write_types(Compiler *c) {
           TyKind ht = infer_type(c, value);
           if (rlv && !rlv->is_param && !rlv->is_block_param && ty_is_hash(ht)) {
             TyKind mg = ty_unify(rlv->type, ht);
-            if (mg != rlv->type) { rlv->type = mg; changed = 1; }
+            if (mg != rlv->type) rlv->type = mg;
           }
         }
       }
@@ -2121,8 +2134,7 @@ int infer_write_types(Compiler *c) {
         if (rplv && !rplv->is_param && !rplv->is_block_param &&
             ty_is_hash(rplv->type) && rplv->type != ot &&
             rplv->type != TY_POLY_POLY_HASH) {
-          rplv->type = TY_POLY_POLY_HASH;
-          changed = 1;
+          rplv->type = TY_POLY_POLY_HASH;   /* a reset local: the sweep reports */
         }
         continue;
       }
@@ -2655,8 +2667,10 @@ int infer_write_types(Compiler *c) {
         if (dst->is_param || dst->is_block_param || src->is_param || src->is_block_param) continue;
         if (!ty_is_array(dst->type) || !ty_is_array(src->type)) continue;
         if (dst->type == src->type) continue;
-        if (dst->type == TY_POLY_ARRAY) { src->type = TY_POLY_ARRAY; prop = 1; changed = 1; }
-        else if (src->type == TY_POLY_ARRAY) { dst->type = TY_POLY_ARRAY; prop = 1; changed = 1; }
+        /* Both are reset locals, so the sweep reports; `prop` still drives
+           this loop's own re-run to a fixed point within the round. */
+        if (dst->type == TY_POLY_ARRAY) { src->type = TY_POLY_ARRAY; prop = 1; }
+        else if (src->type == TY_POLY_ARRAY) { dst->type = TY_POLY_ARRAY; prop = 1; }
       }
     }
   }
@@ -2686,7 +2700,7 @@ int infer_write_types(Compiler *c) {
     LocalVar *lv = nm ? scope_local(comp_scope_of(c, id), nm) : NULL;
     if (!lv || lv->is_param || lv->is_block_param || lv->rbs_seeded) continue;
     TyKind merged = ty_unify(lv->type, TY_POLY);
-    if (merged != lv->type) { lv->type = merged; changed = 1; }
+    if (merged != lv->type) lv->type = merged;
   }
 
   /* Second pass: re-compute proc_ret for proc-typed locals after body-internal
@@ -6534,14 +6548,21 @@ int infer_block_params(Compiler *c) {
       continue;
     }
 
-    /* File.open(args) { |f| ... }: f is a TY_POLY file handle */
+    /* File.open(args) { |f| ... } / IO.open: f is the handle, TY_IO.
+       This said TY_POLY, which predates TY_IO -- and infer_return_types
+       derives TY_IO for the same slot from the same evidence, so the two
+       traded it and neither yielded: the fixpoint ran to its 128-round cap on
+       anything that reached `Pathname#open`, which is `require "pathname"`
+       (#4116). Naming the handle is the fix that also stops the fight: a slot
+       typed TY_IO reaches #gets directly instead of through the runtime's
+       sp_poly_as_io. */
     if (recv >= 0 && sp_streq(name, "open") && nt_type(nt, recv) &&
         sp_streq(nt_type(nt, recv), "ConstantReadNode") && nt_str(nt, recv, "name") &&
         (sp_streq(nt_str(nt, recv, "name"), "File") ||
          sp_streq(nt_str(nt, recv, "name"), "IO"))) {
       const char *p0 = block_param_name(c, block, 0);
       if (p0) { LocalVar *l = scope_local_intern(comp_scope_of(c, block), p0); l->is_block_param = 1;
-                if (l->type != TY_POLY) { l->type = TY_POLY; changed = 1; } }
+                if (l->type != TY_IO) { l->type = TY_IO; changed = 1; } }
       continue;
     }
 
