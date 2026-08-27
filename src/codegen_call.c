@@ -5111,6 +5111,11 @@ static int emit_poly_method_dispatch(Compiler *c, int id, Buf *b) {
     if (ncand > 0 || is_index || is_pdelete || is_pdig || is_pvalues_at || is_pfirstn || is_include || is_fetch || is_push || is_pjoin || is_ppack || is_pred || is_strftime || is_intersect || is_arr_index || is_cover || is_gcdlcm || is_pmerge) {
       TyKind ret = comp_ntype(c, id);
       int tv = ++g_tmp, tr = ++g_tmp;
+      /* `x = v` through a writer: the value is v as written, so the arms call
+         the writer for effect and the argument's temp is the result (the
+         static-receiver twin is setter_value_open). */
+      int is_setter_val = argc == 1 && !has_splat_arg && name_is_plain_setter(name) &&
+                          nt_ref(nt, id, "block") < 0;
       int *atmp = malloc(sizeof(int) * argc);
       TyKind *atmp_ty = malloc(sizeof(TyKind) * argc);
       /* Root the receiver temp across the arms, as the zero-arg dispatch does:
@@ -5159,19 +5164,22 @@ static int emit_poly_method_dispatch(Compiler *c, int id, Buf *b) {
           }
         }
       }
-      emit_ctype(c, is_scalar_ret(ret) ? ret : TY_INT, b);
-      /* Seed the result temp. For `fetch(key, default)` the seed IS the
+      /* Seed the result temp (a setter dispatch yields the argument's temp
+         instead and declares none). For `fetch(key, default)` the seed IS the
          supplied default, so a receiver whose runtime variant matches no switch
          arm (e.g. an empty `{}` that boxed as PolyPolyHash) still yields the
          default rather than a bare default_value() (an empty string). */
-      buf_printf(b, " _t%d = ", tr);
-      if (is_fetch && argc == 2) {
-        char dn[40]; snprintf(dn, sizeof dn, "_t%d", atmp[1]);
-        if (ret == TY_POLY) emit_boxed_text(c, infer_type(c, argv[1]), dn, b);
-        else buf_puts(b, dn);
+      if (!is_setter_val) {
+        emit_ctype(c, is_scalar_ret(ret) ? ret : TY_INT, b);
+        buf_printf(b, " _t%d = ", tr);
+        if (is_fetch && argc == 2) {
+          char dn[40]; snprintf(dn, sizeof dn, "_t%d", atmp[1]);
+          if (ret == TY_POLY) emit_boxed_text(c, infer_type(c, argv[1]), dn, b);
+          else buf_puts(b, dn);
+        }
+        else buf_puts(b, is_scalar_ret(ret) ? default_value(ret) : "0");
+        buf_puts(b, "; ");
       }
-      else buf_puts(b, is_scalar_ret(ret) ? default_value(ret) : "0");
-      buf_puts(b, "; ");
       /* Range#cover? on a runtime Range receiver (#3234) */
       if (is_cover) {
         char ix[64];
@@ -5548,8 +5556,8 @@ else {
         /* a proc form carries its own inferred return type (#3399) */
         int pf8 = pfi8 >= 0;
         TyKind mret8 = pf8 ? c->scopes[pfi8].ret : mret;
-        if ((mret8 == TY_VOID || mret8 == TY_NIL ||
-             method_is_void(&c->scopes[pf8 ? pfi8 : mi]))) buf_puts(b, cb.p);  /* no usable value */
+        if (is_setter_val || mret8 == TY_VOID || mret8 == TY_NIL ||
+            method_is_void(&c->scopes[pf8 ? pfi8 : mi])) buf_puts(b, cb.p);  /* no usable value */
         else {
           buf_printf(b, "_t%d = ", tr);
           if (ret == TY_POLY && mret8 != TY_POLY) emit_boxed_text(c, mret8, cb.p, b);
@@ -5975,7 +5983,7 @@ else {
                buf_puts(b, "; break;"); }
         free(kb.p); free(db.p);
       }
-      buf_printf(b, " } _t%d; })", tr);
+      buf_printf(b, " } _t%d; })", is_setter_val ? atmp[0] : tr);
       free(atmp);
       free(atmp_ty);
       free(kwtmp);
@@ -11388,16 +11396,16 @@ int emit_blockless_enumerator(Compiler *c, int id, Buf *b) {
       nt_ref(nt, id, "block") < 0 && sp_streq(name, "each_line") &&
       nt_type(nt, argv[0]) && sp_streq(nt_type(nt, argv[0]), "KeywordHashNode")) {
     int chomp_v = struct_kwarg_value(c, argv[0], "chomp");
-    int is_chomp = (chomp_v >= 0 && nt_type(nt, chomp_v) &&
-                    sp_streq(nt_type(nt, chomp_v), "TrueNode"));
-    int tsrc2 = ++g_tmp;
+    int is_chomp = kw_flag_static(c, chomp_v);
+    int tsrc2 = ++g_tmp, tch = ++g_tmp;
     buf_printf(b, "({ const char *_t%d = ", tsrc2);
     emit_expr(c, recv, b);
-    buf_printf(b, "; SP_GC_ROOT(_t%d); "
-                  "sp_enum_with_src(sp_Enumerator_new_from(sp_box_str_array(%s(_t%d))), "
-                  "sp_box_str(_t%d), \"each_line(chomp: %s)\"); })",
-               tsrc2, is_chomp ? "sp_str_lines_chomp" : "sp_str_lines", tsrc2, tsrc2,
-               is_chomp ? "true" : "false");
+    buf_printf(b, "; SP_GC_ROOT(_t%d); int _t%d = ", tsrc2, tch);
+    if (is_chomp < 0) emit_cond(c, chomp_v, b);
+    else buf_printf(b, "%d", is_chomp);
+    buf_printf(b, "; sp_enum_with_src(sp_Enumerator_new_from(sp_box_str_array(_t%d ? sp_str_lines_chomp(_t%d) : sp_str_lines(_t%d))), "
+                  "sp_box_str(_t%d), _t%d ? \"each_line(chomp: true)\" : \"each_line(chomp: false)\"); })",
+               tch, tsrc2, tsrc2, tsrc2, tch);
     return 1;
   }
   /* arr.each_slice(n) / arr.each_cons(n) with no block -> a materialized
@@ -11505,6 +11513,65 @@ int emit_blockless_enumerator(Compiler *c, int id, Buf *b) {
    Split out of emit_call; pure code movement, no logic change. Called at the
    point these arms occupied, and declining (0) falls through to the arms that
    followed them. */
+/* Visibility, the way CRuby enforces it. A public_send-lowered call (stamped
+   vis_enforce by the desugars) admits only a public target whatever the
+   caller. An ordinary call with an explicit receiver admits a private target
+   only through literal `self.` and a protected one only from a method whose
+   self is an instance of the declaring class; a receiverless call and
+   send/__send__ (send_blind, and the dynamic-send arms) are not asked. The
+   table has known every declaration all along -- respond_to? answered from
+   it -- but only public_send consulted it, so `obj.helper` reached any
+   private method. Emits the raise as an expression and answers 1 when the
+   call is refused; the receiver still evaluates for its effects, and the
+   never-taken comma value keeps the expression's static type. */
+int emit_vis_refusal(Compiler *c, int id, Buf *b) {
+  const NodeTable *nt = c->nt;
+  int vrecv = nt_ref(nt, id, "receiver");
+  const char *vrty = vrecv >= 0 ? nt_type(nt, vrecv) : NULL;
+  int stamped = nt_str(nt, id, "vis_enforce") != NULL;
+  int plain = !stamped && vrecv >= 0 && !nt_str(nt, id, "send_blind") &&
+              !nt_int(nt, id, "dyn_arm", 0) && !(vrty && sp_streq(vrty, "SelfNode"));
+  if (!stamped && !plain) return 0;
+  const char *vnm = nt_str(nt, id, "name");
+  int vcid = -1;
+  if (vrecv >= 0) {
+    TyKind vrt = comp_ntype(c, vrecv);
+    if (ty_is_object(vrt)) vcid = ty_object_class(vrt);
+  }
+  else {
+    Scope *vs = comp_scope_of(c, id);
+    if (vs && vs->class_id >= 0 && !vs->is_cmethod) vcid = vs->class_id;
+  }
+  if (!vnm || vcid < 0) return 0;
+  int owner = -1;
+  int vis = comp_method_vis_declared(c, vcid, vnm, &owner);
+  if (vis == SP_VIS_PROTECTED && plain) {
+    /* the caller's self must be an instance of the declaring class: that
+       class itself or a descendant */
+    Scope *cs = comp_scope_of(c, id);
+    int caller = (cs && !cs->is_cmethod) ? cs->class_id : -1;
+    if (caller >= 0 && owner >= 0 && is_descendant(c, caller, owner)) vis = SP_VIS_PUBLIC;
+    /* a module's protected method: the caller is an instance of the module
+       when its class took the method from it */
+    if (vis == SP_VIS_PROTECTED && caller >= 0 && owner >= 0) {
+      int cmi = comp_method_in_chain(c, caller, vnm, NULL);
+      if (cmi >= 0 && cmi < c->nscopes && c->scopes[cmi].origin_module_ci == owner + 1) vis = SP_VIS_PUBLIC;
+    }
+  }
+  if (vis == SP_VIS_PUBLIC) return 0;
+  const char *vrn = class_ruby_name(c, vcid) ? class_ruby_name(c, vcid) : c->classes[vcid].name;
+  buf_puts(b, "(");
+  /* the receiver rides the error as NoMethodError#receiver */
+  if (vrecv >= 0) { buf_puts(b, "sp_exc_stage_recv("); emit_boxed(c, vrecv, b); buf_puts(b, "), "); }
+  /* the arguments evaluate before the lookup refuses, as CRuby's do */
+  { int vac; const int *vav = call_args(nt, id, &vac);
+    for (int k = 0; k < vac; k++) { buf_puts(b, "(void)("); emit_expr(c, vav[k], b); buf_puts(b, "), "); } }
+  buf_printf(b, "sp_raise_cls(\"NoMethodError\", (&(\"\\xff\" \"%s method '%s' called for an instance of %s\")[1])), %s)",
+             vis == SP_VIS_PRIVATE ? "private" : "protected", vnm, vrn,
+             default_value(comp_ntype(c, id)));
+  return 1;
+}
+
 int emit_unresolved_call(Compiler *c, int id, Buf *b) {
   const NodeTable *nt = c->nt;
   const char *name = nt_str(nt, id, "name");
@@ -12686,36 +12753,7 @@ static void emit_call_body(Compiler *c, int id, Buf *b) {
     }
   }
   if (emit_dynamic_send(c, id, b)) return;   /* recv.send(runtime_name, args) static dispatch */
-  /* a public_send-lowered call (stamped by the desugars): a private or
-     protected target raises NoMethodError like CRuby, which enforces
-     visibility on public_send regardless of caller context. The receiver
-     still evaluates for its effects; the never-taken comma value keeps the
-     expression's static type. */
-  if (nt_str(nt, id, "vis_enforce")) {
-    const char *vnm = nt_str(nt, id, "name");
-    int vrecv = nt_ref(nt, id, "receiver");
-    int vcid = -1;
-    if (vrecv >= 0) {
-      TyKind vrt = comp_ntype(c, vrecv);
-      if (ty_is_object(vrt)) vcid = ty_object_class(vrt);
-    }
-    else {
-      Scope *vs = comp_scope_of(c, id);
-      if (vs && vs->class_id >= 0 && !vs->is_cmethod) vcid = vs->class_id;
-    }
-    if (vnm && vcid >= 0) {
-      int vis = comp_method_vis_in_chain(c, vcid, vnm);
-      if (vis != SP_VIS_PUBLIC) {
-        const char *vrn = class_ruby_name(c, vcid) ? class_ruby_name(c, vcid) : c->classes[vcid].name;
-        buf_puts(b, "(");
-        if (vrecv >= 0) { buf_puts(b, "(void)("); emit_expr(c, vrecv, b); buf_puts(b, "), "); }
-        buf_printf(b, "sp_raise_cls(\"NoMethodError\", (&(\"\\xff\" \"%s method '%s' called for an instance of %s\")[1])), %s)",
-                   vis == SP_VIS_PRIVATE ? "private" : "protected", vnm, vrn,
-                   default_value(comp_ntype(c, id)));
-        return;
-      }
-    }
-  }
+  if (emit_vis_refusal(c, id, b)) return;
   /* k = Struct.new(:a, :b): the registered anonymous struct class, as a
      first-class class value */
   {
@@ -13645,11 +13683,26 @@ static void emit_call_body(Compiler *c, int id, Buf *b) {
     if (rty2 && sp_streq(rty2, "ConstantReadNode")) {
       const char *rn = nt_str(nt, recv, "name");
       if (rn && sp_streq(rn, "ENV")) {
-        int tk = ++g_tmp, tky = ++g_tmp, tv = ++g_tmp;
+        /* The call's type is String joined with the default's: a String or
+           nil default keeps the nullable string, any other default boxes both
+           arms. (The block form is the ENV snapshot's Hash#fetch, #2742.) */
+        int fpoly = comp_ntype(c, id) == TY_POLY;
+        int tk = ++g_tmp, tky = ++g_tmp, tv = ++g_tmp, td = ++g_tmp;
         buf_printf(b, "({ const char *_t%d = ", tky); emit_str_expr(c, argv[0], b);
-        buf_printf(b, "; const char *_t%d = getenv(_t%d)", tk, tky);
-        buf_printf(b, "; const char *_t%d = _t%d ? sp_str_dup_external(_t%d) : ", tv, tk, tk);
-        if (argc >= 2) emit_expr(c, argv[1], b);
+        /* the default is an argument: it evaluates whether or not the
+           variable is set, before the lookup */
+        if (argc >= 2) {
+          buf_puts(b, "; "); emit_ctype(c, fpoly ? TY_POLY : TY_STRING, b);
+          buf_printf(b, " _t%d = ", td);
+          if (fpoly) emit_boxed(c, argv[1], b);
+          else emit_expr(c, argv[1], b);
+        }
+        buf_printf(b, "; const char *_t%d = getenv(_t%d); ", tk, tky);
+        emit_ctype(c, fpoly ? TY_POLY : TY_STRING, b);
+        buf_printf(b, " _t%d = _t%d ? ", tv, tk);
+        if (fpoly) buf_printf(b, "sp_box_str(sp_str_dup_external(_t%d)) : ", tk);
+        else buf_printf(b, "sp_str_dup_external(_t%d) : ", tk);
+        if (argc >= 2) buf_printf(b, "_t%d", td);
         else
           /* no default: CRuby raises KeyError naming the key. Route it through
              sp_raise_key_not_found so the key is staged for #key (#3027). */
@@ -16206,12 +16259,13 @@ static void emit_call_body(Compiler *c, int id, Buf *b) {
     if (sp_streq(name, "gets") || sp_streq(name, "readline")) {
       /* separator / limit / chomp: forms (#2809); readline raises EOFError
          at end of file (#2817) */
-      int gsep = -1, glim = -1, gchomp = 0;
+      int gsep = -1, glim = -1;
+      Buf gchomp; memset(&gchomp, 0, sizeof gchomp);   /* the C truth of `chomp:` */
       for (int k = 0; k < argc; k++) {
         const char *kty = nt_type(nt, argv[k]);
         if (kty && sp_streq(kty, "KeywordHashNode")) {
           int cv = struct_kwarg_value(c, argv[k], "chomp");
-          if (cv >= 0 && nt_type(nt, cv) && sp_streq(nt_type(nt, cv), "TrueNode")) gchomp = 1;
+          emit_kw_flag(c, cv, &gchomp);
         }
         else if (comp_ntype(c, argv[k]) == TY_INT) glim = argv[k];
         else gsep = argv[k];
@@ -16223,9 +16277,9 @@ static void emit_call_body(Compiler *c, int id, Buf *b) {
         if (gsep >= 0) emit_str_expr_nilable(c, gsep, b); else buf_puts(b, "\"\\n\"");
         buf_puts(b, ", ");
         if (glim >= 0) emit_int_expr(c, glim, b); else buf_puts(b, "0");
-        buf_printf(b, ", %d)", gchomp);
+        buf_printf(b, ", %s)", gchomp.p ? gchomp.p : "0");
       }
-      free(rb.p); return;
+      free(gchomp.p); free(rb.p); return;
     }
     if (sp_streq(name, "getc") && argc == 0) {
       buf_printf(b, "sp_File_getc(%s)", r); free(rb.p); return;
@@ -16481,20 +16535,21 @@ static void emit_call_body(Compiler *c, int id, Buf *b) {
       free(rb.p); return;
     }
     if (sp_streq(name, "readlines")) {
-      int rsep = -1, rchomp = 0;
+      int rsep = -1;
+      Buf rchomp; memset(&rchomp, 0, sizeof rchomp);
       for (int k = 0; k < argc; k++) {
         const char *kty = nt_type(nt, argv[k]);
         if (kty && sp_streq(kty, "KeywordHashNode")) {
           int cv = struct_kwarg_value(c, argv[k], "chomp");
-          if (cv >= 0 && nt_type(nt, cv) && sp_streq(nt_type(nt, cv), "TrueNode")) rchomp = 1;
+          emit_kw_flag(c, cv, &rchomp);
         }
         else rsep = argv[k];
       }
-      if (rsep < 0 && !rchomp) buf_printf(b, "sp_File_readlines(%s)", r);
+      if (rsep < 0 && (!rchomp.p || sp_streq(rchomp.p, "0"))) buf_printf(b, "sp_File_readlines(%s)", r);
       else {
         buf_printf(b, "sp_File_readlines_sep(%s, ", r);
         if (rsep >= 0) emit_expr(c, rsep, b); else buf_puts(b, "\"\\n\"");
-        buf_printf(b, ", %d)", rchomp);
+        buf_printf(b, ", %s)", rchomp.p ? rchomp.p : "0");
       }
       free(rb.p); return;
     }
@@ -21326,25 +21381,27 @@ else {
     }
     if (sp_streq(name, "readlines") && argc >= 1) {
       /* File.readlines(path[, sep][, chomp: true]) (#2820) */
-      int chomp = 0, csep = -1;
+      int csep = -1;
+      Buf chomp; memset(&chomp, 0, sizeof chomp);
       for (int ki = 1; ki < argc; ki++) {
         const char *kty = nt_type(nt, argv[ki]);
         if (kty && sp_streq(kty, "KeywordHashNode")) {
           int cv = struct_kwarg_value(c, argv[ki], "chomp");
-          if (cv >= 0 && nt_type(nt, cv) && sp_streq(nt_type(nt, cv), "TrueNode"))
-            chomp = 1;
+          emit_kw_flag(c, cv, &chomp);
         }
         else csep = argv[ki];
       }
-      if (csep >= 0) {
+      /* a flag decided at run time takes the separator form, which carries it */
+      if (csep >= 0 || (chomp.p && !sp_streq(chomp.p, "0") && !sp_streq(chomp.p, "1"))) {
         buf_puts(b, "sp_file_readlines_sep(");
         emit_path_expr(c, argv[0], b); buf_puts(b, ", ");
-        emit_str_expr(c, csep, b);
-        buf_printf(b, ", %d)", chomp);
-        return;
+        if (csep >= 0) emit_str_expr(c, csep, b); else buf_puts(b, "\"\\n\"");
+        buf_printf(b, ", %s)", chomp.p ? chomp.p : "0");
+        free(chomp.p); return;
       }
-      if (chomp) buf_puts(b, "sp_file_readlines_chomp(");
+      if (chomp.p && sp_streq(chomp.p, "1")) buf_puts(b, "sp_file_readlines_chomp(");
       else buf_puts(b, "sp_file_readlines(");
+      free(chomp.p);
       emit_path_expr(c, argv[0], b); buf_puts(b, ")"); return;
     }
     /* File.open(path, mode) / File.new(path, mode) without block -> TY_IO
@@ -22242,6 +22299,7 @@ else {
           }
         }
         if (_awins) {
+          if (emit_vis_refusal(c, id, b)) return;   /* `private :x=` on the writer */
           char _aivn[258]; snprintf(_aivn, sizeof _aivn, "@%s", _abase);
           int _aiv = comp_ivar_index(&c->classes[_adefc < 0 ? _arc : _adefc], _aivn);
           TyKind _aivt = _aiv >= 0 ? c->classes[_adefc < 0 ? _arc : _adefc].ivar_types[_aiv] : TY_UNKNOWN;

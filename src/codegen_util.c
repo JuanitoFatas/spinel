@@ -59,6 +59,7 @@ int  g_indent = 0;
 int  g_argov_node[MAX_ARG_OVERRIDE];
 char g_argov_text[MAX_ARG_OVERRIDE][16];
 int  g_n_argov = 0;
+int  g_setter_stmt_id = -1;
 /* Node id whose safe-nav (&.) guard is already emitted; the re-entrant
    emit_call skips the guard block for exactly this node. */
 int  g_sn_skip = -1;
@@ -1918,6 +1919,29 @@ int scope_has_callable_symbol(Compiler *c, int s) {
   return sc->reachable && !sc->yields &&
          (!sc->is_transplanted_source || scope_toplevel_included(c, s)) &&
          !scope_is_shadowed(c, s);
+}
+/* What a keyword flag's value says at compile time: 1 for a literal Ruby
+   treats as true (true, a number, a String, a Symbol, a container -- any
+   literal but false and nil), 0 for false or nil, -1 when only the run time
+   knows. A flag such as `chomp:` was read as true for the TrueNode kind
+   alone, so `chomp: 1` did not chomp. */
+int kw_flag_static(Compiler *c, int node) {
+  const char *t = node >= 0 ? nt_type(c->nt, node) : NULL;
+  if (!t) return 0;
+  if (sp_streq(t, "FalseNode") || sp_streq(t, "NilNode")) return 0;
+  if (sp_streq(t, "TrueNode") || sp_streq(t, "IntegerNode") || sp_streq(t, "FloatNode") ||
+      sp_streq(t, "StringNode") || sp_streq(t, "InterpolatedStringNode") ||
+      sp_streq(t, "SymbolNode") || sp_streq(t, "ArrayNode") || sp_streq(t, "HashNode") ||
+      sp_streq(t, "RegularExpressionNode") || sp_streq(t, "RangeNode"))
+    return 1;
+  return -1;
+}
+/* The C truth of a keyword flag into `out`: "1"/"0" from kw_flag_static, or
+   the run-time test in parentheses. An absent flag is "0". */
+void emit_kw_flag(Compiler *c, int node, Buf *out) {
+  int f = kw_flag_static(c, node);
+  if (f >= 0) { buf_printf(out, "%d", f); return; }
+  buf_puts(out, "("); emit_cond(c, node, out); buf_puts(out, ")");
 }
 int struct_kwarg_value(Compiler *c, int kwh, const char *name) {
   const NodeTable *nt = c->nt;

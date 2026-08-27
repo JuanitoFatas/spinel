@@ -40,8 +40,7 @@ end
 
 # 4. Method-level: else's last expr is the method return value
 # (overriding begin body's). When else's last is `puts ...` which
-# returns nil, the method returns nil (spinel's int slot lowers it
-# to 0).
+# returns nil, the method returns nil.
 def m_else_succeeds
   10
 rescue
@@ -49,7 +48,7 @@ rescue
 else
   puts "else fired"
 end
-puts m_else_succeeds       # "else fired" then 0 (spinel int slot for nil)
+puts m_else_succeeds       # "else fired" then an empty line (nil)
 
 # 5. Method-level: exception path skips else, rescue value returned.
 def m_else_skipped

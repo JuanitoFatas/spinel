@@ -1403,6 +1403,16 @@ int infer_object_call(Compiler *c, int id, TyKind rt, TyKind *out) {
           if (wivt == TY_POLY && rhsk != TY_POLY) { *out = TY_POLY; return 1; }
           { *out = rhsk; return 1; }
         }
+        /* A hand-written `def x=(v)` is an assignment expression as well: its
+           value is the argument as written, whatever the body returns (codegen
+           passes the argument through a temp that is the expression's value).
+           An argument not yet typed leaves the call to the method rule below,
+           which the next round revisits. */
+        if (argc == 1 && name_is_plain_setter(name) &&
+            comp_method_in_chain(c, cid, name, NULL) >= 0) {
+          TyKind rhsk = infer_type(c, argv[0]);
+          if (rhsk != TY_UNKNOWN) { *out = rhsk; return 1; }
+        }
       }
     }
     int mi = comp_method_in_chain(c, cid, name, NULL);

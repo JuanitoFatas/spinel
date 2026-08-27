@@ -3769,12 +3769,24 @@ else {
     }
     if (is_fiber) return infer_type(c, argv[1]);
   }
-  /* ENV[key] -> string or nil (use TY_STRING; null means nil) */
+  /* ENV[key] -> string or nil (use TY_STRING; null means nil). ENV.fetch
+     answers its default on a miss, so the call is the union of String with
+     the default's type: a String or nil default keeps the nullable string,
+     anything else boxes. Typed String alone, an Array default was placed in
+     the const char * slot as it stood. (The block form is the ENV snapshot's
+     Hash#fetch, #2742, and types there.) */
   if (recv >= 0 && argc >= 1 && (sp_streq(name, "[]") || sp_streq(name, "fetch"))) {
     const char *rty = nt_type(nt, recv);
     if (rty && sp_streq(rty, "ConstantReadNode")) {
       const char *rn = nt_str(nt, recv, "name");
-      if (rn && sp_streq(rn, "ENV")) return TY_STRING;
+      if (rn && sp_streq(rn, "ENV")) {
+        if (sp_streq(name, "fetch") && argc >= 2) {
+          TyKind dt = infer_type(c, argv[1]);
+          if (dt == TY_UNKNOWN || dt == TY_NIL || dt == TY_VOID) return TY_STRING;
+          return ty_unify(TY_STRING, dt);
+        }
+        return TY_STRING;
+      }
     }
   }
   /* ENV.key?/has_key?/include?/member?(key) -> bool */
@@ -4272,6 +4284,21 @@ else {
          this, `fetch` fell through to the non-hash `fetch(k, default)` rule or
          to nil, and its value-position result was dropped). */
       if (sp_streq(name, "fetch") && (argc == 1 || argc == 2)) return an_poly_concrete(c, name, TY_POLY);
+      /* `x = v` through a writer on a poly receiver is the assigned value as
+         written, like `[]=` below: the dispatch calls the writer for effect
+         and yields the argument's own temp, so no arm's return widens it.
+         Only when some class has the writer -- otherwise the call is the
+         NoMethodError the dispatch raises. */
+      if (argc == 1 && name_is_plain_setter(name) && nt_ref(nt, id, "block") < 0) {
+        int owned = 0;
+        char sbase[256];
+        int has_base = setter_base_name(name, sbase, sizeof sbase);
+        for (int k = 0; k < c->nclasses && !owned; k++)
+          owned = comp_method_in_chain(c, k, name, NULL) >= 0 ||
+                  (has_base && comp_writer_in_chain(c, k, sbase, NULL));
+        TyKind at = owned ? infer_type(c, argv[0]) : TY_UNKNOWN;
+        if (at != TY_UNKNOWN) return at;
+      }
       /* []= on a poly receiver yields the assigned value, emitted boxed */
       if (sp_streq(name, "[]=") && (argc == 2 || argc == 3)) return an_poly_concrete(c, name, TY_POLY);
       if (sp_streq(name, "dig") && argc >= 1) return an_poly_concrete(c, name, TY_POLY);
@@ -6413,9 +6440,18 @@ TyKind infer_uncached(Compiler *c, int id) {
     return ty_unify(lt, rt);  /* value form: a || b -> common type */
   }
   if (nk == NK_BeginNode) {
-    /* value = body value unified with each rescue handler's value */
+    /* value = body value unified with each rescue handler's value. With an
+       `else` clause the else's value REPLACES the body's on success, so the
+       else is the value source; the body's divergence still counts, since a
+       body that raises never reaches the else. Typed from the body alone,
+       `begin; :sym; rescue; else; false; end` held false in a Symbol slot and
+       read it back as symbol number 0. */
     int body = nt_ref(nt, id, "statements");
-    TyKind r = body >= 0 ? infer_type(c, body) : TY_NIL;
+    int else_c = nt_ref(nt, id, "else_clause");
+    int else_st = else_c >= 0 ? nt_ref(nt, else_c, "statements") : -1;
+    int vsrc = else_st >= 0 ? else_st : body;
+    TyKind r = vsrc >= 0 ? infer_type(c, vsrc) : TY_NIL;
+    if (else_c >= 0 && else_st < 0) r = TY_NIL;   /* an empty else is the value: nil */
     TyKind body_t = r;
     /* a body whose last statement is a bare raise diverges: the begin's value
        comes from the rescue arms alone, so their type must not widen (#2739) */
@@ -6433,8 +6469,8 @@ TyKind infer_uncached(Compiler *c, int id) {
        because it diverges. Left as "no value" the begin took the handler's
        type alone, and the array pointer went into an sp_int slot (#3496).
        It carries a value, so the two arms are a union: poly. */
-    if (r == TY_UNKNOWN && body >= 0) {
-      int bn2 = 0; const int *bs2 = nt_arr(nt, body, "body", &bn2);
+    if (r == TY_UNKNOWN && vsrc >= 0) {
+      int bn2 = 0; const int *bs2 = nt_arr(nt, vsrc, "body", &bn2);
       if (bs2 && bn2 > 0 && node_is_empty_container(nt, bs2[bn2 - 1])) r = TY_POLY;
     }
     /* A body that carries a value of a type not settled yet is not the same as
@@ -6442,8 +6478,8 @@ TyKind infer_uncached(Compiler *c, int id) {
        begin an Integer when the body answered an array whose local had not been
        typed at this point in the walk, and the array was coerced into an int
        slot (#3708). Stay UNKNOWN and let a later round settle it. */
-    if (r == TY_UNKNOWN && body >= 0) {
-      int bn3 = 0; const int *bs3 = nt_arr(nt, body, "body", &bn3);
+    if (r == TY_UNKNOWN && vsrc >= 0) {
+      int bn3 = 0; const int *bs3 = nt_arr(nt, vsrc, "body", &bn3);
       /* only for a local read: its slot is typed by a write that comes later
          in the walk, so within this round it reads UNKNOWN however concrete it
          really is. Anything else that answers UNKNOWN here genuinely has no

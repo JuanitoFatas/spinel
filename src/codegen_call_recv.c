@@ -5221,7 +5221,20 @@ else {
                        hn, th, tk, hn, th, tk);
           }
           const char *fp0 = block_param_name(c, blk, 0);  /* fetch yields the key */
-          if (fp0) { buf_printf(b, "lv_%s = _t%d; ", rename_local(fp0), tk); }
+          if (fp0) {
+            /* the block is spliced inline, so the parameter's slot is the
+               enclosing scope's local; a body that reassigns it widened the
+               slot to poly, and the key boxes on the way in */
+            Scope *fbs = comp_scope_of(c, blk);
+            LocalVar *flv = fbs ? scope_local(fbs, fp0) : NULL;
+            if (!flv) { Scope *fes = comp_scope_of(c, id); flv = fes ? scope_local(fes, fp0) : NULL; }
+            TyKind kt = ty_hash_key(rt);
+            if (flv && flv->type == TY_POLY && kt != TY_POLY) {
+              char ktn[32]; snprintf(ktn, sizeof ktn, "_t%d", tk);
+              buf_printf(b, "lv_%s = ", rename_local(fp0)); emit_boxed_text(c, kt, ktn, b); buf_puts(b, "; ");
+            }
+            else buf_printf(b, "lv_%s = _t%d; ", rename_local(fp0), tk);
+          }
           for (int k = 0; k < bn - 1; k++) emit_stmt(c, bb[k], b, 0);  /* leading stmts */
           if (bval >= 0) {
             if ((vt == TY_POLY || mismatch) && bvt != TY_POLY) emit_boxed(c, bval, b);
@@ -7185,16 +7198,22 @@ int emit_scalar_call(Compiler *c, int id, Buf *b) {
                comp_ntype(c, argv[0]) == TY_STRING && nt_type(nt, argv[1]) &&
                sp_streq(nt_type(nt, argv[1]), "KeywordHashNode")) {
         int chv = struct_kwarg_value(c, argv[1], "chomp");
-        int isc = (chv >= 0 && nt_type(nt, chv) && sp_streq(nt_type(nt, chv), "TrueNode"));
-        buf_printf(b, "%s(%s, ", isc ? "sp_str_lines_sep_chomp" : "sp_str_lines_sep", r);
-        emit_expr(c, argv[0], b); buf_puts(b, ")");
+        int isc = kw_flag_static(c, chv);
+        if (isc < 0) { buf_puts(b, "("); emit_cond(c, chv, b); buf_puts(b, " ? "); }
+        if (isc != 0) { buf_printf(b, "sp_str_lines_sep_chomp(%s, ", r); emit_expr(c, argv[0], b); buf_puts(b, ")"); }
+        if (isc < 0) buf_puts(b, " : ");
+        if (isc != 1) { buf_printf(b, "sp_str_lines_sep(%s, ", r); emit_expr(c, argv[0], b); buf_puts(b, ")"); }
+        if (isc < 0) buf_puts(b, ")");
       }
       else if (sp_streq(name, "lines") && argc == 1 && nt_type(nt, argv[0]) &&
                sp_streq(nt_type(nt, argv[0]), "KeywordHashNode")) {
         int chomp_v = struct_kwarg_value(c, argv[0], "chomp");
-        int is_chomp = (chomp_v >= 0 && nt_type(nt, chomp_v) &&
-                        sp_streq(nt_type(nt, chomp_v), "TrueNode"));
-        buf_printf(b, "%s(%s)", is_chomp ? "sp_str_lines_chomp" : "sp_str_lines", r);
+        int is_chomp = kw_flag_static(c, chomp_v);
+        if (is_chomp < 0) {
+          buf_puts(b, "("); emit_cond(c, chomp_v, b);
+          buf_printf(b, " ? sp_str_lines_chomp(%s) : sp_str_lines(%s))", r, r);
+        }
+        else buf_printf(b, "%s(%s)", is_chomp ? "sp_str_lines_chomp" : "sp_str_lines", r);
       }
       else if (sp_streq(name, "bytes") && argc == 0)   buf_printf(b, "sp_str_bytes(%s)", r);
       else if (sp_streq(name, "codepoints") && argc == 0) buf_printf(b, "sp_str_codepoints(%s)", r);
@@ -8332,6 +8351,57 @@ static void emit_isa_self_class(Compiler *c, int recv, int cid, Buf *b) {
     return;
   }
   buf_puts(b, "((void)("); emit_expr(c, recv, b); buf_printf(b, "), (sp_Class){%d})", cid);
+}
+
+/* `obj.x = v` is an assignment expression: its value is v as written, whatever
+   the writer's body returns (`def x=(v); @x = v.to_s; end` still yields v). The
+   argument is evaluated once, after the receiver, into a rooted temp; the
+   dispatch reads the temp through g_argov, and the temp is the result. A call
+   emit_stmt is lowering (g_setter_stmt_id) has no reader for the value and
+   emits as before. Returns the temp, or -1 when the call is left alone, and
+   the temp's type in *vt_out. */
+static int setter_value_open(Compiler *c, int id, Buf *b, TyKind *vt_out) {
+  const NodeTable *nt = c->nt;
+  int argc; const int *argv = call_args(nt, id, &argc);
+  if (id == g_setter_stmt_id || argc != 1 || nt_ref(nt, id, "block") >= 0 ||
+      !name_is_plain_setter(nt_str(nt, id, "name")) || g_n_argov >= MAX_ARG_OVERRIDE)
+    return -1;
+  TyKind vt = comp_ntype(c, argv[0]);
+  if (vt == TY_UNKNOWN) return -1;
+  /* nil and void have no C storage type of their own: hold them boxed */
+  int boxed = (vt == TY_NIL || vt == TY_VOID);
+  Buf ab; memset(&ab, 0, sizeof ab);
+  if (boxed) emit_boxed(c, argv[0], &ab);
+  else emit_expr(c, argv[0], &ab);
+  int tv = ++g_tmp;
+  emit_indent(g_pre, g_indent);
+  emit_ctype(c, boxed ? TY_POLY : vt, g_pre);
+  buf_printf(g_pre, " _t%d = ", tv);
+  buf_puts(g_pre, ab.p ? ab.p : "sp_box_nil()"); buf_puts(g_pre, ";\n");
+  free(ab.p);
+  if (boxed || vt == TY_POLY) { emit_indent(g_pre, g_indent); buf_printf(g_pre, "SP_GC_ROOT_RBVAL(_t%d);\n", tv); }
+  else if (needs_root(vt)) { emit_indent(g_pre, g_indent); buf_printf(g_pre, "SP_GC_ROOT(_t%d);\n", tv); }
+  g_argov_node[g_n_argov] = argv[0];
+  snprintf(g_argov_text[g_n_argov], sizeof g_argov_text[0], "_t%d", tv);
+  g_n_argov++;
+  buf_puts(b, "({ (void)(");
+  *vt_out = boxed ? TY_POLY : vt;
+  return tv;
+}
+/* The temp holds the argument as the dispatch reads it; the expression
+   answers in the CALL's type, which the inference may have widened to poly
+   (a class with both an attr_accessor and a `def x=` for the name) -- box
+   the temp on the way out then. */
+static void setter_value_close(Compiler *c, int id, TyKind vt, Buf *b, int tv) {
+  if (tv < 0) return;
+  g_n_argov--;
+  buf_puts(b, "); ");
+  if (comp_ntype(c, id) == TY_POLY && vt != TY_POLY) {
+    char tn[32]; snprintf(tn, sizeof tn, "_t%d", tv);
+    emit_boxed_text(c, vt, tn, b);
+  }
+  else buf_printf(b, "_t%d", tv);
+  buf_puts(b, "; })");
 }
 
 int emit_object_call(Compiler *c, int id, Buf *b) {
@@ -9646,7 +9716,10 @@ int emit_object_call(Compiler *c, int id, Buf *b) {
           buf_printf(g_pre, " _t%d = ", t); buf_puts(g_pre, rb.p ? rb.p : ""); buf_puts(g_pre, ";\n"); free(rb.p);
           snprintf(selfv, sizeof selfv, "_t%d", t);
         }
+        TyKind svt = TY_UNKNOWN;
+        int sv = setter_value_open(c, id, b, &svt);
         emit_dispatch(c, cid, name, selfv, nt_ref(nt, id, "arguments"), nt_ref(nt, id, "block"), b);
+        setter_value_close(c, id, svt, b, sv);
         return 1;
       }
       /* receiver is a pointer; reuse it directly if it's a simple lvalue,
@@ -9674,7 +9747,10 @@ int emit_object_call(Compiler *c, int id, Buf *b) {
         buf_printf(g_pre, "SP_GC_ROOT(_t%d);\n", t);
         snprintf(selfptr, sizeof selfptr, "_t%d", t);
       }
+      TyKind svt = TY_UNKNOWN;
+      int sv = setter_value_open(c, id, b, &svt);
       emit_dispatch(c, cid, name, selfptr, nt_ref(nt, id, "arguments"), nt_ref(nt, id, "block"), b);
+      setter_value_close(c, id, svt, b, sv);
       return 1;
     }
   }
@@ -12357,6 +12433,36 @@ int emit_poly_call(Compiler *c, int id, Buf *b) {
     else
       buf_printf(b, ", _t%d); _t%d; })", tv, tv);
     return 1;
+  }
+  /* `x = v` through a SYNTHESIZED writer (attr_writer / accessor, a Struct
+     member) on a poly receiver, in value position: the statement form's
+     cls_id switch over the writer arms, yielding the assigned value the way
+     `[]=` below does. A name some class defines as a method instead takes
+     the user-method dispatch, which yields the value itself. */
+  if (recv >= 0 && rt == TY_POLY && argc == 1 && name_is_plain_setter(name) &&
+      nt_ref(nt, id, "block") < 0 && !diag_user_defines(c, name)) {
+    char base[256];
+    int ncand = 0;
+    if (setter_base_name(name, base, sizeof base))
+      for (int k = 0; k < c->nclasses; k++)
+        if (comp_is_writer(&c->classes[k], base)) ncand++;
+    if (ncand > 0) {
+      TyKind at = comp_ntype(c, argv[0]);
+      int nil_rhs = (at == TY_NIL || at == TY_VOID);
+      TyKind at_eff = nil_rhs ? TY_POLY : at;
+      int tv = ++g_tmp, tval = ++g_tmp;
+      buf_printf(b, "({ sp_RbVal _t%d = ", tv); emit_expr(c, recv, b);
+      buf_printf(b, "; SP_GC_ROOT_RBVAL(_t%d); ", tv);
+      if (nil_rhs) buf_printf(b, "sp_RbVal _t%d = sp_box_nil();", tval);
+      else { emit_ctype(c, at, b); buf_printf(b, " _t%d = ", tval); emit_expr(c, argv[0], b); buf_puts(b, ";"); }
+      buf_printf(b, " switch (_t%d.tag == SP_TAG_OBJ ? _t%d.cls_id : 0x7fffffff) {", tv, tv);
+      char src[32]; snprintf(src, sizeof src, "_t%d", tval);
+      char objp[32]; snprintf(objp, sizeof objp, "_t%d.v.p", tv);
+      emit_boxed_writer_arms(c, base, name, objp, src, at_eff, b);
+      buf_printf(b, " default: sp_raise_nomethod(sp_nomethod_msg(\"%s\", _t%d)); break;", name, tv);
+      buf_printf(b, " } _t%d; })", tval);
+      return 1;
+    }
   }
   /* poly receiver: []= with symbol, string, int, or poly key -> runtime dispatch
      Skip Fiber/Fiber.current storage receivers (handled later). */

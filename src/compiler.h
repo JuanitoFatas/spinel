@@ -706,6 +706,7 @@ int        comp_method_vis(ClassInfo *ci, const char *name);
    class with an explicit entry wins (a subclass may re-`public` an inherited
    private method), defaulting to SP_VIS_PUBLIC when none records it. */
 int        comp_method_vis_in_chain(Compiler *c, int class_id, const char *name);
+int        comp_method_vis_declared(Compiler *c, int class_id, const char *name, int *at);
 /* Detect an instance_eval/exec trampoline (def m(args,&b); instance_eval/exec(args,&b); end).
    Returns 1 (eval) / 2 (exec) / 0; sets *def_class to the defining class. */
 int        comp_trampoline_kind(Compiler *c, int class_id, const char *name, int *def_class);
@@ -722,6 +723,8 @@ void       comp_add_reader(ClassInfo *ci, const char *name);
 void       comp_add_writer(ClassInfo *ci, const char *name);
 int        comp_is_reader(ClassInfo *ci, const char *name);
 int        comp_is_writer(ClassInfo *ci, const char *name);
+int        name_is_plain_setter(const char *name);
+int        setter_base_name(const char *name, char *out, size_t cap);
 void       comp_add_undef(ClassInfo *ci, const char *name);
 int        comp_is_undeffed_in_chain(Compiler *c, int class_id, const char *name);
 void       comp_add_sg_reader(ClassInfo *ci, const char *name);

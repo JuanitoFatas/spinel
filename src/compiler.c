@@ -493,11 +493,27 @@ int comp_method_vis(ClassInfo *ci, const char *name) {
 }
 
 int comp_method_vis_in_chain(Compiler *c, int class_id, const char *name) {
+  return comp_method_vis_declared(c, class_id, name, NULL);
+}
+/* The same, reporting the class that declared the visibility in *at. A
+   method copied in from an included module carries the module's declaration:
+   the copy's scope names the module (origin_module_ci) and the module's own
+   table holds the `private`/`protected` its body said. */
+int comp_method_vis_declared(Compiler *c, int class_id, const char *name, int *at) {
   name = comp_resolve_alias(c, class_id, name);
   for (int cid = class_id; cid >= 0; cid = c->classes[cid].parent) {
     ClassInfo *ci = &c->classes[cid];
     for (int i = 0; i < ci->nvis; i++)
-      if (sp_streq(ci->vis_names[i], name)) return ci->vis_kinds[i];
+      if (sp_streq(ci->vis_names[i], name)) { if (at) *at = cid; return ci->vis_kinds[i]; }
+  }
+  int mi = comp_method_in_chain(c, class_id, name, NULL);
+  if (mi >= 0 && mi < c->nscopes && c->scopes[mi].origin_module_ci > 0) {
+    int mci = c->scopes[mi].origin_module_ci - 1;
+    if (mci >= 0 && mci < c->nclasses) {
+      ClassInfo *mi_ci = &c->classes[mci];
+      for (int i = 0; i < mi_ci->nvis; i++)
+        if (sp_streq(mi_ci->vis_names[i], name)) { if (at) *at = mci; return mi_ci->vis_kinds[i]; }
+    }
   }
   return SP_VIS_PUBLIC;
 }
@@ -844,6 +860,24 @@ void comp_add_writer(ClassInfo *ci, const char *name) {
 }
 int comp_is_reader(ClassInfo *ci, const char *name) { return name_in(ci->readers, ci->nreaders, name); }
 int comp_is_writer(ClassInfo *ci, const char *name) { return name_in(ci->writers, ci->nwriters, name); }
+
+/* A plain setter name: `x=`, but not the operators that also end in `=`
+   (`==`, `!=`, `<=`, `>=`, `===`) and not `[]=`, whose value form is its own. */
+int name_is_plain_setter(const char *name) {
+  size_t ln = name ? strlen(name) : 0;
+  if (ln < 2 || name[ln - 1] != '=') return 0;
+  char p = name[ln - 2];
+  return p != '=' && p != '!' && p != '<' && p != '>' && p != ']';
+}
+/* The attribute a setter name writes: "x=" -> "x". 0 when the name is not a
+   plain setter or does not fit. */
+int setter_base_name(const char *name, char *out, size_t cap) {
+  if (!name_is_plain_setter(name)) return 0;
+  size_t ln = strlen(name) - 1;
+  if (ln >= cap) return 0;
+  memcpy(out, name, ln); out[ln] = '\0';
+  return 1;
+}
 void comp_add_undef(ClassInfo *ci, const char *name) {
   if (name_in(ci->undefs, ci->nundefs, name)) return;
   if (ci->nundefs >= ci->cundefs) {

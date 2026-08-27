@@ -4000,10 +4000,13 @@ int emit_sort_cmp_expr(Compiler *c, int id, Buf *b) {
   TyKind et = hash_sort ? TY_POLY : ty_array_elem(rt);
   const char *hn = hash_sort ? ty_hash_cname(rt) : NULL;
   TyKind eff_rt = hash_sort ? TY_POLY_ARRAY : rt;
+  /* A comparator block of fewer than two parameters still runs: CRuby hands
+     it the first of the two values, or none. Standing down here let the
+     blockless arm run without it, and the block vanished from the C. */
   const char *p0 = block_param_name(c, block, 0);
   const char *p1 = block_param_name(c, block, 1);
-  if (!p0 || !p1) return 0;
-  p0 = rename_local(p0); p1 = rename_local(p1);
+  if (p0) p0 = rename_local(p0);
+  if (p1) p1 = rename_local(p1);
   int body = nt_ref(nt, block, "body");
   int bn = 0; const int *bb = body >= 0 ? nt_arr(nt, body, "body", &bn) : NULL;
   /* the comparator answers the <=> sign; a boxed answer -- a poly element, or
@@ -4053,8 +4056,8 @@ else {
   emit_indent(g_pre, g_indent + 3); buf_printf(g_pre, "%s _t%d = sp_%sArray_get(_t%d, _t%d);\n", ecs, ta, k, tr, ti);
   emit_indent(g_pre, g_indent + 3); buf_printf(g_pre, "%s _t%d = sp_%sArray_get(_t%d, _t%d);\n", ecs, tb, k, tr, tj);
   Scope *sbsc = comp_scope_of(c, block);
-  LocalVar *slv0 = sbsc ? scope_local(sbsc, p0) : NULL;
-  LocalVar *slv1 = sbsc ? scope_local(sbsc, p1) : NULL;
+  LocalVar *slv0 = (sbsc && p0) ? scope_local(sbsc, p0) : NULL;
+  LocalVar *slv1 = (sbsc && p1) ? scope_local(sbsc, p1) : NULL;
   TyKind spt0 = slv0 ? slv0->type : TY_UNKNOWN;
   TyKind spt1 = slv1 ? slv1->type : TY_UNKNOWN;
   if (slv0) slv0->type = et;
@@ -4063,8 +4066,10 @@ else {
   int save = g_indent; g_indent += 3;
   /* Shadow the outer (possibly poly) block params with et-typed locals */
   emit_indent(g_pre, g_indent); buf_puts(g_pre, "{\n"); g_indent++;
-  emit_indent(g_pre, g_indent); emit_ctype(c, et, g_pre); buf_printf(g_pre, " lv_%s = _t%d; ", p0, ta);
-  emit_ctype(c, et, g_pre); buf_printf(g_pre, " lv_%s = _t%d;\n", p1, tb);
+  emit_indent(g_pre, g_indent);
+  if (p0) { emit_ctype(c, et, g_pre); buf_printf(g_pre, " lv_%s = _t%d; ", p0, ta); }
+  if (p1) { emit_ctype(c, et, g_pre); buf_printf(g_pre, " lv_%s = _t%d;", p1, tb); }
+  buf_puts(g_pre, "\n");
   for (int j = 0; j < bn - 1; j++) emit_stmt(c, bb[j], g_pre, g_indent);
   Buf cb; memset(&cb, 0, sizeof cb); emit_expr(c, bb[bn - 1], &cb);
   emit_indent(g_pre, g_indent);
@@ -4169,10 +4174,20 @@ int emit_minmax_cmp_expr(Compiler *c, int id, Buf *b) {
   const char *k = (rt == TY_POLY_ARRAY) ? "Poly" : array_kind(rt);
   if (!k) return 0;
   TyKind et = ty_array_elem(rt);
+  /* A comparator block of fewer than two parameters still runs: CRuby hands
+     it the first of the two values, or none. Standing down here let the
+     blockless arm run without it, and the block vanished from the C. */
   const char *p0 = block_param_name(c, block, 0);
   const char *p1 = block_param_name(c, block, 1);
-  if (!p0 || !p1) return 0;
-  p0 = rename_local(p0); p1 = rename_local(p1);
+  /* minmax is not min and max side by side: CRuby's yields its elements in
+     pairs, so a block that sees only the first value answers differently
+     than it does under min or max, and this scan cannot say what it would */
+  if (is_mm && (!p0 || !p1)) {
+    unsupported_feature(c, id, "minmax with a comparator block of fewer than two parameters");
+    return 1;
+  }
+  if (p0) p0 = rename_local(p0);
+  if (p1) p1 = rename_local(p1);
   int body = nt_ref(nt, block, "body");
   int bn = 0; const int *bb = body >= 0 ? nt_arr(nt, body, "body", &bn) : NULL;
   /* the comparator answers the <=> sign; a boxed answer -- a poly element, or
@@ -4200,8 +4215,8 @@ int emit_minmax_cmp_expr(Compiler *c, int id, Buf *b) {
      - refresh ntype cache for body nodes (infer_type writes to cache)
      - emit C shadow declarations inside { } to give lv_p0/lv_p1 the right C type */
   Scope *bsc = comp_scope_of(c, block);
-  LocalVar *lv_p0 = bsc ? scope_local(bsc, p0) : NULL;
-  LocalVar *lv_p1 = bsc ? scope_local(bsc, p1) : NULL;
+  LocalVar *lv_p0 = (bsc && p0) ? scope_local(bsc, p0) : NULL;
+  LocalVar *lv_p1 = (bsc && p1) ? scope_local(bsc, p1) : NULL;
   TyKind saved_p0 = lv_p0 ? lv_p0->type : TY_UNKNOWN;
   TyKind saved_p1 = lv_p1 ? lv_p1->type : TY_UNKNOWN;
   if (lv_p0) lv_p0->type = et;
@@ -4211,8 +4226,10 @@ int emit_minmax_cmp_expr(Compiler *c, int id, Buf *b) {
   if (is_min || is_mm) {
     /* Open C shadow scope with et-typed block param vars */
     emit_indent(g_pre, g_indent); buf_puts(g_pre, "{\n"); g_indent++;
-    emit_indent(g_pre, g_indent); emit_ctype(c, et, g_pre); buf_printf(g_pre, " lv_%s = _t%d; ", p0, te);
-    emit_ctype(c, et, g_pre); buf_printf(g_pre, " lv_%s = _t%d;\n", p1, tmin);
+    emit_indent(g_pre, g_indent);
+    if (p0) { emit_ctype(c, et, g_pre); buf_printf(g_pre, " lv_%s = _t%d; ", p0, te); }
+    if (p1) { emit_ctype(c, et, g_pre); buf_printf(g_pre, " lv_%s = _t%d;", p1, tmin); }
+    buf_puts(g_pre, "\n");
     for (int j = 0; j < bn - 1; j++) emit_stmt(c, bb[j], g_pre, g_indent);
     Buf cm; memset(&cm, 0, sizeof cm); emit_expr(c, bb[bn - 1], &cm);
     g_indent--;
@@ -4221,8 +4238,10 @@ int emit_minmax_cmp_expr(Compiler *c, int id, Buf *b) {
   }
   if (is_max || is_mm) {
     emit_indent(g_pre, g_indent); buf_puts(g_pre, "{\n"); g_indent++;
-    emit_indent(g_pre, g_indent); emit_ctype(c, et, g_pre); buf_printf(g_pre, " lv_%s = _t%d; ", p0, te);
-    emit_ctype(c, et, g_pre); buf_printf(g_pre, " lv_%s = _t%d;\n", p1, tmax);
+    emit_indent(g_pre, g_indent);
+    if (p0) { emit_ctype(c, et, g_pre); buf_printf(g_pre, " lv_%s = _t%d; ", p0, te); }
+    if (p1) { emit_ctype(c, et, g_pre); buf_printf(g_pre, " lv_%s = _t%d;", p1, tmax); }
+    buf_puts(g_pre, "\n");
     for (int j = 0; j < bn - 1; j++) emit_stmt(c, bb[j], g_pre, g_indent);
     Buf cx; memset(&cx, 0, sizeof cx); emit_expr(c, bb[bn - 1], &cx);
     g_indent--;
