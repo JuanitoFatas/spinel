@@ -863,6 +863,14 @@ endif
 # for, as `/* SPINEL_LINK: -lfoo */` markers -- the same ones the spinel driver
 # scrapes when it drives cc itself. This rule drives cc directly, so it has to
 # read them too, or a package binding a system library (openssl) fails to link.
+# Link what the driver would link. A TU that uses Thread carries codegen's
+# /* SPINEL_USES_THREADS */ marker, and src/main.c answers it with the
+# -DSP_THREADS archive plus -lpthread; the harness used to link the N=1
+# cooperative archive for every test, so every threaded test ran in a
+# configuration that never ships -- and a test whose main thread blocks in a
+# syscall while another green thread must make progress deadlocked here and
+# nowhere else. The PCH is dropped on that path: it was built without
+# -DSP_THREADS and -Werror rejects the mismatch.
 define RUN_ONE_TEST
 @mkdir -p build/test-results
 @tmpdir=$$(mktemp -d /tmp/spinel-test.XXXXXX); \
@@ -884,11 +892,15 @@ $(SPINEL) "$<" $(SP_OV_FLAG) -c --no-line-map -o "$$cfile" 2>/dev/null && \
   if head -2 "$$cfile" | grep -q SP_TU_NO_POLY_RENDER; then pchuse="$(PCH_USE_NOPOLY)"; pchf="$(PCH_NOPOLY)"; fi; \
   [ -f "$$pchf" ] || pchuse=""; \
   xlibs=$$(sed -n 's|^/\* SPINEL_LINK: \(.*\) \*/$$|\1|p' "$$cfile" | tr '\n' ' '); \
+  mtdef=""; rtlib="$(SP_RT_LIB)"; natobjs="$(BUNDLED_NATIVE_OBJS)"; mtld=""; \
+  if grep -q SPINEL_USES_THREADS "$$cfile"; then \
+    mtdef="$(MT_DEF)"; rtlib="$(SP_RT_MT_LIB)"; natobjs="$(BUNDLED_NATIVE_MT_OBJS)"; mtld="-lpthread"; pchuse=""; \
+  fi; \
   if [ -n "$(TEST_SINGLE_INVOKE)" ]; then \
-    $(CC) $(CFLAGS) $(SP_OV_DEFINE) -Werror $(TEST_WARN_SUPPRESS) $(SEC_FLAGS) $$pchuse -Ilib "$$cfile" $(BUNDLED_NATIVE_OBJS) $(SP_RT_LIB) $(LDFLAGS) -lm $$xlibs $(GC_FLAGS) -o "$$bin" 2>/dev/null; \
+    $(CC) $(CFLAGS) $(SP_OV_DEFINE) $$mtdef -Werror $(TEST_WARN_SUPPRESS) $(SEC_FLAGS) $$pchuse -Ilib "$$cfile" $$natobjs $$rtlib $(LDFLAGS) -lm $$mtld $$xlibs $(GC_FLAGS) -o "$$bin" 2>/dev/null; \
   else \
-    $(CC) $(CFLAGS) $(SP_OV_DEFINE) -Werror $(TEST_WARN_SUPPRESS) $(SEC_FLAGS) $$pchuse -Ilib -c "$$cfile" -o "$$cfile.o" 2>/dev/null && \
-    $(CC) $(CFLAGS) "$$cfile.o" $(BUNDLED_NATIVE_OBJS) $(SP_RT_LIB) $(LDFLAGS) -lm $$xlibs $(GC_FLAGS) -o "$$bin" 2>/dev/null; \
+    $(CC) $(CFLAGS) $(SP_OV_DEFINE) $$mtdef -Werror $(TEST_WARN_SUPPRESS) $(SEC_FLAGS) $$pchuse -Ilib -c "$$cfile" -o "$$cfile.o" 2>/dev/null && \
+    $(CC) $(CFLAGS) "$$cfile.o" $$natobjs $$rtlib $(LDFLAGS) -lm $$mtld $$xlibs $(GC_FLAGS) -o "$$bin" 2>/dev/null; \
   fi; }; \
 if [ $$? -eq 0 ]; then \
   if [ -f "$<.expected" ]; then \

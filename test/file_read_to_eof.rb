@@ -45,10 +45,14 @@ r.close
 # a stream whose reported size is zero but which yields bytes. /proc is the
 # case that surfaced it; elsewhere the pipe above already covers the shape, so
 # assert the property only where such a file exists.
-status = "/proc/self/status"
-if File.exist?(status)
-  p File.read(status).length > 0
-  p File.read(status).length == File.readlines(status).join.length
+#
+# /proc/version and not /proc/self/status: both report size 0, but status
+# reports the process's own VmRSS, which grows between the two reads below
+# (reading the first one allocates), so the lengths differed at random.
+zero_sized = "/proc/version"
+if File.exist?(zero_sized)
+  p File.read(zero_sized).length > 0
+  p File.read(zero_sized).length == File.readlines(zero_sized).join.length
 else
   p true
   p true
