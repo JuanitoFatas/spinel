@@ -96,6 +96,10 @@ void an_set_poly_arr_face_node(int node);
 int  an_poly_arr_face_node(void);
 /* Name of a block's idx-th required parameter, or NULL. */
 const char *block_param_name(Compiler *c, int block, int idx);
+/* The name of a numbered block parameter (`_1`..`_9`) on this parameters node.
+   Per BLOCK where a scope holds more than one such block; see
+   scope_numbered_block_params. Every site that needs the name goes here. */
+const char *numbered_param_name(Compiler *c, int params_node, int idx);
 /* Name of a block's trailing rest parameter (`|*a|`), or NULL. */
 const char *block_rest_name(Compiler *c, int block);
 const char *block_opt_name(Compiler *c, int block, int idx);

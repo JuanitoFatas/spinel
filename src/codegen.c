@@ -3213,6 +3213,23 @@ void proc_collect_used(Compiler *c, int id, NameSet *out) {
 /* The ParametersNode of a proc-creating node. A `->{}` LambdaNode carries it
    directly (`parameters`); a `proc {}` / `lambda {}` / block-escape pass-through
    nests it one level deeper (block/BlockNode -> BlockParametersNode -> ParametersNode). */
+/* The NumberedParametersNode of a proc-creating node, or -1. proc_params_node
+   answers the inner ParametersNode, which a numbered-param block does not
+   have. */
+int proc_numbered_params_node(Compiler *c, int create) {
+  const char *ty = nt_type(c->nt, create);
+  int bp;
+  if (ty && sp_streq(ty, "LambdaNode")) bp = nt_ref(c->nt, create, "parameters");
+  else if (ty && sp_streq(ty, "BlockNode")) bp = nt_ref(c->nt, create, "parameters");
+  else {
+    int block = nt_ref(c->nt, create, "block");
+    bp = block >= 0 ? nt_ref(c->nt, block, "parameters") : -1;
+  }
+  if (bp < 0) return -1;
+  const char *bt = nt_type(c->nt, bp);
+  return (bt && sp_streq(bt, "NumberedParametersNode")) ? bp : -1;
+}
+
 int proc_params_node(Compiler *c, int create) {
   const char *ty = nt_type(c->nt, create);
   if (ty && sp_streq(ty, "LambdaNode")) return nt_ref(c->nt, create, "parameters");
@@ -3229,6 +3246,17 @@ int proc_params_node(Compiler *c, int create) {
   return nt_ref(c->nt, bp, "parameters");        /* ParametersNode */
 }
 const char *proc_param_name(Compiler *c, int create, int idx) {
+  /* A numbered parameter IS a positional parameter of the proc; it just hangs
+     off a NumberedParametersNode with no `requireds` list. Answering NULL here
+     left the arity at 0, so `_1` was not bound from args[] and every use of it
+     in the body was classified as an enclosing local -- laundered through the
+     capture machinery rather than bound as the argument it is. */
+  { int bpn = proc_numbered_params_node(c, create);
+    if (bpn >= 0) {
+      int maxn = (int)nt_int(c->nt, bpn, "maximum", 0);
+      if (idx >= maxn || idx >= 9) return NULL;
+      return numbered_param_name(c, bpn, idx);
+    } }
   int pn = proc_params_node(c, create);
   if (pn < 0) return NULL;
   int n = 0;
@@ -4247,17 +4275,34 @@ void emit_proc_literal(Compiler *c, int create, Buf *b) {
     }
   }
   proc_collect_used(c, body, &used);
+  /* How many numbered parameters the proc declares. Read off the node rather
+     than off the names used in the body: proc_param_name answers them now, so
+     `arity` already counts them and the old "arity == 0" gate never fired --
+     which left Proc#parameters reporting none. The metadata below still names
+     them `_1` .. `_N`, which is what Ruby reports whatever the slot is
+     called internally. */
   int nnumbered = 0;
-  if (arity == 0 && nposts == 0 && !(restn && restn[0]) && nopts == 0) {
-    nnumbered = proc_numbered_max(&used);
-    for (int k = 1; k <= nnumbered; k++) {
-      /* NameSet stores the POINTER: use the scope-interned stable name, not
-         a stack buffer. The analyze pass interned _k on this scope already. */
-      char nb[4] = { '_', (char)('0' + k), 0, 0 };
-      LocalVar *nlv = scope_local_intern(bs, nb);
-      nameset_add(&params, nlv->name);
+  { int bpn = proc_numbered_params_node(c, create);
+    if (bpn >= 0) {
+      /* Read off the node: proc_param_name answers numbered parameters now, so
+         `arity` counts them and the body-scan gate below never fires. */
+      nnumbered = (int)nt_int(nt, bpn, "maximum", 0);
+      if (nnumbered > 9) nnumbered = 9;
     }
-  }
+    else if (arity == 0 && nposts == 0 && !(restn && restn[0]) && nopts == 0) {
+      /* `-> { _1 * 10 }` carries no parameters node at all -- the numbered
+         names surface as plain local reads -- so the count comes from the
+         body, and the names are the literal ones (nothing renames a block
+         with no node to record the new name on). */
+      nnumbered = proc_numbered_max(&used);
+      for (int k = 1; k <= nnumbered; k++) {
+        /* NameSet stores the POINTER: use the scope-interned stable name, not
+           a stack buffer. The analyze pass interned _k on this scope already. */
+        char nb[4] = { '_', (char)('0' + k), 0, 0 };
+        LocalVar *nlv = scope_local_intern(bs, nb);
+        nameset_add(&params, nlv->name);
+      }
+    } }
   /* Keyword params bind in the prologue below (extracted by name from the
      call-site kwargs hash delivered on the boxed proc ABI). */
   /* deep: include nested blocks' params/locals so a name used only inside a
@@ -4736,8 +4781,13 @@ else if (orecv >= 0 && onm) {
   int has_kwrest = 0;
   { int pnk = proc_params_node(c, create);
     if (pnk >= 0 && nt_ref(nt, pnk, "keyword_rest") >= 0) has_kwrest = 1; }
+  /* `arity` counts numbered parameters when the block carries a
+     NumberedParametersNode, so adding nnumbered there counts them twice and a
+     `lambda { _1 }.call("a")` was rejected as taking two. Only the
+     no-parameters-node form (`-> { _1 }`) has them outside `arity`. */
+  int num_extra = proc_numbered_params_node(c, create) < 0 ? nnumbered : 0;
   if (is_lambda) buf_printf(pb, "    sp_proc_lambda_arity_check(argc, %d, %d, %s, %s);\n",
-                            arity + nposts + nnumbered, nopts,
+                            arity + nposts + num_extra, nopts,
                             proc_has_rest(c, create) ? "TRUE" : "FALSE",
                             (nkw > 0 || has_kwrest) ? "TRUE" : "FALSE");
   /* CRuby proc auto-splat: a single Array passed to a non-lambda proc taking
@@ -4917,11 +4967,16 @@ else if (orecv >= 0 && onm) {
      the rest; missing posts bind nil. */
   if ((restn && restn[0]) || nposts > 0 || nopts > 0 || nnumbered > 0) {
     g_needs_proc_poly_argslot = 1;  /* channel array now lives in spinel_rt.h */
-    for (int k = 0; k < nnumbered; k++) {
-      buf_printf(pb, "    sp_RbVal lv__%d = (argc > %d) ? _sp_proc_poly_args[%d] : sp_box_nil();\n",
-                 k + 1, k, k);
-      buf_printf(pb, "    (void)lv__%d;\n", k + 1);
-    }
+    /* Only the no-parameters-node form (`-> { _1 }`) binds here. Where the
+       block carries a NumberedParametersNode, proc_param_name answers those
+       names and the requireds loop above has already declared and bound them;
+       doing it twice is a redefinition the C compiler stops on. */
+    if (proc_numbered_params_node(c, create) < 0)
+      for (int k = 0; k < nnumbered; k++) {
+        buf_printf(pb, "    sp_RbVal lv__%d = (argc > %d) ? _sp_proc_poly_args[%d] : sp_box_nil();\n",
+                   k + 1, k, k);
+        buf_printf(pb, "    (void)lv__%d;\n", k + 1);
+      }
     /* Optionals fill from the front with whatever arguments remain after the
        requireds and the trailing posts; a slot with no argument evaluates its
        default (which may reference earlier params -- they are bound above /

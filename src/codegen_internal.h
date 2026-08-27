@@ -841,6 +841,7 @@ void proc_collect_locals(Compiler *c, int id, NameSet *locals);
 void proc_collect_used(Compiler *c, int id, NameSet *out);
 int proc_params_node(Compiler *c, int create);
 const char *proc_param_name(Compiler *c, int create, int idx);
+int proc_numbered_params_node(Compiler *c, int create); /* -1 unless numbered */
 int proc_body_node(Compiler *c, int create);
 int proc_slot_is_direct(TyKind t);
 int proc_slot_is_ptr(TyKind t);

@@ -19823,7 +19823,8 @@ else { memcpy(dir, sf, n); dir[n] = 0; } }
           /* `{ _1.method }`: _1.._N bind like positional block params. */
           int maxn = (int)nt_int(nt, bp_node, "maximum", 0);
           for (int p = 0; p < maxn; p++) {
-            char pn[16]; snprintf(pn, sizeof pn, "_%d", p + 1);
+            const char *pn = numbered_param_name(c, bp_node, p);
+            if (!pn) continue;
             LocalVar *plv = scope_local(comp_scope_of(c, id), pn);
             int ppoly = plv && plv->type == TY_POLY;
             int pdecl = plv && plv->type != TY_UNKNOWN;   /* see the requireds loop (#2734) */

@@ -4041,6 +4041,20 @@ int infer_catch_block_params(Compiler *c) {
   return changed;
 }
 
+/* The name of a numbered block parameter (`_1` .. `_9`, and `it`, which the
+   parser lowers to `_1`). Normally the literal name -- but a scope holding more
+   than one numbered-param block shares its local table, so those blocks would
+   intern the SAME slot and their types would merge; scope_numbered_block_params
+   gives each of them its own name and records it here (#4116). Every site that
+   needs the name goes through this, so the rule lives in one place. */
+const char *numbered_param_name(Compiler *c, int params_node, int idx) {
+  static const char *names[] = {"_1","_2","_3","_4","_5","_6","_7","_8","_9"};
+  if (idx < 0 || idx >= 9) return NULL;
+  char key[8]; snprintf(key, sizeof key, "n%d", idx + 1);
+  const char *gen = nt_str(c->nt, params_node, key);
+  return (gen && *gen) ? gen : names[idx];
+}
+
 /* Name of a block's idx-th required parameter, or NULL. */
 const char *block_param_name(Compiler *c, int block, int idx) {
   int bp = nt_ref(c->nt, block, "parameters");      /* BlockParametersNode */
@@ -4050,8 +4064,7 @@ const char *block_param_name(Compiler *c, int block, int idx) {
   if (bpty && sp_streq(bpty, "NumberedParametersNode")) {
     int max = (int)nt_int(c->nt, bp, "maximum", 0);
     if (idx >= max) return NULL;
-    static const char *names[] = {"_1","_2","_3","_4","_5","_6","_7","_8","_9"};
-    return (idx < 9) ? names[idx] : NULL;
+    return numbered_param_name(c, bp, idx);
   }
   int pn = nt_ref(c->nt, bp, "parameters");          /* ParametersNode */
   if (pn < 0) return NULL;
@@ -5925,7 +5938,12 @@ static int register_proc_numbered(Compiler *c, int create) {
   int changed = 0;
   for (int i = 0; i < used.n; i++) {
     const char *nm = used.v[i];
-    if (!(nm && nm[0] == '_' && nm[1] >= '1' && nm[1] <= '9' && nm[2] == '\0')) continue;
+    /* `_1` as the parser wrote it, and `_1__bNN` where a colliding scope's
+       blocks were given their own (scope_numbered_block_params) -- the body
+       names the second one, and interning the first instead left the block
+       reading a slot the bind never wrote. */
+    if (!(nm && nm[0] == '_' && nm[1] >= '1' && nm[1] <= '9' &&
+          (nm[2] == '\0' || !strncmp(nm + 2, "__b", 3)))) continue;
     LocalVar *lv = scope_local_intern(bs, nm);
     lv->is_block_param = 1;
     if (lv->type != TY_POLY) { lv->type = TY_POLY; changed = 1; }
@@ -6344,7 +6362,8 @@ int infer_block_params(Compiler *c) {
       /* `{ _1.method }` : _1.._N all receive self (the receiver). */
       int maxn = (int)nt_int(nt, pn, "maximum", 0);
       for (int k = 1; k <= maxn; k++) {
-        char nm[16]; snprintf(nm, sizeof nm, "_%d", k);
+        const char *nm = numbered_param_name(c, pn, k - 1);
+        if (!nm) continue;
         LocalVar *lv = scope_local_intern(bs, nm); lv->is_block_param = 1;
         if (!intern_only && lv->type != rt) { lv->type = rt; changed = 1; }
       }
@@ -6394,7 +6413,8 @@ int infer_block_params(Compiler *c) {
          call-site arg types. */
       int maxn = (int)nt_int(nt, pn, "maximum", 0);
       for (int k = 0; k < maxn && k < iac; k++) {
-        char npn[16]; snprintf(npn, sizeof npn, "_%d", k + 1);
+        const char *npn = numbered_param_name(c, pn, k);
+        if (!npn) continue;
         TyKind at = infer_type(c, iav[k]);
         LocalVar *lv = scope_local_intern(bs, npn); lv->is_block_param = 1;
         if (at != TY_UNKNOWN && lv->type != at) { lv->type = at; changed = 1; }

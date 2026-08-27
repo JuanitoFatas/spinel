@@ -2077,6 +2077,125 @@ static int give_self_predicates_a_receiver(Compiler *c) {
   return changed;
 }
 
+/* Give each block its own numbered parameters, where a scope holds more than
+   one block that uses them.
+
+   `_1` .. `_9` (and `it`, which the parser lowers to `_1`) are names spinel
+   synthesizes rather than names the author wrote, and blocks share their
+   enclosing scope's local table -- so two such blocks in one method interned
+   the SAME slot and their types merged. A scope with one of them gets
+   `sp_int lv__1`; add a second over strings and both become a boxed
+   `sp_RbVal`. Values stayed right (each block writes the slot before reading
+   it), so what this costs is the type. It also left two passes typing that one
+   slot from different call shapes on every round, which is the last program in
+   the suite whose inference fixpoint ran to its cap (#4116).
+
+   Only where the names actually collide, which is what rename_shadowing_block_params
+   does for a named parameter and for the same reason: a scope with a single
+   numbered-param block is already correct, and renaming it would churn the
+   emitted identifier for nothing.
+
+   The rewrite is textual on the AST, like that pass: the body's reads are
+   rewritten, the block's comma-joined `locals` string with them, and the
+   generated name is recorded on the NumberedParametersNode where
+   numbered_param_name reads it back. The node keeps its shape, so every pass
+   that recognises a numbered-param block still does.
+
+   A nested block with its own numbered parameters is a SyntaxError in CRuby
+   ("numbered parameter is already used in outer block"), so the walk stops at
+   one rather than guessing which block a name belongs to. */
+static int numbered_params_node_of(Compiler *c, int L) {
+  const NodeTable *nt = c->nt;
+  const char *ty = nt_type(nt, L);
+  if (!ty || (!sp_streq(ty, "BlockNode") && !sp_streq(ty, "LambdaNode"))) return -1;
+  int bp = nt_ref(nt, L, "parameters");
+  if (bp < 0) return -1;
+  const char *bpt = nt_type(nt, bp);
+  return (bpt && sp_streq(bpt, "NumberedParametersNode")) ? bp : -1;
+}
+
+static void numbered_rename_reads(NodeTable *nt, int id, const char *from,
+                                  const char *to, int depth) {
+  if (id < 0 || id >= nt->count || depth > 200) return;
+  const char *ty = nt_type(nt, id);
+  if (!ty) return;
+  if (sp_streq(ty, "BlockNode") || sp_streq(ty, "LambdaNode")) {
+    int bp = nt_ref(nt, id, "parameters");
+    const char *bpt = bp >= 0 ? nt_type(nt, bp) : NULL;
+    if (bpt && sp_streq(bpt, "NumberedParametersNode")) return;   /* binds it itself */
+  }
+  if (sp_streq(ty, "LocalVariableReadNode") || sp_streq(ty, "LocalVariableWriteNode") ||
+      sp_streq(ty, "LocalVariableTargetNode") || sp_streq(ty, "LocalVariableOperatorWriteNode") ||
+      sp_streq(ty, "LocalVariableOrWriteNode") || sp_streq(ty, "LocalVariableAndWriteNode")) {
+    const char *nm = nt_str(nt, id, "name");
+    if (nm && sp_streq(nm, from)) nt_set_str(nt, id, "name", to);
+  }
+  const SpNode *nd = &nt->nodes[id];
+  for (int i = 0; i < nd->nr; i++) numbered_rename_reads(nt, nd->r[i].ref, from, to, depth + 1);
+  for (int i = 0; i < nd->na; i++)
+    for (int j = 0; j < nd->a[i].n; j++)
+      numbered_rename_reads(nt, nd->a[i].ids[j], from, to, depth + 1);
+}
+
+/* Replace `from` with `to` in a block's comma-joined `locals` string.
+   emit_block_locals_reset nils every name in it that is not a parameter, so a
+   stale entry there nils the renamed slot right after the bind, once per
+   iteration, and the body reads nil. */
+static void numbered_rename_locals_str(NodeTable *nt, int L, const char *from, const char *to) {
+  const char *locs = nt_str(nt, L, "locals");
+  if (!locs || !*locs) return;
+  size_t flen = strlen(from), cap = strlen(locs) + strlen(to) + 8, w = 0;
+  char *out = (char *)malloc(cap);
+  if (!out) return;
+  out[0] = 0;
+  for (const char *p = locs; ; ) {
+    const char *e = strchr(p, ',');
+    size_t seg = e ? (size_t)(e - p) : strlen(p);
+    const char *put = p; size_t putn = seg;
+    if (seg == flen && !strncmp(p, from, seg)) { put = to; putn = strlen(to); }
+    if (w) out[w++] = ',';
+    memcpy(out + w, put, putn); w += putn; out[w] = 0;
+    if (!e) break;
+    p = e + 1;
+  }
+  nt_set_str(nt, L, "locals", out);
+  free(out);
+}
+
+static void scope_numbered_block_params(Compiler *c) {
+  NodeTable *nt = (NodeTable *)c->nt;
+  int n0 = nt->count;
+  /* how many numbered-param blocks each scope holds */
+  int *per_scope = (int *)calloc((size_t)(c->nscopes > 0 ? c->nscopes : 1), sizeof(int));
+  if (!per_scope) return;
+  for (int L = 0; L < n0; L++) {
+    if (numbered_params_node_of(c, L) < 0) continue;
+    int sc = c->nscope[L];
+    if (sc >= 0 && sc < c->nscopes) per_scope[sc]++;
+  }
+  for (int L = 0; L < n0; L++) {
+    int bp = numbered_params_node_of(c, L);
+    if (bp < 0) continue;
+    int sc = c->nscope[L];
+    if (sc < 0 || sc >= c->nscopes || per_scope[sc] < 2) continue;   /* no collision */
+    int maxn = (int)nt_int(nt, bp, "maximum", 0);
+    if (maxn <= 0 || maxn > 9) continue;
+    int body = nt_ref(nt, L, "body");
+    for (int k = 1; k <= maxn; k++) {
+      char from[8], to[32], key[8];
+      snprintf(from, sizeof from, "_%d", k);
+      snprintf(to, sizeof to, "_%d__b%d", k, L);
+      snprintf(key, sizeof key, "n%d", k);
+      if (body >= 0) numbered_rename_reads(nt, body, from, to, 0);
+      numbered_rename_locals_str(nt, L, from, to);
+      /* nt_node_set_str, not nt_set_str: the latter only UPDATES a key the node
+         already carries and silently drops a new one. */
+      nt_node_set_str(nt, bp, key, to);
+    }
+  }
+  free(per_scope);
+}
+
 void rename_shadowing_block_params(Compiler *c) {
   const NodeTable *nt = c->nt;
   int n = nt->count;
@@ -11477,6 +11596,7 @@ void analyze_program(Compiler *c) {
       comp_grow_node_arrays(c);
     }
   }
+  scope_numbered_block_params(c);
   rename_shadowing_block_params(c);
   /* `:m.to_proc.call(r, a)` -> `r.m(a)`, before the to_proc rewrite below
      turns the receiver into a fixed-arity lambda (#3097). */

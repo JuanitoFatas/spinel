@@ -629,8 +629,12 @@ static int subtree_has_param_named(const NodeTable *nt, int id, const char *nm) 
 
   /* numbered params (_1.._9): the NumberedParametersNode carries no child
      parameter nodes, yet the block's locals list contains the names. */
+  /* `_1` as the parser wrote it, and `_1__bNN` where scope_numbered_block_params
+     gave a colliding scope's blocks their own -- the same two spellings the
+     shadow rename leaves for an ordinary parameter, matched the same way. */
   if (ty && sp_streq(ty, "NumberedParametersNode") &&
-      nm[0] == '_' && nm[1] >= '1' && nm[1] <= '9' && !nm[2]) return 1;
+      nm[0] == '_' && nm[1] >= '1' && nm[1] <= '9' &&
+      (!nm[2] || !strncmp(nm + 2, "__b", 3))) return 1;
   if (ty && sp_streq(ty, "ItParametersNode") && sp_streq(nm, "it")) return 1;
   if (ty && (strstr(ty, "ParameterNode") || sp_streq(ty, "LocalVariableTargetNode"))) {
     const char *pn = nt_str(nt, id, "name");
