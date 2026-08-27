@@ -501,18 +501,32 @@ under `/i` reaches a character through the 1:1 foldings only, so
 `"ß" =~ /[[:upper:]]/i` is nil here and 0 in CRuby, for the same reason
 `"ß" =~ /ss/i` does not match (see the fold note above).
 
+**Character properties (`\p{...}` / `\P{...}`) carry three families.** The
+POSIX names (`Alpha`, `Alnum`, `Word`, `Space`, `Upper`, `Lower`, `Digit`,
+`Punct`, `Graph`, `Print`, `Blank`, `Cntrl`, `XDigit`, `ASCII`) are the types
+the bracket classes already read, so `\p{Alpha}` is `[[:alpha:]]` and folds
+under `/i` the same way. The general categories are all thirty of them, one
+and two letter alike -- `\p{Lu}`, `\p{Ll}`, `\p{Lt}`, `\p{Lm}`, `\p{Lo}`,
+`\p{Mn}`, `\p{Mc}`, `\p{Me}`, `\p{Nd}`, `\p{Nl}`, `\p{No}`, `\p{Pc}`,
+`\p{Pd}`, `\p{Ps}`, `\p{Pe}`, `\p{Pi}`, `\p{Pf}`, `\p{Po}`, `\p{Sm}`,
+`\p{Sc}`, `\p{Sk}`, `\p{So}`, `\p{Zs}`, `\p{Zl}`, `\p{Zp}`, `\p{Cc}`,
+`\p{Cf}`, `\p{Co}`, `\p{Cs}`, `\p{Cn}`, and `\p{L}` / `\p{M}` / `\p{N}` /
+`\p{P}` / `\p{S}` / `\p{Z}` / `\p{C}` for every category under a letter. And
+three emoji properties: `Emoji`, `Emoji_Presentation`, `Extended_Pictographic`.
+Names match the way CRuby matches them, so case, underscores, hyphens and
+spaces make no difference. Anything else -- a script (`\p{Han}`), a binary
+property (`\p{Alphabetic}`), an age or block -- raises `RegexpError` naming
+the property, so the message says which one to reach around. The tables are
+generated from CRuby by `tools/gen_re_uniprop.rb` and are about 18KB;
+`-DRE_NO_UNICODE_CTYPE` leaves them out, and then every property is refused.
+
 **A regexp construct the engine does not carry is refused, not read as its
-letters.** `\K` (drop what was matched before it), `\R` (any linebreak), `\X`
-(a grapheme cluster) and `\p{...}` / `\P{...}` (a character property) each mean
-something in CRuby that this engine does not do. Left as unknown escapes each
-was simply its own letter, so `/\R/` matched an `R` rather than a newline and
-`/\p{Alpha}/` answered a request for a letter with the text of the request.
-They raise `RegexpError` at compile time instead. Inside a character class
-CRuby reads `\K`, `\R` and `\X` as the letter too, and so does the class
-parser here, so `[\R]` still matches an `R`. `\p{...}` / `\P{...}` differ:
-CRuby reads a property escape inside a class as a property test there too
-(`[\p{Alpha}]` matches letters), so the class parser refuses it the same way
-the bare form is refused, rather than reading it as the letters `p{Alpha}`.
+letters.** `\K` (drop what was matched before it), `\R` (any linebreak) and
+`\X` (a grapheme cluster) each mean something in CRuby that this engine does
+not do. Left as unknown escapes each was simply its own letter, so `/\R/`
+matched an `R` rather than a newline. They raise `RegexpError` at compile time
+instead. Inside a character class CRuby reads `\K`, `\R` and `\X` as the
+letter too, and so does the class parser here, so `[\R]` still matches an `R`.
 `\G` and `\g<name>` ARE carried and behave as CRuby does.
 
 The same applies inside a character class, where a `[` never stands for

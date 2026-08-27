@@ -5,12 +5,13 @@ bs-G | 0
 bs-G-mid | nil
 bs-g-name | "ab"
 bs-g-quote | "ab"
-prop-p | RegexpError
-prop-P | RegexpError
+prop-p | 0
+prop-P | 0
+prop-unknown | RegexpError
 bare-g | "g"
 bare-p | "p"
 pL | "pL"
 class-R | "R"
 class-K | "K"
-class-p | RegexpError
-class-P-neg | RegexpError
+class-p | 0
+class-P-neg | nil

@@ -24,6 +24,7 @@ t("bs-g-name") { Regexp.new("(?<x>a|b)\\g<x>").match("ab")[0] }
 t("bs-g-quote"){ Regexp.new("(?<x>a|b)\\g'x'").match("ab")[0] }
 t("prop-p")    { Regexp.new("\\p{Alpha}") =~ "a" }
 t("prop-P")    { Regexp.new("\\P{Alpha}") =~ "1" }
+t("prop-unknown") { Regexp.new("\\p{Hiragana}") =~ "a" }
 
 # a bare `\g` is the letter in CRuby too, and stays one; so is a bare `\p`
 # and the unbraced `\pL`
@@ -36,8 +37,10 @@ t("pL")        { Regexp.new("\\pL").match("pL")[0] }
 t("class-R")   { Regexp.new("[\\R]").match("R")[0] }
 t("class-K")   { Regexp.new("[\\K]").match("K")[0] }
 
-# \p/\P differ: CRuby reads a property escape inside a class as a property
-# test there too, not as its literal letters, so the class parser refuses it
-# the same way the bare form is refused rather than matching "p{Alpha}"
+# \p/\P are carried now (#4143), inside a class as well as outside: CRuby
+# reads a property escape inside a class as a property test there too, not as
+# its literal letters, so these answer rather than raising. A property the
+# engine does not carry still raises, naming it -- see
+# test/regexp_unicode_property.rb, which covers the ones it does.
 t("class-p")     { Regexp.new("[\\p{Alpha}]") =~ "a" }
 t("class-P-neg") { Regexp.new("[^\\p{Word}\\- \\t]").match("a d_1") }

@@ -249,14 +249,16 @@ endif
 
 # ---- Runtime library (regexp + bigint + …) ----
 
-# RE_CASE_FLAGS: the two Unicode tables the regexp engine carries, each left
-# out by asking for it. -DRE_NO_UNICODE_CASE gives ASCII-only /i folding and
-# leaves out the ~3KB fold table; -DRE_NO_UNICODE_CTYPE gives ASCII-only POSIX
-# brackets and word boundaries and leaves out the ~14KB type table. Pass both
-# for the smallest engine.
+# RE_CASE_FLAGS: the Unicode tables the regexp engine carries, each left out by
+# asking for it. -DRE_NO_UNICODE_CASE gives ASCII-only /i folding and leaves
+# out the ~3KB fold table; -DRE_NO_UNICODE_CTYPE gives ASCII-only POSIX
+# brackets and word boundaries, leaves out the ~14KB type table, and takes the
+# ~18KB `\p{...}` property tables with it (a property is refused rather than
+# answered from ASCII, since a category means nothing there). Pass both for the
+# smallest engine.
 RE_CASE_FLAGS ?=
 
-build/regexp/%.o: lib/regexp/%.c lib/regexp/re_internal.h lib/regexp/re_casefold.h lib/regexp/re_ctype.h
+build/regexp/%.o: lib/regexp/%.c lib/regexp/re_internal.h lib/regexp/re_casefold.h lib/regexp/re_ctype.h lib/regexp/re_uniprop.h
 	@mkdir -p build/regexp
 	$(CC) -c $(COPT) $(SEC_FLAGS) $(RE_CASE_FLAGS) -Ilib/regexp $< -o $@
 

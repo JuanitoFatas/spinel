@@ -137,7 +137,12 @@ compile_error(re_compiler *c, const char *msg)
   free(c->code);
   c->code = NULL;
   if (c->classes) {
-    for (uint16_t i = 0; i < c->num_classes; i++) free(c->classes[i].ranges);
+    for (uint16_t i = 0; i < c->num_classes; i++) {
+      free(c->classes[i].ranges);
+#ifdef RE_UNICODE_CTYPE
+      free(c->classes[i].props);
+#endif
+    }
     free(c->classes);
     c->classes = NULL;
   }
@@ -408,6 +413,26 @@ class_add_shorthand(re_charclass *cc, int ch)
    class is handled by the RE_NCLASS emit in compile_charclass, exactly as
    for the `\d`/`\w` shorthands, so these helpers only ever add the
    positive set. */
+#ifdef RE_UNICODE_CTYPE
+/* Record a `\p{...}` property on a class. Returns FALSE when the engine does
+   not carry the property, so the caller can name it in the error. */
+static mrb_bool
+class_add_prop(re_charclass *cc, int id, mrb_bool negated)
+{
+  if (cc->num_props >= cc->prop_capa) {
+    int capa = cc->prop_capa ? cc->prop_capa * 2 : 4;
+    void *p = realloc(cc->props, sizeof(*cc->props) * (size_t)capa);
+    if (!p) return FALSE;
+    cc->props = p;
+    cc->prop_capa = capa;
+  }
+  cc->props[cc->num_props].id = (int16_t)id;
+  cc->props[cc->num_props].negated = negated;
+  cc->num_props++;
+  return TRUE;
+}
+#endif
+
 static mrb_bool
 class_add_posix(re_charclass *cc, const char *name, size_t len, uint16_t *ctype)
 {
@@ -511,6 +536,74 @@ class_add_posix(re_charclass *cc, const char *name, size_t len, uint16_t *ctype)
    its negation holds everything there and utf8_any is right for it; without
    the table every bracket is such a set. Returns FALSE for an unrecognized
    name so the caller can raise. */
+/* class_add_posix_negated is defined below; class_read_property needs both. */
+static mrb_bool class_add_posix_negated(re_charclass *cc, const char *name,
+                                        size_t len, uint16_t *ctype);
+
+#ifdef RE_UNICODE_CTYPE
+/* Parse a `\p{Name}` / `\P{Name}` at `*pp` (which points at the `p`), record
+   it on `cc`, and advance past the closing brace. `esc_neg` is TRUE for the
+   capital spelling. Returns FALSE, with the name copied into `errname`, when
+   the engine does not carry that property -- the caller names it in the error
+   rather than saying only that properties are unsupported, which is what tells
+   an author whether to reach for another spelling or to file.
+
+   A POSIX-named property is the type re_ctype.h already carries, and routing
+   it there rather than to a table of its own is what makes `\p{Alpha}` fold
+   under /i exactly as `[[:alpha:]]` does. */
+static mrb_bool
+class_read_property(re_charclass *cc, const char **pp, const char *end,
+                    mrb_bool esc_neg, char *errname, size_t errcap)
+{
+  const char *p = *pp + 1;          /* past the p/P */
+  if (p >= end || *p != '{') return FALSE;
+  p++;
+  mrb_bool negated = esc_neg;
+  if (p < end && *p == '^') { negated = !negated; p++; }
+  const char *name = p;
+  while (p < end && *p != '}') p++;
+  if (p >= end) return FALSE;       /* unterminated: not a property */
+  size_t len = (size_t)(p - name);
+  if (errcap) {
+    size_t n = len < errcap - 1 ? len : errcap - 1;
+    memcpy(errname, name, n);
+    errname[n] = 0;
+  }
+  char lower[32];
+  if (len > 0 && len < sizeof(lower)) {
+    for (size_t k = 0; k < len; k++) {
+      char ch = name[k];
+      lower[k] = (ch >= 'A' && ch <= 'Z') ? (char)(ch - 'A' + 'a') : ch;
+    }
+    lower[len] = 0;
+    uint16_t ctype = 0;
+    mrb_bool ok = negated ? class_add_posix_negated(cc, lower, len, &ctype)
+                          : class_add_posix(cc, lower, len, &ctype);
+    if (ok) {
+      if (ctype) {
+        if (negated) cc->ctype_no |= ctype;
+        else cc->ctype_yes |= ctype;
+      }
+      *pp = p + 1;
+      return TRUE;
+    }
+  }
+  int id = re_prop_lookup(name, len);
+  if (id < 0) return FALSE;
+  if (!class_add_prop(cc, id, negated)) return FALSE;
+  /* ASCII is answered from the class bitmap and never reaches the property
+     list -- the same split the POSIX brackets use, which write their ASCII
+     members out at compile time and read the table only above it. Writing
+     them here costs 128 lookups once and leaves the match path alone. */
+  for (uint32_t a = 0; a < 128; a++) {
+    mrb_bool has = re_prop_match(id, a);
+    if (negated ? !has : has) class_set_bit(cc, (uint8_t)a);
+  }
+  *pp = p + 1;
+  return TRUE;
+}
+#endif
+
 static mrb_bool
 class_add_posix_negated(re_charclass *cc, const char *name, size_t len,
                         uint16_t *ctype)
@@ -740,9 +833,10 @@ read_class_atom(re_compiler *c, re_charclass *cc)
     }
     /* Unlike `\K`/`\R`/`\X`, CRuby reads a property escape inside a class as
        a property test there too, not as its literal letters -- `[\p{Alpha}]`
-       matches letters, it doesn't hold the text "p{Alpha}". The engine
-       carries no property table, so this is refused the same way the
-       top-level dispatcher already refuses the bare form. */
+       matches letters, it doesn't hold the text "p{Alpha}". */
+    /* Handled by the class loop before it reads an atom -- a property is a
+       set, so it is not an atom and cannot open a range. Reaching here means
+       the loop did not recognise it. */
     if ((peek(c) == 'p' || peek(c) == 'P') && c->p + 1 < c->src_end && c->p[1] == '{') {
       compile_error(c, "character property is not supported");
     }
@@ -878,6 +972,26 @@ compile_charclass(re_compiler *c)
                     ? "premature end of char-class"
                     : "unterminated character class");
     }
+
+#ifdef RE_UNICODE_CTYPE
+    /* `[\p{Lu}\p{Nd}]`: a property inside a class is a set, like a POSIX
+       bracket, so it joins the class rather than being read as an atom --
+       and, like one, it cannot be an endpoint of a range. */
+    if (peek(c) == '\\' && c->p + 2 < c->src_end &&
+        (c->p[1] == 'p' || c->p[1] == 'P') && c->p[2] == '{') {
+      char pname[64];
+      const char *pp = c->p + 1;
+      if (class_read_property(cc, &pp, c->src_end, c->p[1] == 'P',
+                              pname, sizeof(pname))) {
+        c->p = pp;
+        reject_set_as_range_start(c);
+        continue;
+      }
+      { char ebuf[128];
+        snprintf(ebuf, sizeof(ebuf), "character property is not supported: %s", pname);
+        compile_error(c, ebuf); }
+    }
+#endif
 
     uint32_t cp = read_class_atom(c, cc);
 
@@ -1590,13 +1704,36 @@ compile_atom(re_compiler *c)
       }
     }
     else if ((ch == 'p' || ch == 'P') && c->p + 1 < c->src_end && c->p[1] == '{') {
-      /* The engine reads no character property. Without this the escape is
-         the letter it names and the braces are literal too, so /\p{Alpha}/
-         would answer a pattern that asked for a letter with the text of the
-         request. `[[:alpha:]]` is how to ask for one.
-         Only the braced spelling is a property: CRuby reads a bare `\p`, and
-         `\pL` as well, as the letter, and so does the fall-through below. */
+      /* A property outside a class is a one-member class: the same set, with
+         nothing else in it. Only the braced spelling is a property -- CRuby
+         reads a bare `\p`, and `\pL` as well, as the letter, and so does the
+         fall-through below. */
+#ifdef RE_UNICODE_CTYPE
+      uint16_t id = add_class(c);
+      char pname[64];
+      const char *pp = c->p;
+      if (class_read_property(&c->classes[id], &pp, c->src_end, ch == 'P',
+                              pname, sizeof(pname))) {
+        re_charclass *pcc = &c->classes[id];
+        c->p = pp;
+        /* A POSIX-named property routed to a ctype bit needs the same /i
+           closure a bracket gets, and for the same reason: the type is read at
+           match time rather than spelled out as members, so nothing folded it.
+           compile_charclass does this for a class written with `[...]`; a bare
+           `\p{...}` is a class too, just one nothing else is in. */
+        pcc->ctype_fold = (c->flags & RE_FLAG_IGNORECASE) &&
+                          (pcc->ctype_yes || pcc->ctype_no);
+        if (c->flags & RE_FLAG_IGNORECASE) class_fold_codepoints(c, pcc);
+        emit(c, RE_CLASS, (uint8_t)id, 0);
+      }
+      else {
+        char ebuf[128];
+        snprintf(ebuf, sizeof(ebuf), "character property is not supported: %s", pname);
+        compile_error(c, ebuf);
+      }
+#else
       compile_error(c, "character property is not supported");
+#endif
     }
     else if (ch == 'u') {
       next_char(c);  /* skip u */
@@ -2367,6 +2504,9 @@ re_free(mrb_regexp_pattern *pat)
     if (pat->classes) {
       for (uint16_t i = 0; i < pat->num_classes; i++) {
         free(pat->classes[i].ranges);
+#ifdef RE_UNICODE_CTYPE
+        free(pat->classes[i].props);
+#endif
       }
       free(pat->classes);
     }

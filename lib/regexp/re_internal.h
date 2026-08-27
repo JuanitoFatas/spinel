@@ -102,6 +102,14 @@ typedef struct {
   uint16_t ctype_yes;
   uint16_t ctype_no;
   mrb_bool ctype_fold;
+  /* The `\p{...}` properties named in the class, each with whether it was
+     written `\P{...}`. A list rather than a mask because there are more
+     properties than a mask would hold, and a class names one or two of them;
+     the ctype bits stay a mask because there are eleven of those and a
+     bracket class often names several. */
+  struct { int16_t id; mrb_bool negated; } *props;
+  int num_props;
+  int prop_capa;
 #endif
 } re_charclass;
 
@@ -288,6 +296,23 @@ uint16_t re_ctype(uint32_t cp);
    and the utf8_any catch-all. The class matcher calls this for a class
    holding any bracket, once its ranges have said nothing. */
 mrb_bool re_class_ctype_match(const re_charclass *cc, uint32_t cp);
+
+/* Unicode properties, as `\p{...}` names them. re_prop_lookup resolves a name
+   to an id (-1 when the engine does not carry it); re_prop_match answers it
+   for one codepoint. The ids are three ranges rather than an enum: a general
+   category, a one-letter category standing for every two-letter one under it,
+   and an emoji property, which is a bit rather than an index because the emoji
+   properties overlap. The POSIX names (`\p{Alpha}`, `\p{Word}`, ...) are not
+   here -- the compiler routes those to the ctype bits, which is smaller and is
+   what makes them fold correctly under /i. */
+#define RE_PROP_GC     0
+#define RE_PROP_MAJOR  256
+#define RE_PROP_EMOJI  512
+int      re_prop_lookup(const char *name, size_t len);
+mrb_bool re_prop_match(int id, uint32_t cp);
+
+/* Whether a class holds `cp` through the properties named in it. */
+mrb_bool re_class_prop_match(const re_charclass *cc, uint32_t cp);
 #endif
 
 /* The folded form of cp: the codepoint every counterpart of it shares, or cp

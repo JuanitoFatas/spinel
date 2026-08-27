@@ -57,6 +57,11 @@ class_match(const re_charclass *cc, uint32_t cp, mrb_bool binary)
      through a negated bracket and not through a positive one. Asking the
      table would make the lone byte 0xB5 the word character it spells in
      UTF-8. */
+  if (cc->num_props > 0) {
+    /* A binary subject holds bytes, and a byte stands for no character, so it
+       has no property either -- same reasoning as the brackets below. */
+    if (!binary && re_class_prop_match(cc, cp)) return TRUE;
+  }
   if (cc->ctype_yes || cc->ctype_no) {
     if (binary) return cc->ctype_no != 0 || cc->utf8_any;
     return re_class_ctype_match(cc, cp);

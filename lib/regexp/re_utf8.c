@@ -150,6 +150,113 @@ re_class_ctype_match(const re_charclass *cc, uint32_t cp)
   }
   return (any & cc->ctype_yes) || (~all & cc->ctype_no) || cc->utf8_any;
 }
+
+/* ---- Unicode properties (\p{...}) ---- */
+#include "re_uniprop.h"
+
+/* The general category of a codepoint: the category of the run it falls in,
+   which is the last run starting at or below it. ASCII is in the table, so no
+   floor test -- unlike the ctype table, which starts at U+0080. */
+static uint32_t
+re_general_category(uint32_t cp)
+{
+  size_t lo = 0, hi = RE_GC_RUNS;
+  while (hi - lo > 1) {
+    size_t mid = lo + (hi - lo) / 2;
+    if (RE_GC_RUN_START(re_gc_table[mid]) <= cp) lo = mid;
+    else hi = mid;
+  }
+  return RE_GC_RUN_CAT(re_gc_table[lo]);
+}
+
+static uint32_t
+re_emoji_set(uint32_t cp)
+{
+  if (cp < RE_EMOJI_RUN_START(re_emoji_table[0])) return 0;
+  size_t lo = 0, hi = RE_EMOJI_RUNS;
+  while (hi - lo > 1) {
+    size_t mid = lo + (hi - lo) / 2;
+    if (RE_EMOJI_RUN_START(re_emoji_table[mid]) <= cp) lo = mid;
+    else hi = mid;
+  }
+  return RE_EMOJI_RUN_SET(re_emoji_table[lo]);
+}
+
+/* Resolve a `\p{...}` name to a property id, or -1. Case- and separator-
+   insensitive, as CRuby is: `\p{Extended_Pictographic}`, `\p{extended
+   pictographic}` and `\p{EXTENDEDPICTOGRAPHIC}` are one name. The POSIX
+   names resolve elsewhere (to a ctype bit), so they are not here. */
+static char
+re_prop_lc(char ch)
+{
+  return (ch >= 'A' && ch <= 'Z') ? (char)(ch - 'A' + 'a') : ch;
+}
+
+int
+re_prop_lookup(const char *name, size_t len)
+{
+  char norm[64];
+  size_t n = 0;
+  for (size_t i = 0; i < len && n + 1 < sizeof(norm); i++) {
+    char ch = name[i];
+    if (ch == '_' || ch == '-' || ch == ' ') continue;
+    norm[n++] = re_prop_lc(ch);
+  }
+  norm[n] = 0;
+  if (n == 0) return -1;
+  /* A one-letter category (L, N, P, ...) stands for every two-letter one
+     beginning with it, which the matcher answers by comparing first letters.
+     Encoded as RE_PROP_MAJOR + the letter. */
+  if (n == 1) {
+    for (int i = 0; i < RE_GC_COUNT; i++)
+      if (re_prop_lc(re_gc_names[i][0]) == norm[0]) return RE_PROP_MAJOR + norm[0];
+    return -1;
+  }
+  if (n == 2) {
+    for (int i = 0; i < RE_GC_COUNT; i++) {
+      const char *g = re_gc_names[i];
+      if (re_prop_lc(g[0]) == norm[0] && re_prop_lc(g[1]) == norm[1])
+        return RE_PROP_GC + i;
+    }
+  }
+  static const struct { const char *name; uint32_t bit; } emo[] = {
+    { "emoji", RE_EMOJI_EMOJI },
+    { "emojipresentation", RE_EMOJI_EMOJI_PRESENTATION },
+    { "extendedpictographic", RE_EMOJI_EXTENDED_PICTOGRAPHIC },
+  };
+  for (size_t i = 0; i < sizeof(emo) / sizeof(emo[0]); i++)
+    if (strcmp(norm, emo[i].name) == 0) return RE_PROP_EMOJI + (int)emo[i].bit;
+  return -1;
+}
+
+/* Does `cp` have the property `id` (as returned by re_prop_lookup)? */
+mrb_bool
+re_prop_match(int id, uint32_t cp)
+{
+  if (id >= RE_PROP_EMOJI)
+    return (re_emoji_set(cp) & (uint32_t)(id - RE_PROP_EMOJI)) != 0 ? TRUE : FALSE;
+  if (id >= RE_PROP_MAJOR) {
+    char want = (char)(id - RE_PROP_MAJOR);
+    return (re_prop_lc(re_gc_names[re_general_category(cp)][0]) == want) ? TRUE : FALSE;
+  }
+  if (id >= RE_PROP_GC)
+    return (re_general_category(cp) == (uint32_t)(id - RE_PROP_GC)) ? TRUE : FALSE;
+  return FALSE;
+}
+
+/* Whether a class holds `cp` through the properties named in it: the same
+   yes/no pair the POSIX brackets use, one bit per property the class names.
+   Properties are not folded under /i -- a category IS the case distinction
+   (`\p{Lu}` asks for an uppercase letter), so closing it under folding would
+   answer the opposite of what was asked. */
+mrb_bool
+re_class_prop_match(const re_charclass *cc, uint32_t cp)
+{
+  for (int i = 0; i < cc->num_props; i++)
+    if (re_prop_match(cc->props[i].id, cp) == (cc->props[i].negated ? FALSE : TRUE))
+      return TRUE;
+  return FALSE;
+}
 #endif  /* RE_UNICODE_CTYPE */
 
 /* Check if character is a "word" character (\w): [a-zA-Z0-9_] */
