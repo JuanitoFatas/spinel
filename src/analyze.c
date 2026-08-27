@@ -2241,7 +2241,10 @@ void rename_shadowing_block_params(Compiler *c) {
     int pn = blkp_params_node(c, L);
     if (pn < 0) continue;
     const char *pty = nt_type(nt, pn);
-    if (!pty || !sp_streq(pty, "ParametersNode")) continue;  /* numbered params handled elsewhere */
+    /* Numbered parameters are renamed by scope_numbered_block_params, which
+       runs just before this and keys on the NumberedParametersNode; this pass
+       only ever sees an ordinary ParametersNode. */
+    if (!pty || !sp_streq(pty, "ParametersNode")) continue;
     int rn = 0; const int *reqs = nt_arr(nt, pn, "requireds", &rn);
     /* rest / post parameters shadow-rename the same way as the requireds: a
        rest param sharing an outer local's name shares its C slot, so the

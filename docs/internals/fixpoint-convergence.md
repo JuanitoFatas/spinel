@@ -72,43 +72,22 @@ normally.
 
 ## What is left
 
-One program: `test/issue_3196.rb`. It is not an oscillation.
+Nothing: every program under `test/` and `packages/*/test/` converges. The
+sweep went 91 -> 0.
 
-`_1` .. `_9` (and `it`, which the parser lowers to `_1`) are names spinel
-synthesizes rather than names the author wrote, and blocks share their
-enclosing scope's local table -- so **two blocks in one method intern the same
-slot**, and their types merge:
+The last one was not an oscillation. `_1` .. `_9` (and `it`, which the parser
+lowers to `_1`) are names spinel synthesizes rather than names the author
+wrote, and blocks share their enclosing scope's local table -- so two such
+blocks in one method interned the same slot and their types merged. Two passes
+then typed that one slot from different call shapes, every round.
 
-```ruby
-def k
-  out = []
-  [10, 20].each { out << _1 + 1 }   # alone: sp_int lv__1
-  out
-end
-
-def h
-  seen = []
-  [1, 2].each { seen << _1 }        # together: sp_RbVal lv__1, boxed
-  ["a", "b"].each { seen << _1 }
-  seen
-end
-```
-
-Values are right either way -- each block writes the slot before reading it --
-so this costs the type, not the answer. In `issue_3196` two passes then type
-that one slot from different call shapes, every round.
-
-The fix is to give each block its own numbered parameter, which is what
-`rename_shadowing_block_params` does for a named one (it skips numbered
-parameters with a comment saying they are "handled elsewhere"; they are not).
-Renaming them on the AST works and was tried: `block_param_name` hands back the
-generated name, the body's reads and the block's `locals` string are rewritten
-in lock-step, and `subtree_has_param_named` has to learn the second spelling
-the way it already knows `__bp`. What stopped it from landing is that the
-inliner carries its OWN mechanism for this exact collision -- the rename-depth
-stack in `codegen_iter.c` (#3281), whose comment names "a numbered `_1` used by
-both the callee's own block and the caller's". Two mechanisms for one problem
-needs a decision about which survives, not a patch.
+Fixed by giving each block its own (886a9924), only where the names actually
+collide. What made it more than a rename is how much of the compiler treated
+`_N` as something other than a parameter: `proc_param_name` answered NULL for a
+numbered-param proc, so its arity was 0 and every `_1` in the body was
+classified as an enclosing local and laundered through the capture machinery
+rather than bound from `args[]`. Nine sites built the literal `_N`; the naming
+rule now lives in one accessor.
 
 ## Measuring
 
