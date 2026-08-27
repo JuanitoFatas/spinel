@@ -1,0 +1,13 @@
+read: Net::ReadTimeout
+true
+true
+true
+["Net::ReadTimeout", "Timeout::Error", "RuntimeError", "StandardError"]
+["Net::OpenTimeout", "Timeout::Error", "RuntimeError", "StandardError"]
+"Net::ReadTimeout"
+"Net::OpenTimeout"
+rescued as Timeout::Error: Net::ReadTimeout
+60
+60
+["200", "hi"]
+:served

@@ -23,8 +23,26 @@
 require "socket"
 require "uri"
 
+module Timeout
+  # CRuby's base for both of the timeouts below, so `rescue Timeout::Error`
+  # catches either -- which is what a caller with a deadline writes.
+  class Error < RuntimeError
+  end
+end
+
 module Net
   class HTTPError < StandardError
+  end
+
+  # Raised when the peer accepts the connection and then says nothing for
+  # read_timeout seconds, and when a connection cannot be established within
+  # open_timeout. Same classes and same base as CRuby's.
+  class ReadTimeout < Timeout::Error
+    def message = "Net::ReadTimeout"
+  end
+
+  class OpenTimeout < Timeout::Error
+    def message = "Net::OpenTimeout"
   end
 
   # The response. `code` is a String, as CRuby has it ("200", not 200), and
@@ -273,7 +291,7 @@ module Net
     end
 
     def open_connection
-      @socket = TCPSocket.new(@address, @port)
+      @socket = connect_with_timeout
       if @use_ssl
         tls = OpenSSL::SSL::SSLSocket.new(@socket)
         tls.hostname = @address
@@ -292,6 +310,46 @@ module Net
       @fresh = false
       @started = false
       nil
+    end
+
+    # open_timeout, honoured rather than stored: a non-blocking connect and a
+    # bounded wait for writability. A timeout of 0 or less means "no limit",
+    # which is how CRuby reads nil there.
+    def connect_with_timeout
+      limit = @open_timeout.nil? ? 0 : @open_timeout
+      return TCPSocket.new(@address, @port) if limit <= 0
+      s = Socket.new(Socket::AF_INET, Socket::SOCK_STREAM, 0)
+      begin
+        s.connect_nonblock(@address, @port)
+      rescue IO::WaitWritable
+        if IO.select(nil, [s], nil, limit).nil?
+          s.close
+          raise OpenTimeout
+        end
+        begin
+          s.connect_nonblock(@address, @port)
+        rescue Errno::EISCONN
+          # already connected: the wait above is what completed it
+        end
+      end
+      s
+    end
+
+    # Wait for the peer to START answering, or give up. Without this a server
+    # that accepts the connection and never replies held the caller forever,
+    # whatever read_timeout was set to (#4133).
+    #
+    # Once. Not before every read, and the reason is worth stating: after the
+    # first byte arrives the rest of the response is normally already in a
+    # buffer this cannot see -- stdio's on the plain path, the TLS record
+    # layer's on the other -- so waiting again would time out on data the
+    # caller is holding. What this covers is the failure that hangs: a peer
+    # that accepts and then says nothing. A stall PART WAY through a response
+    # is not covered, and CRuby's per-read timeout does cover it.
+    def wait_for_response
+      limit = @read_timeout.nil? ? 0 : @read_timeout
+      return if limit <= 0
+      raise ReadTimeout if IO.select([@socket], nil, nil, limit).nil?
     end
 
     def get(path, headers = nil)
@@ -390,6 +448,7 @@ module Net
     end
 
     def read_response
+      wait_for_response
       status = wire_gets
       raise HTTPError, "no response from #{@address}" if status.nil?
       parts = status.strip.split(" ")
