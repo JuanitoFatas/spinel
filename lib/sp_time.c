@@ -507,6 +507,14 @@ const char *sp_time_strftime(sp_Time t, const char *fmt) {SP_GC_ROOT_STR(fmt);
     /* CRuby names a UTC time "UTC", not the C locale's "GMT"; a fixed-offset
        time has no zone NAME at all, so %Z is empty there (Time#zone is nil). */
     else if (d == 'Z' && t.is_utc) { if (t.is_utc == 1) strcpy(val, "UTC"); else val[0] = 0; }
+    /* Ruby's %Y is zero-padded to four digits; C's is not, so a year below
+       1000 came out "1" where CRuby writes "0001". Ruby keeps the sign
+       outside the padding, so -1 is "-0001". */
+    else if (d == 'Y') {
+      long yr = (long)tmv.tm_year + 1900;
+      if (yr < 0) snprintf(val, sizeof val, "-%04ld", -yr);
+      else snprintf(val, sizeof val, "%04ld", yr);
+    }
     else if (strchr("aAbBcCdDeFgGhHIjklmMnprRSTtuUvVwWxXyYzZ", d)) {
       /* a standard Ruby directive: format the bare `%X` (we redo width/case
          ourselves for portability) */
@@ -643,7 +651,19 @@ static const char *sp_time_fmt(sp_Time t, int frac) {
   struct tm b;
   int32_t off;
   sp_time_vtm(t, &b, &off, NULL);
-  size_t n = strftime(buf, cap, "%Y-%m-%d %H:%M:%S", &b);
+  /* The year is written here rather than by C strftime, whose %Y does not
+     zero-pad below 1000: Time.utc(1,1,1).to_s is "0001-01-01 ..." in CRuby
+     and was "1-01-01 ..." here. The rest still goes through strftime. */
+  size_t n;
+  {
+    long yr = (long)b.tm_year + 1900;
+    int yn = (yr < 0) ? snprintf(buf, cap, "-%04ld", -yr) : snprintf(buf, cap, "%04ld", yr);
+    if (yn < 0 || (size_t)yn >= cap) { n = 0; }
+    else {
+      size_t r = strftime(buf + yn, cap - (size_t)yn, "-%m-%d %H:%M:%S", &b);
+      n = r ? (size_t)yn + r : 0;
+    }
+  }
   if (n == 0) {
     snprintf(buf, cap, "Time(%lld)", (long long)t.tv_sec);
     return sp_str_dup_external(buf);
