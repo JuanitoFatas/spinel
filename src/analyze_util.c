@@ -1526,10 +1526,7 @@ TyKind proc_ret_of(Compiler *c, int node) {
       }
     }
     int mi = -1;
-    if (recv < 0) {
-      mi = comp_method_index(c, name);
-      if (mi < 0) { Scope *self = comp_scope_of(c, node); if (self->class_id >= 0) mi = comp_method_in_chain(c, self->class_id, name, NULL); }
-    }
+    if (recv < 0) mi = comp_self_call_mi(c, node, name);
 else {
       TyKind rt = infer_type(c, recv);
       if (ty_is_object(rt)) mi = comp_method_in_chain(c, ty_object_class(rt), name, NULL);
@@ -1538,6 +1535,28 @@ else {
   }
   return TY_UNKNOWN;
 }
+/* Resolve a RECEIVERLESS call to the user method it lands in, or -1.
+   Ruby resolves it against the enclosing definition's self: a class method
+   against the singleton chain, an instance method against the instance chain.
+   A top-level `def` is a private method on Object, so it sits at the BOTTOM of
+   every ancestry and is the last thing to try. Several passes asked for the
+   free functions FIRST, so a same-named top-level def stood in for the real
+   callee -- and since it is typed by its own body, the real callee's
+   parameters never saw the call's argument types (#4106, #4130). */
+int comp_self_call_mi(Compiler *c, int id, const char *name) {
+  if (!name) return -1;
+  Scope *self = comp_scope_of(c, id);
+  int mi = -1;
+  if (self && self->class_id >= 0) {
+    /* inside a class method self IS the class, so a bare call reaches sibling
+       class methods; inside an instance method it does not */
+    if (self->is_cmethod) mi = comp_cmethod_in_chain(c, self->class_id, name, NULL);
+    if (mi < 0) mi = comp_method_in_chain(c, self->class_id, name, NULL);
+  }
+  if (mi < 0) mi = comp_method_index(c, name);
+  return mi;
+}
+
 TyKind proc_call_ret(Compiler *c, int recv) {
   TyKind r = proc_ret_of(c, recv);
   return r == TY_UNKNOWN ? TY_POLY : r;
@@ -1766,19 +1785,7 @@ int call_user_yield_mi(Compiler *c, int id) {
   int recv = nt_ref(nt, id, "receiver");
   if (!name) return -1;
   int mi = -1;
-  if (recv < 0) {
-    mi = comp_method_index(c, name);
-    if (mi < 0) {
-      Scope *encl = comp_scope_of(c, id);
-      if (encl && encl->class_id >= 0) {
-        mi = comp_method_in_chain(c, encl->class_id, name, NULL);
-        /* inside a class method, a bare call also reaches sibling class
-           methods (self is the class there) */
-        if (mi < 0 && encl->is_cmethod)
-          mi = comp_cmethod_in_chain(c, encl->class_id, name, NULL);
-      }
-    }
-  }
+  if (recv < 0) mi = comp_self_call_mi(c, id, name);
   else {
     TyKind rt = infer_type(c, recv);
     const char *rty = nt_type(nt, recv);

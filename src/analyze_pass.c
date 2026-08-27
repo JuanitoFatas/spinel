@@ -1255,16 +1255,7 @@ static int call_target_scope(Compiler *c, int id) {
   const char *nm = nt_str(nt, id, "name");
   if (!nm) return -1;
   int recv = nt_ref(nt, id, "receiver");
-  if (recv < 0) {
-    int mi = comp_method_index(c, nm);
-    if (mi >= 0) return mi;
-    Scope *self = comp_scope_of(c, id);
-    if (self && self->class_id >= 0) {
-      mi = comp_method_in_chain(c, self->class_id, nm, NULL);
-      if (mi < 0) mi = comp_cmethod_in_chain(c, self->class_id, nm, NULL);
-    }
-    return mi;
-  }
+  if (recv < 0) return comp_self_call_mi(c, id, nm);
   const char *rty = nt_type(nt, recv);
   if (rty && (sp_streq(rty, "ConstantReadNode") || sp_streq(rty, "ConstantPathNode"))) {
     int ci = comp_class_index(c, nt_str(nt, recv, "name"));
@@ -2830,6 +2821,7 @@ int bind_call_params(Compiler *c, int call_id, int mi) {
     TyKind at = infer_type(c, argv[k]);
     LocalVar *p = scope_local(m, m->pnames[k]);
     if (!p || p->rbs_seeded) continue;
+
     /* Post-convergence backstop only: an empty array-literal arg fills a
        parameter that no other call site typed, as an (empty) poly array so
        the callee's array methods dispatch. Never during the fixpoint -- a

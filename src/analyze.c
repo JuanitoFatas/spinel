@@ -6204,13 +6204,7 @@ static void widen_ivars_from_pushed_params(Compiler *c) {
     /* resolve the callee scope */
     int recv = nt_ref(nt, id, "receiver");
     int mi = -1;
-    if (recv < 0) {
-      mi = comp_method_index(c, name);
-      if (mi < 0) {
-        Scope *self = comp_scope_of(c, id);
-        if (self && self->class_id >= 0) mi = comp_method_in_chain(c, self->class_id, name, NULL);
-      }
-    }
+    if (recv < 0) mi = comp_self_call_mi(c, id, name);
     else {
       TyKind rt = infer_type(c, recv);
       if (ty_is_object(rt)) mi = comp_method_in_chain(c, ty_object_class(rt), name, NULL);
@@ -6654,26 +6648,23 @@ static int narrow_object_arrays(Compiler *c) {
       }
       else sl[S].alive = 0;
     }
-    /* Resolve the call target the way emission will: a free function first,
-       then an implicit-self method of the enclosing class, then an explicit
-       receiver -- a constant names a class, so the target is that class's
-       chain of class methods; anything else goes by the receiver's type.
-       -1 = unattributable here. A module of `self.` methods calling its own
-       helpers is the whole shape of a Ruby module used as a namespace, and
+    /* Resolve the call target the way emission will: the enclosing self's
+       ancestry first and a free function only as the fallback, then an
+       explicit receiver -- a constant names a class, so the target is that
+       class's chain of class methods; anything else goes by the receiver's
+       type. -1 = unattributable here. A module of `self.` methods calling its
+       own helpers is the whole shape of a Ruby module used as a namespace, and
        without the class-method arms every slot passed between two of them
-       died here. */
+       died here.
+
+       This used to ask for the free functions FIRST, which is not what
+       emission does: a same-named top-level def then took the call, so the
+       real callee's parameter was never joined to the caller's slot and the
+       two were narrowed apart -- an sp_PolyArray argument passed to an
+       sp_PtrArray parameter, and the C build stopped (#4130). */
     int oa_tmi = -1;
     if (name) {
-      if (recv < 0) {
-        oa_tmi = comp_method_index(c, name);
-        if (oa_tmi < 0) {
-          Scope *csc = comp_scope_of(c, id);
-          if (csc && csc->class_id >= 0) {
-            oa_tmi = comp_method_in_chain(c, csc->class_id, name, NULL);
-            if (oa_tmi < 0) oa_tmi = comp_cmethod_in_chain(c, csc->class_id, name, NULL);
-          }
-        }
-      }
+      if (recv < 0) oa_tmi = comp_self_call_mi(c, id, name);
       else if (nt_type(nt, recv) &&
                (sp_streq(nt_type(nt, recv), "ConstantReadNode") ||
                 sp_streq(nt_type(nt, recv), "ConstantPathNode"))) {

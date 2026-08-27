@@ -565,6 +565,10 @@ Scope *comp_scope_of(Compiler *c, int node_id);        /* owning scope */
 int comp_lvw_first(Compiler *c, const char *name);
 int comp_lvw_next(const Compiler *c, int w);
 int    comp_method_index(Compiler *c, const char *name); /* -1 if none */
+/* A receiverless call's target: the enclosing self's ancestry first, a
+   top-level def (a private Object method, and so last in every ancestry) only
+   as the fallback. See analyze_util.c. */
+int    comp_self_call_mi(Compiler *c, int call_node, const char *name);
 /* 1 iff `node` is a constant path naming an `ffi_const` declaration, with its
    value in *out. Such a name is a VALUE, not a class, wherever the two are
    told apart. */
