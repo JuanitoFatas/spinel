@@ -7198,16 +7198,22 @@ int emit_scalar_call(Compiler *c, int id, Buf *b) {
                comp_ntype(c, argv[0]) == TY_STRING && nt_type(nt, argv[1]) &&
                sp_streq(nt_type(nt, argv[1]), "KeywordHashNode")) {
         int chv = struct_kwarg_value(c, argv[1], "chomp");
-        int isc = (chv >= 0 && nt_type(nt, chv) && sp_streq(nt_type(nt, chv), "TrueNode"));
-        buf_printf(b, "%s(%s, ", isc ? "sp_str_lines_sep_chomp" : "sp_str_lines_sep", r);
-        emit_expr(c, argv[0], b); buf_puts(b, ")");
+        int isc = kw_flag_static(c, chv);
+        if (isc < 0) { buf_puts(b, "("); emit_cond(c, chv, b); buf_puts(b, " ? "); }
+        if (isc != 0) { buf_printf(b, "sp_str_lines_sep_chomp(%s, ", r); emit_expr(c, argv[0], b); buf_puts(b, ")"); }
+        if (isc < 0) buf_puts(b, " : ");
+        if (isc != 1) { buf_printf(b, "sp_str_lines_sep(%s, ", r); emit_expr(c, argv[0], b); buf_puts(b, ")"); }
+        if (isc < 0) buf_puts(b, ")");
       }
       else if (sp_streq(name, "lines") && argc == 1 && nt_type(nt, argv[0]) &&
                sp_streq(nt_type(nt, argv[0]), "KeywordHashNode")) {
         int chomp_v = struct_kwarg_value(c, argv[0], "chomp");
-        int is_chomp = (chomp_v >= 0 && nt_type(nt, chomp_v) &&
-                        sp_streq(nt_type(nt, chomp_v), "TrueNode"));
-        buf_printf(b, "%s(%s)", is_chomp ? "sp_str_lines_chomp" : "sp_str_lines", r);
+        int is_chomp = kw_flag_static(c, chomp_v);
+        if (is_chomp < 0) {
+          buf_puts(b, "("); emit_cond(c, chomp_v, b);
+          buf_printf(b, " ? sp_str_lines_chomp(%s) : sp_str_lines(%s))", r, r);
+        }
+        else buf_printf(b, "%s(%s)", is_chomp ? "sp_str_lines_chomp" : "sp_str_lines", r);
       }
       else if (sp_streq(name, "bytes") && argc == 0)   buf_printf(b, "sp_str_bytes(%s)", r);
       else if (sp_streq(name, "codepoints") && argc == 0) buf_printf(b, "sp_str_codepoints(%s)", r);

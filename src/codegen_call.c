@@ -11396,16 +11396,16 @@ int emit_blockless_enumerator(Compiler *c, int id, Buf *b) {
       nt_ref(nt, id, "block") < 0 && sp_streq(name, "each_line") &&
       nt_type(nt, argv[0]) && sp_streq(nt_type(nt, argv[0]), "KeywordHashNode")) {
     int chomp_v = struct_kwarg_value(c, argv[0], "chomp");
-    int is_chomp = (chomp_v >= 0 && nt_type(nt, chomp_v) &&
-                    sp_streq(nt_type(nt, chomp_v), "TrueNode"));
-    int tsrc2 = ++g_tmp;
+    int is_chomp = kw_flag_static(c, chomp_v);
+    int tsrc2 = ++g_tmp, tch = ++g_tmp;
     buf_printf(b, "({ const char *_t%d = ", tsrc2);
     emit_expr(c, recv, b);
-    buf_printf(b, "; SP_GC_ROOT(_t%d); "
-                  "sp_enum_with_src(sp_Enumerator_new_from(sp_box_str_array(%s(_t%d))), "
-                  "sp_box_str(_t%d), \"each_line(chomp: %s)\"); })",
-               tsrc2, is_chomp ? "sp_str_lines_chomp" : "sp_str_lines", tsrc2, tsrc2,
-               is_chomp ? "true" : "false");
+    buf_printf(b, "; SP_GC_ROOT(_t%d); int _t%d = ", tsrc2, tch);
+    if (is_chomp < 0) emit_cond(c, chomp_v, b);
+    else buf_printf(b, "%d", is_chomp);
+    buf_printf(b, "; sp_enum_with_src(sp_Enumerator_new_from(sp_box_str_array(_t%d ? sp_str_lines_chomp(_t%d) : sp_str_lines(_t%d))), "
+                  "sp_box_str(_t%d), _t%d ? \"each_line(chomp: true)\" : \"each_line(chomp: false)\"); })",
+               tch, tsrc2, tsrc2, tsrc2, tch);
     return 1;
   }
   /* arr.each_slice(n) / arr.each_cons(n) with no block -> a materialized
@@ -16259,12 +16259,13 @@ static void emit_call_body(Compiler *c, int id, Buf *b) {
     if (sp_streq(name, "gets") || sp_streq(name, "readline")) {
       /* separator / limit / chomp: forms (#2809); readline raises EOFError
          at end of file (#2817) */
-      int gsep = -1, glim = -1, gchomp = 0;
+      int gsep = -1, glim = -1;
+      Buf gchomp; memset(&gchomp, 0, sizeof gchomp);   /* the C truth of `chomp:` */
       for (int k = 0; k < argc; k++) {
         const char *kty = nt_type(nt, argv[k]);
         if (kty && sp_streq(kty, "KeywordHashNode")) {
           int cv = struct_kwarg_value(c, argv[k], "chomp");
-          if (cv >= 0 && nt_type(nt, cv) && sp_streq(nt_type(nt, cv), "TrueNode")) gchomp = 1;
+          emit_kw_flag(c, cv, &gchomp);
         }
         else if (comp_ntype(c, argv[k]) == TY_INT) glim = argv[k];
         else gsep = argv[k];
@@ -16276,9 +16277,9 @@ static void emit_call_body(Compiler *c, int id, Buf *b) {
         if (gsep >= 0) emit_str_expr_nilable(c, gsep, b); else buf_puts(b, "\"\\n\"");
         buf_puts(b, ", ");
         if (glim >= 0) emit_int_expr(c, glim, b); else buf_puts(b, "0");
-        buf_printf(b, ", %d)", gchomp);
+        buf_printf(b, ", %s)", gchomp.p ? gchomp.p : "0");
       }
-      free(rb.p); return;
+      free(gchomp.p); free(rb.p); return;
     }
     if (sp_streq(name, "getc") && argc == 0) {
       buf_printf(b, "sp_File_getc(%s)", r); free(rb.p); return;
@@ -16534,20 +16535,21 @@ static void emit_call_body(Compiler *c, int id, Buf *b) {
       free(rb.p); return;
     }
     if (sp_streq(name, "readlines")) {
-      int rsep = -1, rchomp = 0;
+      int rsep = -1;
+      Buf rchomp; memset(&rchomp, 0, sizeof rchomp);
       for (int k = 0; k < argc; k++) {
         const char *kty = nt_type(nt, argv[k]);
         if (kty && sp_streq(kty, "KeywordHashNode")) {
           int cv = struct_kwarg_value(c, argv[k], "chomp");
-          if (cv >= 0 && nt_type(nt, cv) && sp_streq(nt_type(nt, cv), "TrueNode")) rchomp = 1;
+          emit_kw_flag(c, cv, &rchomp);
         }
         else rsep = argv[k];
       }
-      if (rsep < 0 && !rchomp) buf_printf(b, "sp_File_readlines(%s)", r);
+      if (rsep < 0 && (!rchomp.p || sp_streq(rchomp.p, "0"))) buf_printf(b, "sp_File_readlines(%s)", r);
       else {
         buf_printf(b, "sp_File_readlines_sep(%s, ", r);
         if (rsep >= 0) emit_expr(c, rsep, b); else buf_puts(b, "\"\\n\"");
-        buf_printf(b, ", %d)", rchomp);
+        buf_printf(b, ", %s)", rchomp.p ? rchomp.p : "0");
       }
       free(rb.p); return;
     }
@@ -21379,25 +21381,27 @@ else {
     }
     if (sp_streq(name, "readlines") && argc >= 1) {
       /* File.readlines(path[, sep][, chomp: true]) (#2820) */
-      int chomp = 0, csep = -1;
+      int csep = -1;
+      Buf chomp; memset(&chomp, 0, sizeof chomp);
       for (int ki = 1; ki < argc; ki++) {
         const char *kty = nt_type(nt, argv[ki]);
         if (kty && sp_streq(kty, "KeywordHashNode")) {
           int cv = struct_kwarg_value(c, argv[ki], "chomp");
-          if (cv >= 0 && nt_type(nt, cv) && sp_streq(nt_type(nt, cv), "TrueNode"))
-            chomp = 1;
+          emit_kw_flag(c, cv, &chomp);
         }
         else csep = argv[ki];
       }
-      if (csep >= 0) {
+      /* a flag decided at run time takes the separator form, which carries it */
+      if (csep >= 0 || (chomp.p && !sp_streq(chomp.p, "0") && !sp_streq(chomp.p, "1"))) {
         buf_puts(b, "sp_file_readlines_sep(");
         emit_path_expr(c, argv[0], b); buf_puts(b, ", ");
-        emit_str_expr(c, csep, b);
-        buf_printf(b, ", %d)", chomp);
-        return;
+        if (csep >= 0) emit_str_expr(c, csep, b); else buf_puts(b, "\"\\n\"");
+        buf_printf(b, ", %s)", chomp.p ? chomp.p : "0");
+        free(chomp.p); return;
       }
-      if (chomp) buf_puts(b, "sp_file_readlines_chomp(");
+      if (chomp.p && sp_streq(chomp.p, "1")) buf_puts(b, "sp_file_readlines_chomp(");
       else buf_puts(b, "sp_file_readlines(");
+      free(chomp.p);
       emit_path_expr(c, argv[0], b); buf_puts(b, ")"); return;
     }
     /* File.open(path, mode) / File.new(path, mode) without block -> TY_IO

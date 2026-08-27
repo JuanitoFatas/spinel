@@ -396,6 +396,8 @@ int  emit_inline_expr(Compiler *c, int id, Buf *b);
 void emit_cond(Compiler *c, int id, Buf *b);
 void emit_fiber_new(Compiler *c, int id, Buf *b, int as_gen, int size_node);
 int  needs_root(TyKind t);
+int  kw_flag_static(Compiler *c, int node);
+void emit_kw_flag(Compiler *c, int node, Buf *out);
 int  emit_vis_refusal(Compiler *c, int id, Buf *b);
 /* The per-class `case` arms that store `src` into each candidate class's
    `base` writer slot through the object pointer text `objp` (codegen_stmt.c). */
