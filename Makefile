@@ -213,6 +213,15 @@ build/csrc/sp_parse_lib.o: src/spinel_parse.c $(PRISM_LIB) | build/csrc
 build/csrc/re_lit_check.o: src/re_lit_check.c lib/regexp/re_internal.h | build/csrc
 	$(CC) $(CFLAGS) -Ilib/regexp -c src/re_lit_check.c -o $@
 
+# Defined HERE, above the first rule that names it. GNU make expands a rule's
+# prerequisites when the rule is READ, so with this further down the file the
+# $(RE_OBJ) below expanded to nothing: `make bin/spinel` linked whatever
+# regexp objects happened to be on disk and never rebuilt a stale one. The
+# recipe's own $(RE_OBJ) expands at run time, so the link named the right
+# files -- which is what made it look like the compiler was ignoring an edit.
+RE_SRC = lib/regexp/re_compile.c lib/regexp/re_exec.c lib/regexp/re_utf8.c
+RE_OBJ = $(patsubst lib/regexp/%.c,build/regexp/%.o,$(RE_SRC))
+
 $(SPINEL): $(SPINEL_OBJ) build/csrc/sp_parse_lib.o build/csrc/re_lit_check.o $(RE_OBJ) $(PRISM_LIB)
 	@mkdir -p bin
 	$(CC) $(CFLAGS) $(SPINEL_OBJ) build/csrc/sp_parse_lib.o build/csrc/re_lit_check.o $(RE_OBJ) $(PRISM_LIB) -lm $(LDFLAGS) -o $@
@@ -239,9 +248,6 @@ $(RBS_EXTRACT_BIN): tools/spinel_rbs_extract.c $(RBS_LIB)
 endif
 
 # ---- Runtime library (regexp + bigint + …) ----
-
-RE_SRC = lib/regexp/re_compile.c lib/regexp/re_exec.c lib/regexp/re_utf8.c
-RE_OBJ = $(patsubst lib/regexp/%.c,build/regexp/%.o,$(RE_SRC))
 
 # RE_CASE_FLAGS: the two Unicode tables the regexp engine carries, each left
 # out by asking for it. -DRE_NO_UNICODE_CASE gives ASCII-only /i folding and
