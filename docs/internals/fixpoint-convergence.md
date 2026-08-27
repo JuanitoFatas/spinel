@@ -26,38 +26,89 @@ each round and re-derives it, reporting change by comparing against the type it
 stashed. A site inside that window that reports `changed` **itself** is
 comparing against the UNKNOWN it was just handed, so it answers "changed" every
 round even when it re-derived exactly last round's answer, and the loop can
-never settle. Three separate rounds of this accounted for 78 of the 91 capped
-programs in the suite:
+never settle. This, in five separate places, was most of it:
 
 - eight sites in `infer_write_types` and four in `infer_case_pattern_locals`
   (d4fe2ba5)
 - `pm_seed_locals_poly`'s leaf and two array-pattern bindings, reached through
-  `changed |=` rather than written inline (a2f937e6)
+  `changed |=` rather than written inline (a2f937e6) -- found by walking the
+  call tree rather than the line numbers, which is what missed them the first
+  time
 - the end-of-pass comparison ran over slots the reset had SKIPPED
-  (`rbs_seeded`, which also marks a desugar-synthesized temp), so their
-  `gc_root` was a 0 nothing had written (10b71874)
+  (`rbs_seeded`, which also marks a desugar-synthesized temp such as `__ie_*`
+  or `__cd_sav_*`), so their `gc_root` was a 0 nothing had written (10b71874)
+- `infer_return_types` assigning `TY_POLY` and reporting unconditionally
+- two arms of `infer_block_params` typing the same `tap` / `then` parameter
+  differently, so the value was stable at the round's END and only the
+  reporting was not (474c5ce5) -- watching the slot between passes sees
+  nothing here; the attribution has to be inside the pass
 
 So: **inside that window, only the end-of-pass sweep reports.** Ivars, class
 variables, constants and parameters are not reset, so their sites report
 normally.
 
-A promotion the reset wipes has to be re-asserted inside the window, the way
-`oa_pin` and the shared-string marks are (92ce0476), or the pass that made it
-will keep re-making it forever.
+## The three rules that came out of it
+
+1. **A pass must be idempotent on its own output.** A fixpoint over a
+   deliberately non-monotone transfer function (the reset exists so a slot can
+   NARROW) terminates only if running a pass on its own result changes
+   nothing. Every fix above is that property restored.
+
+2. **A round must not discard what it could not re-derive.** A write the pass
+   has no rule for (`g = Hash.new(99)`) left its slot UNKNOWN, another pass
+   settled it again, and they took turns. Restoring the stash where the answer
+   came out UNKNOWN cannot block a narrowing -- a narrowed slot is concrete and
+   wins on its own (f00875ad). This holds for a per-round local. It does NOT
+   hold for a return, which is not re-derived from scratch: refusing to lower
+   one refuses a correction, and five programs stopped compiling when it was
+   tried that way (93326636).
+
+3. **A promotion the reset wipes has to be re-asserted inside the window**, the
+   way `oa_pin` already is (92ce0476) -- or the pass that made it will keep
+   re-making it forever. And a promotion has to stand down where its
+   representation does not apply: `TY_STRBUF` is an sp_String handle, so a slot
+   that widened to POLY cannot carry it, and forcing it back only fought
+   whatever widened it (bc73dc5a).
 
 ## What is left
 
-Ten programs still cap, in four genuine oscillations. None is the shape above;
-each is two passes that disagree, or one pass that cannot re-derive what
-another can.
+One program: `test/issue_3196.rb`. It is not an oscillation.
 
-| slot moves | programs | between |
-|---|---|---|
-| `strbuf -> poly` | `bang_result_through_shared_handle`, `poly_string_append_integer`, `string_alias_out_of_container` | `infer_write_types` widens to poly, `promote_shared_stored_strings` forces `TY_STRBUF` back with no type guard. Re-asserting strbuf for a POLY slot converges these three and starts three others oscillating, so the open question is whether a slot that has widened past String is still a shared string at all. |
-| `sym_poly_hash -> unknown` | `hash_conformance_batch7`, `hash_default_proc_key`, `issue_3288`, `nil_hashdefault_complex_followups` | `infer_write_types` cannot derive `g = Hash.new(99)` (the RHS reads UNKNOWN there) and leaves the slot cleared; `desugar_enum_method_recv`'s `infer_type` calls settle it again later in the round. A derivation gap, surfacing as an oscillation because the reset wipes the answer. |
-| assorted | `issue_3196`, `nil_receiver_tap_then`, `unresolved_tail_call_value` | not yet attributed |
+`_1` .. `_9` (and `it`, which the parser lowers to `_1`) are names spinel
+synthesizes rather than names the author wrote, and blocks share their
+enclosing scope's local table -- so **two blocks in one method intern the same
+slot**, and their types merge:
 
-`nil_receiver_tap_then.rb` is three lines and is the cheapest way in.
+```ruby
+def k
+  out = []
+  [10, 20].each { out << _1 + 1 }   # alone: sp_int lv__1
+  out
+end
+
+def h
+  seen = []
+  [1, 2].each { seen << _1 }        # together: sp_RbVal lv__1, boxed
+  ["a", "b"].each { seen << _1 }
+  seen
+end
+```
+
+Values are right either way -- each block writes the slot before reading it --
+so this costs the type, not the answer. In `issue_3196` two passes then type
+that one slot from different call shapes, every round.
+
+The fix is to give each block its own numbered parameter, which is what
+`rename_shadowing_block_params` does for a named one (it skips numbered
+parameters with a comment saying they are "handled elsewhere"; they are not).
+Renaming them on the AST works and was tried: `block_param_name` hands back the
+generated name, the body's reads and the block's `locals` string are rewritten
+in lock-step, and `subtree_has_param_named` has to learn the second spelling
+the way it already knows `__bp`. What stopped it from landing is that the
+inliner carries its OWN mechanism for this exact collision -- the rename-depth
+stack in `codegen_iter.c` (#3281), whose comment names "a numbered `_1` used by
+both the callee's own block and the caller's". Two mechanisms for one problem
+needs a decision about which survives, not a patch.
 
 ## Measuring
 
@@ -71,3 +122,8 @@ done | awk '$1==128' | wc -l
 
 Convergence is bimodal: everything else in the suite settles in 2 to 11 rounds,
 so "did this converge" needs no threshold to judge.
+
+Attribution, in order: which pass still reports change at round 120+, then
+which site inside it, then which slot. The first two need the probe to carry
+the loop id -- the second 128-round loop clears slots on purpose, and a probe
+that cannot tell them apart reads that as the first loop oscillating.
