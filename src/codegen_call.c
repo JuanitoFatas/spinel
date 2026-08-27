@@ -10735,6 +10735,8 @@ sp_builtin_cmeth_arity_spec_tbl[] = {
   {"Process","setpriority",3,3,"3","3",3,3,"3","3"},
   {"Process","getsid",0,1,NULL,"0..1",0,1,NULL,"0..1"},
   {"Process","kill",2,-1,"2+",NULL,2,-1,"2+",NULL},
+  {"Process","spawn",1,-1,"1+",NULL,1,-1,"1+",NULL},
+  {"Process","waitpid2",1,1,"1","1",1,1,"1","1"},
   {"Process","clock_gettime",1,2,"1..2","1..2",1,2,"1..2","1..2"},
   {"Process","clock_getres",1,2,"1..2","1..2",1,2,"1..2","1..2"},
   {"Process","pid",0,0,NULL,"0",0,0,NULL,"0"},
@@ -20845,6 +20847,195 @@ else { memcpy(dir, sf, n); dir[n] = 0; } }
         buf_puts(b, ");");
       }
       buf_printf(b, " _t%d; })", tk5);
+      return;
+    }
+    /* Process.spawn(cmd, *args, opts) -- CRuby-compatible: cmd is the
+       first arg; remaining args are flattened into a positional array;
+       the LAST arg is treated as opts only if it is a Hash literal.
+       The opts hash is unpacked at the call site: for each known key
+       (:in, :out, :err, :pgroup, :rlimit_cpu, :rlimit_as, :chdir) we
+       emit a sp_poly_hash_get_pair_val call, resolve the value to a
+       primitive (Integer fd, true, Integer, String), and push it into
+       a flat PolyArray. The runtime (sp_process_spawn) takes the
+       7-element flat array positionally -- this keeps the runtime
+       TU out of spinel_rt.h's static-inline family entirely. The
+       [:child, :out|:err|Integer] redirect is recognized inline. */
+    if (tcn && sp_streq(tcn, "Process") && sp_streq(name, "spawn") && argc >= 1) {
+      g_uses_symbols = 1;
+      int tcmd = ++g_tmp;
+      int targs = ++g_tmp;
+      int topts = ++g_tmp;
+      int tmerged = ++g_tmp;
+      /* cmd = argv[0] (boxed, so it can be String or Array) */
+      buf_printf(b, "({ sp_RbVal _t%d = ", tcmd);
+      emit_boxed(c, argv[0], b);
+      buf_puts(b, ";");
+      /* args: collect argv[1..argc-2] (or empty if argc==1) into a
+         PolyArray. Skip the last arg if it's a Hash (the opts). */
+      buf_printf(b, " sp_PolyArray *_t%d = sp_PolyArray_new(); SP_GC_ROOT(_t%d);", targs, targs);
+      int extra = argc - 1;
+      /* Detect if the last positional arg is a Hash (opts). */
+      int last_is_opts = 0;
+      if (extra >= 1) {
+        TyKind ltk = comp_ntype(c, argv[argc - 1]);
+        if (ltk == TY_SYM_POLY_HASH || ltk == TY_STR_POLY_HASH ||
+            ltk == TY_POLY_POLY_HASH || ltk == TY_UNKNOWN ||
+            ltk == TY_POLY) {
+          last_is_opts = 1;
+        }
+      }
+      int n_args = extra - (last_is_opts ? 1 : 0);
+      for (int k = 1; k <= n_args; k++) {
+        buf_printf(b, " sp_PolyArray_push(_t%d, ", targs);
+        emit_boxed(c, argv[k], b);
+        buf_puts(b, ");");
+      }
+      /* opts: build a 7-element flat PolyArray
+         [in_fd, out_fd, err_fd, pgroup, rlimit_cpu, rlimit_as, chdir].
+         If last_is_opts, each entry is a hash lookup result resolved
+         to a primitive. If not, all entries are nil/0. */
+      buf_printf(b, " sp_PolyArray *_t%d = sp_PolyArray_new(); SP_GC_ROOT(_t%d);", topts, topts);
+      if (last_is_opts) {
+        int tth = ++g_tmp;
+        int tkv = ++g_tmp;
+        int tfd = ++g_tmp;
+        buf_printf(b, " sp_RbVal _t%d = ", tth);
+        emit_boxed(c, argv[argc - 1], b);
+        buf_puts(b, ";");
+        /* For the three fd slots (in/out/err): look up the value and
+           resolve it. The C block is emitted three times with the
+           key name changed -- a top-level static helper would be
+           cleaner but cannot be declared inside a statement
+           expression. */
+        const char *fd_keys[] = { "in", "out", "err" };
+        for (int i = 0; i < 3; i++) {
+          buf_printf(b,
+            "{ sp_RbVal _t%d; sp_bool _t%d; "
+            "_t%d = sp_poly_hash_get_pair_val(_t%d, "
+            "sp_box_sym(sp_sym_intern(\"%s\")), &_t%d); "
+            "if (_t%d) { "
+            "  sp_RbVal _v = _t%d; "
+            "  if (_v.tag == SP_TAG_NIL) { "
+            "    sp_PolyArray_push(_t%d, sp_box_int(-1)); "
+            "  } else if (_v.tag == SP_TAG_BOOL && !_v.v.i) { "
+            "    sp_PolyArray_push(_t%d, sp_box_int(-1)); "
+            "  } else if (_v.tag == SP_TAG_INT) { "
+            "    sp_PolyArray_push(_t%d, _v); "
+            "  } else if (_v.tag == SP_TAG_OBJ && _v.cls_id == SP_BUILTIN_IO && _v.v.p) { "
+            "    sp_PolyArray_push(_t%d, sp_box_int(sp_File_fileno((sp_File*)_v.v.p))); "
+            "  } else if (_v.tag == SP_TAG_STR) { "
+            "    int _fd = open(_v.v.s, O_WRONLY|O_CREAT|O_TRUNC, 0644); "
+            "    if (_fd < 0) sp_raise_cls(\"Errno::ENOENT\", _v.v.s); "
+            "    sp_PolyArray_push(_t%d, sp_box_int(_fd)); "
+            "  } else if (_v.tag == SP_TAG_OBJ && _v.cls_id == SP_BUILTIN_POLY_ARRAY) { "
+            "    sp_PolyArray *_a = (sp_PolyArray*)_v.v.p; "
+            "    if (_a->len >= 2 && _a->data[0].tag == SP_TAG_SYM "
+            "        && _a->data[0].v.i == sp_sym_intern(\"child\")) { "
+            "      sp_RbVal _fdv = _a->data[1]; "
+            "      if (_fdv.tag == SP_TAG_SYM) { "
+            "        if (_fdv.v.i == sp_sym_intern(\"out\")) { "
+            "          sp_PolyArray_push(_t%d, sp_box_int(1)); "
+            "        } else if (_fdv.v.i == sp_sym_intern(\"err\")) { "
+            "          sp_PolyArray_push(_t%d, sp_box_int(2)); "
+            "        } else { "
+            "          sp_raise_cls(\"ArgumentError\", \"bad redirect value\"); "
+            "        } "
+            "      } else if (_fdv.tag == SP_TAG_INT) { "
+            "        sp_PolyArray_push(_t%d, sp_box_int((int)_fdv.v.i)); "
+            "      } else { "
+            "        sp_raise_cls(\"ArgumentError\", \"bad redirect value\"); "
+            "      } "
+            "    } else { "
+            "      sp_raise_cls(\"ArgumentError\", \"bad child-array shape\"); "
+            "    } "
+            "  } else { "
+            "    sp_raise_cls(\"ArgumentError\", \"bad redirect type\"); "
+            "  } "
+            "} else { sp_PolyArray_push(_t%d, sp_box_int(-1)); } }",
+            tkv, tfd, tkv, tth, fd_keys[i], tfd,
+            tfd, tkv,
+            topts,
+            topts,
+            topts,
+            topts,
+            topts,
+            topts,
+            topts,
+            topts,
+            topts);
+        }
+        /* pgroup: look up, accept true / 0 / Integer, or 0. */
+        buf_printf(b,
+          " { sp_RbVal _t%d; sp_bool _t%d; "
+          "_t%d = sp_poly_hash_get_pair_val(_t%d, "
+          "sp_box_sym(sp_sym_intern(\"pgroup\")), &_t%d); "
+          "if (_t%d && _t%d.tag == SP_TAG_BOOL && _t%d.v.i) "
+          "{ sp_PolyArray_push(_t%d, sp_box_int(1)); } "
+          "else if (_t%d && _t%d.tag == SP_TAG_INT) "
+          "{ sp_PolyArray_push(_t%d, _t%d); } "
+          "else { sp_PolyArray_push(_t%d, sp_box_nil()); } }",
+          tkv, tfd, tkv, tth, tfd,
+          tfd, tkv, tkv, topts,
+          tfd, tkv, topts, tkv,
+          topts);
+        /* rlimit_cpu, rlimit_as: look up, must be Integer, or nil. */
+        const char *rlim_keys[] = { "rlimit_cpu", "rlimit_as" };
+        for (int i = 0; i < 2; i++) {
+          buf_printf(b,
+            " { sp_RbVal _t%d; sp_bool _t%d; "
+            "_t%d = sp_poly_hash_get_pair_val(_t%d, "
+            "sp_box_sym(sp_sym_intern(\"%s\")), &_t%d); "
+            "if (_t%d && _t%d.tag == SP_TAG_INT) "
+            "{ sp_PolyArray_push(_t%d, _t%d); } "
+            "else { sp_PolyArray_push(_t%d, sp_box_nil()); } }",
+            tkv, tfd, tkv, tth, rlim_keys[i], tfd,
+            tfd, tkv, topts, tkv,
+            topts);
+        }
+        /* chdir: look up, must be String, or nil. */
+        buf_printf(b,
+          " { sp_RbVal _t%d; sp_bool _t%d; "
+          "_t%d = sp_poly_hash_get_pair_val(_t%d, "
+          "sp_box_sym(sp_sym_intern(\"chdir\")), &_t%d); "
+          "if (_t%d && _t%d.tag == SP_TAG_STR) "
+          "{ sp_PolyArray_push(_t%d, _t%d); } "
+          "else { sp_PolyArray_push(_t%d, sp_box_nil()); } }",
+          tkv, tfd, tkv, tth, tfd,
+          tfd, tkv, topts, tkv,
+          topts);
+      } else {
+        /* No opts: push defaults (nils / 0). */
+        for (int i = 0; i < 3; i++)
+          buf_printf(b, " sp_PolyArray_push(_t%d, sp_box_int(-1));", topts);
+        buf_printf(b, " sp_PolyArray_push(_t%d, sp_box_nil());", topts);
+        buf_printf(b, " sp_PolyArray_push(_t%d, sp_box_nil());", topts);
+        buf_printf(b, " sp_PolyArray_push(_t%d, sp_box_nil());", topts);
+        buf_printf(b, " sp_PolyArray_push(_t%d, sp_box_nil());", topts);
+      }
+      /* If cmd is an Array, fold its elements into args (prefix). */
+      buf_printf(b, " sp_PolyArray *_t%d = _t%d;", tmerged, targs);
+      buf_printf(b, " if (_t%d.tag == SP_TAG_OBJ && _t%d.cls_id == SP_BUILTIN_POLY_ARRAY) {", tcmd, tcmd);
+      buf_printf(b, "   sp_PolyArray *_cmd = (sp_PolyArray *)_t%d.v.p;", tcmd);
+      buf_printf(b, "   _t%d = sp_PolyArray_new(); SP_GC_ROOT(_t%d);", tmerged, tmerged);
+      buf_printf(b, "   for (sp_int _i = 0; _i < _cmd->len - 1; _i++) {");
+      buf_printf(b, "     if (_cmd->data[_i].tag != SP_TAG_STR) sp_raise_cls(\"ArgumentError\", \"command array element must be a String\");");
+      buf_printf(b, "     sp_PolyArray_push(_t%d, _cmd->data[_i]);", tmerged);
+      buf_printf(b, "   }");
+      buf_printf(b, "   for (sp_int _i = 0; _i < _t%d->len; _i++) sp_PolyArray_push(_t%d, _t%d->data[_i]);", targs, tmerged, targs);
+      buf_puts(b, " }");
+      buf_printf(b, " sp_int _r = sp_process_spawn(_t%d, sp_box_poly_array(_t%d), sp_box_poly_array(_t%d));", tcmd, tmerged, topts);
+      buf_printf(b, " _r; })\n");
+      g_ret_type = TY_INT;
+      return;
+    }
+    /* Process.waitpid2(pid) -> [pid, raw_status]. The C function returns
+       a 2-element PolyArray (unboxed). We mark the return type as
+       TY_POLY_ARRAY so the codegen emits a proper Array accessor. */
+    if (tcn && sp_streq(tcn, "Process") && sp_streq(name, "waitpid2") && argc == 1) {
+      g_ret_type = TY_POLY_ARRAY;
+      buf_puts(b, "sp_process_waitpid2(");
+      emit_int_expr(c, argv[0], b);
+      buf_puts(b, ")");
       return;
     }
     if (tcn && sp_streq(tcn, "Thread") && sp_streq(name, "current") && argc == 0) {

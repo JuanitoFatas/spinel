@@ -3742,6 +3742,10 @@ else {
     }
     if (rname && sp_streq(rname, "Process") && sp_streq(name, "kill") && argc >= 2)
       return TY_INT;
+    if (rname && sp_streq(rname, "Process") && sp_streq(name, "spawn") && argc >= 1)
+      return TY_INT;
+    if (rname && sp_streq(rname, "Process") && sp_streq(name, "waitpid2") && argc == 1)
+      return TY_POLY_ARRAY;
   }
 
   /* Fiber storage: Fiber[:k] and Fiber.current[:k] -> poly */

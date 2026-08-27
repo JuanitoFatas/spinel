@@ -8361,6 +8361,12 @@ char *codegen_program(const NodeTable *nt) {
   if (!g_emit_sym_rt)
     buf_puts(&b, "#define SP_TU_NO_POLY_RENDER 1\n");
   buf_puts(&b, "#include \"spinel_rt.h\"\n");
+  /* Forward decls for runtime functions whose return type is not int
+     (which is what an implicit declaration would assume). Without
+     these, the compiler treats the return as int and assignments to
+     pointer-typed locals fail. */
+  buf_puts(&b, "sp_int sp_process_spawn(sp_RbVal, sp_RbVal, sp_RbVal);\n");
+  buf_puts(&b, "sp_PolyArray *sp_process_waitpid2(sp_int);\n");
   /* FFI extern declarations and buffer storage */
   {
     Compiler *cf = c;
