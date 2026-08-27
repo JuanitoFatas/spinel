@@ -472,6 +472,59 @@ sp_PolyArray *sp_sock_getaddrinfo(const char *host, sp_int port) {SP_GC_ROOT_STR
   return out;
 }
 
+/* Socket.sockaddr_in(port, host) / Socket.pack_sockaddr_in: the packed
+   sockaddr, as a byte string. It carries NUL bytes (a zero port octet, the
+   sin_zero padding, an address with a zero octet), so it is built with
+   sp_str_from_bytes rather than a C-string constructor -- the string this
+   returns is the one connect_nonblock(sockaddr) and bind take. */
+const char *sp_sock_pack_sockaddr_in(sp_int port, const char *host) {SP_GC_ROOT_STR(host);
+  extern int sp_net_pack_sockaddr_in(const char *host, int port, void *out, int cap);
+  char buf[128];
+  int n = sp_net_pack_sockaddr_in(host, (int)port, buf, (int)sizeof buf);
+  if (n < 0)
+    sp_raise_cls("SocketError",
+                 sp_sprintf("getaddrinfo: Name or service not known - %s", host ? host : ""));
+  return sp_str_from_bytes(buf, (size_t)n);
+}
+
+const char *sp_sock_pack_sockaddr_un(const char *path) {SP_GC_ROOT_STR(path);
+  extern int sp_net_pack_sockaddr_un(const char *path, void *out, int cap);
+  char buf[128 + 108];
+  int n = sp_net_pack_sockaddr_un(path, buf, (int)sizeof buf);
+  if (n < 0)
+    sp_raise_cls("ArgumentError",
+                 sp_sprintf("too long unix socket path (%d bytes given)",
+                            path ? (int)strlen(path) : 0));
+  return sp_str_from_bytes(buf, (size_t)n);
+}
+
+/* Addrinfo#to_sockaddr / #to_s -- the same packed form for an endpoint that is
+   already resolved, which is the whole reason the 1-arg connect exists: the
+   caller does not pay for the name lookup twice. AF_UNIX goes through the path
+   form; everything else is already numeric, so the getaddrinfo below is a
+   parse rather than a resolution. */
+const char *sp_addrinfo_to_sockaddr(sp_Addrinfo *a) {SP_GC_ROOT(a);
+  if (!a) sp_raise_cls("SocketError", "no address");
+  if (a->afname && strcmp(a->afname, "AF_UNIX") == 0)
+    return sp_sock_pack_sockaddr_un(a->ip);
+  return sp_sock_pack_sockaddr_in(a->port, a->ip);
+}
+
+/* Socket.unpack_sockaddr_in -> [port, host]. The inverse, and what makes a
+   packed address inspectable from Ruby without byte hacks. */
+sp_PolyArray *sp_sock_unpack_sockaddr_in(const char *sa) {SP_GC_ROOT_STR(sa);
+  extern int sp_net_unpack_sockaddr_in(const void *sa, int salen, char *ipbuf, int cap);
+  char ip[128];
+  int len = sa ? (int)sp_str_byte_len(sa) : 0;
+  int port = sp_net_unpack_sockaddr_in(sa, len, ip, (int)sizeof ip);
+  if (port < 0) sp_raise_cls("ArgumentError", "not an AF_INET/AF_INET6 sockaddr");
+  sp_PolyArray *out = sp_PolyArray_new();
+  SP_GC_ROOT(out);
+  sp_PolyArray_push(out, sp_box_int((sp_int)port));
+  sp_PolyArray_push(out, sp_box_str(sp_str_from_bytes(ip, strlen(ip))));
+  return out;
+}
+
 /* #local_address / #remote_address -> Addrinfo for this end / the peer. */
 sp_Addrinfo *sp_sock_address(sp_File *f, sp_int peer) {SP_GC_ROOT(f);
   extern sp_Addrinfo *sp_addrinfo_new(const char *ip, sp_int port, sp_int stype, sp_int is_unix);

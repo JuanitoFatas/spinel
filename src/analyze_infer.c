@@ -2712,6 +2712,11 @@ else {
       if (sp_streq(name, "gethostname") && argc == 0) return TY_STRING;
       if ((sp_streq(name, "pair") || sp_streq(name, "socketpair")) && argc >= 2) return TY_POLY_ARRAY;
       if (sp_streq(name, "getaddrinfo") && argc >= 2) return TY_POLY_ARRAY;
+      /* The packed sockaddr is a byte String (it carries NUL), and
+         unpack answers [port, host] (#4137). */
+      if ((sp_streq(name, "sockaddr_in") || sp_streq(name, "pack_sockaddr_in")) && argc == 2) return TY_STRING;
+      if ((sp_streq(name, "sockaddr_un") || sp_streq(name, "pack_sockaddr_un")) && argc == 1) return TY_STRING;
+      if (sp_streq(name, "unpack_sockaddr_in") && argc == 1) return TY_POLY_ARRAY;
     }
     if (rty && sp_streq(rty, "ConstantReadNode") &&
         nt_str(nt, recv, "name") && sp_streq(nt_str(nt, recv, "name"), "IO")) {
@@ -3034,7 +3039,7 @@ else {
   }
   if (recv >= 0 && rt == TY_ADDRINFO && argc == 0) {
     if (sp_streq(name, "ip_address") || sp_streq(name, "unix_path") ||
-        sp_streq(name, "afamily_name") ||
+        sp_streq(name, "afamily_name") || sp_streq(name, "to_sockaddr") ||
         sp_streq(name, "inspect") || sp_streq(name, "to_s")) return TY_STRING;
     if (sp_streq(name, "ip_port") || sp_streq(name, "socktype") ||
         sp_streq(name, "protocol") ||

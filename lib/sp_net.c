@@ -28,6 +28,7 @@
 #include <arpa/inet.h>
 #include <signal.h>
 #include <sys/un.h>   /* UNIXSocket / UNIXServer */
+#include <stddef.h>   /* offsetof (sockaddr_un packed length) */
 
 #define SP_NET_BUFSIZE 65536
 
@@ -903,4 +904,67 @@ const char *sp_net_shell_capture(const char *cmd, int max_bytes) {
     sp_net_shell_buf[total] = '\0';
     pclose(fp);
     return sp_net_shell_buf;
+}
+
+/* ---- packed sockaddr ----
+ * The byte form `connect_nonblock(sockaddr)` and `bind`/`sendto` take: what
+ * CRuby's Socket.sockaddr_in and Addrinfo#to_sockaddr return. Built here
+ * rather than in emitted C because the layouts and the AF_* values are
+ * platform-dependent, and because the resolution is a getaddrinfo call.
+ *
+ * `out` receives the packed bytes and the return is their length, or -1 if the
+ * host does not resolve. The caller supplies the buffer; a sockaddr_un is the
+ * largest of the three and fits well inside sizeof(struct sockaddr_storage)
+ * plus the AF_UNIX path.
+ */
+int sp_net_pack_sockaddr_in(const char *host, int port, void *out, int cap) {
+    struct addrinfo hints, *res = NULL;
+    char portbuf[16];
+    if (!out || cap <= 0) return -1;
+    snprintf(portbuf, sizeof portbuf, "%d", port < 0 ? 0 : port);
+    memset(&hints, 0, sizeof hints);
+    hints.ai_family = AF_UNSPEC;
+    hints.ai_socktype = SOCK_STREAM;
+    if (getaddrinfo((host && *host) ? host : NULL, portbuf, &hints, &res) != 0 || !res)
+        return -1;
+    int len = (int)res->ai_addrlen;
+    if (len > cap) { freeaddrinfo(res); return -1; }
+    memcpy(out, res->ai_addr, (size_t)len);
+    freeaddrinfo(res);
+    return len;
+}
+
+/* The AF_UNIX form: a path rather than a host and port. Separate because
+ * getaddrinfo does not resolve one, and because the length CRuby packs is the
+ * offset of sun_path plus the path and its NUL, not the whole struct. */
+int sp_net_pack_sockaddr_un(const char *path, void *out, int cap) {
+    struct sockaddr_un su;
+    size_t n = path ? strlen(path) : 0;
+    if (!out || cap <= 0) return -1;
+    if (n >= sizeof su.sun_path) return -1;
+    memset(&su, 0, sizeof su);
+    su.sun_family = AF_UNIX;
+    memcpy(su.sun_path, path ? path : "", n);
+    int len = (int)(offsetof(struct sockaddr_un, sun_path) + n + 1);
+    if (len > cap) return -1;
+    memcpy(out, &su, (size_t)len);
+    return len;
+}
+
+/* Read a packed sockaddr back: the port is the return, the numeric address
+ * goes into `ipbuf`. -1 when the buffer is not a sockaddr this understands. */
+int sp_net_unpack_sockaddr_in(const void *sa, int salen, char *ipbuf, int cap) {
+    if (!sa || salen < (int)sizeof(struct sockaddr) || !ipbuf || cap <= 0) return -1;
+    const struct sockaddr *s = (const struct sockaddr *)sa;
+    if (s->sa_family == AF_INET && salen >= (int)sizeof(struct sockaddr_in)) {
+        const struct sockaddr_in *v4 = (const struct sockaddr_in *)sa;
+        if (!inet_ntop(AF_INET, &v4->sin_addr, ipbuf, (socklen_t)cap)) return -1;
+        return (int)ntohs(v4->sin_port);
+    }
+    if (s->sa_family == AF_INET6 && salen >= (int)sizeof(struct sockaddr_in6)) {
+        const struct sockaddr_in6 *v6 = (const struct sockaddr_in6 *)sa;
+        if (!inet_ntop(AF_INET6, &v6->sin6_addr, ipbuf, (socklen_t)cap)) return -1;
+        return (int)ntohs(v6->sin6_port);
+    }
+    return -1;
 }

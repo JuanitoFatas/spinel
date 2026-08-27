@@ -136,12 +136,14 @@ as in CRuby).
 so they carry the right platform-specific values.
 
 **Class methods.** `Socket.gethostname`, `Socket.getaddrinfo`, `Socket.pair` /
-`.socketpair`, `Socket.new(domain, type, protocol)`.
+`.socketpair`, `Socket.new(domain, type, protocol)`,
+`Socket.sockaddr_in(port, host)` / `.pack_sockaddr_in`,
+`Socket.sockaddr_un(path)` / `.pack_sockaddr_un`, `Socket.unpack_sockaddr_in`.
 
 **Addrinfo.** `Addrinfo.tcp` / `.udp` / `.ip` / `.unix`, and `#ip_address`,
 `#ip_port`, `#afamily`, `#pfamily`, `#socktype`, `#protocol`, `#unix_path`,
-`#ipv4?`, `#ipv6?`, `#unix?`, `#ip?`, `#inspect`. `#local_address` and
-`#remote_address` answer one.
+`#ipv4?`, `#ipv6?`, `#unix?`, `#ip?`, `#to_sockaddr`, `#inspect`.
+`#local_address` and `#remote_address` answer one.
 
 **Socket::Option.** What `#getsockopt` returns: `#int`, `#bool`, `#level`,
 `#optname`, `#family`, `#inspect`.
@@ -160,9 +162,9 @@ still works.
   `Socket::Option` carries an int rather than a byte string: `#data` and
   `#unpack` are missing, and `SO_LINGER` cannot be read back.
 - `Addrinfo` covers the address itself, not the resolver surface:
-  `Addrinfo.getaddrinfo`, `#getnameinfo`, `#to_sockaddr`, `#canonname`,
-  `#bind`, `#connect`, `#listen` are missing. `Socket.getaddrinfo` returns
-  CRuby's array-of-arrays form, which is the usual way in.
+  `Addrinfo.getaddrinfo`, `#getnameinfo`, `#canonname`, `#bind`, `#connect`,
+  `#listen` are missing. `Socket.getaddrinfo` returns CRuby's
+  array-of-arrays form, which is the usual way in.
 - `#recvfrom_nonblock`, `#sendmsg` and `#recvmsg` are missing; the rest of
   the non-blocking family (`#accept_nonblock`, `#connect_nonblock`,
   `#recv_nonblock`, `#read_nonblock`, `#write_nonblock`, and their

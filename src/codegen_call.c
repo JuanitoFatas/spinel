@@ -10723,6 +10723,9 @@ sp_builtin_cmeth_arity_spec_tbl[] = {
   {"Socket","gethostname",0,0,NULL,"0",0,0,NULL,"0"},
   {"Socket","sockaddr_in",2,2,"2","2",2,2,"2","2"},
   {"Socket","unpack_sockaddr_in",1,1,"1","1",1,1,"1","1"},
+  {"Socket","pack_sockaddr_in",2,2,"2","2",2,2,"2","2"},
+  {"Socket","sockaddr_un",1,1,"1","1",1,1,"1","1"},
+  {"Socket","pack_sockaddr_un",1,1,"1","1",1,1,"1","1"},
   {"TCPSocket","new",2,4,"2..4","2..4",2,4,"2..4","2..4"},
   {"TCPSocket","open",2,4,"2..4","2..4",2,4,"2..4","2..4"},
   {"TCPServer","new",1,2,"1..2","1..2",1,2,"1..2","1..2"},
@@ -15789,6 +15792,9 @@ static void emit_call_body(Compiler *c, int id, Buf *b) {
     if (sp_streq(name, "ip?")) {
       buf_printf(b, "(!((%s)->afname && strcmp((%s)->afname, \"AF_UNIX\") == 0))", ar, ar); free(ab.p); return;
     }
+    if (sp_streq(name, "to_sockaddr")) {
+      buf_printf(b, "sp_addrinfo_to_sockaddr(%s)", ar); free(ab.p); return;
+    }
     if (sp_streq(name, "inspect") || sp_streq(name, "to_s")) {
       buf_printf(b, "sp_addrinfo_inspect(%s)", ar); free(ab.p); return;
     }
@@ -20472,6 +20478,30 @@ else { memcpy(dir, sf, n); dir[n] = 0; } }
          The rows are built in the runtime: the family constants are
          platform-dependent and the walk is a plain loop, neither of which
          belongs in emitted C. */
+      /* Socket.sockaddr_in(port, host) and its documented alias
+         pack_sockaddr_in -> the packed sockaddr String. The layouts and the
+         AF_* values are platform-dependent, so the packing is a runtime call
+         rather than emitted C (#4137). */
+      if ((sp_streq(name, "sockaddr_in") || sp_streq(name, "pack_sockaddr_in")) && argc == 2) {
+        buf_puts(b, "sp_sock_pack_sockaddr_in(");
+        emit_int_expr(c, argv[0], b);
+        buf_puts(b, ", ");
+        emit_str_expr(c, argv[1], b);
+        buf_puts(b, ")");
+        return;
+      }
+      if ((sp_streq(name, "sockaddr_un") || sp_streq(name, "pack_sockaddr_un")) && argc == 1) {
+        buf_puts(b, "sp_sock_pack_sockaddr_un(");
+        emit_str_expr(c, argv[0], b);
+        buf_puts(b, ")");
+        return;
+      }
+      if (sp_streq(name, "unpack_sockaddr_in") && argc == 1) {
+        buf_puts(b, "sp_sock_unpack_sockaddr_in(");
+        emit_str_expr(c, argv[0], b);
+        buf_puts(b, ")");
+        return;
+      }
       if (sp_streq(name, "getaddrinfo") && argc >= 2) {
         buf_puts(b, "sp_sock_getaddrinfo(");
         emit_str_expr(c, argv[0], b);

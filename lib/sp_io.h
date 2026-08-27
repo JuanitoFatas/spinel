@@ -65,6 +65,13 @@ sp_File *sp_sock_udp_new(sp_int family);
 const char *sp_sock_gethostname(void);
 sp_PolyArray *sp_sock_getaddrinfo(const char *host, sp_int port);
 sp_Addrinfo *sp_sock_address(sp_File *f, sp_int peer);
+/* Packed sockaddr strings: what Socket.sockaddr_in / Socket.pack_sockaddr_in,
+   Socket.pack_sockaddr_un and Addrinfo#to_sockaddr answer, and what the 1-arg
+   connect_nonblock takes. Byte strings -- they carry NUL. */
+const char *sp_sock_pack_sockaddr_in(sp_int port, const char *host);
+const char *sp_sock_pack_sockaddr_un(const char *path);
+const char *sp_addrinfo_to_sockaddr(sp_Addrinfo *a);
+sp_PolyArray *sp_sock_unpack_sockaddr_in(const char *sa);
 sp_File *sp_sock_new(sp_int domain, sp_int type, sp_int proto);
 sp_File *sp_sock_pair_end(sp_int domain, sp_int type, sp_int proto, sp_int which);
 sp_File *sp_sock_unix_server(const char *path);

@@ -188,6 +188,15 @@ int sp_net_wait_any(void);
  * the internal buffer). Returns a static NUL-terminated buffer. */
 const char *sp_net_shell_capture(const char *cmd, int max_bytes);
 
+/* ---- packed sockaddr ----
+ * The byte form Socket.sockaddr_in / Addrinfo#to_sockaddr produce and
+ * connect_nonblock(sockaddr) consumes. Each writes into the caller's buffer
+ * and returns the packed length, or -1. sp_net_unpack_sockaddr_in reads one
+ * back, returning the port and writing the numeric address into ipbuf. */
+int sp_net_pack_sockaddr_in(const char *host, int port, void *out, int cap);
+int sp_net_pack_sockaddr_un(const char *path, void *out, int cap);
+int sp_net_unpack_sockaddr_in(const void *sa, int salen, char *ipbuf, int cap);
+
 #ifdef __cplusplus
 }
 #endif
