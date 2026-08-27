@@ -333,6 +333,12 @@ typedef struct {
   int nprep_chain, cprep_chain;
   int prep_shadow_count; /* next shadow index to assign */
   int enclosing_class;   /* index of enclosing module/class, or -1 for top-level */
+  char *ruby_name_cache; /* the qualified Ruby name, built once by
+                            class_ruby_name. Cached so the pointer it returns
+                            STAYS VALID: it used to be a shared static buffer,
+                            and a caller that held the name across an
+                            emit_expr got whichever class that emission asked
+                            about instead. */
   /* Modules included into this class (class indices), recorded when the
      include transplants methods. Consulted by `rescue M` matching: an
      exception matches a module arm when its class (or an ancestor)

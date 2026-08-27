@@ -5171,8 +5171,15 @@ const char *class_ruby_name(Compiler *c, int ci) {
     k = c->classes[k].enclosing_class;
   }
   if (depth == 1) return c->classes[ci].name; /* top-level: no qualification needed */
-  /* build "A::B::C" from outermost to innermost */
-  static char buf[256];
+  /* Built once and kept on the class. This used to answer out of a shared
+     static buffer, so the name was only good until the NEXT call -- and a
+     caller that took it, emitted an expression, and then wrote it into a
+     message got whichever class that expression asked about. It named the
+     wrong class in a TypeError, and made every `is_a?` compare its receiver
+     against itself (#4133). The name is derived from immutable class data, so
+     caching it is also less work. */
+  if (c->classes[ci].ruby_name_cache) return c->classes[ci].ruby_name_cache;
+  char buf[256];
   buf[0] = '\0';
   for (int i = depth - 1; i >= 0; i--) {
     const char *seg = c->classes[chain[i]].name;
@@ -5189,7 +5196,8 @@ const char *class_ruby_name(Compiler *c, int ci) {
     if (buf[0]) strncat(buf, "::", sizeof(buf) - strlen(buf) - 1);
     strncat(buf, seg, sizeof(buf) - strlen(buf) - 1);
   }
-  return buf;
+  c->classes[ci].ruby_name_cache = strdup(buf);
+  return c->classes[ci].ruby_name_cache;
 }
 
 /* The C function (sp_<Class>_inspect / _to_s) that stringifies an object of
