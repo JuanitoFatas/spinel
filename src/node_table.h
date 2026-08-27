@@ -248,6 +248,11 @@ void nt_free(NodeTable *nt);
    Appends nodes and grows nt->count -- parallel per-node arrays must be
    resized to match afterward. */
 int nt_clone_subtree(NodeTable *nt, int root);
+/* Are a call's arguments all positional -- no splat, no block argument? (A
+   braceless trailing hash is one positional argument to the builtin surface.)
+   The face table's rows describe positional calls, and the two halves that
+   read it treat the other shapes alike. */
+int nt_call_args_plain(const NodeTable *nt, int id);
 
 /* ---- synthetic node construction ----
    Append a freshly-typed node and populate its fields, for desugaring AST

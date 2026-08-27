@@ -11846,11 +11846,12 @@ int emit_unresolved_call(Compiler *c, int id, Buf *b) {
       snprintf(g_argov_text[g_n_argov], sizeof g_argov_text[0], "_t%d", tkv);
       g_n_argov++;
       TyKind svk = c->ntype[recv]; c->ntype[recv] = kt;
-      int svkf = an_handle_face_node(); an_set_handle_face(recv, kt);
+      int svkf = an_face_node(); TyKind svkk = an_face_kind();
+      an_set_face_node(recv, kt);
       int svkn = g_handle_face_node; g_handle_face_node = id;
       emit_call(c, id, b);
       g_handle_face_node = svkn;
-      an_set_handle_face(svkf, svkf >= 0 ? kt : TY_UNKNOWN);
+      an_set_face_node(svkf, svkk);
       c->ntype[recv] = svk;
       g_n_argov--;
       return 1;
@@ -11884,9 +11885,8 @@ int emit_unresolved_call(Compiler *c, int id, Buf *b) {
          because anything under the re-emission that asks re-establishes it and
          the re-dispatch then finds no arm for a poly receiver (#4070 follow-up
          -- `v&.entries` raised NoMethodError with the conversion already made) */
-      int sv_face = an_hash_face_node(); an_set_hash_face_node(recv);
-      int hren = sp_streq(hnm, "each_entry");   /* same yield as each_pair */
-      if (hren) nt_node_set_str((NodeTable *)nt, id, "name", "each_pair");
+      int sv_face = an_face_node(); TyKind sv_fk = an_face_kind();
+      an_set_face_node(recv, TY_POLY_POLY_HASH);
       int sv_pp = g_pp_hash_node; g_pp_hash_node = id;
       if (hinl) {
         emit_call(c, id, &hib);
@@ -11896,8 +11896,7 @@ int emit_unresolved_call(Compiler *c, int id, Buf *b) {
       else emit_call(c, id, b);
       free(hib.p);
       g_pp_hash_node = sv_pp;
-      if (hren) nt_node_set_str((NodeTable *)nt, id, "name", "each_entry");
-      an_set_hash_face_node(sv_face);
+      an_set_face_node(sv_face, sv_fk);
       c->ntype[recv] = svh;
       g_n_argov--;
       return 1;
@@ -14062,9 +14061,10 @@ static void emit_call_body(Compiler *c, int id, Buf *b) {
              comes back poly while the value arm renders that face's C type. */
           if (ret2 == TY_POLY && natg == TY_POLY &&
               ty_poly_hash_face_name(nt_str(nt, id, "name"))) {
-            int svf = an_hash_face_node(); an_set_hash_face_node(recv);
+            int svf = an_face_node(); TyKind svfk = an_face_kind();
+            an_set_face_node(recv, TY_POLY_POLY_HASH);
             TyKind fac = infer_uncached(c, id);
-            an_set_hash_face_node(svf);
+            an_set_face_node(svf, svfk);
             /* only the array answers: a face that answers another hash boxes
                through a different entry point than emit_boxed_text picks */
             if (ty_is_array(fac)) natg = fac;

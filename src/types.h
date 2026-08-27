@@ -21,30 +21,58 @@ static inline int sp_streq(const char *a, const char *b) {
   }
 }
 
-/* Read-only Hash/Enumerable names a boxed receiver answers by pretending to be
-   the general boxed-key/value hash: inference types the call that way and
-   codegen normalizes the receiver to match, so the two agree by construction.
-   Every name here must have a PolyPolyHash emitter, and none may mutate -- the
-   normalization copies any other hash variant, so a write would be lost.
-   A name whose own poly-receiver emitter claims it FIRST does not belong here
-   even if a Hash answers it: the face's answer is then a type nothing renders.
-   find and detect were such names -- their emitter walks sp_poly_arr_recv,
-   which gives a Hash its [k, v] pairs, and answers one boxed ELEMENT of it. */
-static inline int ty_poly_hash_face_name(const char *nm) {
-  static const char *const NAMES[] = {
-    "dig", "value?", "has_value?", "invert", "assoc", "rassoc", "key",
-    "filter_map", "each_with_object", "group_by", "partition", "zip",
-    "reduce", "inject", "find_all", "take", "drop",
-    "select", "filter", "reject", "compact", "slice",
-    "except", "values_at", "fetch_values", "entries", "flatten", "first",
-    "each_pair", "each_key", "each_value", "transform_values",
-    "transform_keys", "tally", "chunk_while", "flat_map",
-    "collect_concat", "none?", "one?",
-    0 };
-  if (!nm) return 0;
-  for (int i = 0; NAMES[i]; i++) if (sp_streq(nm, NAMES[i])) return 1;
-  return 0;
-}
+/* ---- The boxed-receiver face table ----
+
+   A call on a receiver typed TY_POLY has no emitter of its own for most of
+   the builtin surface. What it has is a pretence: unbox the value to ONE
+   concrete kind, retype the receiver node as that kind, and re-enter the
+   typed emitter, which is then the implementation. This table says which
+   kinds own which names, and both halves of the compiler read it -- the
+   inference answers as the typed call would, under the same pin codegen
+   installs, so the result slot and the emission agree by construction
+   (#3449 introduced the shape for the Hash face; the String, Integer and
+   Enumerable lists in the poly emitter grew separately and are folded in).
+
+   A name several kinds own is dispatched on the receiver's run-time kind,
+   one re-entry per owner (see the poly emitter); a name none owns falls
+   through to whatever arm comes next, so this is not a catch-all and a name
+   without a typed emitter still reports the missing method.
+
+   A row marked PF_LAST answers only once no poly-receiver emitter of its own
+   has claimed the name, because a claimed name's face answer is a type
+   nothing renders (find and detect were such names -- their emitter walks
+   the elements and answers one of them). The Hash face is read-only: the
+   normalization copies every variant but the general one, so a write
+   would be lost. The table itself is in types.c. */
+enum {
+  PF_STRING = 1 << 0,  /* re-enter as TY_STRING (sp_poly_recv_s) */
+  PF_ARRAY  = 1 << 1,  /* TY_POLY_ARRAY, an Array at run time only */
+  PF_ENUM   = 1 << 2,  /* TY_POLY_ARRAY over any collection's elements (a hash's pairs) */
+  PF_HASH   = 1 << 3,  /* TY_POLY_POLY_HASH */
+  PF_INT    = 1 << 4,  /* TY_INT */
+  PF_OWNERS = 0x1f,
+  PF_STR_BANG = 1 << 9,  /* String value-form bang: re-enter the plain name, nil when unchanged */
+  PF_STR_SELF = 1 << 10, /* ... but a bang that answers self (succ!/next!): never nil */
+  PF_LAST     = 1 << 13  /* answers only once no poly-receiver emitter of its own has claimed the name */
+};
+typedef struct {
+  const char *name;
+  unsigned short flags;
+  signed char argc_min, argc_max;  /* argc_max -1: any count */
+  signed char blk;                 /* 1 block required, 0 none, -1 either */
+} PolyFace;
+/* The owners of `name` at a call of `argc` arguments with or without a block:
+   the OR of every matching row's flags (an owner bit per kind, plus the
+   write-back flags of the rows that carry them), the last-resort rows
+   included or not. A call whose arguments are not all positional (a splat,
+   a block argument -- see nt_call_args_plain) is no count a
+   bounded row can match: only a row open to any count and any block shape
+   answers it, which is how the name lists this table replaced answered.
+   0 when no row matches. */
+unsigned ty_poly_face_owners(const char *name, int argc, int has_blk, int plain, int with_last);
+/* Does the read-only Hash face answer `name` in some form? The face sites
+   ask by name alone, before the call's shape is known. */
+int ty_poly_hash_face_name(const char *nm);
 
 typedef enum {
   TY_UNKNOWN = 0,  /* not yet inferred, or an unsupported construct */
@@ -107,6 +135,18 @@ typedef enum {
   TY_CLASS,        /* a Class/Module value (sp_Class, carries cls_id) */
   TY_POLY          /* union / top: a value whose static type widened */
 } TyKind;
+
+/* The receiver type an owner bit re-enters the typed emitter with. */
+static inline TyKind ty_poly_face_kind(unsigned owner) {
+  switch (owner) {
+    case PF_STRING: return TY_STRING;
+    case PF_ARRAY:
+    case PF_ENUM:   return TY_POLY_ARRAY;
+    case PF_HASH:   return TY_POLY_POLY_HASH;
+    case PF_INT:    return TY_INT;
+  }
+  return TY_UNKNOWN;
+}
 
 const char *ty_name(TyKind t);         /* legacy string tag, for diagnostics */
 int ty_is_numeric(TyKind t);           /* INT or FLOAT */

@@ -1355,7 +1355,8 @@ int emit_array_call(Compiler *c, int id, Buf *b) {
        type alone does not survive a safe-navigation guard, whose re-emission
        asks again and re-establishes the receiver as poly -- the array emitters
        then decline the very call this arm re-entered to have them serve. */
-    int sv_face = an_poly_arr_face_node(); an_set_poly_arr_face_node(recv);
+    int sv_face = an_face_node(); TyKind sv_fk = an_face_kind();
+    an_set_face_node(recv, TY_POLY_ARRAY);
     /* The re-entry below is the SAME node, and neither the type nor the pin
        stops it reaching this arm again. Latch the node. */
     int sv_rd = g_poly_redispatch_id; g_poly_redispatch_id = id;
@@ -1367,7 +1368,7 @@ int emit_array_call(Compiler *c, int id, Buf *b) {
     }
     else emit_call(c, id, b);
     g_poly_redispatch_id = sv_rd;
-    an_set_poly_arr_face_node(sv_face);
+    an_set_face_node(sv_face, sv_fk);
     c->ntype[recv] = sv;
     g_n_argov--;
     return 1;
@@ -11238,6 +11239,204 @@ static int splice_recv_index_slot(Compiler *c, int recv, int *outer, int *oidx) 
   return 1;
 }
 
+/* One owner's arm: unbox `box` (a temp holding the boxed receiver, or 0 to
+   unbox the receiver expression itself) to `kind`'s representation in the
+   statement prelude, override the receiver node with the temp, retype and
+   pin it, and re-enter the same call so the typed emitter takes it from
+   there. A receiver that is not of that kind at run time raises the
+   NoMethodError the call would have raised, from the coercion. Answers the
+   arm's value text in `val` and its type under the pin -- the node's settled
+   type is the union over the inference passes and the owners, and may be
+   poly where the arm answers a pointer. */
+static TyKind emit_face_arm(Compiler *c, int id, unsigned kind, unsigned flags, int box, Buf *val) {
+  const NodeTable *nt = c->nt;
+  /* The re-entered emitter may rename the node for its own re-entry (a
+     String bang takes its plain form) and restore it into fresh storage, so
+     the name is kept here, not borrowed from the node table. Only a table
+     row's name arrives, so the buffer cannot truncate. */
+  char name[128];
+  snprintf(name, sizeof name, "%s", nt_str(nt, id, "name"));
+  int recv = nt_ref(nt, id, "receiver");
+  int has_blk = nt_ref(nt, id, "block") >= 0;
+  int t = ++g_tmp;
+  char bx[32];
+  Buf rb; memset(&rb, 0, sizeof rb);
+  if (box) snprintf(bx, sizeof bx, "_t%d", box);
+  else {
+    /* the elements of a collection materialize from the box itself */
+    if (kind == PF_ENUM) emit_boxed(c, recv, &rb);
+    else emit_expr(c, recv, &rb);
+  }
+  const char *rs = box ? bx : rb.p ? rb.p : "sp_box_nil()";
+  emit_indent(g_pre, g_indent);
+  switch (kind) {
+    case PF_STRING:
+      buf_printf(g_pre, "const char *_t%d = sp_poly_recv_s(%s, \"%s\"); SP_GC_ROOT(_t%d);\n", t, rs, name, t);
+      break;
+    case PF_INT:
+      /* The block iterators check: `"x".times { }` is a NoMethodError in
+         CRuby, and coercing would silently run the loop zero times. The
+         blockless names keep the plain coercion they have always used. */
+      if (has_blk) buf_printf(g_pre, "sp_int _t%d = sp_poly_int_recv(%s, \"%s\");\n", t, rs, name);
+      else buf_printf(g_pre, "sp_int _t%d = sp_poly_to_i(%s);\n", t, rs);
+      break;
+    case PF_ENUM:
+      /* a hash gives its [key, value] pairs, and a receiver that is no
+         collection answers an empty list, which is what the helper does */
+      buf_printf(g_pre, "sp_PolyArray *_t%d = sp_enum_items_from(%s); SP_GC_ROOT(_t%d);\n", t, rs, t);
+      break;
+  }
+  free(rb.p);
+  g_argov_node[g_n_argov] = recv;
+  snprintf(g_argov_text[g_n_argov], sizeof g_argov_text[0], "_t%d", t);
+  g_n_argov++;
+  TyKind as = ty_poly_face_kind(kind);
+  TyKind sv = c->ntype[recv]; c->ntype[recv] = as;
+  int sv_face = an_face_node(); TyKind sv_fk = an_face_kind();
+  an_set_face_node(recv, as);
+  TyKind nat = infer_uncached(c, id);
+  Buf cb; memset(&cb, 0, sizeof cb);
+  emit_call(c, id, &cb);
+  an_set_face_node(sv_face, sv_fk);
+  c->ntype[recv] = sv;
+  g_n_argov--;
+  const char *call = cb.p ? cb.p : "0";
+  /* A typed emitter that declines the call's argument shape answers the
+     unresolved gate's raise token, a poly value that never returns: hand it
+     on as poly, untouched, rather than bind it into a typed temp. */
+  if (strncmp(call, "sp_raise_nomethod(", 18) == 0) {
+    TyKind slot = comp_ntype(c, id);
+    if (slot == TY_POLY || slot == TY_UNKNOWN || slot == TY_VOID) { buf_puts(val, call); slot = TY_POLY; }
+    else emit_unbox_text(c, slot, call, val);   /* the token is an sp_RbVal; the slot is not */
+    free(cb.p);
+    return slot;
+  }
+  buf_puts(val, call);
+  free(cb.p);
+  return nat;
+}
+
+/* The value of an arm in the call's result slot: as it is when the two
+   types agree, boxed into a poly slot otherwise. */
+static void emit_face_value(Compiler *c, TyKind slot, TyKind nat, const char *val, Buf *b) {
+  /* a poly answer under the pin is not a boxed value: the Integer iterators
+     answer their receiver's sp_int while the pinned inference says poly */
+  if (slot == nat || nat == TY_POLY || nat == TY_UNKNOWN || nat == TY_VOID) buf_puts(b, val);
+  else if (slot == TY_POLY) emit_boxed_text(c, nat, val, b);
+  else {
+    Buf bx; memset(&bx, 0, sizeof bx);
+    emit_boxed_text(c, nat, val, &bx);
+    emit_unbox_text(c, slot, bx.p, b);
+    free(bx.p);
+  }
+}
+
+/* An arm under the silent emittability probe the dynamic-send dispatch
+   uses: a typed emitter that declines the call longjmps out of emit, and
+   the arm is dropped rather than the build. Everything the arm may have
+   changed on the way out is put back -- the receiver's type override and
+   the inference pin emit_face_arm restores only on its normal return, the
+   argument overrides, the conversion hold, the prelude, and the recovery
+   point itself, which the driver armed for the whole unit. The arm's
+   prelude is captured to `pre` and its value to `val`; answers 0 when the
+   arm was dropped. */
+static int face_probe_arm(Compiler *c, int id, unsigned kind, unsigned flags, int box,
+                          Buf *pre, Buf *val, TyKind *nat) {
+  int recv = nt_ref(c->nt, id, "receiver");
+  Buf *sv_pre = g_pre;
+  int sv_probe = g_unsup_probe;
+  ConvHold *sv_hold = g_conv_hold;
+  int sv_argov = g_n_argov;
+  TyKind sv_ty = c->ntype[recv];
+  int sv_face = an_face_node(); TyKind sv_fk = an_face_kind();
+  jmp_buf sv_jb; memcpy(sv_jb, g_unsup_recover, sizeof(jmp_buf));
+  volatile int ok = 1;
+  g_pre = pre; g_unsup_probe = 1;
+  if (setjmp(g_unsup_recover) == 0) *nat = emit_face_arm(c, id, kind, flags, box, val);
+  else ok = 0;
+  memcpy(g_unsup_recover, sv_jb, sizeof(jmp_buf));
+  an_set_face_node(sv_face, sv_fk);
+  c->ntype[recv] = sv_ty;
+  g_n_argov = sv_argov;
+  g_conv_hold = sv_hold;
+  g_unsup_probe = sv_probe;
+  g_pre = sv_pre;
+  return ok;
+}
+
+/* One owner: exactly the re-entry. Answers 0 when the typed emitter
+   declined the call, and the call goes on to the arms after this one. */
+static int emit_face_reentry(Compiler *c, int id, unsigned kind, unsigned flags, Buf *b) {
+  const NodeTable *nt = c->nt;
+  int recv = nt_ref(nt, id, "receiver");
+  int box = 0;
+  Buf pre = {0, 0, 0}, val = {0, 0, 0};
+  TyKind nat = TY_UNKNOWN;
+  if (!face_probe_arm(c, id, kind, flags, box, &pre, &val, &nat)) {
+    free(pre.p); free(val.p);
+    return 0;
+  }
+  if (pre.p) buf_puts(g_pre, pre.p);
+  emit_face_value(c, comp_ntype(c, id), nat, val.p ? val.p : "0", b);
+  free(pre.p); free(val.p);
+  return 1;
+}
+
+/* A String value-form mutator on a boxed receiver: compute the non-bang
+   transform against the unboxed contents, then write the result back
+   through the box. */
+static void emit_face_str_bang(Compiler *c, int id, unsigned own, Buf *b) {
+  const NodeTable *nt = c->nt;
+  const char *name = nt_str(nt, id, "name");
+  int recv = nt_ref(nt, id, "receiver");
+  int nil_nc = !(own & PF_STR_SELF);
+  /* The node's name is rewritten to the plain form for the re-entry, so
+     both spellings live here, not in the node table. */
+  char bang[64], plain[64];   /* a table row's bang name: never empty, never near the cap */
+  snprintf(bang, sizeof bang, "%s", name);
+  snprintf(plain, sizeof plain, "%.*s", (int)strlen(name) - 1, name);
+  int tvb = ++g_tmp, tob = ++g_tmp, tnb = ++g_tmp;
+  Buf rbb; memset(&rbb, 0, sizeof rbb); emit_expr(c, recv, &rbb);
+  emit_indent(g_pre, g_indent);
+  buf_printf(g_pre, "sp_RbVal _t%d = %s; SP_GC_ROOT_RBVAL(_t%d);"
+                    " const char *_t%d = sp_poly_to_s(_t%d); SP_GC_ROOT(_t%d);\n",
+             tvb, rbb.p ? rbb.p : "sp_box_nil()", tvb, tob, tvb, tob);
+  free(rbb.p);
+  g_argov_node[g_n_argov] = recv;
+  snprintf(g_argov_text[g_n_argov], sizeof g_argov_text[0], "_t%d", tob);
+  g_n_argov++;
+  TyKind svb = c->ntype[recv]; c->ntype[recv] = TY_STRING;
+  nt_node_set_str((NodeTable *)nt, id, "name", plain);
+  Buf nbb; memset(&nbb, 0, sizeof nbb); emit_call(c, id, &nbb);
+  nt_node_set_str((NodeTable *)nt, id, "name", bang);
+  c->ntype[recv] = svb;
+  g_n_argov--;
+  buf_printf(b, "({ const char *_t%d = %s; ", tnb, nbb.p ? nbb.p : "\"\"");
+  free(nbb.p);
+  /* Decide "did it change?" BEFORE the mutation. The receiver's old text
+     is the LIVE payload of a shared handle, so once become() has written
+     the new contents into it the two compare equal and the bang method
+     answered nil after a substitution that plainly happened (#4042). */
+  int tchg = 0;
+  if (nil_nc) {
+    tchg = ++g_tmp;
+    buf_printf(b, "int _t%d = !sp_str_eq(_t%d, _t%d); ", tchg, tob, tnb);
+  }
+  /* A shared handle absorbs the new contents; a plain string box cannot,
+     so an lvalue receiver takes the value back the way the typed path
+     does for the same case. */
+  { const char *rvtb = nt_type(nt, recv);
+    if (rvtb && (sp_streq(rvtb, "LocalVariableReadNode") ||
+                 sp_streq(rvtb, "InstanceVariableReadNode"))) {
+      emit_expr(c, recv, b);
+      buf_printf(b, " = sp_poly_str_become(_t%d, _t%d); ", tvb, tnb);
+    }
+    else buf_printf(b, "sp_poly_str_become(_t%d, _t%d); ", tvb, tnb);
+  }
+  if (nil_nc) buf_printf(b, "_t%d ? _t%d : NULL; })", tchg, tnb);
+  else buf_printf(b, "_t%d; })", tnb);
+}
+
 int emit_poly_call(Compiler *c, int id, Buf *b) {
   const NodeTable *nt = c->nt;
   const char *name = nt_str(nt, id, "name");
@@ -11327,188 +11526,23 @@ int emit_poly_call(Compiler *c, int id, Buf *b) {
     buf_puts(b, "; })");
     return 1;
   }
-  /* String value-form mutators on a boxed receiver: compute the non-bang
-     transform against the unboxed contents, then write the result back through
-     the box. Only the bang names String alone owns -- reverse!/sort!/uniq! are
-     Array's too, and the receiver's runtime class is unknown here (#3445). */
+  /* The face table (types.h): unbox the receiver to the kind that owns the
+     name, retype the receiver node and re-enter the same call, so the typed
+     emitter IS the implementation and the inference, which answered under
+     the same pin, has already sized the result slot to it. The Hash face is
+     not taken here: it is the last resort, in emit_unresolved_call, so that
+     a poly-receiver emitter of its own claims the name first. A name several
+     kinds own is left to the arms after this one for now. */
   if (recv >= 0 && rt == TY_POLY && !user_defines_or_reads(c, name) &&
       g_n_argov < MAX_ARG_OVERRIDE) {
-    static const struct { const char *bang, *plain; int nil_nc; } PBANG[] = {
-      {"gsub!", "gsub", 1}, {"sub!", "sub", 1}, {"upcase!", "upcase", 1},
-      {"downcase!", "downcase", 1}, {"capitalize!", "capitalize", 1},
-      {"swapcase!", "swapcase", 1}, {"strip!", "strip", 1}, {"lstrip!", "lstrip", 1},
-      {"rstrip!", "rstrip", 1}, {"chomp!", "chomp", 1}, {"chop!", "chop", 1},
-      {"squeeze!", "squeeze", 1}, {"tr!", "tr", 1}, {"delete!", "delete", 1},
-      {"tr_s!", "tr_s", 1}, {"delete_prefix!", "delete_prefix", 1},
-      {"delete_suffix!", "delete_suffix", 1}, {"succ!", "succ", 0}, {"next!", "next", 0},
-      {NULL, NULL, 0}
-    };
-    int pbi = -1;
-    for (int j = 0; PBANG[j].bang; j++) if (sp_streq(name, PBANG[j].bang)) { pbi = j; break; }
-    if (pbi >= 0) {
-      int tvb = ++g_tmp, tob = ++g_tmp, tnb = ++g_tmp;
-      Buf rbb; memset(&rbb, 0, sizeof rbb); emit_expr(c, recv, &rbb);
-      emit_indent(g_pre, g_indent);
-      buf_printf(g_pre, "sp_RbVal _t%d = %s; SP_GC_ROOT_RBVAL(_t%d);"
-                        " const char *_t%d = sp_poly_to_s(_t%d); SP_GC_ROOT(_t%d);\n",
-                 tvb, rbb.p ? rbb.p : "sp_box_nil()", tvb, tob, tvb, tob);
-      free(rbb.p);
-      g_argov_node[g_n_argov] = recv;
-      snprintf(g_argov_text[g_n_argov], sizeof g_argov_text[0], "_t%d", tob);
-      g_n_argov++;
-      TyKind svb = c->ntype[recv]; c->ntype[recv] = TY_STRING;
-      nt_node_set_str((NodeTable *)nt, id, "name", PBANG[pbi].plain);
-      Buf nbb; memset(&nbb, 0, sizeof nbb); emit_call(c, id, &nbb);
-      nt_node_set_str((NodeTable *)nt, id, "name", PBANG[pbi].bang);
-      c->ntype[recv] = svb;
-      g_n_argov--;
-      buf_printf(b, "({ const char *_t%d = %s; ", tnb, nbb.p ? nbb.p : "\"\"");
-      free(nbb.p);
-      /* Decide "did it change?" BEFORE the mutation. The receiver's old text
-         is the LIVE payload of a shared handle, so once become() has written
-         the new contents into it the two compare equal and the bang method
-         answered nil after a substitution that plainly happened (#4042). */
-      int tchg = 0;
-      if (PBANG[pbi].nil_nc) {
-        tchg = ++g_tmp;
-        buf_printf(b, "int _t%d = !sp_str_eq(_t%d, _t%d); ", tchg, tob, tnb);
-      }
-      /* A shared handle absorbs the new contents; a plain string box cannot,
-         so an lvalue receiver takes the value back the way the typed path
-         does for the same case. */
-      { const char *rvtb = nt_type(nt, recv);
-        if (rvtb && (sp_streq(rvtb, "LocalVariableReadNode") ||
-                     sp_streq(rvtb, "InstanceVariableReadNode"))) {
-          emit_expr(c, recv, b);
-          buf_printf(b, " = sp_poly_str_become(_t%d, _t%d); ", tvb, tnb);
-        }
-        else buf_printf(b, "sp_poly_str_become(_t%d, _t%d); ", tvb, tnb);
-      }
-      if (PBANG[pbi].nil_nc) buf_printf(b, "_t%d ? _t%d : NULL; })", tchg, tnb);
-      else buf_printf(b, "_t%d; })", tnb);
-      return 1;
-    }
-  }
-  /* The names Integer alone owns, on a boxed receiver: unbox once and
-     re-dispatch through the typed emitter, the way the String surface below
-     does. Untyped, they raised NoMethodError naming Integer itself. */
-  if (recv >= 0 && rt == TY_POLY &&
-      !user_defines_or_reads(c, name) && g_n_argov < MAX_ARG_OVERRIDE) {
-    int pi_blk = nt_ref(nt, id, "block") >= 0;
-    static const struct { const char *name; int argc; } PINT[] = {
-      {"digits", 0}, {"digits", 1}, {"pred", 0}, {"bit_length", 0},
-      {"ceildiv", 1}, {"pow", 1}, {"pow", 2}, {"gcdlcm", 1},
-      {NULL, 0} };
-    /* The block iterators Integer owns take the same route. They were left
-       out because this arm only ever ran for the blockless names, so
-       `n.times { }` on a boxed receiver raised NoMethodError naming Integer. */
-    /* step is left out: a Float receiver owns it too, so unboxing to an
-       sp_int would truncate a legitimate `2.5.step(9, 3)`. */
-    static const struct { const char *name; int argc; } PINTB[] = {
-      {"times", 0}, {"upto", 1}, {"downto", 1},
-      {NULL, 0} };
-    int want_pi = 0;
-    for (int i = 0; PINT[i].name && !want_pi; i++)
-      if (!pi_blk && sp_streq(name, PINT[i].name) && argc == PINT[i].argc) want_pi = 1;
-    for (int i = 0; PINTB[i].name && !want_pi; i++)
-      if (pi_blk && sp_streq(name, PINTB[i].name) && argc == PINTB[i].argc) want_pi = 1;
-    if (want_pi) {
-      int tpi = ++g_tmp;
-      Buf rbi; memset(&rbi, 0, sizeof rbi); emit_expr(c, recv, &rbi);
-      emit_indent(g_pre, g_indent);
-      /* The block iterators check: `"x".times { }` is a NoMethodError in CRuby,
-         and coercing would silently run the loop zero times. The blockless
-         names keep the plain coercion they have always used. */
-      if (pi_blk)
-        buf_printf(g_pre, "sp_int _t%d = sp_poly_int_recv(%s, \"%s\");\n",
-                   tpi, rbi.p ? rbi.p : "sp_box_nil()", name);
-      else
-        buf_printf(g_pre, "sp_int _t%d = sp_poly_to_i(%s);\n", tpi, rbi.p ? rbi.p : "sp_box_nil()");
-      free(rbi.p);
-      g_argov_node[g_n_argov] = recv;
-      snprintf(g_argov_text[g_n_argov], sizeof g_argov_text[0], "_t%d", tpi);
-      g_n_argov++;
-      TyKind svpi = c->ntype[recv]; c->ntype[recv] = TY_INT;
-      emit_call(c, id, b);
-      c->ntype[recv] = svpi;
-      g_n_argov--;
-      return 1;
-    }
-  }
-  /* The Enumerable names a boxed receiver shares with Array: materialize its
-     elements into a poly array once and re-dispatch, so the poly-array
-     emitters serve them. Without this a widened array (a container read, a
-     destructured return) raised NoMethodError naming Array, the class that
-     defines them. Hashes and ranges materialize through the same helper, and
-     a receiver that is neither answers an empty list, which is what the
-     runtime helper already does for a non-collection. */
-  if (recv >= 0 && rt == TY_POLY && !user_defines_or_reads(c, name) &&
-      g_n_argov < MAX_ARG_OVERRIDE) {
-    static const struct { const char *name; int wants_block; } PENUM[] = {
-      {"minmax", 0}, {"tally", 0}, {"product", 0}, {"combination", 0},
-      {"permutation", 0}, {"group_by", 1}, {"partition", 1},
-      {"each_with_object", 1}, {"chunk_while", 1}, {"slice_when", 1},
-      {NULL, 0} };
-    int want_pe = 0;
     int has_blk = nt_ref(nt, id, "block") >= 0;
-    for (int i = 0; PENUM[i].name && !want_pe; i++)
-      if (sp_streq(name, PENUM[i].name) && (!PENUM[i].wants_block || has_blk)) want_pe = 1;
-    if (want_pe) {
-      int tpe = ++g_tmp;
-      Buf rbe; memset(&rbe, 0, sizeof rbe); emit_boxed(c, recv, &rbe);
-      emit_indent(g_pre, g_indent);
-      buf_printf(g_pre, "sp_PolyArray *_t%d = sp_enum_items_from(%s); SP_GC_ROOT(_t%d);\n",
-                 tpe, rbe.p ? rbe.p : "sp_box_nil()", tpe);
-      free(rbe.p);
-      g_argov_node[g_n_argov] = recv;
-      snprintf(g_argov_text[g_n_argov], sizeof g_argov_text[0], "_t%d", tpe);
-      g_n_argov++;
-      TyKind svpe = c->ntype[recv]; c->ntype[recv] = TY_POLY_ARRAY;
-      emit_call(c, id, b);
-      c->ntype[recv] = svpe;
-      g_n_argov--;
-      return 1;
-    }
-  }
-  /* The rest of the String surface on a boxed receiver: unbox once and
-
-     re-dispatch the same call with the receiver typed String, so the typed
-     emitter IS the implementation. Only names no other class answers may go
-     here -- the receiver's runtime class is unknown, so a name Array or
-     Enumerable also owns (index, count, sum, slice, insert) would compile the
-     String body for an array receiver. Those are served by their runtime kind
-     dispatch instead. `partition` qualifies only in its one-argument form:
-     Enumerable#partition takes no argument, and a block already excludes this
-     arm. Not a catch-all, so a name without a typed emitter still reports the
-     missing method. */
-  if (recv >= 0 && rt == TY_POLY && nt_ref(nt, id, "block") < 0 &&
-      !user_defines_or_reads(c, name) && g_n_argov < MAX_ARG_OVERRIDE) {
-    static const struct { const char *name; int argc; } PSR[] = {
-      {"squeeze", 0}, {"byteindex", 1}, {"byteindex", 2},
-      {"byterindex", 1}, {"byterindex", 2},
-      {"partition", 1}, {"rpartition", 1},
-      {"hex", 0}, {"oct", 0}, {"tr_s", 2}, {"crypt", 1},
-      {"casecmp", 1}, {"casecmp?", 1},
-      {NULL, 0} };
-    int want = 0;
-    for (int i = 0; PSR[i].name && !want; i++)
-      if (sp_streq(name, PSR[i].name) && argc == PSR[i].argc) want = 1;
-    if (want) {
-      int tps = ++g_tmp;
-      Buf rbs; memset(&rbs, 0, sizeof rbs); emit_expr(c, recv, &rbs);
-      emit_indent(g_pre, g_indent);
-      buf_printf(g_pre, "const char *_t%d = sp_poly_recv_s(%s, \"%s\"); SP_GC_ROOT(_t%d);\n",
-                 tps, rbs.p ? rbs.p : "sp_box_nil()", name, tps);
-      free(rbs.p);
-      g_argov_node[g_n_argov] = recv;
-      snprintf(g_argov_text[g_n_argov], sizeof g_argov_text[0], "_t%d", tps);
-      g_n_argov++;
-      TyKind svps = c->ntype[recv]; c->ntype[recv] = TY_STRING;
-      emit_call(c, id, b);
-      c->ntype[recv] = svps;
-      g_n_argov--;
-      return 1;
-    }
+    unsigned own = ty_poly_face_owners(name, argc, has_blk, nt_call_args_plain(nt, id), 0);
+    unsigned kinds = own & PF_OWNERS;
+    if (own & PF_STR_BANG) { emit_face_str_bang(c, id, own, b); return 1; }
+    if (kinds && !(kinds & (kinds - 1)) && emit_face_reentry(c, id, kinds, own, b)) return 1;
+    /* a declined re-entry may have renamed the node and restored it into
+       fresh storage (see emit_face_arm): the name is read again */
+    name = nt_str(nt, id, "name");
   }
   /* The one/two-String-argument transforms on a boxed receiver: a String
      arriving through a poly slot (a Fiber#resume value, a container read) had

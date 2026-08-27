@@ -20,29 +20,18 @@ TyKind ivar_value_ty(ClassInfo *ci, int iv) {
   return ci->ivar_types[iv] == TY_STRBUF ? TY_STRING : ci->ivar_types[iv];
 }
 
-static int g_hash_face_node = -1;
-/* Codegen normalizes a boxed receiver to the general hash before re-dispatching
-   its Hash/Enumerable face, and needs the inference to answer the same way for
-   the duration -- poking the node's cached type does not survive, because
-   anything under the re-emission that asks re-establishes it. */
-void an_set_hash_face_node(int node) { g_hash_face_node = node; }
-int an_hash_face_node(void) { return g_hash_face_node; }
-/* The same pin for the poly ARRAY face: codegen materializes a boxed receiver
-   into a poly array and re-dispatches the call as the array form, and the
-   inference has to answer the same way for the duration. Poking the node's
-   cached type is not enough on its own -- under a safe-navigation guard the
-   re-emission asks again and re-establishes the receiver as poly, and the
-   array emitters then decline the call they were re-entered to serve. */
-static int g_poly_arr_face_node = -1;
-void an_set_poly_arr_face_node(int node) { g_poly_arr_face_node = node; }
-int an_poly_arr_face_node(void) { return g_poly_arr_face_node; }
-/* And for a boxed HANDLE (Addrinfo, Socket::Option): codegen unboxes the
-   receiver back to its own type and re-dispatches, so the pin carries the
-   TYPE too -- unlike the two above, which each name one fixed kind. */
-static int g_handle_face_node = -1;
-static TyKind g_handle_face_ty = TY_UNKNOWN;
-void an_set_handle_face(int node, TyKind t) { g_handle_face_node = node; g_handle_face_ty = t; }
-int an_handle_face_node(void) { return g_handle_face_node; }
+/* Codegen unboxes a poly receiver to one concrete kind before re-entering the
+   typed emitter (the face table in types.h), and needs the inference to
+   answer the same way for the duration -- poking the node's cached type does
+   not survive, because anything under the re-emission that asks re-establishes
+   it (under a safe-navigation guard the re-emission asks again, and the typed
+   emitters then decline the very call they were re-entered to serve). One
+   node at a time; -1 clears the pin. */
+static int g_face_node = -1;
+static TyKind g_face_kind = TY_UNKNOWN;
+void an_set_face_node(int node, TyKind kind) { g_face_node = node; g_face_kind = kind; }
+int an_face_node(void) { return g_face_node; }
+TyKind an_face_kind(void) { return g_face_kind; }
 #define SP_NMEMO_SZ 16384
 static unsigned g_narrow_gen = 1;
 static struct { unsigned gen; long key; signed char val; } g_nmemo[SP_NMEMO_SZ];
@@ -5680,34 +5669,40 @@ else {
     }
   }
 
-  /* Last resort for a boxed receiver: the read-only Hash/Enumerable face,
-     typed as if the receiver were the general boxed-key/value hash. Codegen
-     normalizes the receiver to exactly that before re-dispatching, so both
-     sides agree on the result slot; a receiver that is not a hash at runtime
-     raises NoMethodError there, as it did before (#3449). */
   /* A boxed HANDLE answering one of its own exclusive names: type the call as
      if the receiver were that handle. Codegen unboxes it back to exactly that
      before re-dispatching, and checks the runtime cls_id first, so a value of
      any other kind still raises NoMethodError (#4158 follow-up). */
-  if (recv >= 0 && rt == TY_POLY && g_handle_face_node < 0 &&
+  if (recv >= 0 && rt == TY_POLY && g_face_node < 0 &&
       ty_poly_handle_face(name) != TY_UNKNOWN &&
       !an_user_defines_or_reads(c, name)) {
-    an_set_handle_face(recv, ty_poly_handle_face(name));
+    an_set_face_node(recv, ty_poly_handle_face(name));
     TyKind kt = infer_call(c, id);
-    an_set_handle_face(-1, TY_UNKNOWN);
+    an_set_face_node(-1, TY_UNKNOWN);
     if (kt != TY_UNKNOWN) return kt;
   }
-  if (recv >= 0 && rt == TY_POLY && g_hash_face_node < 0 &&
-      ty_poly_hash_face_name(name) && !an_user_defines_or_reads(c, name)) {
-    /* Inside the pretence `each_entry` IS `each_pair`: Hash#each_entry yields
-       the same [key, value] pair, and only the pair name has an emitter. */
-    int ren = sp_streq(name, "each_entry");
-    if (ren) nt_node_set_str((NodeTable *)nt, id, "name", "each_pair");
-    g_hash_face_node = recv;
-    TyKind ht = infer_call(c, id);
-    g_hash_face_node = -1;
-    if (ren) nt_node_set_str((NodeTable *)nt, id, "name", "each_entry");
-    if (ht != TY_UNKNOWN) return ht;
+  /* Last resort for a boxed receiver: the face table. Answer as the typed
+     call would with the receiver pinned to each owner kind in turn -- codegen
+     unboxes to exactly that kind before re-entering the typed emitter, so
+     both sides agree on the result slot -- and unify the owners' answers: one
+     owner gives the typed call's own type, owners that disagree give poly and
+     the emission boxes each arm. A receiver of no owner's kind raises
+     NoMethodError there, as it did before (#3449). */
+  if (recv >= 0 && rt == TY_POLY && g_face_node < 0 && !an_user_defines_or_reads(c, name)) {
+    int blk = nt_ref(nt, id, "block") >= 0;
+    unsigned own = ty_poly_face_owners(name, argc, blk, nt_call_args_plain(nt, id), 1) & PF_OWNERS;
+    if (own) {
+      TyKind r = TY_UNKNOWN;
+      for (unsigned bit = 1; bit & PF_OWNERS; bit <<= 1) {
+        if (!(own & bit)) continue;
+        an_set_face_node(recv, ty_poly_face_kind(bit));
+        TyKind ht = infer_call(c, id);
+        an_set_face_node(-1, TY_UNKNOWN);
+        if (ht == TY_UNKNOWN) continue;
+        r = r == TY_UNKNOWN ? ht : ty_unify(r, ht);
+      }
+      if (r != TY_UNKNOWN) return r;
+    }
   }
 
   return TY_UNKNOWN;
@@ -6634,13 +6629,12 @@ TyKind infer_uncached(Compiler *c, int id) {
 
 TyKind infer_type(Compiler *c, int id) {
   if (id < 0 || id >= c->nt->count) return TY_UNKNOWN;
-  /* The boxed-hash face re-inference (infer_call's last resort) asks what one
-     call would be if this receiver were the general hash. Only that receiver
-     node, only for the duration of the recursion, and the cache is left
-     untouched so the receiver's own type is unaffected. */
-  if (id == g_hash_face_node) return TY_POLY_POLY_HASH;
-  if (id == g_poly_arr_face_node) return TY_POLY_ARRAY;
-  if (id == g_handle_face_node) return g_handle_face_ty;
+  /* The face re-inference (infer_call's last resort, and codegen's re-entry)
+     asks what one call would be with this receiver pinned to one concrete
+     kind (the face table in types.h). Only that receiver node, only for the
+     duration, and the cache is left untouched so the receiver's own type is
+     unaffected. */
+  if (id == g_face_node) return g_face_kind;
   TyKind t = infer_uncached(c, id);
   /* The builtin-only re-derivation (see an_builtin_only) asks what this call
      would be if no user class owned the name. That answer is not the node's
