@@ -129,7 +129,19 @@ void sp_alloc_worker_tune(int workers) {
   if (workers > SP_MAX_WORKERS) workers = SP_MAX_WORKERS;
   if (workers == 1) return;
   sp_gc_threshold_init *= (size_t)workers;
-  SP_GC_CTR_SET(sp_gc_threshold, SP_GC_CTR_GET(sp_gc_threshold) * (size_t)workers);
+  /* Raise the CURRENT threshold to the new base, do not multiply it. The cost
+     budgeted above -- N * 256 KB retained between collections -- is what the
+     multiply costs when it lands on the base, which is where it lands for a
+     program that creates its threads before doing any work. A program that
+     creates its first thread after its heap has grown was handed N * whatever
+     the adaptive threshold had become: 76 MB -> 2.4 GB on a 32-core machine,
+     with no collection involved, and the churn that followed then ran to a
+     997 MB heap against a 66 MB live set without collecting once. The
+     multiplier is the POOL size (min(cores, SPINEL_WORKERS)), not the thread
+     count the program asked for, so the damage scales with the machine
+     (#4146). */
+  { size_t cur = SP_GC_CTR_GET(sp_gc_threshold);
+    if (sp_gc_threshold_init > cur) SP_GC_CTR_SET(sp_gc_threshold, sp_gc_threshold_init); }
 }
 #endif
 
