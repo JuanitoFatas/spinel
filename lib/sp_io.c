@@ -751,7 +751,7 @@ sp_int sp_sock_connect_nb(sp_File *f, const char *host, sp_int port, sp_bool exc
     if (!exc) return SP_INT_NIL;
     sp_raise_cls("IO::EINPROGRESSWaitWritable", "operation in progress - connect(2) would block");
   }
-  if (errno == EISCONN) return 0;
+  if (errno == EISCONN && !exc) return 0;
   sp_file_raise_errno("connect", host ? host : "");
 }
 /* connect_nonblock(sockaddr). The peer is already resolved into a packed
@@ -779,7 +779,7 @@ sp_int sp_sock_connect_nb_sa(sp_File *f, const char *sa, sp_int salen, sp_bool e
     if (!exc) return SP_INT_NIL;
     sp_raise_cls("IO::EINPROGRESSWaitWritable", "operation in progress - connect(2) would block");
   }
-  if (errno == EISCONN) return 0;
+  if (errno == EISCONN && !exc) return 0;
   sp_file_raise_errno("connect", "");
   return -1;
 }
