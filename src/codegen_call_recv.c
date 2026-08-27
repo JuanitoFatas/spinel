@@ -8026,9 +8026,28 @@ int emit_scalar_call(Compiler *c, int id, Buf *b) {
    it has run, so read the id the object actually carries rather than folding
    the static one (#4084). Everything else keeps the fold, with the receiver
    evaluated for its effects. */
+/* Does any user class have `cid` in its superclass chain? Then a slot typed
+   `cid` can hold one of them at run time. */
+static int class_has_descendants(Compiler *c, int cid) {
+  for (int k = 0; k < c->nclasses; k++) {
+    if (k == cid) continue;
+    for (int p = c->classes[k].parent; p >= 0; p = c->classes[p].parent)
+      if (p == cid) return 1;
+  }
+  return 0;
+}
+
+/* The class to test a receiver's `is_a?` against. The receiver's STATIC type is
+   only an upper bound: a `Base`-typed slot legitimately holds a `Sub`, which is
+   the whole point of a subclass, so a class with descendants has to be asked at
+   run time. Using the static id there made `is_a?(Sub)` inside a method defined
+   on Base answer false for every Sub -- silently, and the identical test written
+   at the call site answered true, because there the receiver's type IS Sub
+   (#4142). A leaf class is exact, and a value type carries no tag, so both keep
+   the constant. */
 static void emit_isa_self_class(Compiler *c, int recv, int cid, Buf *b) {
-  if (cid >= 0 && cid < c->nclasses && c->classes[cid].is_singleton_of &&
-      !c->classes[cid].is_value_type) {
+  if (cid >= 0 && cid < c->nclasses && !c->classes[cid].is_value_type &&
+      (c->classes[cid].is_singleton_of || class_has_descendants(c, cid))) {
     buf_puts(b, "((sp_Class){("); emit_expr(c, recv, b); buf_puts(b, ")->cls_id})");
     return;
   }
@@ -8214,8 +8233,28 @@ int emit_object_call(Compiler *c, int id, Buf *b) {
         if (sp_streq(name, "instance_of?")) {
           /* a synthesized singleton subclass is instance_of? its parent
              (CRuby hides the singleton class) */
-          buf_puts(b, "((void)("); emit_expr(c, recv, b);
-          buf_printf(b, "), %d)", singleton_visible_ci(c, cid) == target);
+          if (cid >= 0 && cid < c->nclasses && !c->classes[cid].is_value_type &&
+              class_has_descendants(c, cid)) {
+            /* Same upper-bound problem as is_a? just below, and exactness is
+               what instance_of? is FOR: ask the object. The ids that answer
+               are the target and any singleton class of it, which is a set the
+               compiler can enumerate (#4142). */
+            int t9 = ++g_tmp;
+            buf_printf(b, "({ sp_int _t%d = (", t9); emit_expr(c, recv, b);
+            buf_printf(b, ")->cls_id; ");
+            int first = 1;
+            for (int k = 0; k < c->nclasses; k++) {
+              if (singleton_visible_ci(c, k) != target) continue;
+              buf_printf(b, "%s_t%d == %d", first ? "" : " || ", t9, k);
+              first = 0;
+            }
+            if (first) buf_puts(b, "0");
+            buf_puts(b, "; })");
+          }
+          else {
+            buf_puts(b, "((void)("); emit_expr(c, recv, b);
+            buf_printf(b, "), %d)", singleton_visible_ci(c, cid) == target);
+          }
         }
         else {
           /* use sp_class_le_mod (via macro) so includes chain is checked */

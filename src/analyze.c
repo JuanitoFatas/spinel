@@ -1918,6 +1918,56 @@ static int give_native_self_calls_a_receiver(Compiler *c) {
   return changed;
 }
 
+/* The same missing receiver, for the universal Object predicates. `is_a?` and
+   friends are dispatched through the receiver, so written on an implicit self
+   they had no receiver node and were rejected outright:
+
+     class Room < ApplicationRecord
+       def open? = is_a?(Rooms::Open)   # unsupported call
+     end
+
+   which is how Rails spells single-table inheritance, and how anyone spells a
+   type predicate on self. Give it the receiver it means (#4142).
+
+   Deliberately a short list: only predicates that are Object's and have no
+   sensible meaning as a bare call. A method the class itself defines wins, as
+   does a top-level def of the same name -- both bind ahead of Object's. */
+static int give_self_predicates_a_receiver(Compiler *c) {
+  static const struct { const char *name; int argc; } preds[] = {
+    { "is_a?", 1 }, { "kind_of?", 1 }, { "instance_of?", 1 },
+    { "nil?", 0 }, { "frozen?", 0 },
+  };
+  NodeTable *nt = (NodeTable *)c->nt;
+  int n0 = nt->count, changed = 0;
+  for (int id = 0; id < n0; id++) {
+    if (nt_kind(nt, id) != NK_CallNode) continue;
+    if (nt_ref(nt, id, "receiver") >= 0) continue;
+    const char *nm = nt_str(nt, id, "name");
+    if (!nm) continue;
+    int want = -1;
+    for (size_t k = 0; k < sizeof preds / sizeof preds[0]; k++)
+      if (sp_streq(nm, preds[k].name)) { want = preds[k].argc; break; }
+    if (want < 0) continue;
+    Scope *osc = comp_scope_of(c, id);
+    int ocid = osc ? osc->class_id : -1;
+    if (ocid < 0 || osc->is_cmethod) continue;
+    if (ocid >= c->nclasses) continue;
+    if (comp_method_in_chain(c, ocid, nm, NULL) >= 0) continue;
+    if (comp_method_index(c, nm) >= 0) continue;
+    int argc = 0;
+    { int an = nt_ref(nt, id, "arguments");
+      if (an >= 0) nt_arr(nt, an, "arguments", &argc); }
+    if (argc != want) continue;
+    int selfn = nt_new_node(nt, "SelfNode");
+    if (selfn < 0) continue;
+    nt_node_set_ref(nt, id, "receiver", selfn);
+    comp_grow_node_arrays(c);
+    c->nscope[selfn] = c->nscope[id];
+    changed = 1;
+  }
+  return changed;
+}
+
 void rename_shadowing_block_params(Compiler *c) {
   const NodeTable *nt = c->nt;
   int n = nt->count;
@@ -11982,6 +12032,7 @@ void analyze_program(Compiler *c) {
     ch |= desugar_multi_yield_map_param(c);    /* multi-yield each: map's |x| takes the 1st */
     ch |= desugar_enum_method_recv(c);         /* obj.map{} -> obj.__enum_to_a.map{} */
     ch |= give_native_self_calls_a_receiver(c);  /* native class: implicit self -> self.m */
+    ch |= give_self_predicates_a_receiver(c);    /* is_a?(X) on implicit self -> self.is_a?(X) */
     ch |= desugar_for_enumerable(c);           /* for x in obj -> for x in obj.__enum_to_a */
     ch |= desugar_lazy_terminal(c);            /* lz.sum -> lz.to_a.sum */
     ch |= desugar_string_upto(c);              /* "a".upto("c") -> ("a".."c").each */
