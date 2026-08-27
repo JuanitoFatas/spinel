@@ -2759,11 +2759,19 @@ int infer_write_types(Compiler *c) {
       else lv->oa_pin = TY_UNKNOWN;
     }
 
-  /* detect change vs the stashed old types */
+  /* Detect change vs the stashed old types -- over EXACTLY the slots the reset
+     above stashed. It used to skip only params and block params, so a slot the
+     reset skips for the third reason, rbs_seeded, was compared against a
+     gc_root nothing ever wrote: 0, which reads as UNKNOWN, against whatever
+     type the slot really has. That answered "changed" every round for every
+     desugar-synthesized temp (`__ie_*` for instance_eval, `__cd_sav_*` for
+     Dir.chdir), and the fixpoint ran to its cap on any program with one
+     (#4116). */
   for (int s = 0; s < c->nscopes; s++)
     for (int i = 0; i < c->scopes[s].nlocals; i++) {
       LocalVar *lv = &c->scopes[s].locals[i];
-      if (!lv->is_param && !lv->is_block_param && (TyKind)lv->gc_root != lv->type) changed = 1;
+      if (lv->is_param || lv->is_block_param || lv->rbs_seeded) continue;
+      if ((TyKind)lv->gc_root != lv->type) changed = 1;
     }
   lw_index_free(&lw_ix);
   lw_index_free(&ivw_ix);
