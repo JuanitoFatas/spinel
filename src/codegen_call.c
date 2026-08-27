@@ -12293,6 +12293,17 @@ static int emit_implicit_self_member(Compiler *c, int id, Buf *b) {
   return 0;
 }
 
+/* Can this class-method arm take a call with `argc` positional arguments?
+   A candidate that cannot is not a possible receiver for THAT call site --
+   CRuby raises ArgumentError there -- so it must not veto the whole dispatch
+   (#4129). Optional parameters make this a range, not an equality: the old
+   `nrequired == argc` test also refused a candidate with a trailing default
+   called with the argument that fills it. */
+static int cls_arm_takes_argc(Scope *s, int argc) {
+  if (s->rest_idx >= 0) return 1;   /* a rest param takes any count */
+  return argc >= s->nrequired && argc <= s->nparams;
+}
+
 static void emit_call_body(Compiler *c, int id, Buf *b) {
   /* deep-return pickup (#3227 P6): a marked receiverless call to a method
      whose every return path yields a shared handle -- reset the side
@@ -19126,6 +19137,10 @@ else { memcpy(dir, sf, n); dir[n] = 0; } }
         if (is_builtin_reopen(c->classes[k].name)) continue;
         int kmi = comp_cmethod_in_chain(c, k, name, NULL);
         if (kmi < 0) continue;
+        /* Only the candidates this call could actually reach set the return
+           type. One that cannot take this many arguments is not a possible
+           receiver here, so its return type is not part of the answer. */
+        if (!cls_arm_takes_argc(&c->scopes[kmi], argc)) continue;
         ncand9++; defmi9 = kmi;
         TyKind kr = (TyKind)c->scopes[kmi].ret;
         if (!uret_set9) { uret9 = kr; uret_set9 = 1; }
@@ -19142,9 +19157,14 @@ else { memcpy(dir, sf, n); dir[n] = 0; } }
           if (is_builtin_reopen(c->classes[k].name)) continue;
           int kmi = comp_cmethod_in_chain(c, k, name, NULL);
           if (kmi < 0) continue;
+          /* A candidate that yields, takes a block, or has a rest param has no
+             arm this emitter can build at all, so it still vetoes the
+             dispatch. A candidate with the WRONG ARITY does not: it cannot be
+             the receiver of this call, and vetoing on it refused to compile a
+             program whose call was never ambiguous (#4129). */
           if (c->scopes[kmi].yields ||
               (c->scopes[kmi].blk_param && c->scopes[kmi].blk_param[0]) ||
-              c->scopes[kmi].nrequired != argc || c->scopes[kmi].rest_idx >= 0) simple9 = 0;
+              c->scopes[kmi].rest_idx >= 0) simple9 = 0;
         }
         if (simple9) {
           TyKind slot9 = is_scalar_ret(uret9) && uret9 != TY_VOID && uret9 != TY_UNKNOWN
@@ -19167,6 +19187,15 @@ else { memcpy(dir, sf, n); dir[n] = 0; } }
             int defcls9 = -1;
             int kmi = comp_cmethod_in_chain(c, k, name, &defcls9);
             if (kmi < 0) continue;
+            /* A class whose method cannot take this many arguments gets the
+               answer CRuby gives, rather than no arm (which would fall to the
+               default's NoMethodError, naming the wrong failure). */
+            if (!cls_arm_takes_argc(&c->scopes[kmi], argc)) {
+              buf_printf(b, " case %d: sp_raise_cls(\"ArgumentError\", "
+                            "sp_sprintf(\"wrong number of arguments (given %d, expected %d)\")); break;",
+                         k, argc, c->scopes[kmi].nrequired);
+              continue;
+            }
             TyKind kr = (TyKind)c->scopes[kmi].ret;
             buf_printf(b, " case %d: _t%d = ", k, tr9);
             Buf cb9; memset(&cb9, 0, sizeof cb9);

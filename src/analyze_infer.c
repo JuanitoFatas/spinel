@@ -2072,9 +2072,14 @@ TyKind infer_call(Compiler *c, int id) {
         if (is_builtin_reopen(c->classes[k].name)) continue;
         int kmi = comp_cmethod_in_chain(c, k, name, NULL);
         if (kmi < 0) continue;
-        if (c->scopes[kmi].nrequired != argc || c->scopes[kmi].rest_idx >= 0 ||
-            c->scopes[kmi].yields ||
+        /* A candidate that yields, takes a block, or has a rest param has no
+           arm the emitter can build, so it kills the whole dispatch. A
+           candidate with the WRONG ARITY does not: this call cannot reach it,
+           so it neither contributes a return type nor vetoes the others
+           (#4129). Codegen's cls_arm_takes_argc is the same rule. */
+        if (c->scopes[kmi].rest_idx >= 0 || c->scopes[kmi].yields ||
             (c->scopes[kmi].blk_param && c->scopes[kmi].blk_param[0])) { nc = 0; break; }
+        if (argc < c->scopes[kmi].nrequired || argc > c->scopes[kmi].nparams) continue;
         nc++;
         TyKind kr = (TyKind)c->scopes[kmi].ret;
         if (!set) { uret = kr; set = 1; }
