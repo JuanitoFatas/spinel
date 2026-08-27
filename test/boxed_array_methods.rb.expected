@@ -1,0 +1,26 @@
+[1, 2, 3]
+[2, 3, 1]
+nil
+[1, 3, 2]
+nil
+[2, 7, 7]
+[2, 7, 7]
+["apple", "fig", "pear"]
+["apple", "pear"]
+["pear"]
+["pear"]
+["pear"]
+["pear"]
+nil
+["pear"]
+[1.5, 2.5, 3.5]
+[1.5, 2.5, 3.5]
+[0.0, 0.0, 0.0]
+[0.0, 0.0, 0.0]
+[[1, 3], [2, 4]]
+[[1, 2], [3, 4]]
+[[1, 2], [3, 4]]
+[[:a, 1], [:b, 2]]
+[[:b, 2], [:a, 1]]
+undefined method 'sort!' for an instance of Hash
+undefined method 'transpose' for an instance of String

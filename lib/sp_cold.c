@@ -1047,6 +1047,26 @@ sp_StrArray *sp_dir_entries_impl(const char *path, int children) {
   return a;
 }
 
+/* The rows of a transpose are Arrays; a row that is not is CRuby's TypeError,
+   named by the class of what was there. This unit sees the tags alone, so the
+   naming is by tag. */
+static int sp_transpose_row_p(sp_RbVal rv) {
+  return rv.tag == SP_TAG_OBJ &&
+         (rv.cls_id == SP_BUILTIN_INT_ARRAY || rv.cls_id == SP_BUILTIN_FLT_ARRAY ||
+          rv.cls_id == SP_BUILTIN_STR_ARRAY || rv.cls_id == SP_BUILTIN_SYM_ARRAY ||
+          rv.cls_id == SP_BUILTIN_POLY_ARRAY);
+}
+static const char *sp_transpose_row_class(sp_RbVal rv) {
+  switch (rv.tag) {
+    case SP_TAG_NIL: return "nil";
+    case SP_TAG_BOOL: return rv.v.i ? "true" : "false";
+    case SP_TAG_INT: return "Integer";
+    case SP_TAG_FLT: return "Float";
+    case SP_TAG_STR: return "String";
+    case SP_TAG_SYM: return "Symbol";
+    default: return "Object";
+  }
+}
 sp_PolyArray *sp_poly_array_transpose(sp_PolyArray *rows) {
   SP_GC_SAVE();
   SP_GC_ROOT(rows);
@@ -1057,7 +1077,9 @@ sp_PolyArray *sp_poly_array_transpose(sp_PolyArray *rows) {
   int16_t kind = 0; /* 0=unknown, SP_BUILTIN_INT_ARRAY, SP_BUILTIN_FLT_ARRAY, SP_BUILTIN_STR_ARRAY */
   for (sp_int r = 0; r < nrows; r++) {
     sp_RbVal rv = rows->data[r];
-    if (rv.tag != SP_TAG_OBJ) continue;
+    /* a row that is no Array is CRuby's TypeError, not a row of nothing */
+    if (!sp_transpose_row_p(rv))
+      sp_raise_cls("TypeError", sp_sprintf("no implicit conversion of %s into Array", sp_transpose_row_class(rv)));
     sp_int rlen = 0;
     if (rv.cls_id == SP_BUILTIN_INT_ARRAY)  { rlen = ((sp_IntArray *)rv.v.p)->len; if(!kind) kind = SP_BUILTIN_INT_ARRAY; }
     else if (rv.cls_id == SP_BUILTIN_FLT_ARRAY) { rlen = ((sp_FloatArray *)rv.v.p)->len; if(!kind) kind = SP_BUILTIN_FLT_ARRAY; }

@@ -1177,38 +1177,6 @@ int emit_array_call(Compiler *c, int id, Buf *b) {
     buf_printf(b, " : (sp_StrArray *)(sp_raise_nomethod(sp_nomethod_msg(\"split\", _t%d)), (void *)0); })", tv);
     return 1;
   }
-  /* `poly.fill(v, ...)`: Array owns the name alone, but it MUTATES, so the
-     enumerator face (which hands out a copy) cannot serve it. Coerce to a poly
-     array the way map! does, re-enter the typed fill emitter against that, and
-     write the elements back into the receiver's own representation (#4149). */
-  if (recv >= 0 && rt == TY_POLY && sp_streq(name, "fill") && argc >= 1 &&
-      argc <= 3 && nt_ref(nt, id, "block") < 0 && g_n_argov < MAX_ARG_OVERRIDE) {
-    int torig = ++g_tmp, ta = ++g_tmp, tres = ++g_tmp;
-    Buf rb = expr_buf(c, recv);
-    emit_indent(g_pre, g_indent);
-    buf_printf(g_pre, "sp_RbVal _t%d = %s; SP_GC_ROOT_RBVAL(_t%d);\n",
-               torig, rb.p ? rb.p : "sp_box_nil()", torig);
-    free(rb.p);
-    emit_indent(g_pre, g_indent);
-    buf_printf(g_pre, "sp_PolyArray *_t%d = sp_poly_arr_recv(_t%d, \"fill\"); SP_GC_ROOT(_t%d);\n",
-               ta, torig, ta);
-    g_argov_node[g_n_argov] = recv;
-    snprintf(g_argov_text[g_n_argov], sizeof g_argov_text[0], "_t%d", ta);
-    g_n_argov++;
-    TyKind svf = c->ntype[recv]; c->ntype[recv] = TY_POLY_ARRAY;
-    Buf fb; memset(&fb, 0, sizeof fb);
-    emit_expr(c, id, &fb);
-    c->ntype[recv] = svf;
-    g_n_argov--;
-    emit_indent(g_pre, g_indent);
-    buf_printf(g_pre, "sp_PolyArray *_t%d = %s; SP_GC_ROOT(_t%d);\n",
-               tres, fb.p ? fb.p : "0", tres);
-    free(fb.p);
-    emit_indent(g_pre, g_indent);
-    buf_printf(g_pre, "sp_poly_arr_writeback(_t%d, _t%d);\n", torig, tres);
-    buf_printf(b, "_t%d", tres);
-    return 1;
-  }
   /* `poly.map! { |x| ... }` / `collect!` where poly is an array read out of a
      container: coerce to a poly array and rewrite each element in place with
      the block result, returning the (mutated) array (#3162). */
@@ -11280,10 +11248,17 @@ static TyKind emit_face_arm(Compiler *c, int id, unsigned kind, unsigned flags, 
       if (has_blk) buf_printf(g_pre, "sp_int _t%d = sp_poly_int_recv(%s, \"%s\");\n", t, rs, name);
       else buf_printf(g_pre, "sp_int _t%d = sp_poly_to_i(%s);\n", t, rs);
       break;
+    /* A mutator's coercion checks the original for frozenness first: the
+       typed emitter would otherwise work on the copy, running a block over
+       every element, and only the write-back would raise. */
+    case PF_ARRAY:
+      buf_printf(g_pre, "sp_PolyArray *_t%d = sp_poly_array_recv(%s, \"%s\", %d); SP_GC_ROOT(_t%d);\n",
+                 t, rs, name, (flags & PF_MUT) != 0, t);
+      break;
     case PF_ENUM:
-      /* a hash gives its [key, value] pairs, and a receiver that is no
-         collection answers an empty list, which is what the helper does */
-      buf_printf(g_pre, "sp_PolyArray *_t%d = sp_enum_items_from(%s); SP_GC_ROOT(_t%d);\n", t, rs, t);
+      /* a hash gives its [key, value] pairs; a receiver that is no collection
+         raises the NoMethodError the call raised before */
+      buf_printf(g_pre, "sp_PolyArray *_t%d = sp_poly_enum_recv(%s, \"%s\"); SP_GC_ROOT(_t%d);\n", t, rs, name, t);
       break;
   }
   free(rb.p);
@@ -11311,7 +11286,18 @@ static TyKind emit_face_arm(Compiler *c, int id, unsigned kind, unsigned flags, 
     free(cb.p);
     return slot;
   }
-  buf_puts(val, call);
+  /* A mutator worked on the poly copy a typed array was normalized to, and
+     the original has to take the result back once the value is taken. */
+  if ((flags & PF_MUT) && box && (kind == PF_ARRAY)) {
+    Buf wb; memset(&wb, 0, sizeof wb);
+    int tr = ++g_tmp;
+    int has_val = nat != TY_VOID && nat != TY_UNKNOWN;
+    buf_printf(&wb, "sp_poly_arr_writeback(_t%d, _t%d)", box, t);
+    if (!has_val) buf_printf(val, "({ (void)(%s); %s; })", call, wb.p);
+    else buf_printf(val, "({ %s _t%d = %s; %s; _t%d; })", c_type_name(nat), tr, call, wb.p, tr);
+    free(wb.p);
+  }
+  else buf_puts(val, call);
   free(cb.p);
   return nat;
 }
@@ -11364,17 +11350,25 @@ static int face_probe_arm(Compiler *c, int id, unsigned kind, unsigned flags, in
   return ok;
 }
 
-/* One owner: exactly the re-entry. Answers 0 when the typed emitter
-   declined the call, and the call goes on to the arms after this one. */
+/* One owner: exactly the re-entry, with the box kept only when a mutator
+   has to write back through it. Answers 0 when the typed emitter declined
+   the call, and the call goes on to the arms after this one. */
 static int emit_face_reentry(Compiler *c, int id, unsigned kind, unsigned flags, Buf *b) {
   const NodeTable *nt = c->nt;
   int recv = nt_ref(nt, id, "receiver");
   int box = 0;
   Buf pre = {0, 0, 0}, val = {0, 0, 0};
   TyKind nat = TY_UNKNOWN;
+  if ((flags & PF_MUT) && (kind == PF_ARRAY)) box = ++g_tmp;
   if (!face_probe_arm(c, id, kind, flags, box, &pre, &val, &nat)) {
     free(pre.p); free(val.p);
     return 0;
+  }
+  if (box) {
+    Buf rb; memset(&rb, 0, sizeof rb); emit_expr(c, recv, &rb);
+    emit_indent(g_pre, g_indent);
+    buf_printf(g_pre, "sp_RbVal _t%d = %s; SP_GC_ROOT_RBVAL(_t%d);\n", box, rb.p ? rb.p : "sp_box_nil()", box);
+    free(rb.p);
   }
   if (pre.p) buf_puts(g_pre, pre.p);
   emit_face_value(c, comp_ntype(c, id), nat, val.p ? val.p : "0", b);

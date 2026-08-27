@@ -35,6 +35,17 @@ static const PolyFace ty_poly_face_tbl[] = {
   {"group_by", PF_ENUM, 0, -1, 1}, {"partition", PF_ENUM, 0, -1, 1},
   {"each_with_object", PF_ENUM, 0, -1, 1}, {"chunk_while", PF_ENUM, 0, -1, 1},
   {"slice_when", PF_ENUM, 0, -1, 1},
+  /* The Array-only names, on an Array at run time; a mutator writes its
+     result back into a typed original. */
+  {"sort!", PF_ARRAY | PF_MUT, 0, 0, -1}, {"sort_by!", PF_ARRAY | PF_MUT, 0, 0, 1},
+  {"rotate!", PF_ARRAY | PF_MUT, 0, 1, 0}, {"uniq!", PF_ARRAY | PF_MUT, 0, 0, -1},
+  {"flatten!", PF_ARRAY | PF_MUT, 0, 1, 0}, {"fill", PF_ARRAY | PF_MUT, 1, 3, 0},
+  {"select!", PF_ARRAY | PF_MUT, 0, 0, 1}, {"filter!", PF_ARRAY | PF_MUT, 0, 0, 1},
+  {"reject!", PF_ARRAY | PF_MUT, 0, 0, 1}, {"keep_if", PF_ARRAY | PF_MUT, 0, 0, 1},
+  {"delete_if", PF_ARRAY | PF_MUT, 0, 0, 1},
+  {"to_ary", PF_ARRAY, 0, 0, 0}, {"transpose", PF_ARRAY, 0, 0, 0},
+  /* and the Enumerable names that had no arm at all */
+  {"grep", PF_ENUM, 1, 1, -1}, {"minmax_by", PF_ENUM, 0, 0, 1},
   /* The read-only Hash/Enumerable face. */
   {"dig", PF_HASH | PF_LAST, 0, -1, -1}, {"value?", PF_HASH | PF_LAST, 0, -1, -1}, {"has_value?", PF_HASH | PF_LAST, 0, -1, -1},
   {"invert", PF_HASH | PF_LAST, 0, -1, -1}, {"assoc", PF_HASH | PF_LAST, 0, -1, -1}, {"rassoc", PF_HASH | PF_LAST, 0, -1, -1}, {"key", PF_HASH | PF_LAST, 0, -1, -1},
