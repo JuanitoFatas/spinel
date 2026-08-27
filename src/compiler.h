@@ -153,6 +153,14 @@ typedef struct {
   int lowered_lifted_yield; /* lowered because a yield sits in a Thread/Fiber
                                body: the method's value is its own tail, not
                                the block's, unlike the self-recursive form */
+  int lowered_carries_block_value; /* the self-recursive lowering, for a method
+                               whose RETURN VALUE comes out of a `yield`
+                               (`return yield if ...`). Then the call site is
+                               typed from the block, and the function's own C
+                               type is the raw slot the proc side-channel hands
+                               back. A lowered method whose tail is its own
+                               expression carries THAT, and both the call site
+                               and the signature follow `ret` (#4145). */
   char *blk_param;  /* name of the `&block` parameter, or NULL (anon -> "") */
 
   /* Compile-time `define_method` unrolling: a method synthesized from

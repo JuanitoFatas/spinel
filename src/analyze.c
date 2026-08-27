@@ -574,6 +574,68 @@ static int a_scope_forwards_block_to_poly(Compiler *c, int mi) {
   return 0;
 }
 
+/* Does scope `mi` hand its block param on to a method that takes a REAL &block
+   -- one lowered out of yield-inlining because it recurses (or yields from
+   inside a lifted body)? Such a target cannot have the block spliced into it,
+   so the block has to be materialized as a proc, and a forwarder in front of
+   it cannot splice either. The forwarder is still marked `yields` (forwarding
+   is what earns that mark), which is exactly what made a_block_is_lifted call
+   the literal block unlifted and leave its captures without cells (#4145). */
+static int a_scope_forwards_block_to_lowered_1(Compiler *c, int mi) {
+  const NodeTable *nt = c->nt;
+  Scope *m = &c->scopes[mi];
+  if (!m->blk_param) return 0;
+  for (int nid = 0; nid < nt->count; nid++) {
+    if (c->nscope[nid] != mi) continue;
+    const char *ty = nt_type(nt, nid);
+    if (!ty || !sp_streq(ty, "CallNode")) continue;
+    int blk = nt_ref(nt, nid, "block");
+    const char *bty = blk >= 0 ? nt_type(nt, blk) : NULL;
+    if (!bty || !sp_streq(bty, "BlockArgumentNode")) continue;
+    const char *tn = nt_str(nt, nid, "name");
+    if (!tn || nt_ref(nt, nid, "receiver") >= 0) continue;
+    int tmi = comp_self_call_mi(c, nid, tn);
+    if (tmi >= 0 && tmi != mi && c->scopes[tmi].is_lowered_yield) return 1;
+  }
+  return 0;
+}
+
+static int a_scope_forwards_block_to_lowered(Compiler *c, int mi) {
+  const NodeTable *nt = c->nt;
+  Scope *m = &c->scopes[mi];
+  if (!m->blk_param) return 0;
+  for (int nid = 0; nid < nt->count; nid++) {
+    if (c->nscope[nid] != mi) continue;
+    const char *ty = nt_type(nt, nid);
+    if (!ty || !sp_streq(ty, "CallNode")) continue;
+    int blk = nt_ref(nt, nid, "block");
+    const char *bty = blk >= 0 ? nt_type(nt, blk) : NULL;
+    if (!bty || !sp_streq(bty, "BlockArgumentNode")) continue;
+    int fwd = nt_ref(nt, blk, "expression");
+    if (fwd >= 0) {   /* named `&blk`: only THIS method's block param counts */
+      const char *fty = nt_type(nt, fwd);
+      const char *fn = fty && sp_streq(fty, "LocalVariableReadNode") ? nt_str(nt, fwd, "name") : NULL;
+      if (!fn || !m->blk_param[0] || !sp_streq(fn, m->blk_param)) continue;
+    }
+    const char *tn = nt_str(nt, nid, "name");
+    if (!tn) continue;
+    int recv = nt_ref(nt, nid, "receiver");
+    int tmi = -1;
+    if (recv < 0) tmi = comp_self_call_mi(c, nid, tn);
+    else {
+      TyKind rt = infer_type(c, recv);
+      if (ty_is_object(rt)) tmi = comp_method_in_chain(c, ty_object_class(rt), tn, NULL);
+    }
+    if (tmi < 0 || tmi == mi) continue;
+    if (c->scopes[tmi].is_lowered_yield) return 1;
+    /* the target is itself a forwarder: follow one link, which is as deep as
+       the shape goes in practice and keeps this terminating */
+    if (c->scopes[tmi].blk_param && c->scopes[tmi].blk_param[0] &&
+        a_scope_forwards_block_to_lowered_1(c, tmi)) return 1;
+  }
+  return 0;
+}
+
 int a_block_is_lifted(Compiler *c, int id) {
   const NodeTable *nt = c->nt;
   const char *ty = nt_type(nt, id);
@@ -655,7 +717,13 @@ else {
   Scope *m = &c->scopes[mi];
   /* A lowered yielding method also receives its block as a real proc, so a
      block passed to it is lifted and captures enclosing locals like any other. */
-  if (!m->blk_param || !m->blk_param[0] || m->yields) return 0;
+  if (!m->blk_param || !m->blk_param[0]) return 0;
+  /* A yielding method has its block SPLICED into it, so nothing escapes and
+     the block needs no cells -- unless the block does not stop here. A
+     forwarder is marked `yields` too, and if what it forwards to is a lowered
+     yielder taking a real &block, the block is materialized as a proc after
+     all. Its captures need storage like any other proc's (#4145). */
+  if (m->yields && !a_scope_forwards_block_to_lowered(c, mi)) return 0;
   /* instance_eval/exec trampolines splice their block at the call site rather
      than lifting it to a proc, so they are not lifted-block captures. */
   if (m->class_id >= 0 && !m->is_cmethod && m->name &&
@@ -723,6 +791,47 @@ static int a_subtree_contains(const NodeTable *nt, int root, int id, int depth) 
   for (int i = 0; i < nd->na; i++)
     for (int j = 0; j < nd->a[i].n; j++)
       if (a_subtree_contains(nt, nd->a[i].ids[j], id, depth + 1)) return 1;
+  return 0;
+}
+
+/* Does this method's RETURN VALUE come out of a `yield`? For a lowered
+   recursive yielder that matters to the C type: the emitted tail reads the
+   block's answer out of the poly side-channel as a raw slot
+   (`_sp_proc_poly_ret.v.i`), so the function has to be typed to receive it.
+   A yield whose value is discarded -- a bare `yield` statement -- says nothing
+   about the return, and typing on it made `walk` answer Integer where it
+   answers nil, and a body ending in a String emit `return char *` from a
+   function typed sp_int (#4145). */
+static int a_subtree_has_yield(const NodeTable *nt, int id, int depth) {
+  if (id < 0 || id >= nt->count || depth > 200) return 0;
+  const char *ty = nt_type(nt, id);
+  if (ty && sp_streq(ty, "YieldNode")) return 1;
+  /* a nested block or lambda has its own yield target */
+  if (ty && (sp_streq(ty, "BlockNode") || sp_streq(ty, "LambdaNode"))) return 0;
+  const SpNode *nd = &nt->nodes[id];
+  for (int i = 0; i < nd->nr; i++)
+    if (a_subtree_has_yield(nt, nd->r[i].ref, depth + 1)) return 1;
+  for (int i = 0; i < nd->na; i++)
+    for (int j = 0; j < nd->a[i].n; j++)
+      if (a_subtree_has_yield(nt, nd->a[i].ids[j], depth + 1)) return 1;
+  return 0;
+}
+
+static int a_scope_returns_a_yield(Compiler *c, int mi) {
+  const NodeTable *nt = c->nt;
+  Scope *m = &c->scopes[mi];
+  /* an explicit `return yield ...` anywhere in the body */
+  for (int id = 0; id < nt->count; id++) {
+    if (c->nscope[id] != mi) continue;
+    const char *ty = nt_type(nt, id);
+    if (!ty || !sp_streq(ty, "ReturnNode")) continue;
+    if (a_subtree_has_yield(nt, nt_ref(nt, id, "arguments"), 0)) return 1;
+  }
+  /* the body's tail, which is the value a method without `return` answers */
+  if (m->body >= 0) {
+    int bn = 0; const int *bb = nt_arr(nt, m->body, "body", &bn);
+    if (bb && bn > 0 && a_subtree_has_yield(nt, bb[bn - 1], 0)) return 1;
+  }
   return 0;
 }
 
@@ -12823,7 +12932,24 @@ void analyze_program(Compiler *c) {
     m->is_lowered_yield = 1;
     m->lowered_lifted_yield = thread_yld;
     m->yields = 0;
-    if (!thread_yld) m->ret = TY_INT;
+    /* The return the fixpoint derived stands. This forced TY_INT, which was
+       right only by coincidence: the body's own tail already types the method,
+       and overwriting it made `walk` answer Integer where it answers nil, and
+       made a body ending in a String or an Array emit `return char *` from a
+       function typed sp_int -- no binary at all (#4145). A body that types to
+       nothing usable still needs a declarable slot, which is what the default
+       below is for. */
+    m->lowered_carries_block_value = !thread_yld && a_scope_returns_a_yield(c, mi);
+    /* The return the fixpoint derived stands, unless the method's value comes
+       out of a `yield`: then the emitted tail reads the block's answer from the
+       poly side-channel as a raw slot, and the function has to be typed to
+       receive it. This used to force TY_INT unconditionally, which was right
+       only by coincidence -- `walk` answered Integer where it answers nil, and
+       a body ending in a String or an Array emitted `return char *` from a
+       function typed sp_int, producing no binary at all (#4145). */
+    if (!thread_yld &&
+        (m->ret == TY_UNKNOWN || m->ret == TY_VOID || m->lowered_carries_block_value))
+      m->ret = TY_INT;
     if (!m->blk_param) m->blk_param = strdup("__yblk__");
     LocalVar *yblk = scope_local_intern(m, m->blk_param);
     if (yblk) {
