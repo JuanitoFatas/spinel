@@ -817,10 +817,12 @@ static int pm_seed_locals_poly(Compiler *c, Scope *ms, int pat) {
   if (sp_streq(pty, "LocalVariableTargetNode")) {
     const char *lnm = nt_str(nt, pat, "name");
     LocalVar *lv = lnm ? scope_local(ms, lnm) : NULL;
-    if (lv && !lv->is_param && !lv->is_block_param) {
-      TyKind mg = ty_unify(lv->type, TY_POLY);
-      if (mg != lv->type) { lv->type = mg; changed = 1; }
-    }
+    /* No `changed` here, for the reason on infer_write_types' reset: this runs
+       inside that pass, so the slot was cleared to UNKNOWN moments ago and
+       seeding it POLY looks like a change every round even when the answer is
+       last round's. The end-of-pass sweep reports it. (#4116) */
+    if (lv && !lv->is_param && !lv->is_block_param)
+      lv->type = ty_unify(lv->type, TY_POLY);
     return changed;
   }
   if (sp_streq(pty, "CapturePatternNode")) {
@@ -968,7 +970,7 @@ static int infer_case_pattern_locals(Compiler *c) {
           if (!lv || lv->is_param || lv->is_block_param) continue;
           TyKind et = (vt != TY_UNKNOWN && vt != TY_NIL) ? vt : TY_POLY;
           TyKind mg = ty_unify(lv->type, et);
-          if (mg != lv->type) { lv->type = mg; changed = 1; }
+          if (mg != lv->type) lv->type = mg;   /* reset slot: the sweep reports */
         }
       }
       else if (sp_streq(pty, "FindPatternNode")) {
@@ -987,7 +989,7 @@ static int infer_case_pattern_locals(Compiler *c) {
           LocalVar *lv = snm ? scope_local(ms, snm) : NULL;
           if (!lv || lv->is_param || lv->is_block_param) continue;
           TyKind mg = ty_unify(lv->type, arr_t);
-          if (mg != lv->type) { lv->type = mg; changed = 1; }
+          if (mg != lv->type) lv->type = mg;   /* reset slot: the sweep reports */
         }
         int rn = 0;
         const int *reqs = nt_arr(nt, pat, "requireds", &rn);
