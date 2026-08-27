@@ -2482,10 +2482,17 @@ else {
         const int *lb = live >= 0 ? nt_arr(nt, live, "body", &ln) : NULL;
         if (ln == 0) { buf_puts(b, "sp_box_nil()"); return; }
         if (ln == 1) { emit_expr(c, lb[0], b); return; }
-        buf_puts(b, "({ ");
-        for (int j = 0; j < ln - 1; j++) emit_stmt(c, lb[j], b, 0);
+        /* The leading statements go into the PRELUDE, not inside a statement
+           expression around the value. The last element is emitted with
+           emit_expr, and an arm that is itself a conditional hoists its own
+           branches into the prelude -- which is emitted before this whole
+           expression. Holding the leading statements here instead put them
+           AFTER the code that reads what they assign: `range = H[expected]`
+           landed below the `if range.nil?` testing it, so the nil arm always
+           won and a branch reached its tail without running its own first
+           line (#4139). The prelude keeps them in source order. */
+        for (int j = 0; j < ln - 1; j++) emit_stmt(c, lb[j], g_pre, g_indent);
         emit_expr(c, lb[ln - 1], b);
-        buf_puts(b, "; })");
         return;
       }
     }
