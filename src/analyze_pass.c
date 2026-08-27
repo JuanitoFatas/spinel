@@ -2759,6 +2759,21 @@ int infer_write_types(Compiler *c) {
       else lv->oa_pin = TY_UNKNOWN;
     }
 
+  /* The shared-mutable / append-accumulator promotion is durable -- the mark
+     is, and analyze re-asserts the slot type from it after the fixpoint. Do it
+     HERE too, before the comparison below: the reset at the top of this pass
+     wipes the promotion, the writes re-derive TY_STRING, and
+     promote_shared_stored_strings puts TY_STRBUF back later in the same round.
+     Neither yielded, so the fixpoint ran to its cap on every program with a
+     shared-mutable string (#3227, #4116). Same treatment oa_pin gets just
+     above, and for the same reason. */
+  for (int s = 0; s < c->nscopes; s++)
+    for (int i = 0; i < c->scopes[s].nlocals; i++) {
+      LocalVar *lv = &c->scopes[s].locals[i];
+      if ((lv->str_shared || lv->str_append) &&
+          (lv->type == TY_STRING || lv->type == TY_STR_ARRAY)) lv->type = TY_STRBUF;
+    }
+
   /* Detect change vs the stashed old types -- over EXACTLY the slots the reset
      above stashed. It used to skip only params and block params, so a slot the
      reset skips for the third reason, rbs_seeded, was compared against a
