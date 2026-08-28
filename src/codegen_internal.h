@@ -429,6 +429,10 @@ void emit_unbox_text(Compiler *c, TyKind t, const char *expr, Buf *b);
 /* emit_unbox_text, but a nil-tagged poly lands on the slot's own nil (an int?
    or float? sentinel) instead of the zero payload under the tag (#3412). */
 void emit_unbox_nilable_text(Compiler *c, TyKind t, const char *expr, Buf *b);
+/* `recv.attr ||= v` / `&&=` where the reader or the writer is a real `def`:
+   emits the reader/writer pair as an expression, or answers 0 to leave the
+   caller's direct-ivar shapes alone. See codegen_expr.c. */
+int emit_call_or_write_via_methods(Compiler *c, int id, int is_or, Buf *b);
 /* Wrap a boxed expression in the --rbs seed assertion (a no-op macro without
    -DSP_RBS_CHECK) before it narrows into a seeded slot. */
 void emit_rbs_checked_text(Compiler *c, TyKind slot, const char *slotname,

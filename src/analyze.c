@@ -203,6 +203,25 @@ void compute_reachable(Compiler *c) {
     }
   }
 
+  /* `obj.attr ||= v` calls the reader and, conditionally, the writer -- and it
+     is a CallOrWriteNode, not a CallNode, so the walk above never saw either
+     name. It did not matter while the emitter reached past both to the ivar;
+     it does now that a hand-written pair is called (#4148). */
+  {
+    int any_cw = 0;
+    for (int id = 0; id < c->nt->count; id++) {
+      const char *ty = nt_type(c->nt, id);
+      if (!ty || (!sp_streq(ty, "CallOrWriteNode") && !sp_streq(ty, "CallAndWriteNode"))) continue;
+      const char *nm = nt_str(c->nt, id, "name");
+      if (!nm) continue;
+      char wnm[300]; snprintf(wnm, sizeof wnm, "%s=", nm);
+      MARK_NAME(nm); MARK_NAME(wnm);
+      any_cw = 1;
+    }
+    if (any_cw)
+      while (qhead < qtail) { int s = queue[qhead++]; for (int ni = 0; ni < sc_n[s]; ni++) MARK_NAME(scope_calls[s][ni]); }
+  }
+
   /* A `case obj when other` arm calls the pattern's #=== (or #==, which Ruby's
      default #=== is), and that call has no CallNode of its own -- the arm is a
      WhenNode. Mark them reachable when any case has a when arm (#3820). */

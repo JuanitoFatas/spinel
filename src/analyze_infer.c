@@ -6331,6 +6331,22 @@ TyKind infer_uncached(Compiler *c, int id) {
     TyKind rt2 = recv >= 0 ? infer_type(c, recv) : TY_UNKNOWN;
     if (attr && ty_is_object(rt2)) {
       int cid2 = ty_object_class(rt2);
+      /* An explicit `def` reader or writer is a method call, not an ivar
+         touch: the value is the reader's answer or the assigned value, and
+         neither need be the backing ivar's type (`def v=(x); @v = x * 10; end`
+         stores an Integer while the expression answers what was assigned).
+         Unify the two arms, the way the emitter does (#4148). */
+      int rmi2 = -1, wmi2 = -1;
+      int rk2 = comp_resolve_member(c, cid2, attr, 0, NULL, &rmi2);
+      int wk2 = comp_resolve_member(c, cid2, attr, 1, NULL, &wmi2);
+      if (rk2 == SP_MEMBER_METHOD || wk2 == SP_MEMBER_METHOD) {
+        int v3 = nt_ref(nt, id, "value");
+        TyKind at = v3 >= 0 ? infer_type(c, v3) : TY_UNKNOWN;
+        TyKind rr = (rk2 == SP_MEMBER_METHOD && rmi2 >= 0) ? (TyKind)c->scopes[rmi2].ret : TY_UNKNOWN;
+        if (rr == TY_UNKNOWN || rr == TY_VOID) return at;
+        if (at == TY_UNKNOWN) return rr;
+        return ty_unify(rr, at);
+      }
       char ivn2[300]; snprintf(ivn2, sizeof ivn2, "@%s", attr);
       int ii2 = comp_ivar_index(&c->classes[cid2], ivn2);
       if (ii2 >= 0) return ivar_value_ty(&c->classes[cid2], ii2);

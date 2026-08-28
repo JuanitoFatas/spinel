@@ -723,6 +723,111 @@ static void warn_undefined_constant(Compiler *c, int id, const char *nm) {
                     "defined nowhere in the program (raises NameError when reached)\n", nm);
 }
 
+/* `recv.attr ||= v` / `&&=` where the reader or the writer is a real `def`.
+   The direct-ivar shapes below are a fast path for a generated accessor pair,
+   where the ivar IS the attribute; a hand-written reader or writer has to be
+   called, and skipping it wrote the ivar and never ran the writer -- silently
+   when the ivar happened to share the method's name, and as a C build error
+   naming a struct member that does not exist when it did not (#4148).
+
+   CRuby's shape, measured: the receiver is evaluated once, the reader is
+   called once, and on the assigning branch the value is the ASSIGNED value --
+   not the writer's return and not a re-read (`def v=(x); @v = x * 10; end`
+   leaves 70 in the ivar and answers 7). The right-hand side is not evaluated
+   at all when the reader's answer decides it.
+
+   Answers 1 when it emitted; 0 leaves the caller's existing shapes alone. */
+int emit_call_or_write_via_methods(Compiler *c, int id, int is_or, Buf *b) {
+  const NodeTable *nt = c->nt;
+  int recv = nt_ref(nt, id, "receiver");
+  const char *attr = nt_str(nt, id, "name");
+  int v = nt_ref(nt, id, "value");
+  if (recv < 0 || !attr || v < 0) return 0;
+  TyKind rt = comp_ntype(c, recv);
+  if (!ty_is_object(rt)) return 0;
+  int cid = ty_object_class(rt);
+  int rmi = -1, wmi = -1;
+  int rk = comp_resolve_member(c, cid, attr, 0, NULL, &rmi);
+  int wk = comp_resolve_member(c, cid, attr, 1, NULL, &wmi);
+  if (rk != SP_MEMBER_METHOD && wk != SP_MEMBER_METHOD) return 0;
+  /* Both halves have to exist for the pair to run; a missing one is
+     NoMethodError in CRuby, which the ordinary call path reports. */
+  if (rk == SP_MEMBER_NONE || wk == SP_MEMBER_NONE) return 0;
+  if ((rk == SP_MEMBER_METHOD && rmi < 0) || (wk == SP_MEMBER_METHOD && wmi < 0)) return 0;
+
+  TyKind want = comp_ntype(c, id);
+  if (want == TY_UNKNOWN || want == TY_VOID) want = TY_POLY;
+  TyKind rdt = (rk == SP_MEMBER_METHOD) ? (TyKind)c->scopes[rmi].ret : TY_UNKNOWN;
+  if (rdt == TY_UNKNOWN || rdt == TY_VOID) rdt = want;
+  TyKind vt = comp_ntype(c, v);
+  if (vt == TY_UNKNOWN || vt == TY_VOID) vt = want;
+
+  int tr = ++g_tmp, tv = ++g_tmp, tw = ++g_tmp;
+  buf_puts(b, "({ ");
+  emit_ctype(c, rt, b); buf_printf(b, " _t%d = ", tr); emit_expr(c, recv, b); buf_puts(b, "; ");
+  if (!comp_ty_value_obj(c, rt)) buf_printf(b, "SP_GC_ROOT(_t%d); ", tr);
+  /* the reader, once */
+  emit_ctype(c, rdt, b); buf_printf(b, " _t%d = ", tv);
+  if (rk == SP_MEMBER_METHOD) {
+    Buf rb; memset(&rb, 0, sizeof rb);
+    emit_method_cname(c, &c->scopes[rmi], &rb);
+    buf_printf(&rb, "((sp_%s *)_t%d)", c->classes[cid].c_name, tr);
+    TyKind got = (TyKind)c->scopes[rmi].ret;
+    if (got == TY_UNKNOWN || got == TY_VOID) got = rdt;
+    if (got == rdt) buf_puts(b, rb.p ? rb.p : "");
+    else if (rdt == TY_POLY) emit_boxed_text(c, got, rb.p ? rb.p : "", b);
+    else emit_unbox_text(c, rdt, rb.p ? rb.p : "", b);
+    free(rb.p);
+  }
+  else { buf_printf(b, "((sp_%s *)_t%d)->iv_%s", c->classes[cid].c_name, tr, iv_c(attr)); }
+  buf_puts(b, "; ");
+  if (rdt == TY_POLY) buf_printf(b, "SP_GC_ROOT_RBVAL(_t%d); ", tv);
+  else if (!is_scalar_ret(rdt) && !comp_ty_value_obj(c, rdt)) buf_printf(b, "SP_GC_ROOT(_t%d); ", tv);
+  /* the test, then either the reader's answer or the assignment's value.
+     `||=` assigns when the reader is falsy, `&&=` when it is truthy. */
+  buf_puts(b, "(");
+  emit_slot_nil_test(c, rdt, tv, is_or ? 0 : 1, b);
+  buf_puts(b, ") ? ");
+  { char sv[32]; snprintf(sv, sizeof sv, "_t%d", tv);
+    if (rdt == want) buf_puts(b, sv);
+    else if (want == TY_POLY) emit_boxed_text(c, rdt, sv, b);
+    /* nil-preserving: the reader can answer nil, and this arm is exactly the
+       one taken when it did (`&&=` on a nil attribute). Plain unboxing lands
+       on the payload under the tag -- 0 for an int slot, where nil is
+       SP_INT_NIL -- so `b.v &&= 7` answered 0 where CRuby answers nil. */
+    else emit_unbox_nilable_text(c, want, sv, b);
+  }
+  buf_puts(b, " : ({ ");
+  emit_ctype(c, vt, b); buf_printf(b, " _t%d = ", tw); emit_expr(c, v, b); buf_puts(b, "; ");
+  if (vt == TY_POLY) buf_printf(b, "SP_GC_ROOT_RBVAL(_t%d); ", tw);
+  else if (!is_scalar_ret(vt) && !comp_ty_value_obj(c, vt)) buf_printf(b, "SP_GC_ROOT(_t%d); ", tw);
+  buf_puts(b, "(void)(");
+  if (wk == SP_MEMBER_METHOD) {
+    emit_method_cname(c, &c->scopes[wmi], b);
+    buf_printf(b, "((sp_%s *)_t%d, ", c->classes[cid].c_name, tr);
+    { Scope *ws = &c->scopes[wmi];
+      LocalVar *pv = (ws->nparams > 0 && ws->pnames[0]) ? scope_local(ws, ws->pnames[0]) : NULL;
+      TyKind pt = pv ? pv->type : vt;
+      char sw[32]; snprintf(sw, sizeof sw, "_t%d", tw);
+      if (pt == vt || pt == TY_UNKNOWN) buf_puts(b, sw);
+      else if (pt == TY_POLY) emit_boxed_text(c, vt, sw, b);
+      else emit_unbox_text(c, pt, sw, b);
+    }
+    buf_puts(b, ")");
+  }
+  else {
+    buf_printf(b, "((sp_%s *)_t%d)->iv_%s = _t%d", c->classes[cid].c_name, tr, iv_c(attr), tw);
+  }
+  buf_puts(b, "); ");
+  { char sw[32]; snprintf(sw, sizeof sw, "_t%d", tw);
+    if (vt == want) buf_puts(b, sw);
+    else if (want == TY_POLY) emit_boxed_text(c, vt, sw, b);
+    else emit_unbox_text(c, want, sw, b);
+  }
+  buf_puts(b, "; }); })");
+  return 1;
+}
+
 void emit_expr(Compiler *c, int id, Buf *b) {
   const NodeTable *nt = c->nt;
   const char *ty = nt_type(nt, id);
@@ -3057,6 +3162,7 @@ else {
     int recv = nt_ref(nt, id, "receiver");
     const char *attr = nt_str(nt, id, "name");
     int v = nt_ref(nt, id, "value");
+    if (emit_call_or_write_via_methods(c, id, is_or, b)) return;
     TyKind rt = recv >= 0 ? comp_ntype(c, recv) : TY_UNKNOWN;
     if (recv >= 0 && attr && ty_is_object(rt)) {
       int class_id = ty_object_class(rt);

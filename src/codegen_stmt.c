@@ -6761,6 +6761,19 @@ else {
     const char *attr = nt_str(nt, id, "name");  /* attr/reader name */
     int v = nt_ref(nt, id, "value");
     if (recv < 0 || !attr) { unsupported(c, id, is_or ? "call-or-write" : "call-and-write"); return; }
+    /* A hand-written reader or writer is a method call, so the ivar shapes
+       below do not apply -- the value is discarded here, but the calls are the
+       point (#4148). */
+    {
+      Buf cw; memset(&cw, 0, sizeof cw);
+      if (emit_call_or_write_via_methods(c, id, is_or, &cw)) {
+        emit_indent(b, indent);
+        buf_puts(b, "(void)("); buf_puts(b, cw.p ? cw.p : ""); buf_puts(b, ");\n");
+        free(cw.p);
+        return;
+      }
+      free(cw.p);
+    }
     TyKind rt = comp_ntype(c, recv);
     if (!ty_is_object(rt)) { unsupported(c, id, is_or ? "call-or-write (non-object)" : "call-and-write (non-object)"); return; }
     int class_id = ty_object_class(rt);
