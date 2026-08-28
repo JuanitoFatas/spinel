@@ -178,6 +178,35 @@ static inline int    ty_object_class(TyKind t){ return (int)t - TY_OBJECT_BASE; 
 static inline int    ty_is_obj_array(TyKind t)   { return (int)t >= TY_OBJ_ARRAY_BASE; }
 static inline TyKind ty_obj_array(int class_id)  { return (TyKind)(TY_OBJ_ARRAY_BASE + class_id); }
 static inline int    ty_obj_array_class(TyKind t){ return (int)t - TY_OBJ_ARRAY_BASE; }
+/* Names a boxed HANDLE answers by being unboxed back to its own type. Each
+   one belongs to exactly one builtin handle class and to no other class in
+   the language, so the name alone identifies the receiver: a value of any
+   other kind was going to raise NoMethodError anyway, and the emitted arm
+   checks the runtime cls_id before it dereferences.
+
+   This is the exclusive-name mechanism, and exclusivity is the whole safety
+   argument -- a SHARED name (Dir#path is also IO#path, Dir#read is also
+   IO#read) must never come here, or a poly IO receiver gets a sp_Dir body
+   compiled against it. That family needs a runtime tag arm instead.
+
+   Answers TY_UNKNOWN for a name that is not one of these. */
+static inline TyKind ty_poly_handle_face(const char *nm) {
+  if (!nm) return TY_UNKNOWN;
+  {
+    static const char *const ADDRINFO[] = {
+      "ip_address", "unix_path", "afamily", "pfamily", "afamily_name",
+      "ip_port", "socktype", "protocol", "ipv4?", "ipv6?", "unix?", "ip?",
+      "to_sockaddr", 0 };
+    for (int i = 0; ADDRINFO[i]; i++) if (sp_streq(nm, ADDRINFO[i])) return TY_ADDRINFO;
+  }
+  {
+    static const char *const SOCKOPT[] = {
+      "int", "bool", "level", "optname", "family", 0 };
+    for (int i = 0; SOCKOPT[i]; i++) if (sp_streq(nm, SOCKOPT[i])) return TY_SOCKOPT;
+  }
+  return TY_UNKNOWN;
+}
+
 /* Both TY_OBJ_ARRAY and TY_INT_ARRAY_ARRAY are backed by sp_PtrArray (unboxed
    void* elements): code that only cares about the container representation (new,
    push, length, box, GC-root) uses this; the element cast on index differs. */

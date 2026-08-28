@@ -3,6 +3,10 @@
 /* The call whose poly-hash face is being re-emitted, so the arm that installs
    the face does not fire again on its own substituted receiver. */
 static int g_pp_hash_node = -1;
+/* Recursion guard for the boxed-handle face re-entry, the same shape as
+   g_pp_hash_node: the re-emission asks the inference again, and a type cache
+   is not a recursion guard. */
+static int g_handle_face_node = -1;
 
 const int *call_args(const NodeTable *nt, int id, int *argc) {
   *argc = 0;
@@ -11718,6 +11722,41 @@ int emit_unresolved_call(Compiler *c, int id, Buf *b) {
        `v&.entries` on a nilable hash emitted sp_poly_as_pp_hash 63 times, each
        applied to the last. Guard on the node id, like the safe-navigation
        re-entry does. */
+    /* A boxed HANDLE answering one of its own exclusive names: unbox it back
+       to its own type and re-dispatch, so the handle's typed emitter compiles
+       against the real pointer. sp_poly_as_handle checks the runtime cls_id
+       first, so a value of any other kind raises the NoMethodError the gate
+       below would have raised. Guarded on the node id like the hash face: the
+       re-entry asks the inference again, and a type cache is not a recursion
+       guard (#4158 follow-up). */
+    if (grt == TY_POLY && g_handle_face_node != id &&
+        ty_poly_handle_face(nt_str(nt, id, "name")) != TY_UNKNOWN &&
+        !user_defines_or_reads(c, nt_str(nt, id, "name")) &&
+        g_n_argov < MAX_ARG_OVERRIDE) {
+      const char *knm = nt_str(nt, id, "name");
+      TyKind kt = ty_poly_handle_face(knm);
+      int tkv = ++g_tmp;
+      Buf krb; memset(&krb, 0, sizeof krb); emit_boxed(c, recv, &krb);
+      emit_indent(g_pre, g_indent);
+      emit_ctype(c, kt, g_pre);
+      buf_printf(g_pre, " _t%d = (", tkv);
+      emit_ctype(c, kt, g_pre);
+      buf_printf(g_pre, ")sp_poly_as_handle(%s, %s, \"%s\");\n",
+                 krb.p ? krb.p : "sp_box_nil()", ty_nullable_builtin_id(kt), knm);
+      free(krb.p);
+      g_argov_node[g_n_argov] = recv;
+      snprintf(g_argov_text[g_n_argov], sizeof g_argov_text[0], "_t%d", tkv);
+      g_n_argov++;
+      TyKind svk = c->ntype[recv]; c->ntype[recv] = kt;
+      int svkf = an_handle_face_node(); an_set_handle_face(recv, kt);
+      int svkn = g_handle_face_node; g_handle_face_node = id;
+      emit_call(c, id, b);
+      g_handle_face_node = svkn;
+      an_set_handle_face(svkf, svkf >= 0 ? kt : TY_UNKNOWN);
+      c->ntype[recv] = svk;
+      g_n_argov--;
+      return 1;
+    }
     if (grt == TY_POLY && g_pp_hash_node != id &&
         ty_poly_hash_face_name(nt_str(nt, id, "name")) &&
         g_n_argov < MAX_ARG_OVERRIDE) {

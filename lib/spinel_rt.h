@@ -8839,6 +8839,15 @@ static sp_PolyPolyHash *sp_poly_as_pp_hash(sp_RbVal v, const char *nm) {
   }
   return sp_poly_hash_merge(v, sp_box_nil());
 }
+/* A boxed HANDLE back as its own pointer, for the exclusive-name face: the
+   call site compiles the handle's own body against the result, so the runtime
+   kind has to be checked first. A value of any other kind raises the
+   NoMethodError the call site would otherwise have raised (#4158). */
+static void *sp_poly_as_handle(sp_RbVal v, int cls_id, const char *nm) {
+  if (v.tag == SP_TAG_OBJ && v.cls_id == cls_id && v.v.p) return v.v.p;
+  sp_raise_nomethod(sp_nomethod_msg(nm, v));
+  return NULL;
+}
 /* OpenStruct.new(hash) where hash is a runtime value (not a literal): seed the
    member table from the hash's entries, keys coerced to symbols. Copies, so
    mutating the OpenStruct does not alter the source hash (#3194). */

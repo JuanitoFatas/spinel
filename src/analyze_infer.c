@@ -36,6 +36,13 @@ int an_hash_face_node(void) { return g_hash_face_node; }
 static int g_poly_arr_face_node = -1;
 void an_set_poly_arr_face_node(int node) { g_poly_arr_face_node = node; }
 int an_poly_arr_face_node(void) { return g_poly_arr_face_node; }
+/* And for a boxed HANDLE (Addrinfo, Socket::Option): codegen unboxes the
+   receiver back to its own type and re-dispatches, so the pin carries the
+   TYPE too -- unlike the two above, which each name one fixed kind. */
+static int g_handle_face_node = -1;
+static TyKind g_handle_face_ty = TY_UNKNOWN;
+void an_set_handle_face(int node, TyKind t) { g_handle_face_node = node; g_handle_face_ty = t; }
+int an_handle_face_node(void) { return g_handle_face_node; }
 #define SP_NMEMO_SZ 16384
 static unsigned g_narrow_gen = 1;
 static struct { unsigned gen; long key; signed char val; } g_nmemo[SP_NMEMO_SZ];
@@ -5640,6 +5647,18 @@ else {
      normalizes the receiver to exactly that before re-dispatching, so both
      sides agree on the result slot; a receiver that is not a hash at runtime
      raises NoMethodError there, as it did before (#3449). */
+  /* A boxed HANDLE answering one of its own exclusive names: type the call as
+     if the receiver were that handle. Codegen unboxes it back to exactly that
+     before re-dispatching, and checks the runtime cls_id first, so a value of
+     any other kind still raises NoMethodError (#4158 follow-up). */
+  if (recv >= 0 && rt == TY_POLY && g_handle_face_node < 0 &&
+      ty_poly_handle_face(name) != TY_UNKNOWN &&
+      !an_user_defines_or_reads(c, name)) {
+    an_set_handle_face(recv, ty_poly_handle_face(name));
+    TyKind kt = infer_call(c, id);
+    an_set_handle_face(-1, TY_UNKNOWN);
+    if (kt != TY_UNKNOWN) return kt;
+  }
   if (recv >= 0 && rt == TY_POLY && g_hash_face_node < 0 &&
       ty_poly_hash_face_name(name) && !an_user_defines_or_reads(c, name)) {
     /* Inside the pretence `each_entry` IS `each_pair`: Hash#each_entry yields
@@ -6583,6 +6602,7 @@ TyKind infer_type(Compiler *c, int id) {
      untouched so the receiver's own type is unaffected. */
   if (id == g_hash_face_node) return TY_POLY_POLY_HASH;
   if (id == g_poly_arr_face_node) return TY_POLY_ARRAY;
+  if (id == g_handle_face_node) return g_handle_face_ty;
   TyKind t = infer_uncached(c, id);
   /* The builtin-only re-derivation (see an_builtin_only) asks what this call
      would be if no user class owned the name. That answer is not the node's

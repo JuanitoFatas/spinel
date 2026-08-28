@@ -90,6 +90,8 @@ extern int g_ret_no_new_poly;
 TyKind infer_uncached(Compiler *c, int id);
 /* Pin/read the node the inference should answer as the general boxed hash
    (see an_set_hash_face_node). -1 clears the pin. */
+void an_set_handle_face(int node, TyKind t);
+int  an_handle_face_node(void);
 void an_set_hash_face_node(int node);
 int  an_hash_face_node(void);
 void an_set_poly_arr_face_node(int node);
