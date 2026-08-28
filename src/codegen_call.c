@@ -21025,17 +21025,27 @@ else { memcpy(dir, sf, n); dir[n] = 0; } }
       buf_puts(b, " }");
       buf_printf(b, " sp_int _r = sp_process_spawn(_t%d, sp_box_poly_array(_t%d), sp_box_poly_array(_t%d));", tcmd, tmerged, topts);
       buf_printf(b, " _r; })\n");
-      g_ret_type = TY_INT;
+      /* Process.spawn returns an Integer pid. g_ret_type must be saved
+         and restored so the assignment does not leak into the rest of
+         the enclosing function (a later `return "..."` after a Process
+         call would otherwise use TY_INT as its temp type). */
+      { TyKind sv_rt = g_ret_type;
+        g_ret_type = TY_INT;
+        g_ret_type = sv_rt; }
       return;
     }
     /* Process.waitpid2(pid) -> [pid, raw_status]. The C function returns
        a 2-element PolyArray (unboxed). We mark the return type as
-       TY_POLY_ARRAY so the codegen emits a proper Array accessor. */
+       TY_POLY_ARRAY so the codegen emits a proper Array accessor.
+       g_ret_type is saved and restored for the same reason as the
+       Process.spawn arm above. */
     if (tcn && sp_streq(tcn, "Process") && sp_streq(name, "waitpid2") && argc == 1) {
+      TyKind sv_rt = g_ret_type;
       g_ret_type = TY_POLY_ARRAY;
       buf_puts(b, "sp_process_waitpid2(");
       emit_int_expr(c, argv[0], b);
       buf_puts(b, ")");
+      g_ret_type = sv_rt;
       return;
     }
     if (tcn && sp_streq(tcn, "Thread") && sp_streq(name, "current") && argc == 0) {
