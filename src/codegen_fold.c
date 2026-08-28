@@ -1823,7 +1823,8 @@ int emit_gsub_block_expr(Compiler *c, int id, Buf *b) {
   if (!name || (!sp_streq(name, "gsub") && !sp_streq(name, "sub"))) return 0;
   int once = sp_streq(name, "sub");
   int recv = nt_ref(nt, id, "receiver");
-  if (recv < 0 || comp_ntype(c, recv) != TY_STRING) return 0;
+  TyKind recv_ty = recv >= 0 ? comp_ntype(c, recv) : TY_UNKNOWN;
+  if (recv < 0 || (recv_ty != TY_STRING && recv_ty != TY_POLY)) return 0;
   int args = nt_ref(nt, id, "arguments");
   int argc = 0; const int *argv = args >= 0 ? nt_arr(nt, args, "arguments", &argc) : NULL;
   if (argc != 1) return 0;
@@ -1841,7 +1842,13 @@ int emit_gsub_block_expr(Compiler *c, int id, Buf *b) {
   if (bn < 1) return 0;
   int ts = ++g_tmp, tpos = ++g_tmp, tslen = ++g_tmp, tout = ++g_tmp,
       tm = ++g_tmp, tms = ++g_tmp, tme = ++g_tmp;
-  Buf rb; memset(&rb, 0, sizeof rb); emit_expr(c, recv, &rb);
+  /* poly values reaching here are strings, like the blockless poly gsub/sub
+     arm in codegen_call_recv.c -- unbox through sp_poly_to_s to get the same
+     `const char *` the typed String receiver emits directly. */
+  Buf rb; memset(&rb, 0, sizeof rb);
+  if (recv_ty == TY_POLY) buf_puts(&rb, "sp_poly_to_s(");
+  emit_expr(c, recv, &rb);
+  if (recv_ty == TY_POLY) buf_puts(&rb, ")");
   emit_indent(g_pre, g_indent); buf_printf(g_pre, "const char *_t%d = ", ts); buf_puts(g_pre, rb.p ? rb.p : ""); buf_puts(g_pre, ";\n"); free(rb.p);
   emit_indent(g_pre, g_indent); buf_printf(g_pre, "sp_int _t%d = 0;\n", tpos);
   emit_indent(g_pre, g_indent); buf_printf(g_pre, "sp_int _t%d = (sp_int)strlen(_t%d);\n", tslen, ts);
