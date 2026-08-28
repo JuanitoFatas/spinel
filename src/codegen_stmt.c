@@ -4768,7 +4768,22 @@ void emit_for(Compiler *c, int id, Buf *b, int indent) {
     buf_printf(b, "for (sp_int _t%d = 0; _t%d < sp_%sArray_length(_t%d); _t%d++) {\n",
                ti, ti, k ? k : "Poly", ta, ti);
     emit_indent(b, indent + 2);
-    buf_printf(b, "lv_%s = sp_%sArray_get(_t%d, _t%d);\n", vn, k ? k : "Poly", ta, ti);
+    /* The loop variable is an ordinary local, and another `for` over a
+       different element type may share its slot -- then the slot is poly and
+       a typed array's element has to be boxed into it (#4168). */
+    { Scope *fsc = comp_scope_of(c, idx);
+      LocalVar *flv = (fsc && vn) ? scope_local(fsc, rename_local(vn)) : NULL;
+      TyKind et2 = ty_array_elem(ct);
+      if (flv && flv->type == TY_POLY && et2 != TY_POLY && et2 != TY_UNKNOWN) {
+        char el2[96];
+        snprintf(el2, sizeof el2, "sp_%sArray_get(_t%d, _t%d)", k ? k : "Poly", ta, ti);
+        buf_printf(b, "lv_%s = ", vn);
+        emit_boxed_text(c, et2, el2, b);
+        buf_puts(b, ";\n");
+      }
+      else
+        buf_printf(b, "lv_%s = sp_%sArray_get(_t%d, _t%d);\n", vn, k ? k : "Poly", ta, ti);
+    }
     emit_loop_body(c, body, b, indent + 2);
     emit_indent(b, indent + 1); buf_puts(b, "}\n");
     emit_indent(b, indent); buf_puts(b, "}\n");

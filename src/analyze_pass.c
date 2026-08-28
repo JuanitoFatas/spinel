@@ -4009,10 +4009,26 @@ int infer_for_index(Compiler *c) {
     }
     const char *vn = nt_str(nt, idx, "name");
     if (!vn) continue;
-    TyKind ct = infer_type(c, coll);
-    TyKind et = ct == TY_RANGE ? TY_INT : ty_is_array(ct) ? ty_array_elem(ct) : TY_UNKNOWN;
-    if (et == TY_UNKNOWN) continue;
-    LocalVar *lv = scope_local_intern(comp_scope_of(c, idx), vn);
+    Scope *isc = comp_scope_of(c, idx);
+    /* Every `for` binding this NAME in this scope writes the same C slot, so
+       the slot has to hold all of their element types. Typed from one loop
+       alone -- whichever the pass reached last -- the other one assigned a
+       String element into an sp_int slot (#4168). */
+    TyKind et = TY_UNKNOWN;
+    int seen = 0;
+    NT_FOREACH_KIND(nt, NK_ForNode, jd) {
+      int jx = nt_ref(nt, jd, "index"), jc = nt_ref(nt, jd, "collection");
+      if (jx < 0 || jc < 0) continue;
+      const char *jn = nt_str(nt, jx, "name");
+      if (!jn || !sp_streq(jn, vn) || comp_scope_of(c, jx) != isc) continue;
+      TyKind jt = infer_type(c, jc);
+      TyKind je = jt == TY_RANGE ? TY_INT : ty_is_array(jt) ? ty_array_elem(jt) : TY_UNKNOWN;
+      if (je == TY_UNKNOWN) continue;
+      et = seen ? ty_unify(et, je) : je;
+      seen = 1;
+    }
+    if (!seen || et == TY_UNKNOWN) continue;
+    LocalVar *lv = scope_local_intern(isc, vn);
     lv->is_block_param = 1;  /* iteration-bound: survives the write-types reset */
     if (lv->type != et) { lv->type = et; changed = 1; }
   }
