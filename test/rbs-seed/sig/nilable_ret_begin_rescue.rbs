@@ -1,0 +1,4 @@
+class Box
+  def self.f: (untyped x) -> String?
+  def self.g: (untyped x) -> Integer?
+end

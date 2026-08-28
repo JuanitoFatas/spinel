@@ -9433,6 +9433,19 @@ void emit_stmt_tail_inner(Compiler *c, int id, Buf *b, int indent) {
         Buf bx; memset(&bx, 0, sizeof bx); emit_boxed_text(c, rt, ex, &bx);
         buf_printf(b, "%s;\n", bx.p ? bx.p : "sp_box_nil()"); free(bx.p);
       }
+      /* The mirror: a POLY begin value (its arms are a union -- a String and
+         nil) tailing into a CONCRETE return slot. The slot is what the --rbs
+         seed says, and `String?` is a NULL `const char *` here, so narrow the
+         accumulator rather than hand back the box. The if/else and ternary
+         forms of the same union already coerce per arm (#4154). */
+      else if (!g_result_var && rt == TY_POLY && g_ret_type != TY_POLY &&
+               g_ret_type != TY_VOID && g_ret_type != TY_UNKNOWN &&
+               is_scalar_ret(g_ret_type)) {
+        char ex[24]; snprintf(ex, sizeof ex, "_t%d", t);
+        Buf ux; memset(&ux, 0, sizeof ux);
+        emit_unbox_nilable_text(c, g_ret_type, ex, &ux);
+        buf_printf(b, "%s;\n", ux.p ? ux.p : "0"); free(ux.p);
+      }
       else buf_printf(b, "_t%d;\n", t);
       return;
     }
