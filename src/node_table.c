@@ -601,3 +601,15 @@ const int *nt_arr_at(const NodeTable *nt, int id, int i, int *out_n) {
   *out_n = nd->a[i].n;
   return nd->a[i].ids;
 }
+
+int nt_call_args_plain(const NodeTable *nt, int id) {
+  int args = nt_ref(nt, id, "arguments");
+  if (args < 0) return 1;
+  int argc = 0;
+  const int *argv = nt_arr(nt, args, "arguments", &argc);
+  for (int i = 0; i < argc; i++) {
+    const char *ty = nt_type(nt, argv[i]);
+    if (ty && (sp_streq(ty, "SplatNode") || sp_streq(ty, "BlockArgumentNode"))) return 0;
+  }
+  return 1;
+}

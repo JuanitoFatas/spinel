@@ -2,6 +2,97 @@
 #include <stddef.h>
 #include <string.h>
 
+/* ---- The boxed-receiver face table (see types.h) ---- */
+static const PolyFace ty_poly_face_tbl[] = {
+  /* String value-form mutators: the non-bang transform runs against the
+     unboxed contents and the result is written back through the box. */
+  {"gsub!", PF_STRING | PF_STR_BANG, 0, -1, -1}, {"sub!", PF_STRING | PF_STR_BANG, 0, -1, -1},
+  {"upcase!", PF_STRING | PF_STR_BANG, 0, -1, -1}, {"downcase!", PF_STRING | PF_STR_BANG, 0, -1, -1},
+  {"capitalize!", PF_STRING | PF_STR_BANG, 0, -1, -1}, {"swapcase!", PF_STRING | PF_STR_BANG, 0, -1, -1},
+  {"strip!", PF_STRING | PF_STR_BANG, 0, -1, -1}, {"lstrip!", PF_STRING | PF_STR_BANG, 0, -1, -1},
+  {"rstrip!", PF_STRING | PF_STR_BANG, 0, -1, -1}, {"chomp!", PF_STRING | PF_STR_BANG, 0, -1, -1},
+  {"chop!", PF_STRING | PF_STR_BANG, 0, -1, -1}, {"squeeze!", PF_STRING | PF_STR_BANG, 0, -1, -1},
+  {"tr!", PF_STRING | PF_STR_BANG, 0, -1, -1}, {"delete!", PF_STRING | PF_STR_BANG, 0, -1, -1},
+  {"tr_s!", PF_STRING | PF_STR_BANG, 0, -1, -1}, {"delete_prefix!", PF_STRING | PF_STR_BANG, 0, -1, -1},
+  {"delete_suffix!", PF_STRING | PF_STR_BANG, 0, -1, -1},
+  {"succ!", PF_STRING | PF_STR_BANG | PF_STR_SELF, 0, -1, -1},
+  {"next!", PF_STRING | PF_STR_BANG | PF_STR_SELF, 0, -1, -1},
+  /* The rest of the String surface. `partition` qualifies only in its
+     one-argument form: Enumerable#partition takes none. */
+  {"squeeze", PF_STRING, 0, 0, 0}, {"byteindex", PF_STRING, 1, 2, 0}, {"byterindex", PF_STRING, 1, 2, 0},
+  {"partition", PF_STRING, 1, 1, 0}, {"rpartition", PF_STRING, 1, 1, 0},
+  {"hex", PF_STRING, 0, 0, 0}, {"oct", PF_STRING, 0, 0, 0}, {"tr_s", PF_STRING, 2, 2, 0},
+  {"crypt", PF_STRING, 1, 1, 0}, {"casecmp", PF_STRING, 1, 1, 0}, {"casecmp?", PF_STRING, 1, 1, 0},
+  /* The names Integer alone owns. step is left out: a Float receiver owns it
+     too, so unboxing to an sp_int would truncate a legitimate `2.5.step(9, 3)`. */
+  {"digits", PF_INT, 0, 1, 0}, {"pred", PF_INT, 0, 0, 0}, {"bit_length", PF_INT, 0, 0, 0},
+  {"ceildiv", PF_INT, 1, 1, 0}, {"pow", PF_INT, 1, 2, 0}, {"gcdlcm", PF_INT, 1, 1, 0},
+  {"times", PF_INT, 0, 0, 1}, {"upto", PF_INT, 1, 1, 1}, {"downto", PF_INT, 1, 1, 1},
+  /* The Enumerable names a boxed receiver shares with Array: its elements
+     (a hash's [key, value] pairs) materialize into a poly array once. */
+  {"minmax", PF_ENUM, 0, -1, -1}, {"tally", PF_ENUM, 0, -1, -1}, {"product", PF_ENUM, 0, -1, -1},
+  {"combination", PF_ENUM, 0, -1, -1}, {"permutation", PF_ENUM, 0, -1, -1},
+  {"group_by", PF_ENUM, 0, -1, 1}, {"partition", PF_ENUM, 0, -1, 1},
+  {"each_with_object", PF_ENUM, 0, -1, 1}, {"chunk_while", PF_ENUM, 0, -1, 1},
+  {"slice_when", PF_ENUM, 0, -1, 1},
+  /* Names served by unboxing to an Array, on an Array at run time; a mutator
+     writes its result back into a typed original. Array is the only OWNER
+     here, but four of them are not Array's alone: Hash defines select!,
+     reject!, keep_if and delete_if too. That costs nothing today because
+     sp_poly_array_recv admits only an Array and raises NoMethodError for a
+     Hash -- the same answer as before the rows existed -- but it is the reason
+     these four cannot simply be read as "Array's". They belong with concat and
+     the rest of the shared names, in the run-time kind switch. */
+  {"sort!", PF_ARRAY | PF_MUT, 0, 0, -1}, {"sort_by!", PF_ARRAY | PF_MUT, 0, 0, 1},
+  {"rotate!", PF_ARRAY | PF_MUT, 0, 1, 0}, {"uniq!", PF_ARRAY | PF_MUT, 0, 0, -1},
+  {"flatten!", PF_ARRAY | PF_MUT, 0, 1, 0}, {"fill", PF_ARRAY | PF_MUT, 1, 3, 0},
+  {"select!", PF_ARRAY | PF_MUT, 0, 0, 1}, {"filter!", PF_ARRAY | PF_MUT, 0, 0, 1},
+  {"reject!", PF_ARRAY | PF_MUT, 0, 0, 1}, {"keep_if", PF_ARRAY | PF_MUT, 0, 0, 1},
+  {"delete_if", PF_ARRAY | PF_MUT, 0, 0, 1},
+  {"to_ary", PF_ARRAY, 0, 0, 0}, {"transpose", PF_ARRAY, 0, 0, 0},
+  /* and the Enumerable names that had no arm at all */
+  {"grep", PF_ENUM, 1, 1, -1}, {"minmax_by", PF_ENUM, 0, 0, 1},
+  /* The read-only Hash/Enumerable face. */
+  {"dig", PF_HASH | PF_LAST, 0, -1, -1}, {"value?", PF_HASH | PF_LAST, 0, -1, -1}, {"has_value?", PF_HASH | PF_LAST, 0, -1, -1},
+  {"invert", PF_HASH | PF_LAST, 0, -1, -1}, {"assoc", PF_HASH | PF_LAST, 0, -1, -1}, {"rassoc", PF_HASH | PF_LAST, 0, -1, -1}, {"key", PF_HASH | PF_LAST, 0, -1, -1},
+  {"filter_map", PF_HASH | PF_LAST, 0, -1, -1}, {"each_with_object", PF_HASH | PF_LAST, 0, -1, -1},
+  {"group_by", PF_HASH | PF_LAST, 0, -1, -1}, {"partition", PF_HASH | PF_LAST, 0, -1, -1}, {"zip", PF_HASH | PF_LAST, 0, -1, -1},
+  {"reduce", PF_HASH | PF_LAST, 0, -1, -1}, {"inject", PF_HASH | PF_LAST, 0, -1, -1}, {"find_all", PF_HASH | PF_LAST, 0, -1, -1},
+  {"take", PF_HASH | PF_LAST, 0, -1, -1}, {"drop", PF_HASH | PF_LAST, 0, -1, -1}, {"select", PF_HASH | PF_LAST, 0, -1, -1},
+  {"filter", PF_HASH | PF_LAST, 0, -1, -1}, {"reject", PF_HASH | PF_LAST, 0, -1, -1}, {"compact", PF_HASH | PF_LAST, 0, -1, -1},
+  {"slice", PF_HASH | PF_LAST, 0, -1, -1}, {"except", PF_HASH | PF_LAST, 0, -1, -1}, {"values_at", PF_HASH | PF_LAST, 0, -1, -1},
+  {"fetch_values", PF_HASH | PF_LAST, 0, -1, -1}, {"entries", PF_HASH | PF_LAST, 0, -1, -1}, {"flatten", PF_HASH | PF_LAST, 0, -1, -1},
+  {"first", PF_HASH | PF_LAST, 0, -1, -1}, {"each_pair", PF_HASH | PF_LAST, 0, -1, -1}, {"each_key", PF_HASH | PF_LAST, 0, -1, -1},
+  {"each_value", PF_HASH | PF_LAST, 0, -1, -1}, {"transform_values", PF_HASH | PF_LAST, 0, -1, -1},
+  {"transform_keys", PF_HASH | PF_LAST, 0, -1, -1}, {"tally", PF_HASH | PF_LAST, 0, -1, -1},
+  {"chunk_while", PF_HASH | PF_LAST, 0, -1, -1}, {"flat_map", PF_HASH | PF_LAST, 0, -1, -1},
+  {"collect_concat", PF_HASH | PF_LAST, 0, -1, -1}, {"none?", PF_HASH | PF_LAST, 0, -1, -1}, {"one?", PF_HASH | PF_LAST, 0, -1, -1},
+  {0, 0, 0, 0, 0}
+};
+static int face_row_matches(const PolyFace *r, int argc, int has_blk, int plain) {
+  if (!plain) return r->argc_min == 0 && r->argc_max < 0 && r->blk != 0;
+  if (argc < r->argc_min || (r->argc_max >= 0 && argc > r->argc_max)) return 0;
+  return r->blk < 0 || r->blk == (has_blk != 0);
+}
+
+unsigned ty_poly_face_owners(const char *name, int argc, int has_blk, int plain, int with_last) {
+  unsigned own = 0;
+  if (!name) return 0;
+  for (const PolyFace *r = ty_poly_face_tbl; r->name; r++) {
+    if (!sp_streq(name, r->name)) continue;
+    if (!with_last && (r->flags & PF_LAST)) continue;
+    if (!face_row_matches(r, argc, has_blk, plain)) continue;
+    own |= r->flags;
+  }
+  return own;
+}
+int ty_poly_hash_face_name(const char *nm) {
+  if (!nm) return 0;
+  for (const PolyFace *r = ty_poly_face_tbl; r->name; r++)
+    if ((r->flags & PF_HASH) && (r->flags & PF_LAST) && sp_streq(nm, r->name)) return 1;
+  return 0;
+}
+
 const char *ty_name(TyKind t) {
   switch (t) {
     case TY_UNKNOWN: return "unknown";

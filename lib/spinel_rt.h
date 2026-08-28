@@ -3520,31 +3520,59 @@ static sp_int sp_poly_int_recv(sp_RbVal v, const char *m) {
   sp_raise_nomethod(sp_nomethod_msg(m, v));
   return 0;  /* unreachable: sp_raise_nomethod does not return */
 }
-/* map!'s write-back through a boxed receiver: sp_poly_arr_recv normalizes a
-   TYPED array to a poly COPY, so in-place rewrites never reached the
-   original (#3234). Copy the mutated elements back into the original
-   representation; a POLY_ARRAY receiver shares storage and needs nothing. */
+/* A mutated element that the typed original has no representation for: a
+   String written into an Array of Integers through a boxed receiver. CRuby's
+   Array holds anything; the typed original cannot, and it cannot be re-laid
+   from here (the container slot that holds it is not in reach), so the
+   write-back refuses rather than coerce the value into something it was not
+   -- the earlier map! write-back answered 0 for such a String. */
+SP_NORETURN SP_COLD static void sp_raise_writeback_kind(sp_RbVal v, const char *into) {
+  sp_raise_cls("TypeError", sp_sprintf("can't store %s in an Array of %s through a boxed receiver",
+                                       sp_poly_class_name(v), into));
+}
+/* A mutator's write-back through a boxed receiver: sp_poly_arr_recv
+   normalizes a TYPED array to a poly COPY, so in-place rewrites never reached
+   the original (#3234). Replace the original's contents with the mutated
+   elements, in its own representation; a POLY_ARRAY receiver shares storage
+   and needs nothing. The length follows the work array -- reject!, uniq! and
+   slice! shrink it, fill(n) can grow it. Frozenness was refused at the
+   coercion, before the mutator ran. */
 static void sp_poly_arr_writeback(sp_RbVal orig, sp_PolyArray *work) {
   if (orig.tag != SP_TAG_OBJ || !work) return;
   switch (orig.cls_id) {
-    case SP_BUILTIN_INT_ARRAY:
+    case SP_BUILTIN_INT_ARRAY: {
+      sp_IntArray *a = (sp_IntArray *)orig.v.p;
+      for (sp_int i = 0; i < work->len; i++)
+        if (work->data[i].tag != SP_TAG_INT) sp_raise_writeback_kind(work->data[i], "Integer");
+      a->start = 0; a->len = 0;
+      for (sp_int i = 0; i < work->len; i++) sp_IntArray_push(a, work->data[i].v.i);
+      return;
+    }
     case SP_BUILTIN_SYM_ARRAY: {
       sp_IntArray *a = (sp_IntArray *)orig.v.p;
-      for (sp_int i = 0; i < a->len && i < work->len; i++)
-        a->data[a->start + i] = sp_poly_to_i(work->data[i]);
+      for (sp_int i = 0; i < work->len; i++)
+        if (work->data[i].tag != SP_TAG_SYM) sp_raise_writeback_kind(work->data[i], "Symbol");
+      a->start = 0; a->len = 0;
+      for (sp_int i = 0; i < work->len; i++) sp_IntArray_push(a, work->data[i].v.i);
       return;
     }
     case SP_BUILTIN_FLT_ARRAY: {
       sp_FloatArray *a = (sp_FloatArray *)orig.v.p;
-      for (sp_int i = 0; i < a->len && i < work->len; i++)
-        a->data[i] = sp_poly_to_f(work->data[i]);
+      for (sp_int i = 0; i < work->len; i++)
+        if (work->data[i].tag != SP_TAG_FLT && work->data[i].tag != SP_TAG_INT)
+          sp_raise_writeback_kind(work->data[i], "Float");
+      a->len = 0;
+      for (sp_int i = 0; i < work->len; i++) sp_FloatArray_push(a, sp_poly_to_f(work->data[i]));
       return;
     }
     case SP_BUILTIN_STR_ARRAY: {
       sp_StrArray *a = (sp_StrArray *)orig.v.p;
+      for (sp_int i = 0; i < work->len; i++)
+        if (work->data[i].tag != SP_TAG_STR && !sp_poly_is_strbuf(work->data[i]))
+          sp_raise_writeback_kind(work->data[i], "String");
       sp_gc_wb((void *)a);
-      for (sp_int i = 0; i < a->len && i < work->len; i++)
-        a->data[i] = sp_poly_to_s(work->data[i]);
+      a->len = 0;
+      for (sp_int i = 0; i < work->len; i++) sp_StrArray_push(a, sp_poly_to_s(work->data[i]));
       return;
     }
     default: return;   /* POLY_ARRAY: same storage; others: nothing to do */
@@ -3565,6 +3593,43 @@ static sp_PolyArray *sp_poly_arr_recv(sp_RbVal v, const char *m) {
   }
   sp_raise_nomethod(sp_nomethod_msg(m, v));
   return NULL;  /* unreachable: sp_raise_nomethod does not return */
+}
+
+/* Is the array a boxed value holds frozen? The flag rides in each array
+   struct, not in the GC header. */
+static sp_bool sp_poly_array_frozen(sp_RbVal v) {
+  switch (v.cls_id) {
+    case SP_BUILTIN_INT_ARRAY:
+    case SP_BUILTIN_SYM_ARRAY:  return ((sp_IntArray *)v.v.p)->frozen != 0;
+    case SP_BUILTIN_FLT_ARRAY:  return ((sp_FloatArray *)v.v.p)->frozen != 0;
+    case SP_BUILTIN_STR_ARRAY:  return ((sp_StrArray *)v.v.p)->frozen != 0;
+    case SP_BUILTIN_POLY_ARRAY: return ((sp_PolyArray *)v.v.p)->frozen != 0;
+  }
+  return FALSE;
+}
+/* The receiver of an Array-only method (sort!, fill, transpose, ...) reached
+   through a boxed value: an Array at run time, as a poly array, and anything
+   else -- a Hash, whose pairs sp_poly_arr_recv would have offered, a nil, a
+   String -- CRuby's NoMethodError naming the method. A mutator (`mut`) asks
+   about frozenness here, before any work: the typed emitter it re-enters
+   works on the poly copy, so only the write-back would notice, after a
+   block had already run over every element. */
+static sp_PolyArray *sp_poly_array_recv(sp_RbVal v, const char *m, int mut) {
+  if (v.tag == SP_TAG_OBJ && sp_poly_is_array_kind(v.cls_id)) {
+    if (mut && sp_poly_array_frozen(v)) sp_raise_frozen_array_at(v.v.p, v.cls_id);
+    return sp_poly_to_poly_array(v);
+  }
+  sp_raise_nomethod(sp_nomethod_msg(m, v));
+  return NULL;  /* unreachable: sp_raise_nomethod does not return */
+}
+/* The receiver of an Enumerable method reached through a boxed value: its
+   elements (a hash's pairs, a range's members) as a poly array, and for a
+   value that is no collection at all -- an Integer, a String, nil --
+   CRuby's NoMethodError, where the bare materialization answered an empty
+   list and the call went on as if over nothing. */
+static sp_PolyArray *sp_poly_enum_recv(sp_RbVal v, const char *m) {
+  if (v.tag != SP_TAG_OBJ) sp_raise_nomethod(sp_nomethod_msg(m, v));
+  return sp_enum_items_from(v);
 }
 
 /* inject/reduce with a symbol op over a poly iterable (a container-read row
