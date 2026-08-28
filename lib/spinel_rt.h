@@ -145,6 +145,9 @@ static inline void sp_builtin_cls_ids_distinct(int id) {
     case SP_BUILTIN_COMPLEX: case SP_BUILTIN_RATIONAL:
     case SP_BUILTIN_BIG_RATIONAL: case SP_BUILTIN_FLOAT_RANGE:
     case SP_BUILTIN_STR_RANGE: case SP_BUILTIN_OPENSTRUCT:
+    case SP_BUILTIN_PROCESS_STATUS:   /* agentwm/dvtm: Process.waitpid2's boxed
+                                          return value, dispatches signaled?/exited?/
+                                          termsig/... via runtime type tag. */
     default: break;
   }
 }
@@ -382,6 +385,19 @@ static inline sp_float sp_math_gamma(sp_float x){if(x<0.0&&x==floor(x))sp_raise_
    result into the GC string heap. is_utc distinguishes UTC-coerced
    times from local-zone times; the underlying epoch is the same. */
 #include "sp_time.h"
+
+/* sp_ProcessStatus is a small heap-allocated struct (pid + raw status
+   word) boxed for `result[1].signaled?` dispatch. The codegen
+   dereferences it in the poly-receiver path, so the layout must be
+   visible to every program. */
+#include "sp_process_status.h"
+/* Process.spawn / Process.waitpid2 live in lib/sp_process.c, which cannot
+   include this header (see the note there). Declare them here rather than
+   emitting the prototypes into every generated program: neither returns int,
+   so an implicit declaration mistypes the result, and a program that never
+   spawns should not carry two lines about it. */
+sp_int sp_process_spawn(sp_RbVal cmd, sp_RbVal args, sp_RbVal opts);
+sp_PolyArray *sp_process_waitpid2(sp_int pid);
 
 
 /* `recycle`: optional sweep hook. If non-NULL, sp_gc_collect calls
@@ -1804,6 +1820,7 @@ static const char *sp_poly_class_name(sp_RbVal v) {
            String / OpenStruct rather than nothing (#4158). */
         case SP_BUILTIN_ADDRINFO: return SPL("Addrinfo");
         case SP_BUILTIN_SOCKOPT: return SPL("Socket::Option");
+        case SP_BUILTIN_PROCESS_STATUS: return SPL("Process::Status");
         case SP_BUILTIN_EXCEPTION: return sp_exc_class_name((volatile struct sp_Exception_s *)v.v.p);
         default: { sp_Class c = {v.cls_id}; return sp_class_to_s(c); }
       }

@@ -1170,6 +1170,20 @@ void emit_assign(Compiler *c, int id, Buf *b, int indent) {
     else if (vt == TY_POLY) { buf_puts(b, "sp_poly_as_bigint("); emit_expr(c, v, b); buf_puts(b, ")"); }
     else { buf_puts(b, "sp_bigint_new_int("); emit_expr(c, v, b); buf_puts(b, ")"); }
   }
+  else if (lv && lv->type == TY_PROCESS_STATUS) {
+    /* The slot is sp_ProcessStatus *. The RHS is sp_RbVal (a boxed
+       sp_box_process_status result, or a poly result that we know
+       holds one): unbox the .v.p pointer. */
+    TyKind vt = comp_ntype(c, v);
+    if (vt == TY_POLY) {
+      buf_puts(b, "((sp_ProcessStatus *)("); emit_expr(c, v, b); buf_puts(b, ").v.p)");
+    }
+    else {
+      /* RHS is already a typed sp_ProcessStatus * (e.g. direct constructor
+         result emitted by codegen_call): assign straight through. */
+      emit_expr(c, v, b);
+    }
+  }
   else if (lv && lv->type == TY_POLY) {
     emit_boxed(c, v, b);   /* poly slot: box the (non-poly) RHS */
   }
