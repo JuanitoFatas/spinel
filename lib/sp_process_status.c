@@ -19,6 +19,14 @@
 #include "sp_alloc.h"   /* sp_RbVal, sp_gc_alloc, sp_raise_cls */
 #include "sp_process_status.h"
 
+/* The W*() macros must be handed an int LVALUE, not a cast expression. macOS
+   still defines them through the legacy `union wait` bridge --
+   `#define _W_INT(w) (*(int *)&(w))` -- so the macro takes the ADDRESS of its
+   argument, and `WIFEXITED((int)s)` fails to compile there with "cannot take
+   the address of an rvalue". glibc casts instead of dereferencing, which is
+   why this built on Linux. Each accessor below copies its sp_int argument
+   into `int st` first and passes that. */
+
 /* CRuby answers nil for exitstatus on a signaled status and for termsig on
    one that exited, and spinel already has a spelling for a nullable Integer:
    SP_INT_NIL, which every renderer and `.nil?` understands. -1 is a real
@@ -50,24 +58,28 @@ sp_RbVal sp_box_process_status(sp_ProcessStatus *p) {
 /* ---- predicates ---- */
 
 int sp_process_status_exited_p(sp_int s) {
-  return WIFEXITED((int)s) ? 1 : 0;
+  int st = (int)s;
+  return WIFEXITED(st) ? 1 : 0;
 }
 
 int sp_process_status_signaled_p(sp_int s) {
-  return WIFSIGNALED((int)s) ? 1 : 0;
+  int st = (int)s;
+  return WIFSIGNALED(st) ? 1 : 0;
 }
 
 int sp_process_status_coredump_p(sp_int s) {
-  if (!WIFSIGNALED((int)s)) return 0;
-  return WCOREDUMP((int)s) ? 1 : 0;
+  int st = (int)s;
+  if (!WIFSIGNALED(st)) return 0;
+  return WCOREDUMP(st) ? 1 : 0;
 }
 
 /* Tri-state, because CRuby's is: true when the process exited with status 0,
    false when it exited with anything else, and NIL when it did not exit
    normally at all. -1 is that nil; the call site boxes it. */
 int sp_process_status_success_p(sp_int s) {
-  if (!WIFEXITED((int)s)) return -1;
-  return WEXITSTATUS((int)s) == 0 ? 1 : 0;
+  int st = (int)s;
+  if (!WIFEXITED(st)) return -1;
+  return WEXITSTATUS(st) == 0 ? 1 : 0;
 }
 
 /* ---- accessors ---- */
@@ -87,13 +99,15 @@ sp_int sp_process_status_pid(sp_int s) {
 }
 
 sp_int sp_process_status_exitstatus(sp_int s) {
-  if (!WIFEXITED((int)s)) return SP_STATUS_NIL;
-  return (sp_int)WEXITSTATUS((int)s);
+  int st = (int)s;
+  if (!WIFEXITED(st)) return SP_STATUS_NIL;
+  return (sp_int)WEXITSTATUS(st);
 }
 
 sp_int sp_process_status_termsig(sp_int s) {
-  if (!WIFSIGNALED((int)s)) return SP_STATUS_NIL;
-  return (sp_int)WTERMSIG((int)s);
+  int st = (int)s;
+  if (!WIFSIGNALED(st)) return SP_STATUS_NIL;
+  return (sp_int)WTERMSIG(st);
 }
 
 /* ---- boxed-struct pid access ---- */
@@ -147,11 +161,12 @@ static char sp_status_buf[96];
 const char *sp_process_status_to_s(sp_int s, int is_inspect) {
   const char *prefix = is_inspect ? "#<Process::Status: " : "";
   const char *suffix = is_inspect ? ">" : "";
-  if (WIFEXITED((int)s)) {
+  int st = (int)s;
+  if (WIFEXITED(st)) {
     snprintf(sp_status_buf, sizeof sp_status_buf,
-             "%sexit %d%s", prefix, WEXITSTATUS((int)s), suffix);
-  } else if (WIFSIGNALED((int)s)) {
-    int sig = WTERMSIG((int)s);
+             "%sexit %d%s", prefix, WEXITSTATUS(st), suffix);
+  } else if (WIFSIGNALED(st)) {
+    int sig = WTERMSIG(st);
     const char *name = sp_signal_name(sig);
     if (name) {
       snprintf(sp_status_buf, sizeof sp_status_buf,
