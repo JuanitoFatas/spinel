@@ -35,8 +35,14 @@ static const PolyFace ty_poly_face_tbl[] = {
   {"group_by", PF_ENUM, 0, -1, 1}, {"partition", PF_ENUM, 0, -1, 1},
   {"each_with_object", PF_ENUM, 0, -1, 1}, {"chunk_while", PF_ENUM, 0, -1, 1},
   {"slice_when", PF_ENUM, 0, -1, 1},
-  /* The Array-only names, on an Array at run time; a mutator writes its
-     result back into a typed original. */
+  /* Names served by unboxing to an Array, on an Array at run time; a mutator
+     writes its result back into a typed original. Array is the only OWNER
+     here, but four of them are not Array's alone: Hash defines select!,
+     reject!, keep_if and delete_if too. That costs nothing today because
+     sp_poly_array_recv admits only an Array and raises NoMethodError for a
+     Hash -- the same answer as before the rows existed -- but it is the reason
+     these four cannot simply be read as "Array's". They belong with concat and
+     the rest of the shared names, in the run-time kind switch. */
   {"sort!", PF_ARRAY | PF_MUT, 0, 0, -1}, {"sort_by!", PF_ARRAY | PF_MUT, 0, 0, 1},
   {"rotate!", PF_ARRAY | PF_MUT, 0, 1, 0}, {"uniq!", PF_ARRAY | PF_MUT, 0, 0, -1},
   {"flatten!", PF_ARRAY | PF_MUT, 0, 1, 0}, {"fill", PF_ARRAY | PF_MUT, 1, 3, 0},
