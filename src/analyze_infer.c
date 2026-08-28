@@ -2859,6 +2859,22 @@ else {
   if (recv >= 0 && rt == TY_TMS && argc == 0 &&
       (sp_streq(name, "utime") || sp_streq(name, "stime") ||
        sp_streq(name, "cutime") || sp_streq(name, "cstime"))) return TY_FLOAT;
+  /* Process::Status accessors. The runtime returns sp_int (with -1 for
+     the nil-or-false slot on exitstatus/termsig); the analyze pass keeps
+     Integer here and the codegen wraps -1 in sp_box_nil for those two.
+     Boolean predicates are TY_BOOL; the accessors that can be nil are
+     TY_INT (so `result[1].termsig.nil?` is well-typed). */
+  if (recv >= 0 && rt == TY_PROCESS_STATUS && argc == 0) {
+    if (sp_streq(name, "signaled?") || sp_streq(name, "exited?") ||
+        sp_streq(name, "coredump?") || sp_streq(name, "success?"))
+      return TY_BOOL;
+    if (sp_streq(name, "exitstatus") || sp_streq(name, "termsig") ||
+        sp_streq(name, "pid"))
+      return TY_INT;
+    if (sp_streq(name, "to_s") || sp_streq(name, "inspect") ||
+        sp_streq(name, "class")) return TY_STRING;
+    if (sp_streq(name, "==")) return TY_BOOL;
+  }
   /* OpenStruct: dynamic members. A member read (any name, arg-less, no
      writer) or `[sym]` returns a boxed value; a writer / `[]=` returns the
      assigned value; the rest is a small fixed surface (#3135). */

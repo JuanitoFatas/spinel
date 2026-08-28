@@ -49,6 +49,7 @@
 #include <errno.h>
 
 #include "sp_alloc.h"   /* sp_PolyArray, sp_RbVal, sp_box_*, sp_raise_cls */
+#include "sp_process_status.h"   /* sp_ProcessStatus, sp_box_process_status */
 
 /* Local error-message builder. Returns a static buffer; copy the
    result before another call. Avoids sp_sprintf which would pull
@@ -181,15 +182,37 @@ sp_int sp_process_spawn(sp_RbVal cmd, sp_RbVal args_box,
   }
   argv[ai] = NULL;
 
+  /* Pre-exec error pipe: the child writes the exec errno here if execve
+     fails, so the parent can raise the matching Errno (CRuby raises
+     Errno::ENOENT for "no such file or directory" instead of returning
+     a dead pid). FD_CLOEXEC on the write end so a successful execvp
+     closes it; the parent then sees a zero-byte read and no raise. */
+  int err_pipe[2];
+  if (pipe(err_pipe) < 0) {
+    free(argv);
+    sp_raise_cls("SystemCallError", sp_errf_errno("pipe failed", errno));
+  }
+
   pid_t pid = fork();
   if (pid < 0) {
     free(argv);
     sp_raise_cls("SystemCallError", sp_errf_errno("fork failed", errno));
   }
   if (pid == 0) {
-    /* CHILD */
+    /* CHILD. If execve fails, write the errno to the parent's pipe
+       and exit 127; the parent will raise the matching Errno
+       (Errno::ENOENT for "no such file") to match CRuby semantics.
+       Using a pipe (not relying on the child's exit code alone)
+       because the exit code is the same regardless of exec failure
+       reason. */
+    close(err_pipe[0]);
+    if (fcntl(err_pipe[1], F_SETFD, FD_CLOEXEC) < 0) { _exit(126); }
     if (chdir_to) {
-      if (chdir(chdir_to) != 0) _exit(127);
+      if (chdir(chdir_to) != 0) {
+        int e = errno;
+        (void)!write(err_pipe[1], &e, sizeof e);
+        _exit(127);
+      }
     }
     if (rlimit_cpu_set) {
       struct rlimit rl = { rlimit_cpu_val, RLIM_INFINITY };
@@ -208,9 +231,28 @@ sp_int sp_process_spawn(sp_RbVal cmd, sp_RbVal args_box,
     apply_redirect(1, out_fd);
     apply_redirect(2, err_fd);
     execvp(prog, argv);
+    /* exec returned: failure. Send the errno to the parent. */
+    int e = errno;
+    (void)!write(err_pipe[1], &e, sizeof e);
     _exit(127);
   }
+  /* PARENT. Close the child's write end, read the errno if any. */
+  close(err_pipe[1]);
+  int exec_errno = 0;
+  ssize_t got = read(err_pipe[0], &exec_errno, sizeof exec_errno);
+  close(err_pipe[0]);
   free(argv);
+  if (got > 0) {
+    /* child failed to exec; the child has already exited 127, so the
+       waitpid2 caller will still find a (zombie) pid, but we raise the
+       CRuby-style exception first. The pid is leaked but harmless: the
+       init process reaps the zombie. */
+    errno = exec_errno;
+    sp_raise_cls(errno == ENOENT ? "Errno::ENOENT" :
+                 errno == EACCES ? "Errno::EACCES" :
+                 "SystemCallError",
+                 sp_errf_errno("cannot execute", errno));
+  }
   return (sp_int)pid;
 }
 
@@ -228,6 +270,8 @@ sp_PolyArray *sp_process_waitpid2(sp_int pid) {
   }
   sp_PolyArray *pa = sp_PolyArray_new();
   sp_PolyArray_push(pa, sp_box_int((sp_int)r));
-  sp_PolyArray_push(pa, sp_box_int((sp_int)status));
+  /* Second element is a Process::Status instance wrapping (pid, status),
+     not a raw int -- .signaled? / .termsig dispatch on the boxed cls_id. */
+  sp_PolyArray_push(pa, sp_box_process_status(sp_process_status_new((sp_int)r, (sp_int)status)));
   return pa;
 }

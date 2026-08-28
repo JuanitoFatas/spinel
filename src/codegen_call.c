@@ -3753,6 +3753,55 @@ static int emit_poly_builtin_method(Compiler *c, int id, Buf *b) {
   int argc; const int *argv = call_args(nt, id, &argc);
   if (user_defines_or_reads(c, name)) return 0;   /* a user class owns the name */
 
+  /* Process::Status accessors: the boxed poly holds a pointer to a
+     sp_ProcessStatus struct (pid + raw waitpid status word). The runtime
+     helpers are stateless: the predicate fns and the int accessors take
+     the raw int status word; pid_of takes the boxed struct directly.
+     Each arm returns the unboxed scalar (sp_bool for the predicates,
+     sp_int for the accessors, with -1 as the nil sentinel for
+     exitstatus/termsig), and the call-site codegen auto-boxes to
+     sp_RbVal (or sp_box_nil for the -1 case) according to the
+     analyze-infer return type. */
+  if (argc == 0) {
+    const char *ps_int_fn = NULL;     /* takes the int status word, returns sp_int */
+    const char *ps_bool_fn = NULL;    /* same input, returns sp_bool (0/1) */
+    const char *ps_pid_fn = NULL;     /* takes the boxed struct, returns sp_int */
+    if (sp_streq(name, "signaled?")) ps_bool_fn = "sp_process_status_signaled_p";
+    else if (sp_streq(name, "exited?")) ps_bool_fn = "sp_process_status_exited_p";
+    else if (sp_streq(name, "coredump?")) ps_bool_fn = "sp_process_status_coredump_p";
+    else if (sp_streq(name, "success?")) ps_bool_fn = "sp_process_status_success_p";
+    else if (sp_streq(name, "exitstatus")) ps_int_fn = "sp_process_status_exitstatus";
+    else if (sp_streq(name, "termsig")) ps_int_fn = "sp_process_status_termsig";
+    else if (sp_streq(name, "pid")) ps_pid_fn = "sp_process_status_pid_of";
+    if (ps_bool_fn) {
+      int tv = ++g_tmp;
+      buf_printf(b, "({ sp_RbVal _t%d = ", tv); emit_expr(c, recv, b);
+      buf_printf(b, "; _t%d.tag == SP_TAG_OBJ && _t%d.cls_id == SP_BUILTIN_PROCESS_STATUS"
+                    " ? (sp_bool)%s(((sp_ProcessStatus *)_t%d.v.p)->status)"
+                    " : (sp_bool)(sp_raise_nomethod(sp_nomethod_msg(\"%s\", _t%d)), 0); })",
+                 tv, tv, ps_bool_fn, tv, name, tv);
+      return 1;
+    }
+    if (ps_int_fn) {
+      int tv = ++g_tmp;
+      buf_printf(b, "({ sp_RbVal _t%d = ", tv); emit_expr(c, recv, b);
+      buf_printf(b, "; _t%d.tag == SP_TAG_OBJ && _t%d.cls_id == SP_BUILTIN_PROCESS_STATUS"
+                    " ? %s(((sp_ProcessStatus *)_t%d.v.p)->status)"
+                    " : (sp_int)(sp_raise_nomethod(sp_nomethod_msg(\"%s\", _t%d)), 0); })",
+                 tv, tv, ps_int_fn, tv, name, tv);
+      return 1;
+    }
+    if (ps_pid_fn) {
+      int tv = ++g_tmp;
+      buf_printf(b, "({ sp_RbVal _t%d = ", tv); emit_expr(c, recv, b);
+      buf_printf(b, "; _t%d.tag == SP_TAG_OBJ && _t%d.cls_id == SP_BUILTIN_PROCESS_STATUS"
+                    " ? %s((sp_ProcessStatus *)_t%d.v.p)"
+                    " : (sp_int)(sp_raise_nomethod(sp_nomethod_msg(\"%s\", _t%d)), 0); })",
+                 tv, tv, ps_pid_fn, tv, name, tv);
+      return 1;
+    }
+  }
+
   /* Time accessors: the boxed poly holds a pointer to the sp_Time value. */
   const char *tf = NULL;
   if (argc == 0) {
@@ -12498,6 +12547,9 @@ static void emit_call_body(Compiler *c, int id, Buf *b) {
     return;
   }
 
+  /* (Process::Status.new is dispatched later, after the recv/name/argc
+     locals are declared.) */
+
   /* A retargeted `x.send(:m)`: send ignores visibility, and a top-level `def`
      is Object's private instance method -- reachable this way and no other.
      The receiver's own class answers first when it defines the name. */
@@ -21048,6 +21100,9 @@ else { memcpy(dir, sf, n); dir[n] = 0; } }
       g_ret_type = sv_rt;
       return;
     }
+    /* Process::Status.new(status_int) is handled earlier in
+       emit_call_body (the ConstantPathNode arm above); the
+       ConstantReadNode-scoped block here does not see it. */
     if (tcn && sp_streq(tcn, "Thread") && sp_streq(name, "current") && argc == 0) {
       buf_puts(b, "sp_Thread_current()"); return;
     }

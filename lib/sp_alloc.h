@@ -535,6 +535,17 @@ const char *sp_float_to_s(sp_float f);
                                            poly slot, where it read as nil (#3885) */
 #define SP_BUILTIN_MATCHDATA     (-43)  /* MatchData (sp_MatchData *): boxed so
                                            a match can live in a container */
+#define SP_BUILTIN_PROCESS_STATUS (-48) /* Process::Status (sp_ProcessStatus *):
+                                           boxed so waitpid2's status carries the
+                                           cls_id for .signaled? dispatch. -48,
+                                           not the -45 first chosen: the upstream
+                                           cls_id-distinctness fix moved
+                                           SP_BUILTIN_ENUMERATOR to -45 (#4158),
+                                           so PROCESS_STATUS had to take the next
+                                           free slot. The switch in spinel_rt.h
+                                           that asserts every id is distinct will
+                                           flag any future collision at compile
+                                           time. */
 
 static inline sp_RbVal sp_box_int(sp_int v)    { sp_RbVal r; r.tag = SP_TAG_INT;  r.cls_id = 0; r.v.i = v; return r; }
 /* A NULL char* IS Ruby nil throughout the string paths (the nullable-string
@@ -816,6 +827,8 @@ sp_RbVal sp_box_complex(sp_Complex v);
 sp_RbVal sp_box_rational(sp_Rational v);
 sp_RbVal sp_box_time(sp_Time v);
 sp_RbVal sp_box_tms(sp_Tms v);
+struct sp_ProcessStatus_s;   /* forward decl for the box helper */
+sp_RbVal sp_box_process_status(struct sp_ProcessStatus_s *v);
 sp_RbVal sp_box_addrinfo(sp_Addrinfo *v);
 sp_RbVal sp_box_sockopt(sp_SockOpt *v);
 void sp_addrinfo_scan(void *p);

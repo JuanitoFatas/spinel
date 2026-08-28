@@ -87,7 +87,7 @@ static const BuiltinClass BUILTIN_CLASSES[] = {
   { "Math::DomainError",            -160,  BC_EXCEPTION },
   { "SystemExit",                   -161,  BC_CLASS | BC_EXCEPTION },
   { "Signal",                       -162,  BC_CLASS | BC_MODULE },
-  { "Process::Status",              -163,  0 },
+  { "Process::Status",              -163,  BC_CLASS },
   { "Process::Tms",                 -164,  0 },
   { "Dir",                          -165,  BC_CLASS },
   { "BasicSocket",                  -166,  BC_CLASS | BC_SOCKET },

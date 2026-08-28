@@ -98,6 +98,7 @@ typedef enum {
   TY_ADDRINFO,     /* one resolved endpoint (sp_Addrinfo *) */
   TY_SOCKOPT,      /* Socket::Option (sp_SockOpt *) */
   TY_TMS,          /* Process.times -> Process::Tms (sp_Tms, four Floats) */
+  TY_PROCESS_STATUS, /* Process::Status (sp_ProcessStatus, one pid + one int) */
   TY_OPENSTRUCT,   /* OpenStruct: dynamic symbol->value members (#3135) */
   TY_METHOD,       /* a bound Method object (sp_BoundMethod *) */
   TY_IO,           /* a File/IO handle (sp_File *) */
