@@ -9388,6 +9388,44 @@ int tail_iter_receiver(Compiler *c, int id) {
   return r;
 }
 
+/* Does this statement list end in something that leaves the function -- a
+   `return`, or a bare `raise`/`throw`? Used to decide whether a construct in
+   tail position produces a value at all. */
+static int stmts_diverge(Compiler *c, int stmts) {
+  const NodeTable *nt = c->nt;
+  if (stmts < 0) return 0;
+  int n = 0; const int *bb = nt_arr(nt, stmts, "body", &n);
+  if (!bb || n == 0) return 0;
+  int last = bb[n - 1];
+  const char *lt = nt_type(nt, last);
+  if (!lt) return 0;
+  if (sp_streq(lt, "ReturnNode")) return 1;
+  if (sp_streq(lt, "CallNode") && nt_ref(nt, last, "receiver") < 0) {
+    const char *nm = nt_str(nt, last, "name");
+    if (nm && (sp_streq(nm, "raise") || sp_streq(nm, "throw"))) return 1;
+  }
+  return 0;
+}
+
+/* Every arm of a `case` leaves the function, so the case yields no value.
+   An else clause is required: without one a no-match falls through with nil,
+   which is a value the arms' divergence says nothing about. */
+static int case_arms_all_diverge(Compiler *c, int id) {
+  const NodeTable *nt = c->nt;
+  int else_c = nt_ref(nt, id, "else_clause");
+  if (else_c < 0) return 0;
+  if (!stmts_diverge(c, nt_ref(nt, else_c, "statements"))) return 0;
+  int nw = 0; const int *whens = nt_arr(nt, id, "conditions", &nw);
+  if (!whens || nw == 0) return 0;
+  for (int w = 0; w < nw; w++) {
+    /* an `in` pattern arm is a CaseMatchNode's business, not this one */
+    const char *wt = nt_type(nt, whens[w]);
+    if (!wt || !sp_streq(wt, "WhenNode")) return 0;
+    if (!stmts_diverge(c, nt_ref(nt, whens[w], "statements"))) return 0;
+  }
+  return 1;
+}
+
 void emit_stmt_tail_inner(Compiler *c, int id, Buf *b, int indent) {
   const NodeTable *nt = c->nt;
   const char *ty = nt_type(nt, id);
@@ -9411,6 +9449,16 @@ void emit_stmt_tail_inner(Compiler *c, int id, Buf *b, int indent) {
       nt_str(nt, id, "name") &&
       (sp_streq(nt_str(nt, id, "name"), "raise") || sp_streq(nt_str(nt, id, "name"), "throw"))) {
     emit_indent(b, indent); emit_expr(c, id, b); buf_puts(b, ";\n");
+    return;
+  }
+  /* A tail `case` whose every arm (and its else) DIVERGES has no value: the
+     arms return or raise, and the case's own type is therefore unknown, which
+     the value path widens to poly and then returns from a concretely typed
+     function. Emit the statement form instead, and let the method's trailing
+     default cover the unreachable fall-through -- what the if/elsif/else form
+     of the same dispatch already does through emit_if's tail mode (#4156). */
+  if (sp_streq(ty, "CaseNode") && case_arms_all_diverge(c, id)) {
+    emit_case(c, id, b, indent);
     return;
   }
   if (sp_streq(ty, "BeginNode")) {
