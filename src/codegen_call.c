@@ -4965,6 +4965,22 @@ static int emit_poly_method_dispatch(Compiler *c, int id, Buf *b) {
         else buf_puts(b, jv);
         buf_puts(b, "; break;");
       }
+      /* And once more for `__enum_to_a`, which is not a name a user writes:
+         the Enumerable desugar puts it in front of `obj.map { }` when the
+         receiver's class defines #each. That rewrite is on the AST and
+         permanent, so a receiver that was an object type when the desugar ran
+         and widened to poly afterwards arrives here as an Array -- and was
+         told it has no such method. An Array's own `to_a` is itself (#4150). */
+      if (argc == 0 && sp_streq(name, "__enum_to_a")) {
+        char av[80];
+        snprintf(av, sizeof av, "sp_poly_to_a_arr(_t%d)", tv);
+        buf_puts(b, " case SP_BUILTIN_INT_ARRAY: case SP_BUILTIN_STR_ARRAY:"
+                    " case SP_BUILTIN_FLT_ARRAY: case SP_BUILTIN_POLY_ARRAY: ");
+        buf_printf(b, "_t%d = ", tr);
+        if (ret == TY_POLY) emit_boxed_text(c, TY_POLY_ARRAY, av, b);
+        else buf_puts(b, av);
+        buf_puts(b, "; break;");
+      }
       if (!obj_default_done)
         buf_printf(b, " default: sp_raise_nomethod(sp_nomethod_msg(\"%s\", _t%d)); break;", name, tv);
       buf_printf(b, " } _t%d; })", tr);
