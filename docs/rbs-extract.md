@@ -58,7 +58,7 @@ A seed the program *statically* contradicts is a compile error:
 
 ```
 $ spinel main.rb --rbs sig -o a
-spinel: main.rb:6: --rbs seed contradicted: @v is declared int but this assigns string
+spinel: main.rb:6: --rbs seed contradicted: @v is declared Integer but this assigns String
   A seed is trusted, so the emitted code would reinterpret the value rather than convert it.
   Fix the signature or the assignment.
 ```

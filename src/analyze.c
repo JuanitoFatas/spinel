@@ -10253,6 +10253,19 @@ static int seed_contradicts(Compiler *c, TyKind slot, TyKind val, int ret) {
     return kslot != kval && kslot != TY_POLY && kval != TY_POLY &&
            kslot != TY_UNKNOWN && kval != TY_UNKNOWN;
   }
+  /* Two ARRAYS whose ELEMENT kind differs are different C structs, and unlike
+     a hash's VALUE kind the emitter does not rebuild one from the other at a
+     return: rebuilding would hand back a copy, so writes through the getter
+     would stop reaching the receiver's own array. The clash therefore reached
+     cc, which named sp_IntArray / sp_PolyArray -- types the author has no way
+     to connect back to the `Array[untyped]` they wrote (#4151). */
+  if (fs == 2 && ks == 1 && kv == 1) {
+    /* A POLY array is the one array kind the emitter DOES materialize into a
+       typed one at a boundary (sp_StrArray_from_poly_array, #1827), so it can
+       satisfy any array slot. */
+    if (val == TY_POLY_ARRAY) return 0;
+    return slot != val;
+  }
   if (fs != 2 || !ks || !kv || ks == kv) return 0;
   return 1;
 }
@@ -10272,13 +10285,42 @@ static int seed_ret_family(Compiler *c, TyKind t) {
 }
 /* ty_name has no spelling for a user class (it answers "?"), which is exactly
    the half of the message that has to be readable here. */
-static const char *seed_ty_name(Compiler *c, TyKind t) {
+/* The type as the AUTHOR would have written it in the RBS. The internal
+   lattice names (int_array, poly_array) named nothing the signature contains,
+   so a contradiction on a container read as being about types the author had
+   no way to connect back to the `Array[untyped]` they wrote (#4151). The
+   buffer is the caller's: one message prints two of these. */
+static const char *seed_ty_name_into(Compiler *c, TyKind t, char *buf, size_t n) {
   if (ty_is_object(t)) {
     int cid = ty_object_class(t);
     if (cid >= 0 && cid < c->nclasses && c->classes[cid].name) return c->classes[cid].name;
   }
-  const char *n = ty_name(t);
-  return n ? n : "?";
+  if (ty_is_array(t)) {
+    char eb[128];
+    TyKind e = ty_array_elem(t);
+    snprintf(buf, n, "Array[%s]", seed_ty_name_into(c, e, eb, sizeof eb));
+    return buf;
+  }
+  if (ty_is_hash(t)) {
+    char kb[128], vb[128];
+    snprintf(buf, n, "Hash[%s, %s]",
+             seed_ty_name_into(c, ty_hash_key(t), kb, sizeof kb),
+             seed_ty_name_into(c, ty_hash_val(t), vb, sizeof vb));
+    return buf;
+  }
+  switch (t) {
+    case TY_INT:    return "Integer";
+    case TY_FLOAT:  return "Float";
+    case TY_STRING: return "String";
+    case TY_SYMBOL: return "Symbol";
+    case TY_BOOL:   return "bool";
+    case TY_NIL:    return "nil";
+    case TY_PROC:   return "Proc";
+    case TY_RANGE:  return "Range";
+    case TY_POLY: case TY_UNKNOWN: return "untyped";
+    default: break;
+  }
+  { const char *nm = ty_name(t); return nm ? nm : "?"; }
 }
 static int seed_ret_kind(TyKind t) {
   int k = seed_ptr_kind(t);
@@ -10310,6 +10352,7 @@ int collect_mode(void);
 static int g_seed_bad = 0;
 static void check_seed_contradictions(Compiler *c) {
   const NodeTable *nt = c->nt;
+  char _sn1[192], _sn2[192];
   for (int id = 0; id < nt->count; id++) {
     if (nt_kind(nt, id) != NK_InstanceVariableWriteNode) continue;
     const char *nm = nt_str(nt, id, "name");
@@ -10336,7 +10379,8 @@ static void check_seed_contradictions(Compiler *c) {
             "  A seed is trusted, so the emitted code would reinterpret the value "
             "rather than convert it.\n"
             "  Fix the signature or the assignment.\n",
-            file, ln, nm, ty_name(slot), ty_name(val));
+            file, ln, nm, seed_ty_name_into(c, slot, _sn1, sizeof _sn1),
+            seed_ty_name_into(c, val, _sn2, sizeof _sn2));
     if (!collect_mode()) exit(1);
     g_seed_bad = 1;
   }
@@ -10387,6 +10431,12 @@ static void check_seed_contradictions(Compiler *c) {
         NodeKind sk = nt_kind(nt, lit);
         if (sk == NK_HashNode || sk == NK_KeywordHashNode || sk == NK_ArrayNode) {
           int en = 0; nt_arr(nt, lit, "elements", &en);
+          /* A RETURNED container literal is built at the declared kind -- the
+             return boundary carries the seed's type and the literal has no
+             identity to preserve, so there is nothing here to judge either
+             (#3279). An ivar WRITE of a literal is a different matter: the
+             ivar keeps the object, so its kind has to be the declared one. */
+          if (en > 0 && sk == NK_ArrayNode && ty_is_array(slot)) continue;
           if (en == 0) {
             /* An EMPTY container literal carries a DEFAULT kind, not evidence:
                a bare `{}` reads as the String-keyed variant and contradicted
@@ -10424,7 +10474,8 @@ static void check_seed_contradictions(Compiler *c) {
               "and the value is placed in it rather than converted.\n"
               "  Fix the signature or the body.\n",
               pos, cn ? cn : "", cn ? "#" : "", sc->name ? sc->name : "?",
-              seed_ty_name(c, slot), seed_ty_name(c, val));
+              seed_ty_name_into(c, slot, _sn1, sizeof _sn1),
+              seed_ty_name_into(c, val, _sn2, sizeof _sn2));
       if (!collect_mode()) exit(1);
       g_seed_bad = 1;
     }
@@ -10487,7 +10538,9 @@ static void check_seed_contradictions(Compiler *c) {
               "  A seed is trusted, so the emitted code would reinterpret the value "
               "rather than convert it.\n"
               "  Fix the signature or the call.\n",
-              file, ln, m->pnames[i], name, seed_ty_name(c, slot), seed_ty_name(c, val));
+              file, ln, m->pnames[i], name,
+              seed_ty_name_into(c, slot, _sn1, sizeof _sn1),
+              seed_ty_name_into(c, val, _sn2, sizeof _sn2));
       if (!collect_mode()) exit(1);
       g_seed_bad = 1;
     }
