@@ -593,6 +593,22 @@ static void emit_block_arg_coerced(Compiler *c, int node, TyKind ot, Buf *b) {
   else emit_expr(c, node, b);
 }
 
+/* A tail CALL whose STATEMENT form drops the value the splice is read for:
+   tap/then/yield_self answer the receiver or the block's value, and an
+   iterator that answers its receiver cannot re-read a computed one. The
+   method-tail path already routes both to the value path (codegen_stmt.c);
+   a spliced block's tail needed the same, or the statement expression took
+   whatever the last emitted statement happened to leave (#4155). */
+static int block_tail_needs_value_form(Compiler *c, int id) {
+  const NodeTable *nt = c->nt;
+  if (nt_kind(nt, id) != NK_CallNode || nt_ref(nt, id, "block") < 0) return 0;
+  const char *nm = nt_str(nt, id, "name");
+  if (!nm) return 0;
+  if (sp_streq(nm, "tap") || sp_streq(nm, "then") || sp_streq(nm, "yield_self"))
+    return nt_ref(nt, id, "receiver") >= 0;
+  return iter_value_answers_recv(c, id) && tail_iter_receiver(c, id) < 0;
+}
+
 void emit_block_invoke(Compiler *c, int args_node, Buf *b, int indent, int as_expr,
                        TyKind want_ty) {
   /* want_ty: the consumer's slot type for the block's value (the YieldNode's
@@ -1149,7 +1165,8 @@ void emit_block_invoke(Compiler *c, int args_node, Buf *b, int indent, int as_ex
                rescue modifier is an if/else over setjmp, whose two arms
                compute the value and drop it. Same void tail as the rest. */
             sp_streq(nt_type(nt, bd3[bn3 - 1]), "RescueModifierNode") ||
-            sp_streq(nt_type(nt, bd3[bn3 - 1]), "BeginNode"))) {
+            sp_streq(nt_type(nt, bd3[bn3 - 1]), "BeginNode") ||
+            block_tail_needs_value_form(c, bd3[bn3 - 1]))) {
     /* A GNU statement-expression's value is its last statement only when that
        statement is an EXPRESSION; a trailing if/case/begin STATEMENT yields
        void, so a block whose value is such a construct (`wrap { if c then a
