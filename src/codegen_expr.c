@@ -526,6 +526,28 @@ static void emit_ternary_arm(Compiler *c, int nd, TyKind res, Buf *b) {
   const NodeTable *nt = c->nt;
   const char *bty = nt_type(nt, nd);
   if (res == TY_POLY && comp_ntype(c, nd) != TY_POLY) { emit_boxed(c, nd, b); return; }
+  /* An arm with no C VALUE cannot sit in a C conditional beside a typed
+     sibling: a method whose body is `nil` compiles to a void function, and
+     `a && a.analyze` put that call straight into one arm of `? :` whose other
+     arm is an sp_Att *. Sequence the call and produce the sibling type's nil
+     -- NULL for a pointer, which IS nil there -- the same shape as the raise
+     coercion below. The poly arm above already handles it by boxing, which is
+     why only a TYPED sibling ever saw this (#4163). */
+  { TyKind at = comp_ntype(c, nd);
+    if ((at == TY_VOID || at == TY_NIL) && res != TY_POLY && res != TY_UNKNOWN &&
+        res != TY_VOID && res != TY_NIL) {
+      Buf ab; memset(&ab, 0, sizeof ab);
+      emit_expr(c, nd, &ab);
+      const char *nv = nil_value(res);
+      if (!nv) nv = default_value(res);
+      if (!nv) nv = "0";
+      /* a bare `nil` arm emits nothing at all; only a call needs sequencing */
+      if (ab.p && ab.p[0]) buf_printf(b, "(%s, %s)", ab.p, nv);
+      else buf_puts(b, nv);
+      free(ab.p);
+      return;
+    }
+  }
   if (ty_is_array(res) && bty && sp_streq(bty, "ArrayNode")) {
     int bn = 0; nt_arr(nt, nd, "elements", &bn);
     if (bn == 0) {
