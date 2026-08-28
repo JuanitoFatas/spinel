@@ -191,7 +191,8 @@ int emit_ctor_yield_inline(Compiler *c, int id, int ci, Buf *b) {
   int pos_argc = kwh >= 0 ? argc2 - 1 : argc2;
   for (int i = 0; i < m->nparams; i++) {
     emit_indent(b, din);
-    buf_printf(b, "lv__y%d_%s = ", tag, m->pnames[i]);
+    { char rn[128]; snprintf(rn, sizeof rn, "_y%d_%s", tag, m->pnames[i]);
+      emit_inlined_param_target(c, m, m->pnames[i], rn, b); }
     /* A param past the rest binds by name, never positionally. */
     int past_rest = m->rest_idx >= 0 && i > m->rest_idx;
     int provided = (i < pos_argc && !past_rest) ? argv2[i] : -1;

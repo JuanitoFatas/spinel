@@ -4177,6 +4177,21 @@ static int proc_owns_local(Compiler *c, int create, const char *nm) {
   return 0;
 }
 
+/* How an inlined method's PARAMETER is spelled as an assignment target, under
+   the same rule emit_inlined_local_decl declares it by: a cell-promoted local
+   is reached through `(*_cell_x)`, a plain one through `lv_x`. The three
+   inline emitters bound the plain form unconditionally, so a parameter an
+   inner block captures was assigned under a name nothing had declared -- the
+   read path was fixed for exactly this in #4088 and the binder was not
+   (#4147). `rn` is the renamed (per-inline) name. */
+void emit_inlined_param_target(Compiler *c, Scope *m, const char *pname,
+                               const char *rn, Buf *b) {
+  LocalVar *lv = pname ? scope_local(m, pname) : NULL;
+  if (lv && lv->is_cell) buf_printf(b, "(*_cell_%s) = ", rn);
+  else buf_printf(b, "lv_%s = ", rn);
+  (void)c;
+}
+
 /* One inlined local's declaration. A local an inner block captures is reached
    through a heap CELL, and the body keeps that form when the method is inlined
    here -- so the cell is what this frame declares, under the same renamed name.
@@ -6504,7 +6519,8 @@ int emit_super_inline(Compiler *c, int id, Buf *b, int indent, int as_expr) {
   const int *argv = args >= 0 ? nt_arr(c->nt, args, "arguments", &argc) : NULL;
   for (int i = 0; i < m->nparams; i++) {
     emit_indent(b, din);
-    buf_printf(b, "lv__y%d_%s = ", tag, m->pnames[i]);
+    { char rn[128]; snprintf(rn, sizeof rn, "_y%d_%s", tag, m->pnames[i]);
+      emit_inlined_param_target(c, m, m->pnames[i], rn, b); }
     int sv = g_nren; g_nren = saved_nren;
     if (is_forwarding) {
       if (i < s->nparams) {

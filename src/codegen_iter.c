@@ -332,7 +332,8 @@ int emit_inline_call_x(Compiler *c, int id, Buf *b, int indent, int as_expr) {
   int ds_tmp = emit_ds_hash_materialize(c, kwh, &ds_type);
   for (int i = 0; i < m->nparams; i++) {
     emit_indent(b, din);
-    buf_printf(b, "lv__y%d_%s = ", tag, m->pnames[i]);
+    { char rn[128]; snprintf(rn, sizeof rn, "_y%d_%s", tag, m->pnames[i]);
+      emit_inlined_param_target(c, m, m->pnames[i], rn, b); }
     /* hide THIS inline's renames only: args are call-site expressions,
        and the call site may itself be an outer inlined body whose locals
        are renamed (nested yield-method inlines) -- zeroing the whole
