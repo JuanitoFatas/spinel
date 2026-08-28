@@ -559,6 +559,14 @@ int main(int argc, char **argv) {
      in the build log, easy to scroll past. Fail the build instead, so the
      emitter's own bug surfaces here rather than at run time. */
   s_add(&cmd, "-Werror=incompatible-pointer-types -Werror=int-conversion ");
+  /* The error list is spinel's output, not cc's: the same flag assembly
+     remaps every location onto the Ruby line and promotes two pointer
+     warnings to errors. cc's own default cap (20 for clang) truncated that
+     list with a "too many errors" line AFTER twenty had scrolled past, so a
+     build's remaining work read 30-40% smaller than it was. Lift the cap --
+     0 means unlimited in both -- in each compiler's own spelling; an unknown
+     -f flag is an error, not a warning (#4152). */
+  s_add(&cmd, cc_is_clang(cc_cmd) ? "-ferror-limit=0 " : "-fmax-errors=0 ");
   /* With #line on, cc reports against the .rb -- but only the LINE is remapped.
      The column is the C one, and a whole Ruby line is emitted as one C line, so
      it routinely lands hundreds of columns past the end of the source line it
