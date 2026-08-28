@@ -5524,6 +5524,13 @@ static void emit_ivar_nil_inits(Buf *b, ClassInfo *ci, const char *lv,
   }
 }
 
+/* Was this "class" written as `module`? Module-ness lives in the AST node
+   kind, not in ClassInfo, and two emitters need the same answer. */
+int comp_class_is_module(Compiler *c, ClassInfo *ci) {
+  const char *dt = ci ? nt_type(c->nt, ci->def_node) : NULL;
+  return dt && sp_streq(dt, "ModuleNode");
+}
+
 void emit_class_new(Compiler *c, ClassInfo *ci, Buf *b) {
   /* Native (C-backed) class: constructor + methods live in the package; nothing
      is generated here (see the native_method externs + .new emission). */
@@ -5711,7 +5718,18 @@ void emit_class_new(Compiler *c, ClassInfo *ci, Buf *b) {
     else buf_puts(b, "void");
     buf_printf(b, ") {\n  sp_%s self = {0};\n  self.cls_id = %d;\n", ci->c_name, cid);
     emit_ivar_nil_inits(b, ci, "self.", "  ", ";\n");
-    if (init >= 0 && c->scopes[init].reachable && !c->scopes[init].yields) {
+    if (comp_class_is_module(c, ci)) {
+      /* A MODULE has no `new` -- `Buffering.new` is a NoMethodError in Ruby --
+         and its method bodies are emitted into each INCLUDER, not under the
+         module's own name. So there is no sp_<Module>_initialize to call, and
+         emitting the call made the constructor ill-formed: a hard error on a
+         compiler that rejects implicit declarations, and a quietly built
+         module instance where CRuby raises (#4167). The constructor itself
+         stays, since call sites in every position name it. */
+      buf_printf(b, "  sp_raise_cls(\"NoMethodError\", \"undefined method 'new' for module %s\");\n",
+                 class_ruby_name(c, cid));
+    }
+    else if (init >= 0 && c->scopes[init].reachable && !c->scopes[init].yields) {
       buf_printf(b, "  sp_%s_initialize(&self", c->classes[initcls].c_name);
       Scope *s = &c->scopes[init];
       for (int i = 0; i < s->nparams; i++) buf_printf(b, ", lv_%s", s->pnames[i]);
@@ -5806,7 +5824,13 @@ void emit_class_new(Compiler *c, ClassInfo *ci, Buf *b) {
      (read-only ivars stay nil; written ones are overwritten). */
   emit_ivar_nil_inits(b, ci, "self->", "  ", ";\n");
   } /* close else (non-exception subclass allocation) */
-  if (init >= 0 && c->scopes[init].reachable && !c->scopes[init].yields) {
+  if (comp_class_is_module(c, ci)) {
+    /* see the value-type branch above: a module has no `new`, and no
+       sp_<Module>_initialize exists to call (#4167) */
+    buf_printf(b, "  sp_raise_cls(\"NoMethodError\", \"undefined method 'new' for module %s\");\n",
+               class_ruby_name(c, cid));
+  }
+  else if (init >= 0 && c->scopes[init].reachable && !c->scopes[init].yields) {
     buf_printf(b, "  sp_%s_initialize(", c->classes[initcls].c_name);
     if (initcls != cid) buf_printf(b, "(sp_%s *)", c->classes[initcls].c_name);
     buf_puts(b, "self");
