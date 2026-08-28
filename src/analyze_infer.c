@@ -2866,14 +2866,32 @@ else {
      TY_INT (so `result[1].termsig.nil?` is well-typed). */
   if (recv >= 0 && rt == TY_PROCESS_STATUS && argc == 0) {
     if (sp_streq(name, "signaled?") || sp_streq(name, "exited?") ||
-        sp_streq(name, "coredump?") || sp_streq(name, "success?"))
+        sp_streq(name, "coredump?"))
       return TY_BOOL;
+    /* success? is nil, not false, when the process did not exit normally */
+    if (sp_streq(name, "success?")) return TY_POLY;
     if (sp_streq(name, "exitstatus") || sp_streq(name, "termsig") ||
         sp_streq(name, "pid"))
       return TY_INT;
     if (sp_streq(name, "to_s") || sp_streq(name, "inspect") ||
         sp_streq(name, "class")) return TY_STRING;
     if (sp_streq(name, "==")) return TY_BOOL;
+  }
+  /* The same names on a BOXED status -- which is how one normally arrives,
+     since waitpid2 answers an Array and its second element is read out of a
+     poly container. emit_poly_builtin_method already emits the unboxed scalar
+     for exactly these seven (behind a runtime cls_id check), so without the
+     matching rule here the two sides disagreed: `"exit #{st.exitstatus}"`
+     asked sp_poly_to_s for a poly the emitter had produced as an sp_int. */
+  if (recv >= 0 && rt == TY_POLY && argc == 0 &&
+      !an_user_defines_or_reads(c, name)) {
+    if (sp_streq(name, "signaled?") || sp_streq(name, "exited?") ||
+        sp_streq(name, "coredump?"))
+      return TY_BOOL;
+    if (sp_streq(name, "success?")) return TY_POLY;
+    if (sp_streq(name, "exitstatus") || sp_streq(name, "termsig") ||
+        sp_streq(name, "pid"))
+      return TY_INT;
   }
   /* OpenStruct: dynamic members. A member read (any name, arg-less, no
      writer) or `[sym]` returns a boxed value; a writer / `[]=` returns the

@@ -19,8 +19,11 @@
 #include "sp_alloc.h"   /* sp_RbVal, sp_gc_alloc, sp_raise_cls */
 #include "sp_process_status.h"
 
-/* Bound checks for the sp_int helpers below. */
-#define SP_STATUS_NIL (-1)   /* codegen: -1 -> nil box */
+/* CRuby answers nil for exitstatus on a signaled status and for termsig on
+   one that exited, and spinel already has a spelling for a nullable Integer:
+   SP_INT_NIL, which every renderer and `.nil?` understands. -1 is a real
+   Integer here -- `p st.termsig` printed -1 rather than nil. */
+#define SP_STATUS_NIL SP_INT_NIL
 
 /* ---- allocator ---- */
 
@@ -59,8 +62,12 @@ int sp_process_status_coredump_p(sp_int s) {
   return WCOREDUMP((int)s) ? 1 : 0;
 }
 
+/* Tri-state, because CRuby's is: true when the process exited with status 0,
+   false when it exited with anything else, and NIL when it did not exit
+   normally at all. -1 is that nil; the call site boxes it. */
 int sp_process_status_success_p(sp_int s) {
-  return (WIFEXITED((int)s) && WEXITSTATUS((int)s) == 0) ? 1 : 0;
+  if (!WIFEXITED((int)s)) return -1;
+  return WEXITSTATUS((int)s) == 0 ? 1 : 0;
 }
 
 /* ---- accessors ---- */

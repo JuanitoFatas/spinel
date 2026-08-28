@@ -10057,7 +10057,12 @@ int emit_value_recv_call(Compiler *c, int id, Buf *b) {
       if (sp_streq(name, "signaled?"))   buf_printf(b, "sp_process_status_signaled_p((%s)->status)", r);
       else if (sp_streq(name, "exited?"))     buf_printf(b, "sp_process_status_exited_p((%s)->status)", r);
       else if (sp_streq(name, "coredump?"))   buf_printf(b, "sp_process_status_coredump_p((%s)->status)", r);
-      else if (sp_streq(name, "success?"))    buf_printf(b, "sp_process_status_success_p((%s)->status)", r);
+      /* tri-state: -1 is CRuby's nil for a process that did not exit */
+      else if (sp_streq(name, "success?"))
+        { int tsx = ++g_tmp;
+          buf_printf(b, "({ int _t%d = sp_process_status_success_p((%s)->status);"
+                        " _t%d < 0 ? sp_box_nil() : sp_box_bool((sp_bool)_t%d); })",
+                     tsx, r, tsx, tsx); }
       else if (sp_streq(name, "exitstatus"))  buf_printf(b, "sp_process_status_exitstatus((%s)->status)", r);
       else if (sp_streq(name, "termsig"))     buf_printf(b, "sp_process_status_termsig((%s)->status)", r);
       else if (sp_streq(name, "pid"))         buf_printf(b, "(%s)->pid", r);

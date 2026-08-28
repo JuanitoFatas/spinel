@@ -8,3 +8,12 @@ true
 true
 true
 true
+exit 1
+true
+true
+false
+9
+nil
+true
+nil
+false

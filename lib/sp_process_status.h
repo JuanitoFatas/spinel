@@ -27,15 +27,17 @@ typedef struct sp_ProcessStatus_s {
    status. */
 sp_ProcessStatus *sp_process_status_new(sp_int pid, sp_int status);
 
-/* Predicates (all return 0 or 1) */
+/* Predicates. All return 0 or 1 except success_p, which is tri-state: -1
+   means CRuby's nil (the process did not exit normally). */
 int sp_process_status_exited_p(sp_int s);
 int sp_process_status_signaled_p(sp_int s);
 int sp_process_status_coredump_p(sp_int s);
 int sp_process_status_success_p(sp_int s);
 
 /* Accessors. CRuby semantics: exited? -> exitstatus, signaled? -> termsig;
-   the un-applicable accessor answers nil (encoded as -1 here, the
-   codegen boxes -1 as nil). */
+   the un-applicable accessor answers nil, carried as SP_INT_NIL -- the
+   nullable-Integer sentinel the rest of the runtime uses, so `p st.termsig`
+   renders nil and `st.termsig.nil?` is true. */
 sp_int sp_process_status_pid(sp_int s);
 sp_int sp_process_status_exitstatus(sp_int s);
 sp_int sp_process_status_termsig(sp_int s);

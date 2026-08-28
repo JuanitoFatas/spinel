@@ -3766,13 +3766,26 @@ static int emit_poly_builtin_method(Compiler *c, int id, Buf *b) {
     const char *ps_int_fn = NULL;     /* takes the int status word, returns sp_int */
     const char *ps_bool_fn = NULL;    /* same input, returns sp_bool (0/1) */
     const char *ps_pid_fn = NULL;     /* takes the boxed struct, returns sp_int */
+    const char *ps_tri_fn = NULL;     /* same input, -1/0/1 -> nil/false/true */
     if (sp_streq(name, "signaled?")) ps_bool_fn = "sp_process_status_signaled_p";
     else if (sp_streq(name, "exited?")) ps_bool_fn = "sp_process_status_exited_p";
     else if (sp_streq(name, "coredump?")) ps_bool_fn = "sp_process_status_coredump_p";
-    else if (sp_streq(name, "success?")) ps_bool_fn = "sp_process_status_success_p";
+    else if (sp_streq(name, "success?")) ps_tri_fn = "sp_process_status_success_p";
     else if (sp_streq(name, "exitstatus")) ps_int_fn = "sp_process_status_exitstatus";
     else if (sp_streq(name, "termsig")) ps_int_fn = "sp_process_status_termsig";
     else if (sp_streq(name, "pid")) ps_pid_fn = "sp_process_status_pid_of";
+    if (ps_tri_fn) {
+      /* success? is nil, not false, when the process did not exit normally --
+         so the answer rides boxed, as its inferred TY_POLY says. */
+      int tv = ++g_tmp, tr2 = ++g_tmp;
+      buf_printf(b, "({ sp_RbVal _t%d = ", tv); emit_expr(c, recv, b);
+      buf_printf(b, "; int _t%d = _t%d.tag == SP_TAG_OBJ && _t%d.cls_id == SP_BUILTIN_PROCESS_STATUS"
+                    " ? %s(((sp_ProcessStatus *)_t%d.v.p)->status)"
+                    " : (int)(sp_raise_nomethod(sp_nomethod_msg(\"%s\", _t%d)), 0);"
+                    " _t%d < 0 ? sp_box_nil() : sp_box_bool((sp_bool)_t%d); })",
+                 tr2, tv, tv, ps_tri_fn, tv, name, tv, tr2, tr2);
+      return 1;
+    }
     if (ps_bool_fn) {
       int tv = ++g_tmp;
       buf_printf(b, "({ sp_RbVal _t%d = ", tv); emit_expr(c, recv, b);
@@ -21077,27 +21090,17 @@ else { memcpy(dir, sf, n); dir[n] = 0; } }
       buf_puts(b, " }");
       buf_printf(b, " sp_int _r = sp_process_spawn(_t%d, sp_box_poly_array(_t%d), sp_box_poly_array(_t%d));", tcmd, tmerged, topts);
       buf_printf(b, " _r; })\n");
-      /* Process.spawn returns an Integer pid. g_ret_type must be saved
-         and restored so the assignment does not leak into the rest of
-         the enclosing function (a later `return "..."` after a Process
-         call would otherwise use TY_INT as its temp type). */
-      { TyKind sv_rt = g_ret_type;
-        g_ret_type = TY_INT;
-        g_ret_type = sv_rt; }
       return;
     }
-    /* Process.waitpid2(pid) -> [pid, raw_status]. The C function returns
-       a 2-element PolyArray (unboxed). We mark the return type as
-       TY_POLY_ARRAY so the codegen emits a proper Array accessor.
-       g_ret_type is saved and restored for the same reason as the
-       Process.spawn arm above. */
+    /* Process.waitpid2(pid) -> [pid, raw_status]: the runtime hands back a
+       2-element PolyArray, unboxed. The call's own type comes from
+       infer_call, like every other arm here -- g_ret_type is the enclosing
+       FUNCTION's return type, and writing it at a call site leaked into
+       every later `return` in that function. */
     if (tcn && sp_streq(tcn, "Process") && sp_streq(name, "waitpid2") && argc == 1) {
-      TyKind sv_rt = g_ret_type;
-      g_ret_type = TY_POLY_ARRAY;
       buf_puts(b, "sp_process_waitpid2(");
       emit_int_expr(c, argv[0], b);
       buf_puts(b, ")");
-      g_ret_type = sv_rt;
       return;
     }
     /* Process::Status.new(status_int) is handled earlier in

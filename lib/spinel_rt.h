@@ -391,6 +391,13 @@ static inline sp_float sp_math_gamma(sp_float x){if(x<0.0&&x==floor(x))sp_raise_
    dereferences it in the poly-receiver path, so the layout must be
    visible to every program. */
 #include "sp_process_status.h"
+/* Process.spawn / Process.waitpid2 live in lib/sp_process.c, which cannot
+   include this header (see the note there). Declare them here rather than
+   emitting the prototypes into every generated program: neither returns int,
+   so an implicit declaration mistypes the result, and a program that never
+   spawns should not carry two lines about it. */
+sp_int sp_process_spawn(sp_RbVal cmd, sp_RbVal args, sp_RbVal opts);
+sp_PolyArray *sp_process_waitpid2(sp_int pid);
 
 
 /* `recycle`: optional sweep hook. If non-NULL, sp_gc_collect calls

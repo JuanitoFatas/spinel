@@ -66,3 +66,33 @@ got_st  = result[1]
 puts got_pid == pid
 puts got_st.exited?
 puts got_st.success?
+
+# 5) The boxed status in a String consumer. The accessors are answered on a
+#    poly receiver by emit_poly_builtin_method, which emits an unboxed scalar,
+#    so the inference has to type them the same way -- otherwise the
+#    interpolation asks sp_poly_to_s for what the emitter produced as sp_int.
+r, w = IO.pipe
+pid = Process.spawn("/bin/false", out: w)
+w.close
+r.read
+res = Process.waitpid2(pid)
+st = res[1]
+puts "exit #{st.exitstatus}"
+puts "pid=#{st.pid}" == "pid=#{pid}"
+
+# 6) A status that did NOT exit normally. CRuby answers nil, not false, for
+#    success?, and nil for exitstatus; termsig carries the signal. The nil
+#    accessors ride the SP_INT_NIL sentinel, so they render as nil and answer
+#    .nil? rather than reading back as -1.
+r, w = IO.pipe
+pid = Process.spawn("/bin/sleep", "5", out: w)
+w.close
+Process.kill("KILL", pid)
+_, ks = Process.waitpid2(pid)
+p ks.signaled?
+p ks.exited?
+p ks.termsig
+p ks.exitstatus
+p ks.exitstatus.nil?
+p ks.success?
+p ks.coredump?
