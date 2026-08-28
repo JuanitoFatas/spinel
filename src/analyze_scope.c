@@ -1495,6 +1495,31 @@ static void sg_mark_activation(NodeTable *nt, int id, int newci) {
   nt_node_set_str(nt, id, "sg_activates", buf);
 }
 
+/* Does this `def <recv>.m` body need a `self` -- an ivar of its own, or the
+   receiver itself? Without a synthesized subclass the def falls through to the
+   ordinary emitter, which gives it no self: such a body then reads its @ivars
+   as the ENCLOSING class's and names an undeclared `self`. A body that touches
+   neither compiles as a plain function, dead or not, which is what several
+   ruby/spec examples rely on -- so only the ones that cannot are refused. */
+static int sg_def_needs_self(Compiler *c, int def_id) {
+  const NodeTable *nt = c->nt;
+  int sc = -1;
+  for (int s = 0; s < c->nscopes; s++)
+    if (c->scopes[s].def_node == def_id) { sc = s; break; }
+  if (sc < 0) return 0;
+  for (int n = 0; n < nt->count && n < c->node_cap; n++) {
+    if (c->nscope[n] != sc) continue;
+    NodeKind k = nt_kind(nt, n);
+    if (k == NK_SelfNode ||
+        k == NK_InstanceVariableReadNode || k == NK_InstanceVariableWriteNode ||
+        k == NK_InstanceVariableOperatorWriteNode ||
+        k == NK_InstanceVariableOrWriteNode || k == NK_InstanceVariableAndWriteNode ||
+        k == NK_InstanceVariableTargetNode)
+      return 1;
+  }
+  return 0;
+}
+
 void register_singleton_defs(Compiler *c) {
   /* not const: the pass marks a resolved dsm call on the node itself */
   NodeTable *nt = (NodeTable *)c->nt;
@@ -1531,7 +1556,20 @@ void register_singleton_defs(Compiler *c) {
     if (sg_binding(c, id, recv, &is_const, &rn, &owner) < 0) continue;
     int parent_ci = -1;
     int wnode = sg_single_new_write(c, rn, is_const, owner, &parent_ci);
-    if (wnode < 0) continue;   /* not statically traceable: leave as today */
+    if (wnode < 0) {
+      /* Not traceable to one `new` of a user class, so there is no subclass to
+         synthesize. A `def <recv>.m` then fell through to the ordinary def
+         emitter, which has no singleton to attach it to: the body came out as
+         a plain function of the enclosing scope, with `self` undeclared and
+         its `@ivars` read as the enclosing class's. Say so here rather than
+         letting the C compiler report it against generated code (#4169).
+         extend / define_singleton_method keep their own fallbacks. */
+      if (idk == NK_DefNode && !is_extend && !is_dsm && !is_scls &&
+          sg_def_needs_self(c, id))
+        unsupported_feature(c, id, "singleton method that needs a self, on a "
+                                   "receiver that is not one user-class instance");
+      continue;   /* not statically traceable: leave as today */
+    }
     /* a user-defined method of the singleton name is that method, not the
        machinery (#2652). */
     if (is_dsm && comp_method_in_chain(c, parent_ci, "define_singleton_method", NULL) >= 0) continue;

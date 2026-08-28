@@ -42,7 +42,7 @@ RBS_SRC      = $(wildcard $(RBS_DIR)/src/*.c) $(wildcard $(RBS_DIR)/src/util/*.c
 RBS_OBJ      = $(patsubst $(RBS_DIR)/src/%.c,build/rbs/%.o,$(RBS_SRC))
 RBS_LIB      = build/librbs.a
 
-.PHONY: all regexp rbs_extract rbs-test rbs-seed-test re-lit-test alloc-report-test rubyspec rubyspec-gate spin-check \
+.PHONY: all regexp rbs_extract rbs-test rbs-seed-test re-lit-test reject-test alloc-report-test rubyspec rubyspec-gate spin-check \
         test test-run clean-test-results regen-rbs-expected \
         regen-expected regen-expected-err bench optcarrot gate check gate-legs gate-test gate-bench \
         gate-optcarrot clean install uninstall deps tools
@@ -590,7 +590,7 @@ test:
 # The actual run. rbs-test golden-checks the RBS extractor (cheap, C-only).
 # rbs-seed-test checks the seeds actually reach the analyzer (incl. nested
 # classes, #1417).
-test-run: rbs-test rbs-seed-test re-lit-test $(TEST_TARGETS) $(PKG_TEST_TARGETS)
+test-run: rbs-test rbs-seed-test re-lit-test reject-test $(TEST_TARGETS) $(PKG_TEST_TARGETS)
 	@if [ -z "$(TIMEOUT_BIN)" ]; then echo "Note: no 'timeout' command found; running without time limits."; fi
 	@if [ -t 1 ]; then printf '\n'; fi
 	@pass=$$(grep -l '^PASS' build/test-results/*.ok 2>/dev/null | wc -l); \
@@ -608,6 +608,20 @@ test-run: rbs-test rbs-seed-test re-lit-test $(TEST_TARGETS) $(PKG_TEST_TARGETS)
 	done; \
 	echo "Tests: $$pass pass, $$fail fail, $$err error"; \
 	if [ $$fail -ne 0 ] || [ $$err -ne 0 ]; then exit 1; fi
+
+# ---- Rejection diagnostics ----
+# A construct spinel deliberately does not compile must name itself, at the
+# Ruby line that has it. Falling through to the C compiler reports generated
+# code the author never wrote (#4169).
+reject-test: $(SPINEL)
+	@ok=1; tmp=$$(mktemp -d /tmp/spinel-reject.XXXXXX); \
+	t=test/reject/singleton_on_untraceable_recv.rb; \
+	if $(SPINEL) "$$t" -c --no-line-map -o "$$tmp/r.c" >"$$tmp/r.out" 2>&1; then \
+	  echo "reject-test: FAIL (a singleton def on an untraceable receiver compiled)"; ok=0; \
+	else grep -q "singleton method that needs a self, on a receiver that is not one user-class instance" "$$tmp/r.out" || \
+	  { echo "reject-test: FAIL (rejected without saying why)"; sed -n 1,5p "$$tmp/r.out"; ok=0; }; fi; \
+	rm -rf "$$tmp"; \
+	if [ $$ok -eq 1 ]; then echo "reject-test: pass"; else exit 1; fi
 
 # ---- RBS extractor golden tests ----
 RBS_TEST_SRCS := $(sort $(wildcard test/rbs/*.rbs))
