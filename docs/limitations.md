@@ -243,8 +243,9 @@ still works.
   ArgumentError names can differ from CRuby — deterministically so.
 - **Thread data races are observable** — Spinel runs threads with real
   parallelism and no GVL, so two threads mutating the same `Array`/`Hash`/object
-  without a `Mutex` is undefined at the Ruby level, exactly as in JRuby and
-  TruffleRuby. CRuby's GVL makes individual operations appear atomic; Spinel does
+  without a `Mutex` is undefined at the Ruby level, similar to `Array`/`Hash` in
+  JRuby and `Array` in TruffleRuby.
+  CRuby's GVL makes individual operations appear atomic; Spinel does
   not, and adds no implicit per-object locking — correctness across threads is the
   program's responsibility via `Mutex`/`Queue`/`ConditionVariable`. Relatedly,
   thread *interleaving* (and so the ordering of `Thread.pass`, `Thread.list`

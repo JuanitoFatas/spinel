@@ -78,8 +78,9 @@ These are deliberate consequences of real parallelism, listed in
 
 - **Data races are observable.** Two threads mutating the same
   `Array`/`Hash`/object without a `Mutex` is undefined at the Ruby level,
-  exactly as in JRuby and TruffleRuby. CRuby's GVL makes individual operations
-  appear atomic; Spinel does not, and adds no implicit per-object locking.
+  similar to `Array`/`Hash` in JRuby and `Array` in TruffleRuby.
+  CRuby's GVL makes individual operations appear atomic;
+  Spinel does not, and adds no implicit per-object locking.
   Correctness across threads is the program's responsibility via
   `Mutex` / `Queue` / `ConditionVariable`.
 - **Interleaving is nondeterministic.** The ordering of `Thread.pass`,
