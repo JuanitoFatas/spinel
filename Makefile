@@ -632,6 +632,20 @@ rbs-test: $(RBS_EXTRACT_BIN)
 	  fi; \
 	done; \
 	if [ -t 1 ]; then printf '\n'; fi; \
+	tmp=$$(mktemp -d /tmp/spinel-rbscyc.XXXXXX); \
+	mkdir -p "$$tmp/d"; ln -s . "$$tmp/d/d"; \
+	mkdir -p "$$tmp/b/inner"; ln -s .. "$$tmp/b/inner/up"; \
+	mkdir -p "$$tmp/x" "$$tmp/y"; ln -s ../y "$$tmp/x/toy"; ln -s ../x "$$tmp/y/tox"; \
+	printf 'class Cyc\n  def a: () -> String\nend\n' > "$$tmp/d/t.rbs"; \
+	for t in d b x; do \
+	  if [ -n "$$($(RBS_EXTRACT_BIN) "$$tmp/$$t" 2>&1 >/dev/null)" ]; then \
+	    echo "rbs-test FAIL: a directory cycle under $$t was walked (#4159)"; fail=1; fi; \
+	done; \
+	$(RBS_EXTRACT_BIN) "$$tmp/d" 2>/dev/null | grep -q '^class Cyc$$' || \
+	  { echo "rbs-test FAIL: an .rbs beside a cycle was not read (#4159)"; fail=1; }; \
+	if $(RBS_EXTRACT_BIN) "$$tmp/nosuch" 2>&1 >/dev/null | grep -q 'not found'; then \
+	  echo "rbs-test FAIL: stat failure still reported as 'not found' (#4159)"; fail=1; fi; \
+	rm -rf "$$tmp"; \
 	if [ $$fail -ne 0 ]; then echo "RBS extractor tests: FAIL"; exit 1; fi; \
 	echo "RBS extractor tests: $$n pass"
 

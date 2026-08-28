@@ -1607,6 +1607,16 @@ int infer_poly_call(Compiler *c, int id, TyKind rt, TyKind *out) {
         infer_type(c, argv[0]) == TY_STRING && infer_type(c, argv[1]) == TY_STRING)) &&
       !an_user_defines_or_reads(c, name))
     { *out = TY_STRING; return 1; }
+  /* poly.sub / poly.gsub with a block: like the typed String receiver's block
+     form, this always answers a String (the rebuilt receiver), whatever the
+     boxed value's runtime tag turns out to be. Without a rule here the call
+     fell through unresolved, and codegen's own poly gsub/sub arm only covers
+     the two-argument (blockless) shape above -- so this stayed unresolved on
+     both sides of the same gap. */
+  if (recv >= 0 && rt == TY_POLY && argc == 1 && nt_ref(nt, id, "block") >= 0 &&
+      (sp_streq(name, "sub") || sp_streq(name, "gsub")) &&
+      !an_user_defines_or_reads(c, name))
+    { *out = TY_STRING; return 1; }
   /* poly.compact / poly.flatten: an Array read out of a container answers a
      generic Array either way (#3423). */
   if (recv >= 0 && rt == TY_POLY && argc == 0 && nt_ref(nt, id, "block") < 0 &&
