@@ -4360,6 +4360,14 @@ static int emit_poly_method_dispatch(Compiler *c, int id, Buf *b) {
        switch has no builtin arm, so the hash fell through to the nil seed. */
     int is_poly_to_a = sp_streq(name, "to_a") &&
                        (comp_ntype(c, id) == TY_POLY_ARRAY || comp_ntype(c, id) == TY_POLY);
+    /* to_h on a poly value that is really a builtin hash (or an Array of
+       pairs, or a Struct): the user-class switch carries an arm per class that
+       defines to_h and none for the builtin, so a plain Hash reached the
+       default and raised -- naming Hash, the class whose method it is. Every
+       sibling (to_a, to_s, keys, length) already had its arm (#4170). */
+    int is_poly_to_h = sp_streq(name, "to_h") && argc == 0 &&
+                       nt_ref(nt, id, "block") < 0 &&
+                       comp_ntype(c, id) == TY_POLY;
     int ncand = 0, ncall_arm = 0;
     for (int k = 0; k < c->nclasses; k++) {
       int is_call = comp_method_in_chain(c, k, name, NULL) >= 0 ||
@@ -4367,7 +4375,7 @@ static int emit_poly_method_dispatch(Compiler *c, int id, Buf *b) {
       if (is_call || comp_reader_in_chain(c, k, name, NULL)) ncand++;
       if (is_call) ncall_arm++;
     }
-    if (ncand > 0 || is_lengthlike || is_pred || is_class_named || is_class_reflect || is_ostruct || is_io_rewind || is_poly_to_a) {
+    if (ncand > 0 || is_lengthlike || is_pred || is_class_named || is_class_reflect || is_ostruct || is_io_rewind || is_poly_to_a || is_poly_to_h) {
       TyKind ret = comp_ntype(c, id);
       /* an OpenStruct member is a boxed value; but when analyze typed the
          call concretely (a user method OR reader/alias resolves the name --
@@ -4386,7 +4394,8 @@ static int emit_poly_method_dispatch(Compiler *c, int id, Buf *b) {
          an AST walker reads `node.left` through exactly this dispatch, and
          paying a root push and pop per read made one twice as slow (#282). */
       int root_recv = ncall_arm > 0 || is_lengthlike || is_empty || is_pred ||
-                      is_class_named || is_class_reflect || is_ostruct || is_io_rewind || is_poly_to_a;
+                      is_class_named || is_class_reflect || is_ostruct || is_io_rewind || is_poly_to_a ||
+                      is_poly_to_h;
       buf_printf(b, "({ sp_RbVal _t%d = ", tv); emit_expr(c, recv, b); buf_puts(b, "; ");
       if (root_recv) buf_printf(b, "SP_GC_ROOT_RBVAL(_t%d); ", tv);
       emit_ctype(c, is_scalar_ret(ret) ? ret : TY_INT, b);
@@ -5001,6 +5010,17 @@ static int emit_poly_method_dispatch(Compiler *c, int id, Buf *b) {
         if (ret == TY_POLY) emit_boxed_text(c, sp_streq(name, "to_i") ? TY_INT : TY_FLOAT, cv, b);
         else buf_puts(b, cv);
         buf_puts(b, "; break;");
+        obj_default_done = 1;
+      }
+      /* to_h, the same shape: the switch carries an arm per class that defines
+         it and none for a builtin, so a plain Hash reached the default and
+         raised -- naming Hash, whose method it is. In the DEFAULT, not as a
+         pre-arm: a class that defines to_h has its own case and never gets
+         here, and a Struct, whose to_h is generated rather than emitted as a
+         method, does (#4170). */
+      if (!obj_default_done && argc == 0 && sp_streq(name, "to_h") &&
+          nt_ref(nt, id, "block") < 0 && ret == TY_POLY) {
+        buf_printf(b, " default: _t%d = sp_poly_to_h_val(_t%d); break;", tr, tv);
         obj_default_done = 1;
       }
       /* The blockless index enumerators, same shape: an Array reaching this

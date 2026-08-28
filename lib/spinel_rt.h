@@ -8755,6 +8755,35 @@ static sp_PolyArray *sp_poly_to_a_arr(sp_RbVal v) {
   sp_raise_nomethod(sp_nomethod_msg("to_a", v));
   return NULL;
 }
+
+/* `to_h` on a boxed receiver. A Hash answers ITSELF -- CRuby returns self, so
+   there is nothing to build and no copy to make. Every other kind goes through
+   its pair list: an Array of two-element Arrays is the pair form CRuby accepts,
+   and a Struct/Data answers its member table. Anything else raises the
+   NoMethodError the dispatch would have raised (#4170). */
+static sp_RbVal sp_poly_to_h_val(sp_RbVal v) {
+  if (v.tag == SP_TAG_OBJ && sp_poly_is_hash_kind(v.cls_id)) return v;
+  if (v.tag == SP_TAG_OBJ && sp_obj_to_h_fn && v.cls_id >= 0) {
+    sp_RbVal h = sp_obj_to_h_fn(v);
+    if (h.tag == SP_TAG_OBJ && sp_poly_is_hash_kind(h.cls_id)) return h;
+  }
+  if (v.tag == SP_TAG_OBJ && sp_poly_is_array_kind(v.cls_id)) {
+    sp_PolyArray *a = sp_poly_to_a_arr(v); SP_GC_ROOT(a);
+    sp_PolyPolyHash *out = sp_PolyPolyHash_new(); SP_GC_ROOT(out);
+    for (sp_int i = 0; a && i < a->len; i++) {
+      sp_RbVal e = a->data[i];
+      if (e.tag != SP_TAG_OBJ || !sp_poly_is_array_kind(e.cls_id) ||
+          sp_poly_length(e) != 2) {
+        sp_raise_cls("TypeError", "wrong element type (expected array of size 2)");
+        return sp_box_nil();
+      }
+      sp_PolyPolyHash_set(out, sp_poly_arr_get(e, 0), sp_poly_arr_get(e, 1));
+    }
+    return sp_box_obj(out, SP_BUILTIN_POLY_POLY_HASH);
+  }
+  sp_raise_nomethod(sp_nomethod_msg("to_h", v));
+  return sp_box_nil();
+}
 /* Hash#merge on a poly hash (a hash read out of a container, any variant):
    fold both operands' pairs into a general PolyPoly hash, the receiver first
    then the argument overriding (#3162). */
