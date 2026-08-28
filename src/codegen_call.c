@@ -5474,7 +5474,16 @@ static int emit_poly_method_dispatch(Compiler *c, int id, Buf *b) {
                   `#[](Symbol)` by name and handing sp_Range to an sp_sym slot
                   (#3384). The arm passes its temps raw, so a disagreement here
                   is always a hard C error, never a coercion that works. */
-               ty_is_struct_valued(pt0) || ty_is_struct_valued(at0))) {
+               ty_is_struct_valued(pt0) || ty_is_struct_valued(at0) ||
+               /* two concretely different CONTAINER kinds. sp_StrStrHash * and
+                  sp_SymPolyHash * are different structs, so the raw pass is a
+                  hard C error, not a coercion that works -- the same argument
+                  the collapsed-keyword slot below already makes. Without it, a
+                  `merge` seeded Hash[String, String] on an unrelated class
+                  took the arm for a plain Hash's call and the build stopped
+                  inside that class (#4172). */
+               (ty_is_hash(pt0) && ty_is_hash(at0)) ||
+               (ty_is_array(pt0) && ty_is_array(at0)))) {
             arm_key_incompat = 1; break;
           }
         }

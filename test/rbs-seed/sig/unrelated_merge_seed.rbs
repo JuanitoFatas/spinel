@@ -1,0 +1,3 @@
+class Flash
+  def merge: (Hash[String, String] other) -> Flash
+end
