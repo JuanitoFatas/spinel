@@ -5912,6 +5912,30 @@ else {
         buf_printf(b, "; SP_GC_ROOT(_t%d); sp_%sHash *_t%d = sp_%sHash_new(); SP_GC_ROOT(_t%d);", th, hn, tr, hn, tr);
         TyKind skt = ty_hash_key(rt);
         for (int i = 0; i < argc; i++) {
+          /* A splatted key list contributes each of its members, not one key.
+             `except` has had this arm since #3561; `slice` never did, so
+             `h.slice(*ATTRS)` handed the whole array to the key coercion and
+             kept whatever that answered -- no keys for a Symbol-keyed hash,
+             the first one for a local (#4164). */
+          if (nt_type(nt, argv[i]) && sp_streq(nt_type(nt, argv[i]), "SplatNode")) {
+            int sx = nt_ref(nt, argv[i], "expression");
+            int tsa = ++g_tmp, tsi = ++g_tmp;
+            buf_printf(b, " sp_PolyArray *_t%d = sp_poly_to_poly_array(", tsa);
+            if (sx >= 0) emit_boxed(c, sx, b); else buf_puts(b, "sp_box_nil()");
+            buf_printf(b, "); SP_GC_ROOT(_t%d);", tsa);
+            buf_printf(b, " for (sp_int _t%d = 0; _t%d < sp_PolyArray_length(_t%d); _t%d++) {",
+                       tsi, tsi, tsa, tsi);
+            { char el[64]; snprintf(el, sizeof el, "sp_PolyArray_get(_t%d, _t%d)", tsa, tsi);
+              int tsk = ++g_tmp;
+              if (rt == TY_POLY_POLY_HASH) buf_printf(b, " sp_RbVal _t%d = %s;", tsk, el);
+              else if (skt == TY_SYMBOL) buf_printf(b, " sp_sym _t%d = (sp_sym)sp_poly_to_i(%s);", tsk, el);
+              else if (skt == TY_INT) buf_printf(b, " sp_int _t%d = sp_poly_to_i(%s);", tsk, el);
+              else buf_printf(b, " const char *_t%d = sp_poly_to_s(%s);", tsk, el);
+              buf_printf(b, " if (sp_%sHash_has_key(_t%d, _t%d)) sp_%sHash_set(_t%d, _t%d, sp_%sHash_get(_t%d, _t%d)); }",
+                         hn, th, tsk, hn, tr, tsk, hn, th, tsk);
+            }
+            continue;
+          }
           int tk = ++g_tmp;
           if (rt == TY_POLY_POLY_HASH) {
             buf_printf(b, " { sp_RbVal _t%d = ", tk); emit_boxed(c, argv[i], b);
@@ -11238,12 +11262,57 @@ int emit_poly_call(Compiler *c, int id, Buf *b) {
       nt_ref(nt, id, "block") < 0 && !user_defines_or_reads(c, "slice") &&
       g_n_argov < MAX_ARG_OVERRIDE) {
     int tsv = ++g_tmp;
+    int has_splat = 0;
+    for (int i = 0; i < argc; i++)
+      if (nt_type(nt, argv[i]) && sp_streq(nt_type(nt, argv[i]), "SplatNode")) has_splat = 1;
     buf_printf(b, "({ sp_RbVal _t%d = ", tsv); emit_boxed(c, recv, b);
-    buf_printf(b, "; (_t%d.tag == SP_TAG_OBJ && sp_poly_is_hash_kind(_t%d.cls_id))"
-                  " ? sp_poly_hash_slice(_t%d, %d, (sp_RbVal[]){", tsv, tsv, tsv, argc);
-    for (int i = 0; i < argc; i++) { if (i) buf_puts(b, ", "); emit_boxed(c, argv[i], b); }
-    buf_puts(b, "}) : ");
-    if (argc == 1 || argc == 2) {
+    buf_puts(b, "; ");
+    int tkeys = -1;
+    if (has_splat) {
+      /* A splat contributes all of its elements, so the key list has a length
+         only the run time knows: build it as a PolyArray and hand the callee
+         its buffer. The fixed `(sp_RbVal[]){...}` below cannot express that --
+         it passed the whole array as ONE key, and as the wrong C type at that,
+         since the splat expression is an unboxed sp_PolyArray * (#4164). */
+      tkeys = ++g_tmp;
+      buf_printf(b, "sp_PolyArray *_t%d = sp_PolyArray_new(); SP_GC_ROOT(_t%d);", tkeys, tkeys);
+      for (int i = 0; i < argc; i++) {
+        if (nt_type(nt, argv[i]) && sp_streq(nt_type(nt, argv[i]), "SplatNode")) {
+          int sx = nt_ref(nt, argv[i], "expression");
+          int tss = ++g_tmp, tsi = ++g_tmp;
+          buf_printf(b, " sp_PolyArray *_t%d = sp_poly_to_poly_array(", tss);
+          if (sx >= 0) emit_boxed(c, sx, b); else buf_puts(b, "sp_box_nil()");
+          buf_printf(b, "); SP_GC_ROOT(_t%d);", tss);
+          buf_printf(b, " for (sp_int _t%d = 0; _t%d < sp_PolyArray_length(_t%d); _t%d++)"
+                        " sp_PolyArray_push(_t%d, sp_PolyArray_get(_t%d, _t%d));",
+                     tsi, tsi, tss, tsi, tkeys, tss, tsi);
+          continue;
+        }
+        buf_printf(b, " sp_PolyArray_push(_t%d, ", tkeys); emit_boxed(c, argv[i], b);
+        buf_puts(b, ");");
+      }
+      buf_puts(b, " ");
+    }
+    buf_printf(b, "(_t%d.tag == SP_TAG_OBJ && sp_poly_is_hash_kind(_t%d.cls_id))", tsv, tsv);
+    if (has_splat)
+      buf_printf(b, " ? sp_poly_hash_slice(_t%d, (int)_t%d->len, _t%d->data) : ", tsv, tkeys, tkeys);
+    else {
+      buf_printf(b, " ? sp_poly_hash_slice(_t%d, %d, (sp_RbVal[]){", tsv, argc);
+      for (int i = 0; i < argc; i++) { if (i) buf_puts(b, ", "); emit_boxed(c, argv[i], b); }
+      buf_puts(b, "}) : ");
+    }
+    if (has_splat) {
+      /* The non-hash side is String#slice / Array#slice, which is exactly #[]
+         and takes one argument or two -- and with a splat only the run time
+         knows which. Branch on the key list's length; any other length is the
+         ArgumentError CRuby raises. */
+      buf_printf(b, "(_t%d->len == 1 ? sp_poly_index_poly(_t%d, _t%d->data[0])"
+                    " : _t%d->len == 2"
+                    " ? sp_poly_slice(_t%d, sp_poly_to_i(_t%d->data[0]), sp_poly_to_i(_t%d->data[1]))"
+                    " : (sp_raise_cls(\"ArgumentError\", \"wrong number of arguments\"), sp_box_nil()))",
+                 tkeys, tsv, tkeys, tkeys, tsv, tkeys, tkeys);
+    }
+    else if (argc == 1 || argc == 2) {
       g_argov_node[g_n_argov] = recv;
       snprintf(g_argov_text[g_n_argov], sizeof g_argov_text[0], "_t%d", tsv);
       g_n_argov++;

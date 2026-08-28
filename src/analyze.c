@@ -11441,7 +11441,13 @@ static int splat_local_len(Compiler *c, int ex, int callid) {
    Ruby passes nothing. -1 for a name with no single answer. */
 static int splat_builtin_arity(const char *name) {
   static const struct { const char *name; int arity; } tab[] = {
-    { "fetch", 1 }, { "store", 2 }, { "insert", 2 }, { "slice", 1 },
+    /* slice is NOT here: it is the one name in this list whose arity depends
+       on the receiver -- Hash#slice is variadic, Array#slice and String#slice
+       take one argument or two -- so no single number is right. Expanding to
+       1 dropped every Hash key after the first and dropped Array/String's
+       length argument (#4164). A slice splat is expanded only where the
+       length is statically known, and left alone otherwise. */
+    { "fetch", 1 }, { "store", 2 }, { "insert", 2 },
     { "delete", 1 }, { "sub", 2 }, { "sub!", 2 }, { "gsub", 2 },
     { "gsub!", 2 }, { "[]", 1 }, { "[]=", 2 },
     { "key?", 1 }, { "has_key?", 1 }, { "include?", 1 }, { "member?", 1 },
@@ -11548,6 +11554,10 @@ static void expand_static_splat_args(Compiler *c) {
       /* A block moves the required count (`sub(pat) { .. }` takes one
          argument, not two), so leave those alone. */
       n = nt_ref(nt, id, "block") >= 0 ? -1 : splat_builtin_arity(cnm);
+      /* slice has no arity to expand to on purpose (see the table). Leave the
+         splat as it stands rather than refusing the program: Hash#slice's
+         emitter iterates it, which is what the call means. */
+      if (n < 0 && sp_streq(cnm, "slice")) continue;
       if (n < 0 && splat_user_method_rejects(c, cnm, n)) continue;
       if (n < 0) {
         /* No arity to expand to (a name we list for its literal-splat form

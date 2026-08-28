@@ -6021,6 +6021,37 @@ else {
         if (ret == TY_POLY) buf_printf(b, " default: _t%d = %s; break;", tr, gen);
       }
       else if (is_pdelete || is_pdig || is_pvalues_at) {
+        /* A splatted key list has a length only the run time knows, so the
+           fixed `(sp_RbVal[]){...}` cannot hold it -- every argument temp
+           carried the whole array as ONE key and the call answered from the
+           first (#4164). Flatten into a PolyArray and hand the callee its
+           buffer instead. */
+        int splat_n = 0;
+        for (int a = 0; a < argc; a++)
+          if (nt_type(nt, argv[a]) && sp_streq(nt_type(nt, argv[a]), "SplatNode")) splat_n = 1;
+        int tkl = -1;
+        if (splat_n && !is_pdelete) {
+          tkl = ++g_tmp;
+          buf_printf(b, " sp_PolyArray *_t%d = sp_PolyArray_new(); SP_GC_ROOT(_t%d);", tkl, tkl);
+          for (int a = 0; a < argc; a++) {
+            char tn[32]; snprintf(tn, sizeof tn, "_t%d", atmp[a]);
+            if (nt_type(nt, argv[a]) && sp_streq(nt_type(nt, argv[a]), "SplatNode")) {
+              int tsp = ++g_tmp, tsj = ++g_tmp;
+              buf_printf(b, " sp_PolyArray *_t%d = sp_poly_to_poly_array(", tsp);
+              if (atmp_ty[a] == TY_POLY) buf_puts(b, tn);
+              else emit_boxed_text(c, atmp_ty[a], tn, b);
+              buf_printf(b, "); SP_GC_ROOT(_t%d);", tsp);
+              buf_printf(b, " for (sp_int _t%d = 0; _t%d < sp_PolyArray_length(_t%d); _t%d++)"
+                            " sp_PolyArray_push(_t%d, sp_PolyArray_get(_t%d, _t%d));",
+                         tsj, tsj, tsp, tsj, tkl, tsp, tsj);
+              continue;
+            }
+            buf_printf(b, " sp_PolyArray_push(_t%d, ", tkl);
+            if (atmp_ty[a] == TY_POLY) buf_puts(b, tn);
+            else emit_boxed_text(c, atmp_ty[a], tn, b);
+            buf_puts(b, ");");
+          }
+        }
         Buf ab; memset(&ab, 0, sizeof ab);
         for (int a = 0; a < argc; a++) {
           char tn[32]; snprintf(tn, sizeof tn, "_t%d", atmp[a]);
@@ -6031,6 +6062,9 @@ else {
         char gen[512];
         if (is_pdelete)
           snprintf(gen, sizeof gen, "sp_poly_delete_key(_t%d, %s)", tv, ab.p ? ab.p : "sp_box_nil()");
+        else if (tkl >= 0)
+          snprintf(gen, sizeof gen, "sp_poly_%s(_t%d, _t%d->len, _t%d->data)",
+                   is_pdig ? "dig_n" : "values_at_n", tv, tkl, tkl);
         else
           snprintf(gen, sizeof gen, "sp_poly_%s(_t%d, %d, (sp_RbVal[]){%s})",
                    is_pdig ? "dig_n" : "values_at_n", tv, argc, ab.p ? ab.p : "sp_box_nil()");
@@ -25539,6 +25573,24 @@ else {
       emit_indent(g_pre, g_indent);
       buf_printf(g_pre, "sp_PolyArray *_t%d = sp_PolyArray_new(); SP_GC_ROOT(_t%d);\n", ti9, ti9);
       for (int k = 0; k < argc; k++) {
+        /* a splatted index list contributes each of its elements, not itself:
+           pushed whole it became one index and the call answered from that
+           one alone (#4164) */
+        if (nt_type(nt, argv[k]) && sp_streq(nt_type(nt, argv[k]), "SplatNode")) {
+          int sx9 = nt_ref(nt, argv[k], "expression");
+          int ts9 = ++g_tmp, tj9 = ++g_tmp;
+          emit_indent(g_pre, g_indent);
+          buf_printf(g_pre, "sp_PolyArray *_t%d = sp_poly_to_poly_array(", ts9);
+          { Buf sb9; memset(&sb9, 0, sizeof sb9);
+            if (sx9 >= 0) emit_boxed(c, sx9, &sb9);
+            buf_puts(g_pre, sb9.p ? sb9.p : "sp_box_nil()"); free(sb9.p); }
+          buf_printf(g_pre, "); SP_GC_ROOT(_t%d);\n", ts9);
+          emit_indent(g_pre, g_indent);
+          buf_printf(g_pre, "for (sp_int _t%d = 0; _t%d < sp_PolyArray_length(_t%d); _t%d++)"
+                            " sp_PolyArray_push(_t%d, sp_PolyArray_get(_t%d, _t%d));\n",
+                     tj9, tj9, ts9, tj9, ti9, ts9, tj9);
+          continue;
+        }
         emit_indent(g_pre, g_indent);
         buf_printf(g_pre, "sp_PolyArray_push(_t%d, ", ti9);
         Buf ab9; memset(&ab9, 0, sizeof ab9);
