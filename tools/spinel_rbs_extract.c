@@ -37,6 +37,7 @@
 #include <sys/stat.h>
 #include <fcntl.h>
 #include <unistd.h>
+#include <errno.h>
 
 #include "rbs/parser.h"
 #include "rbs/ast.h"
@@ -885,11 +886,28 @@ static bool ends_with(const char *s, const char *suffix) {
     return strcmp(s + sl - su, suffix) == 0;
 }
 
-static void walk_phase(const char *path, FILE *out, process_phase_t phase) {
+/* The directories on the current path, by identity. stat() follows symlinks,
+ * so a link that points at an ancestor resolves to that ancestor's dev/ino and
+ * the descent stops there instead of running down the cycle until the path
+ * buffer or the kernel's symlink limit ends it -- which is what printed a
+ * thirty-levels-deep path and called it `not found` (#4159). Only ANCESTORS
+ * are compared, as find -L does: a directory legitimately reachable by two
+ * different paths is still visited under each, since neither is inside the
+ * other. The chain lives on the C stack, so the walk allocates nothing. */
+typedef struct dir_chain_s {
+    dev_t dev;
+    ino_t ino;
+    const struct dir_chain_s *up;
+} dir_chain;
+
+static void walk_phase_in(const char *path, FILE *out, process_phase_t phase,
+                          const dir_chain *up) {
     struct stat st;
     if (stat(path, &st) != 0) {
         if (phase == PHASE_EMIT) {
-            fprintf(stderr, "spinel_rbs_extract: %s: not found\n", path);
+            /* say what the filesystem answered: `not found` was printed for
+               every reason stat can fail, including the cycle above */
+            fprintf(stderr, "spinel_rbs_extract: %s: %s\n", path, strerror(errno));
         }
         return;
     }
@@ -898,6 +916,13 @@ static void walk_phase(const char *path, FILE *out, process_phase_t phase) {
         return;
     }
     if (!S_ISDIR(st.st_mode)) return;
+    for (const dir_chain *p = up; p != NULL; p = p->up) {
+        /* already on the way in: a symlink closed a loop. Not an error --
+           publishing a tree with such a link is ordinary (tree-sitter ships
+           lib/src/unicode/unicode -> .) -- so stop quietly. */
+        if (p->dev == st.st_dev && p->ino == st.st_ino) return;
+    }
+    dir_chain here = { st.st_dev, st.st_ino, up };
     DIR *d = opendir(path);
     if (d == NULL) return;
     struct dirent *ent;
@@ -912,9 +937,13 @@ static void walk_phase(const char *path, FILE *out, process_phase_t phase) {
             }
             continue;
         }
-        walk_phase(full, out, phase);
+        walk_phase_in(full, out, phase, &here);
     }
     closedir(d);
+}
+
+static void walk_phase(const char *path, FILE *out, process_phase_t phase) {
+    walk_phase_in(path, out, phase, NULL);
 }
 
 static void walk(const char *path, FILE *out) { walk_phase(path, out, PHASE_EMIT); }
