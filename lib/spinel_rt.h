@@ -6795,6 +6795,18 @@ static sp_int sp_poly_str_index_val(sp_RbVal v, sp_RbVal sub, int from_end) {
   const char *ap = a.v.s ? a.v.s : (&("\xff")[1]);
   return from_end ? sp_str_rindex_opt(sp, ap) : sp_str_index_opt(sp, ap);
 }
+/* the two-argument String#index/#rindex on a boxed receiver: the search starts
+   at (index) or stops at (rindex) the given offset. Array owns neither form --
+   its index takes one argument -- so this arm is String's alone (#4149). */
+static sp_int sp_poly_str_index_from_val(sp_RbVal v, sp_RbVal sub, sp_int start,
+                                         int from_end) {
+  sp_RbVal s = sp_poly_strbuf_deref(v), a = sp_poly_strbuf_deref(sub);
+  if (a.tag != SP_TAG_STR) return SP_INT_NIL;
+  const char *sp = s.v.s ? s.v.s : (&("\xff")[1]);
+  const char *ap = a.v.s ? a.v.s : (&("\xff")[1]);
+  if (!from_end) return sp_str_index_from_opt(sp, ap, start);
+  { sp_int n = sp_str_rindex_from(sp, ap, start); return n < 0 ? SP_INT_NIL : n; }
+}
 static sp_int sp_poly_count_val(sp_RbVal v, sp_RbVal x) {
   /* String#count on a boxed receiver counts characters from a set, not
      elements; without this arm it fell through the array test and answered 0

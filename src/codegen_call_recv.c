@@ -1177,6 +1177,38 @@ int emit_array_call(Compiler *c, int id, Buf *b) {
     buf_printf(b, " : (sp_StrArray *)(sp_raise_nomethod(sp_nomethod_msg(\"split\", _t%d)), (void *)0); })", tv);
     return 1;
   }
+  /* `poly.fill(v, ...)`: Array owns the name alone, but it MUTATES, so the
+     enumerator face (which hands out a copy) cannot serve it. Coerce to a poly
+     array the way map! does, re-enter the typed fill emitter against that, and
+     write the elements back into the receiver's own representation (#4149). */
+  if (recv >= 0 && rt == TY_POLY && sp_streq(name, "fill") && argc >= 1 &&
+      argc <= 3 && nt_ref(nt, id, "block") < 0 && g_n_argov < MAX_ARG_OVERRIDE) {
+    int torig = ++g_tmp, ta = ++g_tmp, tres = ++g_tmp;
+    Buf rb = expr_buf(c, recv);
+    emit_indent(g_pre, g_indent);
+    buf_printf(g_pre, "sp_RbVal _t%d = %s; SP_GC_ROOT_RBVAL(_t%d);\n",
+               torig, rb.p ? rb.p : "sp_box_nil()", torig);
+    free(rb.p);
+    emit_indent(g_pre, g_indent);
+    buf_printf(g_pre, "sp_PolyArray *_t%d = sp_poly_arr_recv(_t%d, \"fill\"); SP_GC_ROOT(_t%d);\n",
+               ta, torig, ta);
+    g_argov_node[g_n_argov] = recv;
+    snprintf(g_argov_text[g_n_argov], sizeof g_argov_text[0], "_t%d", ta);
+    g_n_argov++;
+    TyKind svf = c->ntype[recv]; c->ntype[recv] = TY_POLY_ARRAY;
+    Buf fb; memset(&fb, 0, sizeof fb);
+    emit_expr(c, id, &fb);
+    c->ntype[recv] = svf;
+    g_n_argov--;
+    emit_indent(g_pre, g_indent);
+    buf_printf(g_pre, "sp_PolyArray *_t%d = %s; SP_GC_ROOT(_t%d);\n",
+               tres, fb.p ? fb.p : "0", tres);
+    free(fb.p);
+    emit_indent(g_pre, g_indent);
+    buf_printf(g_pre, "sp_poly_arr_writeback(_t%d, _t%d);\n", torig, tres);
+    buf_printf(b, "_t%d", tres);
+    return 1;
+  }
   /* `poly.map! { |x| ... }` / `collect!` where poly is an array read out of a
      container: coerce to a poly array and rewrite each element in place with
      the block result, returning the (mutated) array (#3162). */

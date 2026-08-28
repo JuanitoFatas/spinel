@@ -1622,9 +1622,13 @@ int infer_poly_call(Compiler *c, int id, TyKind rt, TyKind *out) {
      when the block never answers truthy -- so poly, not a bare int. Every
      sibling block name had a poly rule; this family had none, and the call
      fell through untyped to the unresolved-call raise (#3409). */
+  /* The two-argument form is String's alone (a start offset for index, a stop
+     for rindex); it answered nothing and raised (#4149). */
   if (recv >= 0 && rt == TY_POLY &&
       (argc == 0 ? nt_ref(nt, id, "block") >= 0
-                 : (argc == 1 && nt_ref(nt, id, "block") < 0)) &&
+                 : ((argc == 1 ||
+                     (argc == 2 && !sp_streq(name, "find_index"))) &&
+                    nt_ref(nt, id, "block") < 0)) &&
       (sp_streq(name, "find_index") || sp_streq(name, "index") || sp_streq(name, "rindex")) &&
       !an_user_defines_or_reads(c, name))
     { *out = TY_POLY; return 1; }

@@ -1296,6 +1296,12 @@ TyKind infer_call(Compiler *c, int id) {
       (sp_streq(name, "map!") || sp_streq(name, "collect!")) &&
       infer_type(c, recv) == TY_POLY)
     return TY_POLY_ARRAY;
+  /* `poly.fill(v, ...)`: Array's alone, and it answers self -- which the
+     codegen arm hands back as the coerced poly array (#4149). */
+  if (recv >= 0 && nt_ref(nt, id, "block") < 0 && argc >= 1 && argc <= 3 &&
+      sp_streq(name, "fill") && !an_user_defines_method(c, name) &&
+      infer_type(c, recv) == TY_POLY)
+    return TY_POLY_ARRAY;
   /* The filtering siblings answer whatever kind the receiver is -- Hash#select
      is a Hash, Array#select an Array -- and only the runtime value says which,
      so the result rides boxed (#3449). */

@@ -32,7 +32,7 @@ static inline int sp_streq(const char *a, const char *b) {
    which gives a Hash its [k, v] pairs, and answers one boxed ELEMENT of it. */
 static inline int ty_poly_hash_face_name(const char *nm) {
   static const char *const NAMES[] = {
-    "dig", "value?", "has_value?", "invert", "assoc", "rassoc",
+    "dig", "value?", "has_value?", "invert", "assoc", "rassoc", "key",
     "filter_map", "each_with_object", "group_by", "partition", "zip",
     "reduce", "inject", "find_all", "take", "drop",
     "select", "filter", "reject", "compact", "slice",

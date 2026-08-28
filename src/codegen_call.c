@@ -5040,9 +5040,14 @@ static int emit_poly_method_dispatch(Compiler *c, int id, Buf *b) {
        is an array at run time. include? has had this arm for a long time; the
        index family answering the position rather than a bool was simply never
        added, so the call raised NoMethodError naming Array (#3409). */
-    int is_arr_index = (sp_streq(name, "index") || sp_streq(name, "rindex") ||
-                        sp_streq(name, "find_index")) && argc == 1 &&
-                       nt_ref(nt, id, "block") < 0;
+    int is_arr_index = ((sp_streq(name, "index") || sp_streq(name, "rindex") ||
+                         sp_streq(name, "find_index")) && argc == 1 &&
+                        nt_ref(nt, id, "block") < 0) ||
+                       /* the two-argument form is String's alone -- Array#index
+                          takes one argument -- so only the default arm below
+                          answers it, and the array cases stay out (#4149). */
+                       ((sp_streq(name, "index") || sp_streq(name, "rindex")) &&
+                        argc == 2 && nt_ref(nt, id, "block") < 0);
     /* push/<</append on a poly value that is actually a builtin array: the
        array-mutate statement path skips it when a user class also defines the
        name (the value could be that object), so the switch needs a builtin-array
@@ -5708,7 +5713,7 @@ else {
           buf_printf(b, "; _t%d = %ssp_PolyPolyHash_has_key((sp_PolyPolyHash *)_t%d.v.p, _t%d)%s; break; }", tr, ibo, tv, tbox, ibc);
         }
       }
-      if (is_arr_index) {
+      if (is_arr_index && argc == 1) {
         int tix = ++g_tmp;
         Buf ab4; memset(&ab4, 0, sizeof ab4);
         { char tn4[32]; snprintf(tn4, sizeof tn4, "_t%d", atmp[0]);
@@ -5906,13 +5911,30 @@ else {
           { char tn5[32]; snprintf(tn5, sizeof tn5, "_t%d", atmp[0]);
             if (atmp_ty[0] == TY_POLY) buf_puts(&ab5, tn5);
             else emit_boxed_text(c, atmp_ty[0], tn5, &ab5); }
-          buf_printf(b, " if (_t%d.tag == SP_TAG_STR || sp_poly_is_strbuf(_t%d)) {"
-                        " sp_int _t%d = sp_poly_str_index_val(_t%d, %s, %d); _t%d = ",
-                     tv, tv, tsi, tv, ab5.p ? ab5.p : "sp_box_nil()",
-                     sp_streq(name, "rindex") ? 1 : 0, tr);
-          if (ret == TY_INT) buf_printf(b, "_t%d", tsi);
-          else buf_printf(b, "(_t%d == SP_INT_NIL ? sp_box_nil() : sp_box_int(_t%d))", tsi, tsi);
-          buf_puts(b, "; break; }");
+          if (argc == 2) {
+            char sx[64];
+            if (atmp_ty[1] == TY_POLY) snprintf(sx, sizeof sx, "sp_poly_to_i(_t%d)", atmp[1]);
+            else snprintf(sx, sizeof sx, "(sp_int)_t%d", atmp[1]);
+            buf_printf(b, " if (_t%d.tag == SP_TAG_STR || sp_poly_is_strbuf(_t%d)) {"
+                          " sp_int _t%d = sp_poly_str_index_from_val(_t%d, %s, %s, %d); _t%d = ",
+                       tv, tv, tsi, tv, ab5.p ? ab5.p : "sp_box_nil()", sx,
+                       sp_streq(name, "rindex") ? 1 : 0, tr);
+            /* the result slot carries whatever the call was inferred as: the
+               nullable int rides raw (SP_INT_NIL is its nil), a poly slot boxes */
+            if (ret == TY_POLY)
+              buf_printf(b, "(_t%d == SP_INT_NIL ? sp_box_nil() : sp_box_int(_t%d))", tsi, tsi);
+            else buf_printf(b, "_t%d", tsi);
+            buf_puts(b, "; break; }");
+          }
+          else {
+            buf_printf(b, " if (_t%d.tag == SP_TAG_STR || sp_poly_is_strbuf(_t%d)) {"
+                          " sp_int _t%d = sp_poly_str_index_val(_t%d, %s, %d); _t%d = ",
+                       tv, tv, tsi, tv, ab5.p ? ab5.p : "sp_box_nil()",
+                       sp_streq(name, "rindex") ? 1 : 0, tr);
+            if (ret == TY_INT) buf_printf(b, "_t%d", tsi);
+            else buf_printf(b, "(_t%d == SP_INT_NIL ? sp_box_nil() : sp_box_int(_t%d))", tsi, tsi);
+            buf_puts(b, "; break; }");
+          }
           free(ab5.p);
         }
         buf_printf(b, " sp_raise_nomethod(sp_nomethod_msg(\"%s\", _t%d)); break;", name, tv);
