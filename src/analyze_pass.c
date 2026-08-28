@@ -6857,8 +6857,13 @@ int infer_block_params(Compiler *c) {
     else if (rt == TY_STRING && (sp_streq(name, "each_char") || sp_streq(name, "each_line") || sp_streq(name, "upto") ||
                                  sp_streq(name, "chars") || sp_streq(name, "lines") || sp_streq(name, "split")))
       pt = TY_STRING;  /* split { |piece| } yields each substring */
-    else if (rt == TY_STRING && (sp_streq(name, "gsub") || sp_streq(name, "sub")))
-      pt = TY_STRING;  /* block receives the matched substring */
+    else if ((rt == TY_STRING || rt == TY_POLY) &&
+             (sp_streq(name, "gsub") || sp_streq(name, "sub")))
+      /* block receives the matched substring -- a String whatever the
+         receiver's static type is, so a BOXED receiver yields one too. Left at
+         TY_STRING for the typed receiver only, the poly form declared the
+         param sp_RbVal while the emitter assigned it the raw substring. */
+      pt = TY_STRING;
     else if (rt == TY_STRING && (sp_streq(name, "each_byte") || sp_streq(name, "bytes") || sp_streq(name, "codepoints")))
       pt = TY_INT;
     else if (rt == TY_STRING && sp_streq(name, "scan")) {

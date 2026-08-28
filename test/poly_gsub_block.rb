@@ -28,3 +28,19 @@ puts first_vowel(42)      # 42
 # exercised here so a future change can't silently narrow the new rule.
 h = { stream: "abc/def", count: 5 }
 puts h[:stream].gsub(/[^a-z]/, "_") # abc_def
+
+# The receiver can be poly WITHOUT a `.to_s` in front of it, and then the block
+# parameter widens to poly too. gsub/sub always yield the matched substring, a
+# String whatever the receiver's static type is, so the parameter is typed that
+# way for a boxed receiver as well -- otherwise the slot is declared sp_RbVal
+# while the emitter assigns it the raw substring.
+def upcase_a(x)
+  x.gsub(/a/) { |c| c.upcase }
+end
+
+def bracket_vowel(x)
+  x.sub(/[aeiou]/) { |c| "[#{c}]" }
+end
+
+p upcase_a(true ? "banana" : [1, 2])
+p bracket_vowel(true ? "banana" : 5)
