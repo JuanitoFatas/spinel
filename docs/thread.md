@@ -77,12 +77,36 @@ These are deliberate consequences of real parallelism, listed in
 [limitations.md](limitations.md#by-design-deliberate-choices):
 
 - **Data races are observable.** Two threads mutating the same
-  `Array`/`Hash`/object without a `Mutex` is undefined at the Ruby level,
-  similar to `Array`/`Hash` in JRuby and `Array` in TruffleRuby.
-  CRuby's GVL makes individual operations appear atomic;
-  Spinel does not, and adds no implicit per-object locking.
+  `Array`/`Hash`/object without a `Mutex` race, similar to `Array`/`Hash` in
+  JRuby and `Array` in TruffleRuby. CRuby's GVL makes individual operations
+  appear atomic; Spinel does not, and adds no implicit per-object locking.
   Correctness across threads is the program's responsibility via
   `Mutex` / `Queue` / `ConditionVariable`.
+
+  What "race" means here is worth stating rather than leaving as *undefined*,
+  because the kinds of state differ (#4166):
+
+  - **Objects never lose an ivar.** Every instance variable is a field of a
+    generated C struct, fixed when the program is compiled: an object's ivar
+    set cannot grow at run time, and `instance_variable_set` takes a literal
+    symbol only (a name decided at run time raises NoMethodError). So two
+    threads assigning two different ivars cannot lose either, and no ivar
+    write can be lost to a write of a *different* ivar.
+  - **A word-sized ivar never tears.** A racing read of an Integer, Float,
+    String, or object-reference ivar answers a value some thread wrote --
+    never one nobody wrote, and never a half-written pointer. Which write it
+    sees is unordered, and a read may be stale.
+  - **A multi-word ivar can tear.** `Range`, `Time`, `Complex` and `Rational`
+    ivars are stored by value and copied field by field, so a racing read can
+    see one field from one write and another field from another: a `Range`
+    ivar written concurrently reads back with `first` and `last` from
+    different assignments.
+  - **Containers can crash the process.** `Array` and `Hash` have no such
+    guarantee. Concurrent `<<` on one Array reaches the growth path, where a
+    reallocation races with another thread's element store, and the observed
+    outcomes are silently dropped elements, a heap-corruption abort, and
+    SIGSEGV. A shared container needs a `Mutex`, or a `Queue`, which is
+    itself thread-safe.
 - **Interleaving is nondeterministic.** The ordering of `Thread.pass`,
   `Thread.list` membership, and the exact moment a `Thread#raise` / `#kill` is
   delivered are nondeterministic, where the single-worker model was
