@@ -497,7 +497,11 @@ const char *sp_float_to_s(sp_float f);
 #define SP_BUILTIN_FIBER         (-22)
 #define SP_BUILTIN_IO            (-23)
 #define SP_BUILTIN_METHOD        (-24)
-#define SP_BUILTIN_ENUMERATOR    (-25)
+/* -45, not the -25 this once held: sp_gc.h had already given -25 to
+   SP_BUILTIN_FOREIGN_PTR, and the two blocks cannot see each other. An
+   Enumerator in a poly slot therefore read as a foreign pointer, which the
+   collector deliberately does NOT trace (#4158). */
+#define SP_BUILTIN_ENUMERATOR    (-45)
 /* Exception lived at -13, aliasing SP_BUILTIN_STR_INT_HASH, which both put
    exceptions inside the hash cls_id block [-20,-13] (breaking is_a?(Hash) /
    poly .class for exceptions) and made a str_int_hash arriving as a poly value
@@ -519,8 +523,13 @@ const char *sp_float_to_s(sp_float f);
                                            buffer, identity is the handle */
 #define SP_BUILTIN_DIR           (-38)  /* an open directory handle (sp_Dir *) */
 #define SP_BUILTIN_TMS           (-39)  /* Process.times -> Process::Tms */
-#define SP_BUILTIN_ADDRINFO      (-40)  /* Addrinfo (sp_Addrinfo *) */
-#define SP_BUILTIN_SOCKOPT       (-41)  /* Socket::Option (sp_SockOpt *) */
+#define SP_BUILTIN_ADDRINFO      (-46)  /* Addrinfo (sp_Addrinfo *). -46, not
+                                           the -40 this once held: STRBUF above
+                                           had it, so a boxed Addrinfo answered
+                                           String and lost every method (#4158) */
+#define SP_BUILTIN_SOCKOPT       (-47)  /* Socket::Option (sp_SockOpt *). -47,
+                                           not the -41 this once held: sp_gc.h
+                                           had given -41 to OPENSTRUCT (#4158) */
 #define SP_BUILTIN_CURRY         (-44)  /* Proc#curry accumulator (sp_Curry *):
                                            boxed so a curried proc survives a
                                            poly slot, where it read as nil (#3885) */

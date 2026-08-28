@@ -111,6 +111,43 @@ static int sp_bt_n = 0;
 #include "sp_fiber.h"
 /* sp_thread + the cooperative scheduler (Phase 0); bodies in lib/sp_sched.c. */
 #include "sp_sched.h"
+
+/* Every SP_BUILTIN_* cls_id must name exactly one kind. They are declared in
+   TWO headers -- sp_alloc.h and sp_gc.h, the latter because the inline mark
+   helper has to see FOREIGN_PTR and REGEX -- and neither block can see the
+   other, so three pairs had silently landed on the same value: an Addrinfo
+   answered String from every tag-keyed switch, a Socket::Option answered
+   OpenStruct, and an Enumerator read as a foreign pointer, which the collector
+   deliberately does not trace (#4158).
+
+   This is the first point where both blocks are in scope. A switch is the
+   cheapest total check C has -- two labels of the same value is a hard error,
+   not a warning -- and it costs nothing at run time. Add every new id here. */
+static inline void sp_builtin_cls_ids_distinct(int id) {
+  switch (id) {
+    case SP_BUILTIN_INT_ARRAY: case SP_BUILTIN_STR_ARRAY:
+    case SP_BUILTIN_FLT_ARRAY: case SP_BUILTIN_PTR_ARRAY:
+    case SP_BUILTIN_SYM_ARRAY: case SP_BUILTIN_PROC:
+    case SP_BUILTIN_RANGE: case SP_BUILTIN_TIME:
+    case SP_BUILTIN_POLY_ARRAY: case SP_BUILTIN_STR_INT_HASH:
+    case SP_BUILTIN_STR_STR_HASH: case SP_BUILTIN_INT_STR_HASH:
+    case SP_BUILTIN_SYM_INT_HASH: case SP_BUILTIN_SYM_STR_HASH:
+    case SP_BUILTIN_STR_POLY_HASH: case SP_BUILTIN_SYM_POLY_HASH:
+    case SP_BUILTIN_POLY_POLY_HASH: case SP_BUILTIN_INT_INT_HASH:
+    case SP_BUILTIN_OBJECT: case SP_BUILTIN_BASIC_OBJECT:
+    case SP_BUILTIN_FIBER: case SP_BUILTIN_IO: case SP_BUILTIN_METHOD:
+    case SP_BUILTIN_ENUMERATOR: case SP_BUILTIN_EXCEPTION:
+    case SP_BUILTIN_THREAD: case SP_BUILTIN_QUEUE: case SP_BUILTIN_MUTEX:
+    case SP_BUILTIN_CONDVAR: case SP_BUILTIN_STRBUF: case SP_BUILTIN_DIR:
+    case SP_BUILTIN_TMS: case SP_BUILTIN_ADDRINFO: case SP_BUILTIN_SOCKOPT:
+    case SP_BUILTIN_CURRY: case SP_BUILTIN_MATCHDATA:
+    case SP_BUILTIN_FOREIGN_PTR: case SP_BUILTIN_REGEX:
+    case SP_BUILTIN_COMPLEX: case SP_BUILTIN_RATIONAL:
+    case SP_BUILTIN_BIG_RATIONAL: case SP_BUILTIN_FLOAT_RANGE:
+    case SP_BUILTIN_STR_RANGE: case SP_BUILTIN_OPENSTRUCT:
+    default: break;
+  }
+}
 static const char *sp_sym_to_s(sp_sym id);
 /* Capacity of the runtime symbol-intern pool the generated TU declares
    (sp_dyn_syms). 8 bytes/entry, so the default is a 64 KB static buffer holding
@@ -1762,6 +1799,11 @@ static const char *sp_poly_class_name(sp_RbVal v) {
         case SP_BUILTIN_THREAD: return SPL("Thread");
         case SP_BUILTIN_TMS: return SPL("Process::Tms");
         case SP_BUILTIN_OPENSTRUCT: return SPL("OpenStruct");
+        /* These two had no arm of their own. They went unnoticed because their
+           cls_ids collided with STRBUF and OPENSTRUCT, so a boxed one answered
+           String / OpenStruct rather than nothing (#4158). */
+        case SP_BUILTIN_ADDRINFO: return SPL("Addrinfo");
+        case SP_BUILTIN_SOCKOPT: return SPL("Socket::Option");
         case SP_BUILTIN_EXCEPTION: return sp_exc_class_name((volatile struct sp_Exception_s *)v.v.p);
         default: { sp_Class c = {v.cls_id}; return sp_class_to_s(c); }
       }
