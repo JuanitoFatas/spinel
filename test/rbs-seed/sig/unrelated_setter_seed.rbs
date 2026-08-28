@@ -1,0 +1,3 @@
+class Other
+  def session=: (Integer? value) -> untyped
+end

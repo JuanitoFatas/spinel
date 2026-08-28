@@ -6143,6 +6143,17 @@ void emit_boxed_writer_arms(Compiler *c, const char *base, const char *nm,
         LocalVar *pl = scope_local(arm, arm->pnames[0]);
         pt = (pl && pl->type != TY_UNKNOWN) ? pl->type : TY_POLY;
       }
+      /* Skip a class whose PARAMETER cannot take this concrete value -- the
+         attr arm below has had this skip all along, and the method arm did
+         not: an unrelated class's `def session=` seeded `(Integer?)` by an
+         .rbs got an arm passing it an object pointer, and the build stopped
+         on a class the receiver can never be (#4171). A runtime object of
+         that class lands in the default raise instead, as it does for the
+         attr arms. Numeric widths convert in C and keep their arms. */
+      if (at != pt && at != TY_POLY && at != TY_UNKNOWN &&
+          pt != TY_POLY && pt != TY_UNKNOWN &&
+          !(ty_is_numeric(at) && ty_is_numeric(pt)))
+        continue;
       buf_printf(b, " case %d: sp_%s_%s((sp_%s *)%s, ", k,
                  c->classes[wmdc].c_name, mc(arm->name), c->classes[wmdc].c_name, objp);
       if (pt == TY_POLY && at != TY_POLY && at != TY_UNKNOWN) emit_boxed_text(c, at, src, b);
