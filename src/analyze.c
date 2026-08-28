@@ -13312,7 +13312,19 @@ void analyze_program(Compiler *c) {
                        sp_streq(snm, "ir_emit_sa")  ? TY_STR_ARRAY : TY_INT_ARRAY;
     sc->ret = TY_STRING;  /* each returns the accumulated buf (a string) */
   }
-  for (int it = 0; it < 8; it++) { if (!infer_param_types(c)) break; }
+  /* Re-assert BEFORE each binding round, not after. A seeded parameter is a
+     call site of everything its body calls, and this loop is the last place
+     those bindings happen: entering it with the seed already lost, the seeded
+     caller contributed UNKNOWN and the callee narrowed to whatever its one
+     other call site said. `M.wrapper` declared `(untyped)` in an .rbs stopped
+     holding `M.callee`'s parameter open, and the .rbs never mentioned callee
+     (#4165). The fixpoint's own copy runs after its binding, which is why it
+     recovered on the next iteration and this loop never did. */
+  for (int it = 0; it < 8; it++) {
+    reassert_rbs_param_seeds(c);
+    if (!infer_param_types(c)) break;
+  }
+  reassert_rbs_param_seeds(c);
 
   /* method_missing is not honored: spinel resolves every call statically and
      does not route an undefined-method call to method_missing (that would need

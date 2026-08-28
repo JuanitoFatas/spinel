@@ -1,0 +1,3 @@
+class M
+  def self.wrapper: (untyped t) -> untyped
+end
