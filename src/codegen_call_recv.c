@@ -2000,8 +2000,26 @@ int emit_array_call(Compiler *c, int id, Buf *b) {
           char es_tw[64]; snprintf(es_tw, sizeof es_tw, "sp_%sArray_get(_t%d, _t%d)", ek, trecv, ti);
           if (emit_iter_autosplat(c, tw_blk, rt, es_tw, g_indent + 1)) { }
           else if (tw_bp) {
-            emit_indent(g_pre, g_indent + 1); emit_ctype(c, et, g_pre);
-            buf_printf(g_pre, " lv_%s = sp_%sArray_get(_t%d, _t%d);\n", tw_bp, ek, trecv, ti);
+            /* The block parameter is an ordinary local, and its SLOT may have
+               widened to poly -- another method of the receiver's name being
+               widened is enough to get there. The loop then shadowed the
+               sp_RbVal slot with a const char * of the element type, while
+               everything READING the parameter (the predicate through
+               sp_poly_truthy, any use in the body) is compiled against the
+               slot's type. Bind the element boxed into the slot's own type
+               instead, the way the for-loop variable is since #4168 (#4188). */
+            Scope *twsc = comp_scope_of(c, tw_blk);
+            LocalVar *twlv = twsc ? scope_local(twsc, tw_bp) : NULL;
+            emit_indent(g_pre, g_indent + 1);
+            if (twlv && twlv->type == TY_POLY && et != TY_POLY && et != TY_UNKNOWN) {
+              buf_printf(g_pre, "sp_RbVal lv_%s = ", tw_bp);
+              emit_boxed_text(c, et, es_tw, g_pre);
+              buf_puts(g_pre, ";\n");
+            }
+            else {
+              emit_ctype(c, et, g_pre);
+              buf_printf(g_pre, " lv_%s = sp_%sArray_get(_t%d, _t%d);\n", tw_bp, ek, trecv, ti);
+            }
           }
           for (int j = 0; j < tw_bn - 1; j++) emit_stmt(c, tw_bb[j], g_pre, g_indent + 1);
           int sv = g_indent; g_indent = g_indent + 1;
