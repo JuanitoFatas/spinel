@@ -402,7 +402,16 @@ def native_cache_dir(key)
   d
 end
 
-# Compile one package's carried C into the cache; returns the object list.
+# Compile one package's carried C into the cache; returns the object list
+# of PLAIN (.o) entries only. For each .c, a companion "<stem>_mt.o" is
+# also built with the same -DSP_THREADS -ftls-model=initial-exec the
+# spinel compiler uses for the main binary when the program uses threads
+# (lib/sp_process.c and lib/sp_alloc.c read runtime globals through these;
+# without the matching thread-local storage class the link fails). Both
+# variants land in the same cache directory; spinel's linker (src/main.c)
+# computes <stem>_mt.o from each --link and prefers it when the program
+# uses threads, falling back to the plain one otherwise. So one build
+# serves either kind of project, and the --link list is unchanged.
 def native_objs_for(name, dir, version)
   excl = native_excludes(dir)
   cs = collect_c(dir, excl)
@@ -417,20 +426,27 @@ def native_objs_for(name, dir, version)
   objs = []
   cs.split("\n").each do |c|
     rel = c[dir.length + 1..-1].to_s
-    o = File.join(odir, rel.gsub("/", "_")[0..-3] + ".o")
-    if !File.exist?(o) || File.mtime(o).to_i < hnew || ENV["SPIN_NO_NATIVE_CACHE"].to_s != ""
-      cmd = native_cc + " -O2 -c '#{c}' -I '#{dir}'"
-      cmd += " -I '#{hdr}'" if hdr != ""
-      cmd += " -o '#{o}'"
-      spin_die("native compile failed: " + rel + " (" + name + ")") unless run_command(cmd)
-      # stderr, not stdout: `spin flags` prints a flag string on stdout and
-      # a cold cache compiles here first, so progress on stdout would be
-      # spliced into the flags the caller passes to the compiler (#4105).
-      # In --verbose the run_command echo already shows the full command,
-      # so the short status line is redundant there.
-      $stderr.puts "cc #{name}/#{rel}" unless $spin_verbose
+    base = rel.gsub("/", "_")[0..-3]
+    [["", ""], ["_mt", " -DSP_THREADS -ftls-model=initial-exec"]].each do |suffix, flags|
+      o = File.join(odir, base + suffix + ".o")
+      if !File.exist?(o) || File.mtime(o).to_i < hnew || ENV["SPIN_NO_NATIVE_CACHE"].to_s != ""
+        cmd = native_cc + " -O2" + flags + " -c '#{c}' -I '#{dir}'"
+        cmd += " -I '#{hdr}'" if hdr != ""
+        cmd += " -o '#{o}'"
+        spin_die("native compile failed: " + rel + " (" + name + ")") unless run_command(cmd)
+        # stderr, not stdout: `spin flags` prints a flag string on stdout and
+        # a cold cache compiles here first, so progress on stdout would be
+        # spliced into the flags the caller passes to the compiler (#4105).
+        # In --verbose the run_command echo already shows the full command,
+        # so the short status line is redundant there.
+        $stderr.puts "cc #{name}/#{rel}#{suffix}" unless $spin_verbose
+      end
+      # Only the plain .o goes on the --link list; spinel computes the
+      # _mt variant from it. Including _mt.o here would have the linker
+      # add it twice (once via dedup of the _mt->_mt path, once via
+      # the plain->_mt rewrite) and break with multiple-definition errors.
+      objs.push(o) if suffix == ""
     end
-    objs.push(o)
   end
   objs
 end
