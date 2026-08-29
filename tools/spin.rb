@@ -1084,15 +1084,29 @@ def compile(prj, entry, out, extra)
   tmp = ENV["TMPDIR"].to_s
   tmp = "/tmp" if tmp == ""
   err = File.join(tmp, "spin-compile-#{Process.pid}.err")
-  # In verbose mode let the compiler's stderr stream live to the
-  # operator: run_command's echo + the cc/spinel warnings and errors
-  # arrive interleaved, which is what someone running --verbose
-  # wants. In non-verbose mode keep the existing capture-then-replay,
-  # so a build's "what went wrong" hint lands after the exit line,
-  # not before (#4136).
+  # The compiler's stderr ends up in `text` either way -- in non-verbose
+  # mode by redirecting to a file and reading it after; in verbose mode by
+  # spawning with a pipe, streaming each chunk to the operator live, and
+  # accumulating it. `text` is then used below for the "cannot load such
+  # file" hint. The verbose branch keeps the existing live-streaming
+  # behaviour (#4136 in spirit) and the hint check still works.
   text = ""
   if $spin_verbose
-    ok = run_command(compile_cmd(prj, entry, out, extra))
+    rd, wr = IO.pipe
+    pid = Process.spawn("/bin/sh", "-c", compile_cmd(prj, entry, out, extra), :err => wr)
+    wr.close
+    stream = Thread.new do
+      buf = ""
+      while (chunk = rd.gets)
+        $stderr.write chunk
+        buf += chunk
+      end
+      buf
+    end
+    _, status = Process.waitpid2(pid)
+    rd.close
+    text = stream.value
+    ok = status.success?
   else
     ok = system(compile_cmd(prj, entry, out, extra) + " 2>#{err}")
     text = File.exist?(err) ? File.read(err) : ""
