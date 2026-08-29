@@ -4689,6 +4689,14 @@ void emit_hash_pairs_expr(Compiler *c, int recv, TyKind rt, const char *hn, Buf 
   buf_printf(b, " } _t%d; })", tr);
 }
 
+/* An empty hash literal: no variant to infer, nothing to fold into a merge. */
+static int hash_lit_empty(const NodeTable *nt, int n) {
+  const char *ty = nt_type(nt, n);
+  if (!ty || !(sp_streq(ty, "HashNode") || sp_streq(ty, "KeywordHashNode"))) return 0;
+  int en = 0; nt_arr(nt, n, "elements", &en);
+  return en == 0;
+}
+
 int emit_hash_call(Compiler *c, int id, Buf *b) {
   const NodeTable *nt = c->nt;
   const char *name = nt_str(nt, id, "name");
@@ -5548,22 +5556,33 @@ else {
       }
       if ((sp_streq(name, "merge!") || sp_streq(name, "update")) && argc >= 1 &&
           nt_ref(nt, id, "block") < 0 && rt == TY_POLY_POLY_HASH) {
-        for (int ai = 0; ai < argc; ai++)
-          if (!ty_is_hash(comp_ntype(c, argv[ai]))) return 0;
+        /* An argument that is a Hash at run time only is checked there, as
+           CRuby's implicit conversion would, so a boxed hash merges into
+           another; an empty literal has no variant to infer and nothing to
+           fold in. */
+        for (int ai = 0; ai < argc; ai++) {
+          TyKind at = comp_ntype(c, argv[ai]);
+          if (!ty_is_hash(at) && at != TY_POLY && !hash_lit_empty(nt, argv[ai])) return 0;
+        }
         int tr = ++g_tmp;
         buf_printf(b, "({ sp_PolyPolyHash *_t%d = ", tr); emit_expr(c, recv, b); buf_puts(b, ";");
         buf_printf(b, " if (sp_gc_is_frozen(_t%d)) sp_raise_frozen_hash_at(_t%d, %s);", tr, tr, hash_box_cls(rt));   /* (#3001) */
         for (int ai = 0; ai < argc; ai++) {
+          if (hash_lit_empty(nt, argv[ai])) continue;
           int to = ++g_tmp, ti = ++g_tmp, tp = ++g_tmp;
           buf_printf(b, " sp_RbVal _t%d = ", to); emit_boxed(c, argv[ai], b);
-          buf_printf(b, "; SP_GC_ROOT_RBVAL(_t%d);"
-                        " sp_int _t%d = sp_poly_arr_len_ex(_t%d);"
+          buf_printf(b, "; SP_GC_ROOT_RBVAL(_t%d);", to);
+          if (comp_ntype(c, argv[ai]) == TY_POLY)
+            buf_printf(b, " if (_t%d.tag != SP_TAG_OBJ || !sp_poly_is_hash_kind(_t%d.cls_id))"
+                          " sp_raise_cls(\"TypeError\", sp_sprintf(\"no implicit conversion of %%s into Hash\", sp_convert_src_name(_t%d)));",
+                       to, to, to);
+          buf_printf(b, " sp_int _t%d = sp_poly_arr_len_ex(_t%d);"
                         " for (sp_int _i9 = 0; _i9 < _t%d; _i9++) {"
                         " sp_RbVal _t%d = sp_poly_each_elem(_t%d, _i9);"
                         " sp_PolyPolyHash_set(_t%d,"
                         " sp_PolyArray_get((sp_PolyArray *)_t%d.v.p, 0),"
                         " sp_PolyArray_get((sp_PolyArray *)_t%d.v.p, 1)); }",
-                     to, ti, to, ti, tp, to, tr, tp, tp);
+                     ti, to, ti, tp, to, tr, tp, tp);
         }
         buf_printf(b, " _t%d; })", tr);
         return 1;
@@ -11270,6 +11289,10 @@ static TyKind emit_face_arm(Compiler *c, int id, unsigned kind, unsigned flags, 
          raises the NoMethodError the call raised before */
       buf_printf(g_pre, "sp_PolyArray *_t%d = sp_poly_enum_recv(%s, \"%s\"); SP_GC_ROOT(_t%d);\n", t, rs, name, t);
       break;
+    case PF_HASH:
+      buf_printf(g_pre, "sp_PolyPolyHash *_t%d = sp_poly_hash_recv(%s, \"%s\", %d); SP_GC_ROOT(_t%d);\n",
+                 t, rs, name, (flags & PF_MUT) != 0, t);
+      break;
   }
   free(rb.p);
   g_argov_node[g_n_argov] = recv;
@@ -11299,11 +11322,12 @@ static TyKind emit_face_arm(Compiler *c, int id, unsigned kind, unsigned flags, 
   /* A mutator worked on the unboxed representation -- the poly copy a typed
      array was normalized to, the text a string box stands for -- and the
      original has to take the result back once the value is taken. */
-  if ((flags & PF_MUT) && box && (kind == PF_ARRAY || kind == PF_STRING)) {
+  if ((flags & PF_MUT) && box && (kind == PF_ARRAY || kind == PF_STRING || kind == PF_HASH)) {
     Buf wb; memset(&wb, 0, sizeof wb);
     int tr = ++g_tmp;
     int has_val = nat != TY_VOID && nat != TY_UNKNOWN;
     if (kind == PF_ARRAY) buf_printf(&wb, "sp_poly_arr_writeback(_t%d, _t%d)", box, t);
+    else if (kind == PF_HASH) buf_printf(&wb, "sp_poly_hash_writeback(_t%d, _t%d)", box, t);
     else {
       /* The new contents -- the value itself when the mutator answers self,
          else the temp the typed emitter took the receiver's variable from and
@@ -11328,6 +11352,17 @@ static TyKind emit_face_arm(Compiler *c, int id, unsigned kind, unsigned flags, 
       }
     }
     if (!has_val) buf_printf(val, "({ (void)(%s); %s; })", call, wb.p);
+    else if (kind == PF_HASH && (flags & PF_VAL_SELF)) {
+      /* The value is the receiver -- the box -- not the general copy the
+         emitter worked on: a typed original has no general stand-in, and the
+         copy is detached once written back, so a write through the value
+         (h.merge!(a)[:k] = v, and the chain h.merge!(a, b) folds into) would
+         go nowhere. compact! answers nil when it removed nothing, and the
+         receiver else. */
+      if (nat == TY_POLY) buf_printf(val, "({ sp_RbVal _t%d = %s; %s; sp_poly_nil_p(_t%d) ? _t%d : _t%d; })", tr, call, wb.p, tr, tr, box);
+      else buf_printf(val, "({ (void)(%s); %s; _t%d; })", call, wb.p, box);
+      nat = TY_POLY;
+    }
     else buf_printf(val, "({ %s _t%d = %s; %s; _t%d; })", c_type_name(nat), tr, call, wb.p, tr);
     free(wb.p);
   }
@@ -11394,7 +11429,7 @@ static int emit_face_reentry(Compiler *c, int id, unsigned kind, unsigned flags,
   Buf pre = {0, 0, 0}, val = {0, 0, 0};
   TyKind nat = TY_UNKNOWN;
   if ((flags & PF_MUT) && kind == PF_STRING && !(flags & PF_VAL_SELF) && !face_str_var_recv(nt, recv)) return 0;
-  if ((flags & PF_MUT) && (kind == PF_ARRAY || kind == PF_STRING)) box = ++g_tmp;
+  if ((flags & PF_MUT) && (kind == PF_ARRAY || kind == PF_STRING || kind == PF_HASH)) box = ++g_tmp;
   if (!face_probe_arm(c, id, kind, flags, box, &pre, &val, &nat)) {
     free(pre.p); free(val.p);
     return 0;

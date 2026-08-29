@@ -9301,6 +9301,25 @@ static int strbuf_slot_eligible_shape(Compiler *c, const char *vn, Scope *vs, Lo
   /* an rbs-seeded String slot may still take the handle REPRESENTATION:
      the pin constrains the Ruby-level type, not the C storage (#3227) */
   if (!lv || lv->is_param) return 0;
+  /* A local written from a HASH or ARRAY literal is not a string, whatever a
+     mutator name suggests. The evidence that promotes a slot is a name-keyed
+     mutator table, and `[]=`, `insert`, `slice!` and `setbyte` are Hash's and
+     Array's as much as String's -- so `data = parse_object(s); data[k] = v`
+     demanded the callee's returned `out = {}` into the shared set, and the
+     Hash came back through a `const char *` return (#4177). The write is what
+     the local IS; a shared name is only what was done to it. Checked
+     syntactically because it has to hold in the fixpoint's first round, before
+     any type has settled -- the promotion is sticky once made. */
+  for (int w = 0; w < nt->count; w++) {
+    if (nt_kind(nt, w) != NK_LocalVariableWriteNode) continue;
+    if (comp_scope_of(c, w) != vs) continue;
+    const char *wn = nt_str(nt, w, "name");
+    if (!wn || !sp_streq(wn, vn)) continue;
+    int wv = nt_ref(nt, w, "value");
+    if (wv < 0) continue;
+    NodeKind vk = nt_kind(nt, wv);
+    if (vk == NK_HashNode || vk == NK_KeywordHashNode || vk == NK_ArrayNode) return 0;
+  }
   for (int u = 0; u < nt->count; u++) {
     const char *uty = nt_type(nt, u);
     if (!uty || !sp_streq(uty, "CallNode")) continue;
@@ -9727,9 +9746,9 @@ static int promote_shared_stored_strings(Compiler *c) {
        still travel; forcing strbuf back on it only fought whatever widened it,
        every round, to the fixpoint's cap (#4116). */
     if (srcv->type != TY_POLY && (srcv->type != TY_STRBUF || !srcv->str_shared))
-      { srcv->type = TY_STRBUF; srcv->str_shared = 1; changed = 1; }
+      {  srcv->type = TY_STRBUF; srcv->str_shared = 1; changed = 1;  }
     if (tgtv->type != TY_POLY && (tgtv->type != TY_STRBUF || !tgtv->str_shared))
-      { tgtv->type = TY_STRBUF; tgtv->str_shared = 1; changed = 1; }
+      {  tgtv->type = TY_STRBUF; tgtv->str_shared = 1; changed = 1;  }
   }
   /* local <-> ivar alias pairs: `l = @s` / `@s = l`. When either side is
      in-place mutated, the ivar slot and the local share the handle. */
@@ -9768,7 +9787,7 @@ static int promote_shared_stored_strings(Compiler *c) {
       if (iv2 < 0 || !ci2->ivar_str_shared[iv2]) continue; }
     if (ch2) changed = 1;
     if (llv->type != TY_POLY && (llv->type != TY_STRBUF || !llv->str_shared))
-      { llv->type = TY_STRBUF; llv->str_shared = 1; changed = 1; }
+      {  llv->type = TY_STRBUF; llv->str_shared = 1; changed = 1;  }
   }
   /* external reader alias: `x = obj.reader` where the reader exposes an
      in-place-mutated ivar -- x must hold the handle, so a later obj.bump
@@ -9804,7 +9823,7 @@ static int promote_shared_stored_strings(Compiler *c) {
       if (iv2 < 0 || !c->classes[defc].ivar_str_shared[iv2]) continue; }
     if (!c->strbuf_box[wv]) { c->strbuf_box[wv] = 1; changed = 1; }
     if (llv2->type != TY_POLY && (llv2->type != TY_STRBUF || !llv2->str_shared))
-      { llv2->type = TY_STRBUF; llv2->str_shared = 1; changed = 1; }
+      {  llv2->type = TY_STRBUF; llv2->str_shared = 1; changed = 1;  }
   }
   /* iteration-variable mutation: `arr.each { |x| x << "!" }` mutates the
      ELEMENT through the block binding, so the container's stored strings
@@ -9867,7 +9886,7 @@ static int promote_shared_stored_strings(Compiler *c) {
         bpv4->type != TY_STR_ARRAY) continue;
     changed |= strbuf_demand_container_stores(c, contn4, conts4);
     if (bpv4->type != TY_POLY && (bpv4->type != TY_STRBUF || !bpv4->str_shared))
-      { bpv4->type = TY_STRBUF; bpv4->str_shared = 1; changed = 1; }
+      {  bpv4->type = TY_STRBUF; bpv4->str_shared = 1; changed = 1;  }
   }
   /* deep-return alias: `r = make_held` where EVERY return path of the
      (receiverless, uniquely-named) callee yields a shared handle -- r joins
@@ -9939,7 +9958,7 @@ static int promote_shared_stored_strings(Compiler *c) {
         if (tlv->type != TY_UNKNOWN && tlv->type != TY_STRING &&
             tlv->type != TY_STRBUF && tlv->type != TY_POLY) continue;
         if (tlv->type != TY_POLY && (tlv->type != TY_STRBUF || !tlv->str_shared))
-          { tlv->type = TY_STRBUF; tlv->str_shared = 1; changed = 1; }
+          {  tlv->type = TY_STRBUF; tlv->str_shared = 1; changed = 1;  }
       }
       continue;
     }
@@ -9948,7 +9967,7 @@ static int promote_shared_stored_strings(Compiler *c) {
     if (!caller_may_be_str) continue;
     c->strbuf_box[wv] = 1; changed = 1;
     if (clv3->type != TY_POLY && (clv3->type != TY_STRBUF || !clv3->str_shared))
-      { clv3->type = TY_STRBUF; clv3->str_shared = 1; changed = 1; }
+      {  clv3->type = TY_STRBUF; clv3->str_shared = 1; changed = 1;  }
   }
   /* Container-read alias (`r = rows[0]; r.upcase!`): the local is another name
      for the element, so an in-place mutation through it has to land on the
@@ -9988,7 +10007,7 @@ static int promote_shared_stored_strings(Compiler *c) {
     changed |= strbuf_demand_container_stores(c, contn5, conts5);
     if (!c->strbuf_box[wv]) { c->strbuf_box[wv] = 1; changed = 1; }
     if (llv5->type != TY_POLY && (llv5->type != TY_STRBUF || !llv5->str_shared))
-      { llv5->type = TY_STRBUF; llv5->str_shared = 1; changed = 1; }
+      {  llv5->type = TY_STRBUF; llv5->str_shared = 1; changed = 1;  }
   }
   return changed;
 }
@@ -10067,7 +10086,7 @@ static int convert_byref_handle_params(Compiler *c) {
           if (alv->type != TY_UNKNOWN && alv->type != TY_STRING &&
               alv->type != TY_STRBUF && alv->type != TY_POLY) continue;
           if (alv->type != TY_POLY && (alv->type != TY_STRBUF || !alv->str_shared))
-            { alv->type = TY_STRBUF; alv->str_shared = 1; changed = 1; }
+            {  alv->type = TY_STRBUF; alv->str_shared = 1; changed = 1;  }
         }
         else if (nt_kind(nt, an2) == NK_InstanceVariableReadNode) {
           const char *vn2 = nt_str(nt, an2, "name");

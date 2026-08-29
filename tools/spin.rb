@@ -5,6 +5,51 @@
 require_relative "spin/toml"
 
 $spin_hasher = ""   # memoized content-hasher command (native_hasher)
+$spin_verbose = ENV["SPIN_VERBOSE"].to_s != ""   # --verbose / SPIN_VERBOSE=1
+                                                  # makes run_command print the
+                                                  # command before exec'ing it
+
+# Wrap one external command. Returns true on exit 0, false on non-zero
+# exit, raises on exec failure (Errno::ENOENT, etc.). Every external
+# exec in this file goes through here so a single flag -- or env var --
+# turns on command echoing, and so a future refactor (capture output,
+# parallelize, dry-run) has one site to touch.
+#
+# Implementation: Process.spawn("/bin/sh", "-c", cmd) plus a
+# Process.waitpid2 for the exit status. The shell wrapper handles the
+# multi-token cmd string (paths, flags) without us writing a quote
+# parser, and is portable: CRuby's `system(cmd)` runs the same command
+# via /bin/sh, and spinel's AOT runtime routes the codegen-emitted
+# spawn through its own fork/exec with the same shell semantics.
+#
+# When called with `text:` the child's stderr is also accumulated into
+# the given String (line by line, on a background thread that writes
+# each line to $stderr so it still streams live to the operator). This
+# is what compile()'s "cannot load such file" diagnostic needs: the
+# live stream from run_command, plus the captured text for the hint
+# check afterwards. Other call sites pass nothing and get the plain
+# status.
+def run_command(cmd, text: nil)
+  $stderr.puts cmd if $spin_verbose
+  if text.nil?
+    pid = Process.spawn("/bin/sh", "-c", cmd)
+    _, status = Process.waitpid2(pid)
+    return status.success?
+  end
+  rd, wr = IO.pipe
+  pid = Process.spawn("/bin/sh", "-c", cmd, :err => wr)
+  wr.close
+  cap = Thread.new do
+    while (line = rd.gets)
+      $stderr.write line
+      text << line
+    end
+  end
+  _, status = Process.waitpid2(pid)
+  rd.close
+  cap.join
+  status.success?
+end
 
 SPIN_USAGE = <<USAGE
 usage: spin <command> [args]
@@ -385,7 +430,16 @@ def native_cache_dir(key)
   d
 end
 
-# Compile one package's carried C into the cache; returns the object list.
+# Compile one package's carried C into the cache; returns the object list
+# of PLAIN (.o) entries only. For each .c, a companion "<stem>_mt.o" is
+# also built with the same -DSP_THREADS -ftls-model=initial-exec the
+# spinel compiler uses for the main binary when the program uses threads
+# (lib/sp_process.c and lib/sp_alloc.c read runtime globals through these;
+# without the matching thread-local storage class the link fails). Both
+# variants land in the same cache directory; spinel's linker (src/main.c)
+# computes <stem>_mt.o from each --link and prefers it when the program
+# uses threads, falling back to the plain one otherwise. So one build
+# serves either kind of project, and the --link list is unchanged.
 def native_objs_for(name, dir, version)
   excl = native_excludes(dir)
   cs = collect_c(dir, excl)
@@ -400,18 +454,31 @@ def native_objs_for(name, dir, version)
   objs = []
   cs.split("\n").each do |c|
     rel = c[dir.length + 1..-1].to_s
-    o = File.join(odir, rel.gsub("/", "_")[0..-3] + ".o")
-    if !File.exist?(o) || File.mtime(o).to_i < hnew || ENV["SPIN_NO_NATIVE_CACHE"].to_s != ""
-      cmd = native_cc + " -O2 -c '#{c}' -I '#{dir}'"
-      cmd += " -I '#{hdr}'" if hdr != ""
-      cmd += " -o '#{o}'"
-      spin_die("native compile failed: " + rel + " (" + name + ")") unless system(cmd)
-      # stderr, not stdout: `spin flags` prints a flag string on stdout and a
-      # cold cache compiles here first, so progress on stdout would be spliced
-      # into the flags the caller passes to the compiler (#4105).
-      $stderr.puts "cc #{name}/#{rel}"
+    base = rel.gsub("/", "_")[0..-3]
+    [["", ""], ["_mt", " -DSP_THREADS -ftls-model=initial-exec"]].each do |suffix, flags|
+      o = File.join(odir, base + suffix + ".o")
+      if !File.exist?(o) || File.mtime(o).to_i < hnew || ENV["SPIN_NO_NATIVE_CACHE"].to_s != ""
+        cmd = native_cc + " -O2" + flags + " -c '#{c}' -I '#{dir}'"
+        cmd += " -I '#{hdr}'" if hdr != ""
+        cmd += " -o '#{o}'"
+        spin_die("native compile failed: " + rel + " (" + name + ")") unless run_command(cmd)
+        # stderr, not stdout: `spin flags` prints a flag string on stdout and
+        # a cold cache compiles here first, so progress on stdout would be
+        # spliced into the flags the caller passes to the compiler (#4105).
+        # In --verbose the run_command echo already shows the full command,
+        # so the short status line is redundant there.
+        # the suffix names the VARIANT, so it goes after the file name rather
+        # than onto it: "nat/nat.c_mt" is not a path anyone can look for
+        line = "cc #{name}/#{rel}"
+        line += " (threaded)" if suffix != ""
+        $stderr.puts line unless $spin_verbose
+      end
+      # Only the plain .o goes on the --link list; spinel computes the
+      # _mt variant from it. Including _mt.o here would have the linker
+      # add it twice (once via dedup of the _mt->_mt path, once via
+      # the plain->_mt rewrite) and break with multiple-definition errors.
+      objs.push(o) if suffix == ""
     end
-    objs.push(o)
   end
   objs
 end
@@ -1049,10 +1116,24 @@ def compile(prj, entry, out, extra)
   tmp = ENV["TMPDIR"].to_s
   tmp = "/tmp" if tmp == ""
   err = File.join(tmp, "spin-compile-#{Process.pid}.err")
-  ok = system(compile_cmd(prj, entry, out, extra) + " 2>#{err}")
-  text = File.exist?(err) ? File.read(err) : ""
-  $stderr.print text unless text.empty?
-  File.unlink(err) if File.exist?(err)
+  # The compiler's stderr ends up in `text` either way -- in non-verbose
+  # mode by redirecting to a file and reading it after; in verbose mode by
+  # spawning with a pipe, streaming each chunk to the operator live, and
+  # accumulating it. `text` is then used below for the "cannot load such
+  # file" hint. The verbose branch keeps the existing live-streaming
+  # behaviour (#4136 in spirit) and the hint check still works.
+  text = ""
+  if $spin_verbose
+    # run_command echoes the cmd, streams stderr live, and (with text:)
+    # captures the same stderr for the "cannot load such file" hint
+    # check below.
+    ok = run_command(compile_cmd(prj, entry, out, extra), text: text)
+  else
+    ok = system(compile_cmd(prj, entry, out, extra) + " 2>#{err}")
+    text = File.exist?(err) ? File.read(err) : ""
+    $stderr.print text unless text.empty?
+    File.unlink(err) if File.exist?(err)
+  end
   unless ok
     if text.include?("cannot load such file")
       $stderr.puts "spin: build failed (hint: an unresolved require may need a dependency: spin add <name> --path <dir>)"
@@ -1629,13 +1710,17 @@ end
 
 # --- main --------------------------------------------------------------------
 
-cmd = ARGV.empty? ? "" : ARGV[0]
-rest = []
-i = 1
-while i < ARGV.length
-  rest.push(ARGV[i])
-  i += 1
-end
+# --verbose belongs to spin and only to spin: strip it from the part of
+# ARGV before the `--` separator, leaving any --verbose after `--` in
+# `rest` so it reaches the program (e.g. `spin run app -- --verbose`
+# forwards --verbose to the app, not to spin).
+dd = ARGV.index("--")
+spin_part = dd ? ARGV[0, dd] : ARGV
+app_part = dd ? ARGV[(dd + 1)..] : []
+$spin_verbose = spin_part.count("--verbose") > 0 || ENV["SPIN_VERBOSE"].to_s != ""
+args = spin_part.reject { |a| a == "--verbose" } + (dd ? ["--"] : []) + app_part
+cmd = args.empty? ? "" : args[0]
+rest = args[1..] || []
 
 case cmd
 when "new"
@@ -1784,7 +1869,7 @@ when "build", "run", "test", "clean"
     files = rest.reject { |a| a.start_with?("--") }
     cmd_test(prj, files, regen)
   when "clean"
-    system("rm -rf #{File.join(prj.root, 'build')}")
+    run_command("rm -rf #{File.join(prj.root, 'build')}")
     puts "cleaned"
   end
 when "--version"
