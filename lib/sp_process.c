@@ -61,16 +61,18 @@ static const char *sp_errf_errno(const char *prefix, int err) {
 }
 
 /* Apply the redirect in the child: dup2 src_fd onto target_fd, close src.
-   If src_fd is -1 (false), redirect to /dev/null. */
+   src_fd < 0 means the caller did not pass that slot in the opts hash
+   (the codegen initialises every slot to -1 and overwrites only the ones
+   the user set); in that case the fd is left inherited from the parent.
+   CRuby semantics: an unset :in/:out/:err slot is inherit, not /dev/null.
+   The previous /dev/null behaviour silently swallowed the child's stderr
+   and made `Process.spawn("cc -c foo.c")` in verbose mode look like it
+   produced no output. */
 static void apply_redirect(int target_fd, int src_fd) {
-  int fd = src_fd;
-  if (fd < 0) {
-    fd = open("/dev/null", target_fd == 1 ? O_WRONLY : O_RDONLY);
-    if (fd < 0) return;
-  }
-  if (fd != target_fd) {
-    dup2(fd, target_fd);
-    if (fd > 2) close(fd);
+  if (src_fd < 0) return;
+  if (src_fd != target_fd) {
+    dup2(src_fd, target_fd);
+    if (src_fd > 2) close(src_fd);
   }
 }
 
