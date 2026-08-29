@@ -5,6 +5,29 @@
 require_relative "spin/toml"
 
 $spin_hasher = ""   # memoized content-hasher command (native_hasher)
+$spin_verbose = ENV["SPIN_VERBOSE"].to_s != ""   # --verbose / SPIN_VERBOSE=1
+                                                  # makes run_command print the
+                                                  # command before exec'ing it
+
+# Wrap one external command. Returns true on exit 0, false on non-zero
+# exit, raises on exec failure (Errno::ENOENT, etc.). Every external
+# exec in this file goes through here so a single flag -- or env var --
+# turns on command echoing, and so a future refactor (capture output,
+# parallelize, dry-run) has one site to touch.
+#
+# Implementation: Process.spawn("/bin/sh", "-c", cmd) with a waitpid2.
+# CRuby's `system(cmd)` does the same under the hood; the AOT runtime
+# runs the codegen-emitted form directly, so the call is portable across
+# both runtimes. The shell wrapper is needed because `cmd` is a string
+# with multiple argv tokens (paths, flags) and we do not want to write
+# a shell-quote parser; `/bin/sh -c` already handles it. Stderr is
+# inherited from spin so cc/spinel errors stream live to the operator.
+def run_command(cmd)
+  $stderr.puts cmd if $spin_verbose
+  pid = Process.spawn("/bin/sh", "-c", cmd)
+  _, status = Process.waitpid2(pid)
+  status.success?
+end
 
 SPIN_USAGE = <<USAGE
 usage: spin <command> [args]
@@ -399,11 +422,13 @@ def native_objs_for(name, dir, version)
       cmd = native_cc + " -O2 -c '#{c}' -I '#{dir}'"
       cmd += " -I '#{hdr}'" if hdr != ""
       cmd += " -o '#{o}'"
-      spin_die("native compile failed: " + rel + " (" + name + ")") unless system(cmd)
-      # stderr, not stdout: `spin flags` prints a flag string on stdout and a
-      # cold cache compiles here first, so progress on stdout would be spliced
-      # into the flags the caller passes to the compiler (#4105).
-      $stderr.puts "cc #{name}/#{rel}"
+      spin_die("native compile failed: " + rel + " (" + name + ")") unless run_command(cmd)
+      # stderr, not stdout: `spin flags` prints a flag string on stdout and
+      # a cold cache compiles here first, so progress on stdout would be
+      # spliced into the flags the caller passes to the compiler (#4105).
+      # In --verbose the run_command echo already shows the full command,
+      # so the short status line is redundant there.
+      $stderr.puts "cc #{name}/#{rel}" unless $spin_verbose
     end
     objs.push(o)
   end
@@ -1043,10 +1068,21 @@ def compile(prj, entry, out, extra)
   tmp = ENV["TMPDIR"].to_s
   tmp = "/tmp" if tmp == ""
   err = File.join(tmp, "spin-compile-#{Process.pid}.err")
-  ok = system(compile_cmd(prj, entry, out, extra) + " 2>#{err}")
-  text = File.exist?(err) ? File.read(err) : ""
-  $stderr.print text unless text.empty?
-  File.unlink(err) if File.exist?(err)
+  # In verbose mode let the compiler's stderr stream live to the
+  # operator: run_command's echo + the cc/spinel warnings and errors
+  # arrive interleaved, which is what someone running --verbose
+  # wants. In non-verbose mode keep the existing capture-then-replay,
+  # so a build's "what went wrong" hint lands after the exit line,
+  # not before (#4136).
+  text = ""
+  if $spin_verbose
+    ok = run_command(compile_cmd(prj, entry, out, extra))
+  else
+    ok = system(compile_cmd(prj, entry, out, extra) + " 2>#{err}")
+    text = File.exist?(err) ? File.read(err) : ""
+    $stderr.print text unless text.empty?
+    File.unlink(err) if File.exist?(err)
+  end
   unless ok
     if text.include?("cannot load such file")
       $stderr.puts "spin: build failed (hint: an unresolved require may need a dependency: spin add <name> --path <dir>)"
@@ -1623,13 +1659,13 @@ end
 
 # --- main --------------------------------------------------------------------
 
-cmd = ARGV.empty? ? "" : ARGV[0]
-rest = []
-i = 1
-while i < ARGV.length
-  rest.push(ARGV[i])
-  i += 1
-end
+# --verbose can sit in any position; strip every occurrence from
+# ARGV before picking the command. An empty ARGV after that is the
+# no-arg form (usage).
+args = ARGV.reject { |a| a == "--verbose" }
+$spin_verbose = true if args.length != ARGV.length
+cmd = args.empty? ? "" : args[0]
+rest = args[1..] || []
 
 case cmd
 when "new"
@@ -1778,7 +1814,7 @@ when "build", "run", "test", "clean"
     files = rest.reject { |a| a.start_with?("--") }
     cmd_test(prj, files, regen)
   when "clean"
-    system("rm -rf #{File.join(prj.root, 'build')}")
+    run_command("rm -rf #{File.join(prj.root, 'build')}")
     puts "cleaned"
   end
 when "--version"
