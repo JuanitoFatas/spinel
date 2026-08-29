@@ -5606,6 +5606,40 @@ static sp_bool sp_PolyPolyHash_has_key(sp_PolyPolyHash*h,sp_RbVal k){sp_int hs=s
    swapped in whole, so a hook that raises leaves the hash as it was. The
    shell they came in is emptied for its finalizer. */
 static sp_PolyPolyHash*sp_PolyPolyHash_rehash(sp_PolyPolyHash*h){if(!h)return h;if(sp_gc_is_frozen(h))sp_raise_frozen_hash_at(h,SP_BUILTIN_POLY_POLY_HASH);sp_gc_wb((void*)h);SP_GC_ROOT(h);sp_PolyPolyHash*t=sp_PolyPolyHash_new();SP_GC_ROOT(t);for(sp_int i=0;i<h->len;i++){sp_int oi=h->order[i];sp_PolyPolyHash_set(t,h->keys[oi],h->vals[oi]);}free(h->keys);free(h->vals);free(h->hs);free(h->order);free(h->occ);h->keys=t->keys;h->vals=t->vals;h->hs=t->hs;h->order=t->order;h->occ=t->occ;h->len=t->len;h->cap=t->cap;h->mask=t->mask;t->keys=NULL;t->vals=NULL;t->hs=NULL;t->order=NULL;t->occ=NULL;t->len=0;t->cap=0;return h;}
+/* Hash#delete in place: the backward shift the other hash kinds delete
+   with, closing the hole the entry leaves so a probe that ran through it
+   still reaches what lies beyond. order[] holds slot indexes here, not keys,
+   so an entry the shift moves is renumbered where the order holds it. The
+   shift reads the hashes the table keeps and runs no user code, so a hook
+   that raises, or stores into this hash, cannot catch it half done.
+   Rebuilding the table instead -- every remaining key hashed and inserted
+   anew -- would cost a delete what filling the table costs. */
+static void sp_PolyPolyHash_delete(sp_PolyPolyHash*h,sp_RbVal k){
+  if(!h)return;
+  sp_gc_wb((void*)h);
+  SP_GC_ROOT(h);
+  sp_int hs=sp_hash_slot(sp_rbval_hash_key(k));
+  sp_int idx=(sp_int)(hs&h->mask);
+  while(h->occ[idx]){
+    if(h->hs[idx]==hs&&sp_rbval_eql_key(h->keys[idx],k)){
+      for(sp_int oi=0;oi<h->len;oi++)if(h->order[oi]==idx){h->len--;memmove(h->order+oi,h->order+oi+1,sizeof(sp_int)*(size_t)(h->len-oi));break;}
+      h->occ[idx]=FALSE;h->keys[idx]=sp_box_nil();h->vals[idx]=sp_box_nil();
+      sp_int j=(idx+1)&h->mask;
+      while(h->occ[j]){
+        sp_int nj=(sp_int)(h->hs[j]&h->mask);
+        if((j>idx&&(nj<=idx||nj>j))||(j<idx&&nj<=idx&&nj>j)){
+          h->keys[idx]=h->keys[j];h->vals[idx]=h->vals[j];h->hs[idx]=h->hs[j];h->occ[idx]=TRUE;
+          h->occ[j]=FALSE;h->keys[j]=sp_box_nil();h->vals[j]=sp_box_nil();
+          for(sp_int p=0;p<h->len;p++)if(h->order[p]==j){h->order[p]=idx;break;}
+          idx=j;
+        }
+        j=(j+1)&h->mask;
+      }
+      return;
+    }
+    idx=(idx+1)&h->mask;
+  }
+}
 /* format's %<name> / %{name}: find the key in the trailing hash argument by
    its name (a keyword hash boxes as SymPolyHash; string-keyed and fully-poly
    hashes are accepted too). A missing name is CRuby's KeyError. */
@@ -5844,36 +5878,6 @@ static sp_RbVal sp_poly_shift(sp_RbVal v) {
   }
   sp_raise_nomethod(sp_nomethod_msg("shift", v));
   return sp_box_nil();
-}
-/* Hash#delete for a poly-keyed hash: was entirely missing (only the
-   String/Symbol-keyed hash kinds had a delete), so `poly_poly_hash.
-   delete(k)` hit codegen's "unsupported call" catch-all -- e.g. doom's
-   `@active_doors.delete(sector_idx)` once @active_doors unifies to
-   poly-keyed storage. Rebuild-and-swap rather than an in-place
-   backward-shift: order[] here stores *slot indices* (unlike Str/
-   SymPolyHash, which store keys directly), so a backward-shift would
-   also need to renumber every order[] entry whose slot moved -- this is
-   O(n) either way for a table this size, and much less error-prone. `tmp`
-   is a GC-allocated shell; steal its arrays into `h` and null tmp's own
-   fields so its finalizer (which frees h->keys et al by pointer) doesn't
-   double-free the arrays h now owns when tmp is later collected. Root h
-   and tmp for the rebuild (house pattern, cf. sp_StrIntHash_keys and the
-   codegen compact arm): sp_rbval_eql_key/_hash_key can reach the user
-   ==/hash hooks, whose generated code may allocate and collect -- an
-   unrooted tmp would be swept (and finalized) mid-loop. */
-static void sp_PolyPolyHash_delete(sp_PolyPolyHash*h,sp_RbVal k){ sp_gc_wb((void*)h);
-  if(!h||!sp_PolyPolyHash_has_key(h,k))return;
-  SP_GC_ROOT(h);
-  sp_PolyPolyHash*tmp=sp_PolyPolyHash_new();
-  SP_GC_ROOT(tmp);
-  for(sp_int i=0;i<h->len;i++){
-    sp_int idx=h->order[i];
-    if(!sp_rbval_eql_key(h->keys[idx],k))sp_PolyPolyHash_set(tmp,h->keys[idx],h->vals[idx]);
-  }
-  free(h->keys);free(h->vals);free(h->hs);free(h->order);free(h->occ);
-  h->keys=tmp->keys;h->vals=tmp->vals;h->hs=tmp->hs;h->order=tmp->order;h->occ=tmp->occ;
-  h->len=tmp->len;h->cap=tmp->cap;h->mask=tmp->mask;
-  tmp->keys=NULL;tmp->vals=NULL;tmp->hs=NULL;tmp->order=NULL;tmp->occ=NULL;
 }
 static sp_RbVal sp_poly_get_str(sp_RbVal v, const char *key) {
   if (v.tag != SP_TAG_OBJ) return sp_box_nil();
