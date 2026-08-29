@@ -1693,11 +1693,15 @@ end
 
 # --- main --------------------------------------------------------------------
 
-# --verbose can sit in any position; strip every occurrence from
-# ARGV before picking the command. An empty ARGV after that is the
-# no-arg form (usage).
-args = ARGV.reject { |a| a == "--verbose" }
-$spin_verbose = true if args.length != ARGV.length
+# --verbose belongs to spin and only to spin: strip it from the part of
+# ARGV before the `--` separator, leaving any --verbose after `--` in
+# `rest` so it reaches the program (e.g. `spin run app -- --verbose`
+# forwards --verbose to the app, not to spin).
+dd = ARGV.index("--")
+spin_part = dd ? ARGV[0, dd] : ARGV
+app_part = dd ? ARGV[(dd + 1)..] : []
+$spin_verbose = spin_part.count("--verbose") > 0 || ENV["SPIN_VERBOSE"].to_s != ""
+args = spin_part.reject { |a| a == "--verbose" } + (dd ? ["--"] : []) + app_part
 cmd = args.empty? ? "" : args[0]
 rest = args[1..] || []
 
