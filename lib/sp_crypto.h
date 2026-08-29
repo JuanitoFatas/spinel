@@ -29,9 +29,27 @@
  *
  * Thread safety
  * -------------
- * NOT thread-safe -- the static return buffers are shared. Spinel
- * apps that fork (the canonical concurrency model) are fine; apps
- * that thread need to caller-side serialize.
+ * The return buffers are SP_TLS, so an answer belongs to the thread
+ * that asked for it. The clobber rule above still holds, per thread:
+ * the next call to the same function on the SAME thread overwrites
+ * it, and a caller that needs the value to outlive that call still
+ * copies.
+ *
+ * They were process-global until #4174, whose SecureRandom draw made
+ * the cost visible -- eight threads minting tokens got about a third
+ * of them from another thread's buffer. Every function here has the
+ * same window, because every call site copies out of the buffer after
+ * the call has RETURNED. "Caller-side serialize" was not a contract
+ * a caller could keep: Digest::SHA256.hexdigest is an ordinary Ruby
+ * method with nothing at the call site to serialize against.
+ *
+ * SP_TLS is __thread only in the -DSP_THREADS runtime variant, so a
+ * program that never threads pays nothing: its sp_crypto.o is the
+ * byte-identical object it was. The threaded variant pays the buffers
+ * per WORKER -- ~32 KiB of that is the two 16 KiB base64url buffers
+ * and everything else together is under 600 bytes -- and the worker
+ * pool is bounded by min(cores, SPINEL_WORKERS), not by the number of
+ * Ruby threads the program starts.
  */
 #ifndef SP_CRYPTO_H
 #define SP_CRYPTO_H
