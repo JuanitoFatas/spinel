@@ -5059,7 +5059,19 @@ static void emit_tail_value(Compiler *c, int node, Buf *b) {
       emit_ptr_array_build(c, node, g_ret_type, b)) return;
   {
     const char *vnty = nt_type(c->nt, node);
-    if (comp_ntype(c, node) == TY_POLY_ARRAY && vnty && !sp_streq(vnty, "ArrayNode")) {
+    /* A literal is normally context-coerced to the slot's element type, which
+       is why it is excluded from the boundary materialize -- but a literal
+       holding a POLY element (`[n]` with an untyped n) defeats that coercion
+       and builds an sp_PolyArray after all, so it needs the materialize like
+       any other poly-array tail (#4191). */
+    int lit_coerces = 0;
+    if (vnty && sp_streq(vnty, "ArrayNode")) {
+      lit_coerces = 1;
+      int en = 0; const int *ee = nt_arr(c->nt, node, "elements", &en);
+      for (int i = 0; ee && i < en; i++)
+        if (comp_ntype(c, ee[i]) == TY_POLY) { lit_coerces = 0; break; }
+    }
+    if (comp_ntype(c, node) == TY_POLY_ARRAY && vnty && !lit_coerces) {
       const char *conv =
         g_ret_type == TY_STR_ARRAY   ? "sp_StrArray_from_poly_array" :
         g_ret_type == TY_INT_ARRAY   ? "sp_IntArray_from_poly_array" :

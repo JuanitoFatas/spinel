@@ -10281,8 +10281,14 @@ static int seed_contradicts(Compiler *c, TyKind slot, TyKind val, int ret) {
   if (fs == 2 && ks == 1 && kv == 1) {
     /* A POLY array is the one array kind the emitter DOES materialize into a
        typed one at a boundary (sp_StrArray_from_poly_array, #1827), so it can
-       satisfy any array slot. */
-    if (val == TY_POLY_ARRAY) return 0;
+       satisfy any array slot. A RETURN converts in the other direction too:
+       a typed array entering a declared Array[untyped] return is rebuilt with
+       its elements boxed, the same copy the unseeded compiler emits when a
+       caller's use widens such a value (sp_PolyArray_from_int_array at the
+       call site) -- so the wider declaration is satisfied, not contradicted
+       (#4191). An IVAR store converts nothing (the slot keeps the object),
+       so there only an identical kind will do. */
+    if (val == TY_POLY_ARRAY || (ret && slot == TY_POLY_ARRAY)) return 0;
     return slot != val;
   }
   if (fs != 2 || !ks || !kv || ks == kv) return 0;

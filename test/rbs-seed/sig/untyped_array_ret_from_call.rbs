@@ -1,0 +1,9 @@
+class Pager
+  def self.from_range: (untyped n) -> Array[untyped]
+  def self.only_range: (Integer n) -> Array[untyped]
+  def self.strs: () -> Array[untyped]
+end
+
+class Fixed
+  def self.from_range: (untyped n) -> Array[Integer]
+end
