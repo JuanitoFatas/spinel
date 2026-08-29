@@ -1353,34 +1353,14 @@ install: all bin/spin
 	fi
 	install -m 644 lib/libspinel_rt.a    $(SPNLDIR)/lib/
 	install -m 644 lib/libspinel_rt_mt.a $(SPNLDIR)/lib/
-	install -m 644 lib/spinel_rt.h      $(SPNLDIR)/lib/
-	install -m 644 lib/sp_types.h        $(SPNLDIR)/lib/
-	install -m 644 lib/sp_core.h         $(SPNLDIR)/lib/
-	install -m 644 lib/sp_system.h       $(SPNLDIR)/lib/
-	install -m 644 lib/sp_gc.h           $(SPNLDIR)/lib/
-	install -m 644 lib/sp_alloc.h        $(SPNLDIR)/lib/
+	@# Every lib/*.h is installed, derived from the tree rather than
+	@# enumerated: spinel_rt.h includes what it includes, and a hand-kept
+	@# list goes stale the day a new header lands -- sp_process_status.h
+	@# missed it and every installed toolchain failed to compile anything
+	@# (#4186).
+	for h in lib/*.h; do install -m 644 $$h $(SPNLDIR)/lib/; done
 	install -d $(SPNLDIR)/lib/spinel
 	install -m 644 lib/spinel/runtime.h  $(SPNLDIR)/lib/spinel/
-	install -m 644 lib/sp_marshal.h      $(SPNLDIR)/lib/
-	install -m 644 lib/sp_format.h       $(SPNLDIR)/lib/
-	install -m 644 lib/sp_string.h       $(SPNLDIR)/lib/
-	install -m 644 lib/sp_inspect.h      $(SPNLDIR)/lib/
-	install -m 644 lib/sp_array.h        $(SPNLDIR)/lib/
-	install -m 644 lib/sp_str.h          $(SPNLDIR)/lib/
-	install -m 644 lib/sp_hash.h         $(SPNLDIR)/lib/
-	install -m 644 lib/sp_proc.h         $(SPNLDIR)/lib/
-	install -m 644 lib/sp_exc.h          $(SPNLDIR)/lib/
-	install -m 644 lib/sp_range.h        $(SPNLDIR)/lib/
-	install -m 644 lib/sp_argf.h         $(SPNLDIR)/lib/
-	install -m 644 lib/sp_re.h           $(SPNLDIR)/lib/
-	install -m 644 lib/sp_fiber.h        $(SPNLDIR)/lib/
-	install -m 644 lib/sp_fiber_ctx.h    $(SPNLDIR)/lib/
-	install -m 644 lib/sp_sched.h        $(SPNLDIR)/lib/
-	install -m 644 lib/sp_io.h           $(SPNLDIR)/lib/
-	install -m 644 lib/sp_time.h         $(SPNLDIR)/lib/
-	install -m 644 lib/sp_net.h          $(SPNLDIR)/lib/
-	install -m 644 lib/sp_random.h       $(SPNLDIR)/lib/
-	install -m 644 lib/sp_enum.h         $(SPNLDIR)/lib/
 	rm -rf $(SPNLDIR)/packages
 	cp -r packages $(SPNLDIR)/packages
 	rm -rf $(SPNLDIR)/packages/*/build
