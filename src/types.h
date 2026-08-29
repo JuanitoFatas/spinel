@@ -42,9 +42,10 @@ static inline int sp_streq(const char *a, const char *b) {
    has claimed the name, because a claimed name's face answer is a type
    nothing renders (find and detect were such names -- their emitter walks
    the elements and answers one of them). The read-only Hash face is all
-   PF_LAST; a Hash row that is not must carry PF_MUT and write back, because
-   the normalization copies every variant but the general one and a plain
-   write would be lost. The table itself is in types.c. */
+   PF_LAST; a Hash row ahead of it either reads alone (assoc) or carries
+   PF_MUT and writes back, because the normalization copies every variant
+   but the general one and a plain write would be lost. The table itself is
+   in types.c. */
 enum {
   PF_STRING = 1 << 0,  /* re-enter as TY_STRING (sp_poly_recv_s) */
   PF_ARRAY  = 1 << 1,  /* TY_POLY_ARRAY, an Array at run time only */
@@ -56,7 +57,7 @@ enum {
   PF_STR_BANG = 1 << 9,  /* String value-form bang: re-enter the plain name, nil when unchanged */
   PF_STR_SELF = 1 << 10, /* ... but a bang that answers self (succ!/next!): never nil */
   PF_ARGS_OWN = 1 << 11, /* the arguments must be of the owner's own kind (concat) */
-  PF_VAL_SELF = 1 << 12, /* a String mutator whose value is the receiver's new contents */
+  PF_VAL_SELF = 1 << 12, /* a mutator whose value is the receiver: a String row's typed value is its new contents, a Hash row's value is the box itself */
   PF_SAME_OK  = 1 << 14, /* ... and contents that are the receiver's own mean no write, so no frozen check (scrub!) */
   PF_LAST     = 1 << 13  /* answers only once no poly-receiver emitter of its own has claimed the name */
 };

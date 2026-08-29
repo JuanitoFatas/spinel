@@ -19,10 +19,13 @@
  *
  * State buffers
  * -------------
- * Each public function owns a per-function static return buffer.
- * The next call to the SAME function clobbers it. Distinct functions
- * use distinct buffers, so chained calls (b64url_encode then hex)
- * don't trample each other.
+ * Each public function owns a per-function SP_TLS return buffer.
+ * The next call to the SAME function on the SAME thread clobbers it.
+ * Distinct functions use distinct buffers, so chained calls
+ * (b64url_encode then hex) don't trample each other, and distinct
+ * threads never share one -- the call site copies out of the buffer
+ * after the call has returned, and that window is long enough for
+ * another thread to enter the same function and overwrite it.
  */
 #include "sp_crypto.h"
 #include "sp_alloc.h"   /* sp_str_byte_len: hash/HMAC/PBKDF2 inputs are spinel
@@ -176,7 +179,7 @@ else {
     }
 }
 
-static char sp_crypto_sha256_hex_buf[65];
+static SP_TLS char sp_crypto_sha256_hex_buf[65];
 
 /* SHA-256(msg) -> 64-char lowercase hex. The `digest` spin package binds
    Digest::SHA256.hexdigest to this. Same static-buffer contract as the
@@ -199,7 +202,7 @@ const char *sp_crypto_sha256_hex(const char *msg) {SP_GC_ROOT_STR(msg);
    length from sp_ffi_bin_len rather than calling strlen -- a binary digest
    contains NUL bytes roughly one time in eight. Same static-buffer contract as
    the hex siblings. */
-static char sp_crypto_sha256_bin_buf[32];
+static SP_TLS char sp_crypto_sha256_bin_buf[32];
 
 const char *sp_crypto_sha256_bin(const char *msg) {SP_GC_ROOT_STR(msg);
     sp_crypto_sha256((const uint8_t *)msg, sp_str_byte_len(msg),
@@ -208,7 +211,7 @@ const char *sp_crypto_sha256_bin(const char *msg) {SP_GC_ROOT_STR(msg);
     return sp_crypto_sha256_bin_buf;
 }
 
-static char sp_crypto_sha1_hex_buf[41];
+static SP_TLS char sp_crypto_sha1_hex_buf[41];
 
 const char *sp_crypto_sha1_hex(const char *msg) {SP_GC_ROOT_STR(msg);
     uint8_t out[20];
@@ -224,7 +227,7 @@ const char *sp_crypto_sha1_hex(const char *msg) {SP_GC_ROOT_STR(msg);
 }
 
 /* SHA-1(msg) -> the raw 20 digest bytes; see sp_crypto_sha256_bin. */
-static char sp_crypto_sha1_bin_buf[20];
+static SP_TLS char sp_crypto_sha1_bin_buf[20];
 
 const char *sp_crypto_sha1_bin(const char *msg) {SP_GC_ROOT_STR(msg);
     sp_crypto_sha1((const uint8_t *)msg, sp_str_byte_len(msg),
@@ -242,7 +245,7 @@ const char *sp_crypto_sha1_bin(const char *msg) {SP_GC_ROOT_STR(msg);
 static const char SPC_B64[64] =
     "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
 
-static char sp_crypto_websocket_accept_buf[29];
+static SP_TLS char sp_crypto_websocket_accept_buf[29];
 
 const char *sp_crypto_websocket_accept(const char *client_key) {
     /* client_key is the 24-char base64 from the request header;
@@ -352,7 +355,7 @@ else {
     }
 }
 
-static char sp_crypto_hmac_hex_buf[65];
+static SP_TLS char sp_crypto_hmac_hex_buf[65];
 
 const char *sp_crypto_hmac_sha256_hex(const char *key, const char *msg) {SP_GC_ROOT_STR(key);SP_GC_ROOT_STR(msg);
     uint8_t out[32];
@@ -446,7 +449,7 @@ else {
     }
 }
 
-static char sp_crypto_hmac_sha1_hex_buf[41];
+static SP_TLS char sp_crypto_hmac_sha1_hex_buf[41];
 
 const char *sp_crypto_hmac_sha1_hex(const char *key, const char *msg) {SP_GC_ROOT_STR(key);SP_GC_ROOT_STR(msg);
     uint8_t out[20];
@@ -468,7 +471,7 @@ const char *sp_crypto_hmac_sha1_hex(const char *key, const char *msg) {SP_GC_ROO
 static const char SPC_B64U[64] =
     "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
 
-static char sp_crypto_hmac_b64url_buf[44];
+static SP_TLS char sp_crypto_hmac_b64url_buf[44];
 
 const char *sp_crypto_hmac_sha256_b64url(const char *key, const char *msg) {SP_GC_ROOT_STR(key);SP_GC_ROOT_STR(msg);
     uint8_t out[32];
@@ -499,7 +502,7 @@ const char *sp_crypto_hmac_sha256_b64url(const char *key, const char *msg) {SP_G
 }
 
 #define SPC_B64U_BUFSIZE (16 * 1024)
-static char sp_crypto_b64url_buf[SPC_B64U_BUFSIZE];
+static SP_TLS char sp_crypto_b64url_buf[SPC_B64U_BUFSIZE];
 
 const char *sp_crypto_b64url_encode(const char *src) {
     size_t n = sp_str_byte_len(src);
@@ -535,7 +538,7 @@ else if (rem == 2) {
     return sp_crypto_b64url_buf;
 }
 
-static char sp_crypto_b64u_dec_buf[SPC_B64U_BUFSIZE];
+static SP_TLS char sp_crypto_b64u_dec_buf[SPC_B64U_BUFSIZE];
 
 static int sp_crypto_b64u_val(char c) {
     if (c >= 'A' && c <= 'Z') return c - 'A';
@@ -594,7 +597,7 @@ else if (rem == 3) {
  */
 
 /* 64 derived bytes -> 86 unpadded b64url chars + NUL. */
-static char sp_crypto_pbkdf2_b64url_buf[88];
+static SP_TLS char sp_crypto_pbkdf2_b64url_buf[88];
 
 /* Unpadded base64url of `n` bytes into `out` (NUL-terminated). */
 static void sp_crypto_b64url_bytes(const uint8_t *src, int n, char *out) {
@@ -666,7 +669,7 @@ const char *sp_crypto_pbkdf2_sha256_b64url(const char *password, const char *sal
 
 /* ---------- CSPRNG ---------- */
 
-static char sp_crypto_random_b64url_buf[90];
+static SP_TLS char sp_crypto_random_b64url_buf[90];
 
 /* Fill `out` with `nbytes` CSPRNG bytes. 1 on success, 0 when no secure
    source is available -- the ONE place the entropy decision is made, so the

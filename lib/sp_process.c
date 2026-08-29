@@ -54,7 +54,7 @@
 /* Local error-message builder. Returns a static buffer; copy the
    result before another call. Avoids sp_sprintf which would pull
    sp_class_to_s / sp_sym_to_s into the link. */
-static char sp_err_buf[512];
+static SP_TLS char sp_err_buf[512];
 static const char *sp_errf_errno(const char *prefix, int err) {
   snprintf(sp_err_buf, sizeof sp_err_buf, "%s - %s", prefix, strerror(err));
   return sp_err_buf;
