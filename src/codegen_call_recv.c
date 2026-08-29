@@ -3295,57 +3295,13 @@ else {
           buf_printf(b, "_t%d", trecv); return 1;
         }
       }
-      /* select! / filter! / keep_if / reject! / delete_if { |x| cond } - in-place
-         filter. Works on typed (int/str/float) AND poly arrays. */
+      /* select! / filter! / keep_if / reject! / delete_if { |x| cond }: the
+         in-place filter, on a typed or a poly array (emit_array_filter_loop) */
       if ((sp_streq(name, "select!") || sp_streq(name, "filter!") || sp_streq(name, "keep_if") ||
            sp_streq(name, "reject!") || sp_streq(name, "delete_if")) && block >= 0) {
-        int is_rej = sp_streq(name, "reject!") || sp_streq(name, "delete_if");
         const char *kk = (rt == TY_POLY_ARRAY) ? "Poly" : k;
-        const char *bp0 = block_param_name(c, block, 0);
-        const char *bp = bp0 ? rename_local(bp0) : NULL;
-        int body = nt_ref(nt, block, "body");
-        int bn = 0; const int *bb = body >= 0 ? nt_arr(nt, body, "body", &bn) : NULL;
-        if (kk && bn >= 1) {
-          TyKind et = ty_array_elem(rt);
-          Scope *fs = comp_scope_of(c, block);
-          LocalVar *flv = (fs && bp0) ? scope_local(fs, bp0) : NULL;
-          TyKind fsaved = flv ? flv->type : TY_UNKNOWN;
-          if (flv) { flv->type = et; for (int j = 0; j < bn; j++) infer_subtree(c, bb[j]); }
-          int trecv = ++g_tmp, ti = ++g_tmp, twp = ++g_tmp, torig = ++g_tmp;
-          Buf rb = expr_buf(c, recv);
-          emit_indent(g_pre, g_indent); emit_ctype(c, rt, g_pre);
-          buf_printf(g_pre, " _t%d = %s;\n", trecv, rb.p ? rb.p : ""); free(rb.p);
-          emit_indent(g_pre, g_indent);
-          buf_printf(g_pre, "sp_int _t%d = sp_%sArray_length(_t%d);\n", torig, kk, trecv);
-          emit_indent(g_pre, g_indent); buf_printf(g_pre, "sp_int _t%d = 0;\n", twp);
-          emit_indent(g_pre, g_indent);
-          buf_printf(g_pre, "for (sp_int _t%d = 0; _t%d < sp_%sArray_length(_t%d); _t%d++) {\n",
-                     ti, ti, kk, trecv, ti);
-          emit_indent(g_pre, g_indent + 1); emit_ctype(c, et, g_pre);
-          buf_printf(g_pre, " _telt%d = sp_%sArray_get(_t%d, _t%d);\n", ti, kk, trecv, ti);
-          if (bp) {
-            emit_indent(g_pre, g_indent + 1); emit_ctype(c, et, g_pre);
-            buf_printf(g_pre, " lv_%s = _telt%d;\n", bp, ti);
-          }
-          for (int j = 0; j < bn - 1; j++) emit_stmt(c, bb[j], g_pre, g_indent + 1);
-          int sv = g_indent; g_indent++;
-          Buf cb = expr_buf(c, bb[bn - 1]); g_indent = sv;
-          TyKind cty = comp_ntype(c, bb[bn - 1]);
-          /* Ruby truthiness on the predicate value: only nil/false are falsy, so a
-             nilable int/float reads falsy at its sentinel but 0/0.0 stay truthy.
-             Mirrors emit_each_with_index_terminal's select/reject test. */
-          emit_indent(g_pre, g_indent + 1); buf_puts(g_pre, "if (");
-          if (is_rej) buf_puts(g_pre, "!");
-          if (cty == TY_POLY)       buf_printf(g_pre, "sp_poly_truthy(%s)", cb.p ? cb.p : "sp_box_nil()");
-          else if (cty == TY_INT)   buf_printf(g_pre, "((%s) != SP_INT_NIL)", cb.p ? cb.p : "0");
-          else if (cty == TY_FLOAT) buf_printf(g_pre, "(!sp_float_is_nil(%s))", cb.p ? cb.p : "0");
-          else                      buf_printf(g_pre, "(%s)", cb.p ? cb.p : "0");
-          buf_printf(g_pre, ") { sp_%sArray_set(_t%d, _t%d, _telt%d); _t%d++; }\n",
-                     kk, trecv, twp, ti, twp);
-          free(cb.p);
-          emit_indent(g_pre, g_indent); buf_puts(g_pre, "}\n");
-          emit_indent(g_pre, g_indent); buf_printf(g_pre, "if (_t%d) _t%d->len = _t%d;\n", trecv, trecv, twp);
-          if (flv) flv->type = fsaved;
+        int trecv, torig, twp;
+        if (kk && emit_array_filter_loop(c, recv, block, rt, name, g_pre, g_indent, &trecv, &torig, &twp)) {
           char box[64]; snprintf(box, sizeof box, "%s(_t%d)", array_box_fn(kk), trecv);
           emit_filter_bang_result(name, trecv, torig, twp, box, b);
           return 1;
@@ -4538,41 +4494,12 @@ else {
           buf_printf(b, "_t%d", trecv); return 1;
         }
       }
+      /* select! / filter! / keep_if / reject! / delete_if { |x| cond }: the
+         in-place filter (emit_array_filter_loop) */
       if ((sp_streq(name, "select!") || sp_streq(name, "filter!") || sp_streq(name, "keep_if") ||
            sp_streq(name, "reject!") || sp_streq(name, "delete_if")) && nt_ref(nt, id, "block") >= 0) {
-        int is_rej = sp_streq(name, "reject!") || sp_streq(name, "delete_if");
-        int blk = nt_ref(nt, id, "block");
-        const char *bp = block_param_name(c, blk, 0); if (bp) bp = rename_local(bp);
-        int body = nt_ref(nt, blk, "body");
-        int bn = 0; const int *bb = body >= 0 ? nt_arr(nt, body, "body", &bn) : NULL;
-        if (bn >= 1) {
-          int trecv = ++g_tmp, ti = ++g_tmp, twp = ++g_tmp, torig = ++g_tmp;
-          Buf rb = expr_buf(c, recv);
-          emit_indent(g_pre, g_indent); buf_printf(g_pre, "sp_PolyArray *_t%d = %s;\n", trecv, rb.p ? rb.p : ""); free(rb.p);
-          emit_indent(g_pre, g_indent); buf_printf(g_pre, "sp_int _t%d = sp_PolyArray_length(_t%d);\n", torig, trecv);
-          emit_indent(g_pre, g_indent); buf_printf(g_pre, "sp_int _t%d = 0;\n", twp);
-          emit_indent(g_pre, g_indent);
-          buf_printf(g_pre, "for (sp_int _t%d = 0; _t%d < sp_PolyArray_length(_t%d); _t%d++) {\n", ti, ti, trecv, ti);
-          emit_indent(g_pre, g_indent + 1); buf_printf(g_pre, "sp_RbVal _telt%d = sp_PolyArray_get(_t%d, _t%d);\n", ti, trecv, ti);
-          if (bp) { emit_indent(g_pre, g_indent + 1); buf_printf(g_pre, "lv_%s = _telt%d;\n", bp, ti); }
-          for (int j = 0; j < bn - 1; j++) emit_stmt(c, bb[j], g_pre, g_indent + 1);
-          int sv = g_indent; g_indent++;
-          /* Capture the predicate in its own buffer: a multi-statement terminal
-             (a block ending in an if/else expression) lowers its statements
-             through g_pre, and emitting the condition straight into g_pre would
-             splice them after the already-written `if (!`. */
-          Buf cb; memset(&cb, 0, sizeof cb);
-          emit_cond(c, bb[bn - 1], &cb);
-          emit_indent(g_pre, g_indent);
-          buf_puts(g_pre, "if (");
-          if (is_rej) buf_puts(g_pre, "!");
-          buf_puts(g_pre, cb.p ? cb.p : "0");
-          free(cb.p);
-          g_indent = sv;
-          buf_printf(g_pre, ") { sp_PolyArray_set(_t%d, _t%d, _telt%d); _t%d++; }\n",
-                     trecv, twp, ti, twp);
-          emit_indent(g_pre, g_indent); buf_puts(g_pre, "}\n");
-          emit_indent(g_pre, g_indent); buf_printf(g_pre, "if (_t%d) _t%d->len = _t%d;\n", trecv, trecv, twp);
+        int trecv, torig, twp;
+        if (emit_array_filter_loop(c, recv, nt_ref(nt, id, "block"), rt, name, g_pre, g_indent, &trecv, &torig, &twp)) {
           char box[64]; snprintf(box, sizeof box, "sp_box_poly_array(_t%d)", trecv);
           emit_filter_bang_result(name, trecv, torig, twp, box, b);
           return 1;
