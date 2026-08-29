@@ -1092,6 +1092,10 @@ def compile(prj, entry, out, extra)
   # behaviour (#4136 in spirit) and the hint check still works.
   text = ""
   if $spin_verbose
+    # Echo the command (run_command's behaviour for every other exec) so
+    # the operator sees it on stderr, then spawn with stderr piped for
+    # live stream + retained text below.
+    $stderr.puts compile_cmd(prj, entry, out, extra)
     rd, wr = IO.pipe
     pid = Process.spawn("/bin/sh", "-c", compile_cmd(prj, entry, out, extra), :err => wr)
     wr.close
