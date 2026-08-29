@@ -1571,10 +1571,17 @@ void emit_expr(Compiler *c, int id, Buf *b) {
       TyKind kt = ty_hash_key(irt);
       TyKind vt = ty_hash_val(irt);
       if (!hn) { unsupported(c, id, "index-or/and-write (expr, unknown hash)"); return; }
-      buf_printf(b, "({ %s _t%d = ", c_type_name(irt), ta2); emit_expr(c, ir, b);
-      buf_printf(b, "; %s _t%d = ", c_type_name(kt), tb2); emit_hash_key(c, iav[0], kt, b);
+      /* The receiver's temp is the hash's only holder once the key or the
+         value drops it, and a key that can allocate has no holder at all:
+         root the receiver when either can -- a call, a write -- and the key
+         when it can allocate, as the statement form does. */
+      int drops = subtree_has_side_effect(c, iav[0]) || subtree_has_side_effect(c, iv);
+      buf_printf(b, "({ %s _t%d = ", c_type_name(irt), ta2); emit_expr(c, ir, b); buf_puts(b, "; ");
+      if (subtree_may_allocate(c->nt, ir) || drops) { emit_gc_root_tmp(c, irt, ta2, b); buf_puts(b, " "); }
+      buf_printf(b, "%s _t%d = ", c_type_name(kt), tb2); emit_hash_key(c, iav[0], kt, b); buf_puts(b, "; ");
+      if (subtree_may_allocate(c->nt, iav[0]) && needs_root(kt)) { emit_gc_root_tmp(c, kt, tb2, b); buf_puts(b, " "); }
       if (vt == TY_POLY) {
-        buf_printf(b, "; sp_RbVal _t%d = sp_%sHash_get(_t%d, _t%d);", tc2, hn, ta2, tb2);
+        buf_printf(b, "sp_RbVal _t%d = sp_%sHash_get(_t%d, _t%d);", tc2, hn, ta2, tb2);
         buf_printf(b, " if (%ssp_poly_truthy(_t%d)) { ", is_or2 ? "!" : "", tc2);
         /* The right-hand side's own prelude belongs INSIDE the guard. Hoisted
            above it, a call there runs even when the key is already present --
@@ -1586,7 +1593,7 @@ void emit_expr(Compiler *c, int id, Buf *b) {
         buf_printf(b, "; sp_%sHash_set(_t%d, _t%d, _t%d); } _t%d; })", hn, ta2, tb2, tc2, tc2);
       }
       else {
-        buf_printf(b, "; %s _t%d = sp_%sHash_get(_t%d, _t%d);", c_type_name(vt), tc2, hn, ta2, tb2);
+        buf_printf(b, "%s _t%d = sp_%sHash_get(_t%d, _t%d);", c_type_name(vt), tc2, hn, ta2, tb2);
         buf_puts(b, " if (");
         emit_slot_nil_test(c, vt, tc2, is_or2, b);
         buf_printf(b, ") { _t%d = ", tc2);
@@ -2567,9 +2574,20 @@ else {
       Buf vb; memset(&vb, 0, sizeof vb);
       if (sym_poly || poly_poly) emit_boxed(c, val, &vb); else emit_expr(c, val, &vb);
       emit_indent(g_pre, g_indent);
+      /* A pair's key and value are the set's sibling arguments, as a store's
+         are: a key that can allocate goes into a rooted temp ahead of the
+         value's build, as the store arm's does. */
+      int tk = -1;
+      if (ty_is_hash(ht) && subtree_may_allocate(nt, key)) {
+        TyKind kt = ty_hash_key(ht);
+        tk = ++g_tmp;
+        buf_printf(g_pre, "{ %s _t%d = %s; ", c_type_name(kt), tk, kb.p ? kb.p : "");
+        if (needs_root(kt)) { emit_gc_root_tmp(c, kt, tk, g_pre); buf_puts(g_pre, " "); }
+      }
       buf_printf(g_pre, "sp_%sHash_set(_t%d, ", hn, t);
-      buf_puts(g_pre, kb.p ? kb.p : ""); buf_puts(g_pre, ", ");
-      buf_puts(g_pre, vb.p ? vb.p : ""); buf_puts(g_pre, ");\n");
+      if (tk >= 0) buf_printf(g_pre, "_t%d", tk); else buf_puts(g_pre, kb.p ? kb.p : "");
+      buf_puts(g_pre, ", "); buf_puts(g_pre, vb.p ? vb.p : "");
+      buf_puts(g_pre, tk >= 0 ? "); }\n" : ");\n");
       free(kb.p); free(vb.p);
     }
     buf_printf(b, "_t%d", t);

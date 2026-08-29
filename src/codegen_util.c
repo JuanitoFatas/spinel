@@ -2021,6 +2021,12 @@ void emit_frozen_obj_guard(Compiler *c, int cid, const char *selfexpr, Buf *b) {
       selfexpr, selfexpr, cid, rn);
 }
 
+/* `_t<tmp>` when the node was already evaluated into that temp, or the
+   node itself when tmp is -1. */
+void emit_node_or_tmp(Compiler *c, int node, int tmp, Buf *b) {
+  if (tmp >= 0) buf_printf(b, "_t%d", tmp);
+  else emit_expr(c, node, b);
+}
 /* Root a temp whose C type came from a TyKind. A boxed-poly temp is an
    sp_RbVal, whose first word is a tag rather than a pointer, so it has to be
    rooted through the rbval macro -- rooting it as a raw pointer hands the mark
