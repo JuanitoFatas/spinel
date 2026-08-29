@@ -15,17 +15,39 @@ $spin_verbose = ENV["SPIN_VERBOSE"].to_s != ""   # --verbose / SPIN_VERBOSE=1
 # turns on command echoing, and so a future refactor (capture output,
 # parallelize, dry-run) has one site to touch.
 #
-# Implementation: Process.spawn("/bin/sh", "-c", cmd) with a waitpid2.
-# CRuby's `system(cmd)` does the same under the hood; the AOT runtime
-# runs the codegen-emitted form directly, so the call is portable across
-# both runtimes. The shell wrapper is needed because `cmd` is a string
-# with multiple argv tokens (paths, flags) and we do not want to write
-# a shell-quote parser; `/bin/sh -c` already handles it. Stderr is
-# inherited from spin so cc/spinel errors stream live to the operator.
-def run_command(cmd)
+# Implementation: Process.spawn("/bin/sh", "-c", cmd) plus a
+# Process.waitpid2 for the exit status. The shell wrapper handles the
+# multi-token cmd string (paths, flags) without us writing a quote
+# parser, and is portable: CRuby's `system(cmd)` runs the same command
+# via /bin/sh, and spinel's AOT runtime routes the codegen-emitted
+# spawn through its own fork/exec with the same shell semantics.
+#
+# When called with `text:` the child's stderr is also accumulated into
+# the given String (line by line, on a background thread that writes
+# each line to $stderr so it still streams live to the operator). This
+# is what compile()'s "cannot load such file" diagnostic needs: the
+# live stream from run_command, plus the captured text for the hint
+# check afterwards. Other call sites pass nothing and get the plain
+# status.
+def run_command(cmd, text: nil)
   $stderr.puts cmd if $spin_verbose
-  pid = Process.spawn("/bin/sh", "-c", cmd)
+  if text.nil?
+    pid = Process.spawn("/bin/sh", "-c", cmd)
+    _, status = Process.waitpid2(pid)
+    return status.success?
+  end
+  rd, wr = IO.pipe
+  pid = Process.spawn("/bin/sh", "-c", cmd, :err => wr)
+  wr.close
+  cap = Thread.new do
+    while (line = rd.gets)
+      $stderr.write line
+      text << line
+    end
+  end
   _, status = Process.waitpid2(pid)
+  rd.close
+  cap.join
   status.success?
 end
 
@@ -1092,25 +1114,10 @@ def compile(prj, entry, out, extra)
   # behaviour (#4136 in spirit) and the hint check still works.
   text = ""
   if $spin_verbose
-    # Echo the command (run_command's behaviour for every other exec) so
-    # the operator sees it on stderr, then spawn with stderr piped for
-    # live stream + retained text below.
-    $stderr.puts compile_cmd(prj, entry, out, extra)
-    rd, wr = IO.pipe
-    pid = Process.spawn("/bin/sh", "-c", compile_cmd(prj, entry, out, extra), :err => wr)
-    wr.close
-    stream = Thread.new do
-      buf = ""
-      while (chunk = rd.gets)
-        $stderr.write chunk
-        buf += chunk
-      end
-      buf
-    end
-    _, status = Process.waitpid2(pid)
-    rd.close
-    text = stream.value
-    ok = status.success?
+    # run_command echoes the cmd, streams stderr live, and (with text:)
+    # captures the same stderr for the "cannot load such file" hint
+    # check below.
+    ok = run_command(compile_cmd(prj, entry, out, extra), text: text)
   else
     ok = system(compile_cmd(prj, entry, out, extra) + " 2>#{err}")
     text = File.exist?(err) ? File.read(err) : ""
