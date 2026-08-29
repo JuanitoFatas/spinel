@@ -668,32 +668,75 @@ const char *sp_crypto_pbkdf2_sha256_b64url(const char *password, const char *sal
 
 static char sp_crypto_random_b64url_buf[90];
 
-const char *sp_crypto_random_b64url(int nbytes) {
-    if (nbytes < 1) nbytes = 16;
-    if (nbytes > 64) nbytes = 64;
-    uint8_t r[64];
+/* Fill `out` with `nbytes` CSPRNG bytes. 1 on success, 0 when no secure
+   source is available -- the ONE place the entropy decision is made, so the
+   raw-bytes and base64url entry points below cannot drift apart about what
+   counts as secure. */
+static int sp_crypto_entropy(uint8_t *out, int nbytes) {
 #if defined(__APPLE__) || defined(__FreeBSD__) || defined(__OpenBSD__) || defined(__NetBSD__)
-    arc4random_buf(r, nbytes);
+    arc4random_buf(out, nbytes);
+    return 1;
 #else
     /* getrandom(2) first: kernel-sourced, works where /dev/urandom is not
        even visible (chroot, minimal containers) -- the very environments
        whose old time-based fallback made "CSPRNG" a lie. Then the device;
-       then fail CLOSED (NULL), never weak randomness. */
-    int filled = 0;
+       then fail CLOSED, never weak randomness. */
 #if defined(__linux__) && defined(SYS_getrandom)
     {
-        long n = syscall(SYS_getrandom, r, (size_t)nbytes, 0);
-        if (n == (long)nbytes) filled = 1;
+        long n = syscall(SYS_getrandom, out, (size_t)nbytes, 0);
+        if (n == (long)nbytes) return 1;
     }
 #endif
-    if (!filled) {
+    {
         FILE *f = fopen("/dev/urandom", "rb");
-        if (!f) return NULL;
-        size_t got = fread(r, 1, (size_t)nbytes, f);
+        if (!f) return 0;
+        size_t got = fread(out, 1, (size_t)nbytes, f);
         fclose(f);
-        if (got != (size_t)nbytes) return NULL;
+        if (got != (size_t)nbytes) return 0;
     }
+    return 1;
 #endif
+}
+
+/* nbytes raw CSPRNG bytes. SecureRandom's one primitive: every other method
+   in the bundled `securerandom` package is a rendering of these bytes, so
+   this is the only place that has to be right about entropy.
+
+   RAISES rather than returning NULL when no secure source is available.
+   The b64url sibling below predates it and keeps its NULL contract, but a
+   caller reaching for random BYTES is minting a token or a key -- there is
+   no answer to give, and a nil flowing into a token is the failure nothing
+   notices. Length rides sp_ffi_bin_len for the `:cbinstr` return mode:
+   random bytes contain NULs about one time in 256.
+
+   SP_TLS, unlike its siblings in this file. The `:cbinstr` call site copies
+   the returned pointer AFTER the call, so under -DSP_THREADS a second worker
+   drawing in that window would overwrite the first one's bytes -- and here
+   that means two sessions handed the same token, which is the one failure
+   mode that never shows up as a crash. sp_ffi_bin_len, which carries this
+   buffer's length, is already SP_TLS: a value and its length in different
+   storage classes cannot both be right. sp_random.c keeps its generator
+   state per-worker for the same reason. Costs SPC_RANDOM_MAX bytes per
+   thread. */
+static SP_TLS char sp_crypto_random_bin_buf[SPC_RANDOM_MAX];
+
+const char *sp_crypto_random_bin(int nbytes) {
+    if (nbytes < 0) sp_raise_cls("ArgumentError", "negative string size");
+    if (nbytes > SPC_RANDOM_MAX)
+        sp_raise_cls("ArgumentError",
+                     "securerandom: request exceeds the bundled maximum draw");
+    if (nbytes == 0) { sp_ffi_bin_len = 0; sp_crypto_random_bin_buf[0] = '\0'; return sp_crypto_random_bin_buf; }
+    if (!sp_crypto_entropy((uint8_t *)sp_crypto_random_bin_buf, nbytes))
+        sp_raise_cls("RuntimeError", "securerandom: no secure random source available");
+    sp_ffi_bin_len = nbytes;
+    return sp_crypto_random_bin_buf;
+}
+
+const char *sp_crypto_random_b64url(int nbytes) {
+    if (nbytes < 1) nbytes = 16;
+    if (nbytes > 64) nbytes = 64;
+    uint8_t r[64];
+    if (!sp_crypto_entropy(r, nbytes)) return NULL;
     int i, j = 0;
     for (i = 0; i + 3 <= nbytes; i += 3) {
         uint32_t v = ((uint32_t)r[i] << 16)
