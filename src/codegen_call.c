@@ -4500,15 +4500,19 @@ static int emit_poly_method_dispatch(Compiler *c, int id, Buf *b) {
         if (cfn) {
           char cex[96];
           snprintf(cex, sizeof cex, "%s(_t%d)", cfn, tv);
-          /* Time#min is the MINUTE, and sp_poly_min answers it. A boxed Time is
-             neither an array nor a hash kind, so without this arm it fell past
-             the guard into the user-class switch and raised NoMethodError --
-             the second symptom of #4192, reached only when some user class
-             happens to define `min`. */
-          char tg[64];
-          tg[0] = 0;
+          /* Time#min is the MINUTE, and sp_poly_min answers it. A boxed Time
+             is neither an array nor a hash kind, so without this arm it fell
+             past the guard into the user-class switch and raised
+             NoMethodError -- the second symptom of #4192, reached only when
+             some user class happens to define `min`. A boxed Range is in the
+             same position for all five names: the helpers own it (Range#sum
+             always did; min/max/first/last since #4192's follow-up), so it
+             must not fall into the user switch either. */
+          char tg[128];
+          int tn = snprintf(tg, sizeof tg, " || _t%d.cls_id == SP_BUILTIN_RANGE", tv);
           if (sp_streq(name, "min"))
-            snprintf(tg, sizeof tg, " || _t%d.cls_id == SP_BUILTIN_TIME", tv);
+            snprintf(tg + tn, sizeof tg - (size_t)tn,
+                     " || _t%d.cls_id == SP_BUILTIN_TIME", tv);
           buf_printf(b, "if (_t%d.tag == SP_TAG_OBJ && (sp_poly_is_array_kind(_t%d.cls_id) ||"
                         " sp_poly_is_hash_kind(_t%d.cls_id)%s)) { _t%d = ", tv, tv, tv, tg, tr);
           if (ret == TY_POLY) buf_puts(b, cex);

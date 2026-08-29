@@ -7233,7 +7233,9 @@ static sp_RbVal sp_poly_arr_values_at(sp_RbVal v, sp_PolyArray *idx) {
   return sp_box_poly_array(out);
 }
 static sp_RbVal sp_poly_min(sp_RbVal v) {
-  if (v.tag != SP_TAG_OBJ) return sp_box_nil();
+  /* A receiver that is not a container (nil, an Integer, a String) has no
+     #min in CRuby; answering nil hid the call entirely (#4192 follow-up). */
+  if (v.tag != SP_TAG_OBJ) return sp_raise_nomethod(sp_nomethod_msg("min", v));
   /* Enumerable#min on a boxed hash: the least [k, v] pair by pair comparison. */
   if (sp_poly_is_hash_kind(v.cls_id)) return sp_PolyArray_min(sp_poly_to_a_arr(v));
   switch (v.cls_id) {
@@ -7249,12 +7251,16 @@ static sp_RbVal sp_poly_min(sp_RbVal v) {
        own arm in emit_poly_builtin_method, which `min` never gets to because
        the enumerable fast path claims the name first (#4192). */
     case SP_BUILTIN_TIME:       return sp_box_int(sp_time_min(*(sp_Time *)v.v.p));
+    /* a boxed int Range enumerates like the typed path; empty answers nil */
+    case SP_BUILTIN_RANGE: { sp_IntArray *ia = sp_range_to_ia(*(sp_Range *)v.v.p);
+                             SP_GC_ROOT(ia);
+                             return ia->len ? sp_box_int(sp_IntArray_min(ia)) : sp_box_nil(); }
     default: { sp_PolyArray *ue = sp_poly_user_elems(v);
-               return ue ? sp_PolyArray_min(ue) : sp_box_nil(); }
+               return ue ? sp_PolyArray_min(ue) : sp_raise_nomethod(sp_nomethod_msg("min", v)); }
   }
 }
 static sp_RbVal sp_poly_max(sp_RbVal v) {
-  if (v.tag != SP_TAG_OBJ) return sp_box_nil();
+  if (v.tag != SP_TAG_OBJ) return sp_raise_nomethod(sp_nomethod_msg("max", v));
   if (sp_poly_is_hash_kind(v.cls_id)) return sp_PolyArray_max(sp_poly_to_a_arr(v));
   switch (v.cls_id) {
     case SP_BUILTIN_INT_ARRAY:  { sp_IntArray *a = (sp_IntArray *)v.v.p; return (a && a->len) ? sp_box_int(sp_IntArray_max(a)) : sp_box_nil(); }
@@ -7262,8 +7268,11 @@ static sp_RbVal sp_poly_max(sp_RbVal v) {
     case SP_BUILTIN_STR_ARRAY:  { const char *m = sp_StrArray_max((sp_StrArray *)v.v.p); return m ? sp_box_str(m) : sp_box_nil(); }
     case SP_BUILTIN_SYM_ARRAY:  return sp_PolyArray_max(sp_poly_to_poly_array(v));
     case SP_BUILTIN_POLY_ARRAY: return sp_PolyArray_max((sp_PolyArray *)v.v.p);
+    case SP_BUILTIN_RANGE: { sp_IntArray *ia = sp_range_to_ia(*(sp_Range *)v.v.p);
+                             SP_GC_ROOT(ia);
+                             return ia->len ? sp_box_int(sp_IntArray_max(ia)) : sp_box_nil(); }
     default: { sp_PolyArray *ue = sp_poly_user_elems(v);
-               return ue ? sp_PolyArray_max(ue) : sp_box_nil(); }
+               return ue ? sp_PolyArray_max(ue) : sp_raise_nomethod(sp_nomethod_msg("max", v)); }
   }
 }
 /* Hash#first / #last answer a [key, value] pair; sp_poly_arr_get indexes the
@@ -7319,11 +7328,26 @@ static sp_RbVal sp_poly_first(sp_RbVal v) {
     if (ps) return ps->len > 0 ? ps->data[0] : sp_box_nil(); }
   /* a user class that includes Enumerable answers from its own elements; the
      array read below only knows containers, so it answered nil (#3875) */
+  /* Range#first is the begin, with no emptiness check: (5..1).first is 5.
+     Before the user_elems read, which materializes a Range and would answer
+     nil for an empty one. */
+  if (v.cls_id == SP_BUILTIN_RANGE) return sp_box_int(((sp_Range *)v.v.p)->first);
   { sp_PolyArray *ue = sp_poly_user_elems(v);
     if (ue) return ue->len > 0 ? ue->data[0] : sp_box_nil(); }
   return sp_poly_arr_get(v, 0);
 }
 static sp_RbVal sp_poly_last(sp_RbVal v) {
+  /* Range#last is the end, exclusivity untouched: (1...5).last is 5. A
+     stepped range's last is the last element it enumerates. Before the
+     user_elems read, which materializes the Range and would answer the
+     exclusivity-adjusted element instead. */
+  if (v.tag == SP_TAG_OBJ && v.cls_id == SP_BUILTIN_RANGE) {
+    sp_Range *rg = (sp_Range *)v.v.p;
+    if (rg->step == 0 || rg->step == 1) return sp_box_int(rg->last);
+    sp_IntArray *ia = sp_range_to_ia(*rg);
+    SP_GC_ROOT(ia);
+    return ia->len ? sp_box_int(ia->data[ia->start + ia->len - 1]) : sp_box_nil();
+  }
   { sp_PolyArray *ue = v.tag == SP_TAG_OBJ ? sp_poly_user_elems(v) : NULL;
     if (ue) return ue->len > 0 ? ue->data[ue->len - 1] : sp_box_nil(); }
   sp_int n = sp_poly_length(v);
