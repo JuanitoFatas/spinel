@@ -30,7 +30,7 @@ One health report for a program. Independent legs:
   the generated C, ranked by loop depth and mapped back to source lines.
   Static, so it ranks by *expected* cost — a deep loop that runs once at
   startup outranks a shallow one that runs per frame; confirm with a
-  profiler before optimizing.
+  profiler before optimizing ([`docs/profiling.md`](../docs/profiling.md)).
 - **requires** — non-relative `require`s spinel treats as native / no-op.
 - **behavior** — optional: compiled output vs CRuby; needs `ruby` on
   `PATH` and skips cleanly otherwise.

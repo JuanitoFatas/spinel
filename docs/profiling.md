@@ -4,6 +4,12 @@ Two measurements, both opt-in and both usable on a normal build: where the time
 goes, and where the allocations come from. Neither needs a special compiler and
 neither costs anything when it is off.
 
+Before measuring anything, `spinel-doctor app.rb` is the static half of the
+same question: its `advice` leg lists the source lines that compile to boxed
+dispatch inside loops — the usual suspects — without running the program (see
+[`tools/README.md`](../tools/README.md)). The profiler below then tells you
+which of those actually cost time.
+
 ## Where the time goes: `--profile`
 
 ```

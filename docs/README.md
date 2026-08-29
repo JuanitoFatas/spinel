@@ -27,6 +27,10 @@ Start here, then open the topic you need.
 - **[profiling.md](profiling.md)** — where the time goes (`--profile` plus any
   frame-pointer sampler) and where the allocations come from
   (`SPINEL_ALLOC_REPORT`, with per-site attribution).
+- **[../tools/README.md](../tools/README.md)** — the in-tree companion tools:
+  `spinel-doctor` (one health report per program: build, silent degradations,
+  inference, and static performance advice), `spinel-reduce` (minimal-repro
+  reducer), `spinel-flatten`.
 - **[thread.md](thread.md)** — `Thread` as true M:N parallelism with no GVL:
   the execution model, the supported API, and the data-race semantics that
   follow from having no global lock.
