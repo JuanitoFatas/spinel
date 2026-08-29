@@ -8521,7 +8521,9 @@ int emit_object_call(Compiler *c, int id, Buf *b) {
      is what reflection-driven code observes. */
   if (recv >= 0 && ty_is_object(rt) && argc == 0 && nt_ref(nt, id, "block") < 0 &&
       (sp_streq(name, "freeze") || sp_streq(name, "frozen?")) &&
-      comp_method_in_chain(c, ty_object_class(rt), name, NULL) < 0) {
+      comp_method_in_chain(c, ty_object_class(rt), name, NULL) < 0 &&
+      /* a generated reader of the name owns it, as in CRuby (#4190) */
+      comp_resolve_member(c, ty_object_class(rt), name, 0, NULL, NULL) != SP_MEMBER_ATTR) {
     if (comp_ty_value_obj(c, rt)) {
       /* A value-type object (sp_X by value, no heap GC header to carry the
          frozen bit): freeze is a self-returning no-op and frozen? is false,

@@ -1354,7 +1354,7 @@ TyKind infer_call(Compiler *c, int id) {
   /* Object#itself is the receiver, whatever its type -- the scattered per-type
      arms below predate this and remain harmless. */
   if (recv >= 0 && argc == 0 && sp_streq(name, "itself") &&
-      nt_ref(nt, id, "block") < 0 && !an_user_defines_method(c, "itself"))
+      nt_ref(nt, id, "block") < 0 && !an_user_defines_or_reads(c, "itself"))
     return infer_type(c, recv);
 
   /* A literal integer power whose result exceeds int64 (`10 ** 30`, `2 ** 70`)
@@ -1477,7 +1477,10 @@ TyKind infer_call(Compiler *c, int id) {
   }
 
   /* nil receiver: type inference for NilClass methods */
-  if (recv >= 0 && sp_streq(name, "display") && argc == 0) return TY_NIL;
+  if (recv >= 0 && sp_streq(name, "display") && argc == 0 &&
+      !(ty_is_object(rt) &&
+        comp_resolve_member(c, ty_object_class(rt), name, 0, NULL, NULL) == SP_MEMBER_ATTR))
+    return TY_NIL;
   if (recv >= 0 && sp_streq(name, "instance_variable_defined?") && argc == 1 &&
       ty_is_object(rt)) return TY_BOOL;
   if (recv >= 0 && rt == TY_SYMBOL && argc == 0 && sp_streq(name, "encoding"))
@@ -2102,7 +2105,11 @@ TyKind infer_call(Compiler *c, int id) {
        (argc == 1 && sp_streq(name, "clone") && argv && nt_type(nt, argv[0]) &&
         sp_streq(nt_type(nt, argv[0]), "KeywordHashNode"))) &&
       (sp_streq(name, "freeze") || sp_streq(name, "itself") ||
-       sp_streq(name, "dup") || sp_streq(name, "clone")))
+       sp_streq(name, "dup") || sp_streq(name, "clone")) &&
+      /* a generated READER of the name owns it on a concrete object, as any
+         reader does in CRuby: fall through to the member-read rule (#4190) */
+      !(ty_is_object(rt) &&
+        comp_resolve_member(c, ty_object_class(rt), name, 0, NULL, NULL) == SP_MEMBER_ATTR))
     return rt;
 
   /* bareword freeze (implicit self) returns self, so `def seal = freeze` and
@@ -3333,7 +3340,11 @@ else {
       if (comp_ivar_index(sc, szn) < 0) return TY_INT;
     }
     if (sp_streq(name, "values_at")) return TY_POLY_ARRAY;   /* no keys selects nothing */
-    if (sp_streq(name, "hash") && argc == 0) return TY_INT;
+    if (sp_streq(name, "hash") && argc == 0) {
+      /* a member of that name wins, like size/length above (#4190) */
+      char hn2[272]; snprintf(hn2, sizeof hn2, "@%s", name);
+      if (comp_ivar_index(sc, hn2) < 0) return TY_INT;
+    }
     if (sp_streq(name, "deconstruct_keys") && argc == 1) return TY_SYM_POLY_HASH;
     if (sp_streq(name, "dig") && argc >= 1) {
       int mi = struct_member_idx(c, sc, argv[0]);
@@ -5319,7 +5330,16 @@ else {
     if (cgn) { LocalVar *cv = comp_const(c, cgn); if (cv && cv->type != TY_UNKNOWN) return cv->type; return TY_POLY; }
   }
   if (sp_streq(name, "nil?") && recv >= 0 && argc == 0) return TY_BOOL;
-  if ((sp_streq(name, "object_id") || sp_streq(name, "__id__")) && recv >= 0 && argc == 0) return TY_INT;
+  /* A generated READER of this name owns it on a concrete object, as it does
+     in CRuby -- Data.define(:object_id) answers the member (CRuby warns and
+     defines it). Codegen's reader arm already wins there; typing the call
+     Integer here split the two halves and the build stopped (#4190). */
+  if ((sp_streq(name, "object_id") || sp_streq(name, "__id__")) && recv >= 0 && argc == 0) {
+    if (ty_is_object(rt) &&
+        comp_resolve_member(c, ty_object_class(rt), name, 0, NULL, NULL) == SP_MEMBER_ATTR)
+      { /* fall through to the member-read rule below */ }
+    else return TY_INT;
+  }
   /* #hash on a primitive returns an Integer (CRuby's any_hash contract): the
      value is the receiver boxed through sp_rbval_hash_key, the same hashing the
      Hash container uses, so a user `def hash = v.hash` composes consistently. A

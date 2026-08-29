@@ -5648,7 +5648,16 @@ void emit_class_new(Compiler *c, ClassInfo *ci, Buf *b) {
     /* Struct/Data #inspect (== #to_s): `#<struct Name m=v, ...>` (Data uses
        `data`). Generated unless the user redefined the method, so a user
        override wins. to_s defers to inspect, which always exists here. */
-    if (comp_method_in_chain(c, cid, "inspect", NULL) < 0) {
+    /* the same ownership for a member named inspect (#4190) */
+    { char insiv[64]; snprintf(insiv, sizeof insiv, "@%s", "inspect");
+      int insidx = comp_ivar_index(ci, insiv);
+      if (comp_method_in_chain(c, cid, "inspect", NULL) < 0 &&
+          insidx >= 0 && ci->ivar_types[insidx] == TY_STRING &&
+          comp_resolve_member(c, cid, "inspect", 0, NULL, NULL) == SP_MEMBER_ATTR) {
+        buf_printf(b, "static const char *sp_%s_inspect(sp_%s *self) { return self->iv_inspect; }\n",
+                   ci->name, ci->name);
+      }
+      else if (comp_method_in_chain(c, cid, "inspect", NULL) < 0) {
       const char *rn = class_ruby_name(c, cid); if (!rn) rn = ci->name;
       buf_printf(b, "static const char *sp_%s_inspect(sp_%s *self) {\n", ci->c_name, ci->c_name);
       buf_puts(b, "  if (!self) return \"nil\";\n");
@@ -5685,10 +5694,24 @@ void emit_class_new(Compiler *c, ClassInfo *ci, Buf *b) {
         }
       }
       buf_puts(b, "  sp_String_append(s, \">\");\n  return s->data;\n}\n");
+      }
     }
-    if (comp_method_in_chain(c, cid, "to_s", NULL) < 0)
-      buf_printf(b, "static const char *sp_%s_to_s(sp_%s *self) { return sp_%s_inspect(self); }\n",
-                 ci->name, ci->name, ci->name);
+    if (comp_method_in_chain(c, cid, "to_s", NULL) < 0) {
+      /* A MEMBER named to_s owns the name, as any generated reader does in
+         CRuby: `Data.define(:to_s)` answers the member, not the default
+         representation. Only a String member takes this -- a non-String
+         to_s falls back to the default at interpolation in CRuby too, and
+         the direct call goes through the reader arm (#4190). */
+      char tosiv[64]; snprintf(tosiv, sizeof tosiv, "@%s", "to_s");
+      int tosidx = comp_ivar_index(ci, tosiv);
+      if (tosidx >= 0 && ci->ivar_types[tosidx] == TY_STRING &&
+          comp_resolve_member(c, cid, "to_s", 0, NULL, NULL) == SP_MEMBER_ATTR)
+        buf_printf(b, "static const char *sp_%s_to_s(sp_%s *self) { return self->iv_to_s; }\n",
+                   ci->name, ci->name);
+      else
+        buf_printf(b, "static const char *sp_%s_to_s(sp_%s *self) { return sp_%s_inspect(self); }\n",
+                   ci->name, ci->name, ci->name);
+    }
     return;
   }
   int initcls = cid;

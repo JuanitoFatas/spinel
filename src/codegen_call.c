@@ -12622,6 +12622,29 @@ static void emit_call_body(Compiler *c, int id, Buf *b) {
     return;
   }
 
+  /* A generated READER named after an Object builtin owns the name, as any
+     reader does in CRuby: Data.define(:freeze) answers the member. The
+     builtin arms below would claim these first, so hand the call to the
+     value-receiver path -- whose reader arm carries the full member-read
+     contract -- ahead of them. to_s/inspect go through the generated
+     stringifiers and hash/object_id have their own guards (#4190). */
+  {
+    const NodeTable *nt0 = c->nt;
+    int recv0 = nt_ref(nt0, id, "receiver");
+    const char *nm0 = nt_str(nt0, id, "name");
+    if (recv0 >= 0 && nm0 && nt_ref(nt0, id, "block") < 0 &&
+        (sp_streq(nm0, "freeze") || sp_streq(nm0, "dup") || sp_streq(nm0, "clone") ||
+         sp_streq(nm0, "itself") || sp_streq(nm0, "display"))) {
+      int argsr = nt_ref(nt0, id, "arguments"); int acr = 0;
+      if (argsr >= 0) nt_arr(nt0, argsr, "arguments", &acr);
+      TyKind rt0 = comp_ntype(c, recv0);
+      if (acr == 0 && ty_is_object(rt0) &&
+          comp_resolve_member(c, ty_object_class(rt0), nm0, 0, NULL, NULL) == SP_MEMBER_ATTR) {
+        if (emit_value_recv_call(c, id, b)) return;
+      }
+    }
+  }
+
   /* (Process::Status.new is dispatched later, after the recv/name/argc
      locals are declared.) */
 
@@ -12879,7 +12902,11 @@ static void emit_call_body(Compiler *c, int id, Buf *b) {
     if (nm0 && sp_streq(nm0, "itself") && nt_ref(nt, id, "receiver") >= 0 &&
         nt_ref(nt, id, "block") < 0) {
       int ac0 = 0; call_args(nt, id, &ac0);
-      if (ac0 == 0 && !diag_user_defines(c, "itself")) {
+      TyKind irt0 = comp_ntype(c, nt_ref(nt, id, "receiver"));
+      if (ac0 == 0 && !diag_user_defines(c, "itself") &&
+          /* a generated READER of the name owns it, as in CRuby (#4190) */
+          !(ty_is_object(irt0) &&
+            comp_resolve_member(c, ty_object_class(irt0), "itself", 0, NULL, NULL) == SP_MEMBER_ATTR)) {
         emit_expr(c, nt_ref(nt, id, "receiver"), b);
         return;
       }
@@ -19697,7 +19724,10 @@ else { memcpy(dir, sf, n); dir[n] = 0; } }
      fell through to the identity shortcut below and aliased the original.
      Value-type objects copy by value already; exception subclasses use distinct
      allocation, so both stay on the identity path. */
-  if (recv >= 0 && (sp_streq(name, "dup") || sp_streq(name, "clone"))) {
+  if (recv >= 0 && (sp_streq(name, "dup") || sp_streq(name, "clone")) &&
+      /* a generated READER of the name owns it, as in CRuby (#4190) */
+      !(ty_is_object(comp_ntype(c, recv)) &&
+        comp_resolve_member(c, ty_object_class(comp_ntype(c, recv)), name, 0, NULL, NULL) == SP_MEMBER_ATTR)) {
     int dargs = nt_ref(nt, id, "arguments");
     int dargc = 0; const int *dargv = dargs >= 0 ? nt_arr(nt, dargs, "arguments", &dargc) : NULL;
     TyKind drt = comp_ntype(c, recv);
@@ -19803,7 +19833,10 @@ else { memcpy(dir, sf, n); dir[n] = 0; } }
   /* identity methods -> the receiver itself */
   if (recv >= 0 &&
       (sp_streq(name, "freeze") || sp_streq(name, "itself") ||
-       sp_streq(name, "dup") || sp_streq(name, "clone"))) {
+       sp_streq(name, "dup") || sp_streq(name, "clone")) &&
+      /* a generated READER of the name owns it, as in CRuby (#4190) */
+      !(ty_is_object(comp_ntype(c, recv)) &&
+        comp_resolve_member(c, ty_object_class(comp_ntype(c, recv)), name, 0, NULL, NULL) == SP_MEMBER_ATTR)) {
     int args = nt_ref(nt, id, "arguments");
     int argc0 = 0; if (args >= 0) nt_arr(nt, args, "arguments", &argc0);
     /* hash, string, array, and native-bound object dup/clone require real
@@ -25192,7 +25225,10 @@ else {
     return;
   }
   /* Kernel#display prints to_s with no newline, returns nil */
-  if (recv >= 0 && sp_streq(name, "display") && argc == 0) {
+  if (recv >= 0 && sp_streq(name, "display") && argc == 0 &&
+      /* a generated READER of the name owns it, as in CRuby (#4190) */
+      !(ty_is_object(comp_ntype(c, recv)) &&
+        comp_resolve_member(c, ty_object_class(comp_ntype(c, recv)), name, 0, NULL, NULL) == SP_MEMBER_ATTR)) {
     /* Struct#to_s IS inspect in CRuby ("#<struct Point x=1, y=2>"); the
        boxed sp_poly_to_s default would print the bare-object form */
     TyKind drt2 = comp_ntype(c, recv);
@@ -25350,7 +25386,12 @@ else {
   /* object_id: a stable integer id. Int uses MRI's 2n+1; pointer-backed
      values use the pointer bit pattern; a symbol uses its interned id.
      The immediates have fixed ids: nil is 4, false is 0, true is 20. */
-  if ((sp_streq(name, "object_id") || sp_streq(name, "__id__")) && recv >= 0 && argc == 0) {
+  if ((sp_streq(name, "object_id") || sp_streq(name, "__id__")) && recv >= 0 && argc == 0 &&
+      /* a generated READER of this name owns it on a concrete object, as in
+         CRuby (which warns and defines it): fall through to the member read,
+         which the inference already typed (#4190) */
+      !(ty_is_object(rt) &&
+        comp_resolve_member(c, ty_object_class(rt), name, 0, NULL, NULL) == SP_MEMBER_ATTR)) {
     if (rt == TY_INT) { buf_puts(b, "(2*("); emit_expr(c, recv, b); buf_puts(b, ")+1)"); }
     else if (rt == TY_SYMBOL) { buf_puts(b, "((sp_int)("); emit_expr(c, recv, b); buf_puts(b, ")*2)"); }
     else if (rt == TY_NIL) { buf_puts(b, "((void)("); emit_expr(c, recv, b); buf_puts(b, "), 4)"); }
