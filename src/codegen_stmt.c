@@ -4792,6 +4792,60 @@ void emit_for(Compiler *c, int id, Buf *b, int indent) {
   /* for over a hash: materialize [key, value] pairs in insertion order (the
      shared Hash#to_a walk) and iterate; `for k, v in h` destructures each
      pair, `for pair in h` binds the boxed pair itself. */
+  /* A BOXED collection: `for x in <poly>`. The runtime materializer answers
+     what each kind iterates -- a hash's [key, value] pairs, an array's
+     elements, a range's, an enumerator drained -- and raises NoMethodError for
+     a value that iterates nothing, which is what CRuby does. Without this the
+     loop fell through to the comment below and ran zero times, silently: a
+     method whose return the inference widened to poly (two return paths, a
+     built hash and an empty literal) made every `for` over its result a
+     no-op (#4184). */
+  if (ct == TY_POLY || ct == TY_UNKNOWN) {
+    int ta = ++g_tmp, ti = ++g_tmp, tv = ++g_tmp;
+    emit_indent(b, indent);
+    buf_printf(b, "{ sp_PolyArray *_t%d = sp_poly_to_a_arr(", ta);
+    emit_boxed(c, coll, b);
+    buf_puts(b, ");\n");
+    emit_indent(b, indent + 1); buf_printf(b, "SP_GC_ROOT(_t%d);\n", ta);
+    emit_indent(b, indent + 1);
+    buf_printf(b, "for (sp_int _t%d = 0; _t%d < _t%d->len; _t%d++) {\n", ti, ti, ta, ti);
+    const char *idx_ty3 = nt_type(nt, idx);
+    if (idx_ty3 && sp_streq(idx_ty3, "MultiTargetNode")) {
+      int ln = 0;
+      const int *lefts = nt_arr(nt, idx, "lefts", &ln);
+      emit_indent(b, indent + 2);
+      buf_printf(b, "sp_RbVal _t%d = sp_PolyArray_get(_t%d, _t%d);\n", tv, ta, ti);
+      for (int i = 0; i < ln; i++) {
+        const char *lnm = nt_str(nt, lefts[i], "name");
+        if (!lnm) continue;
+        LocalVar *dlv = scope_local(comp_scope_of(c, idx), lnm);
+        TyKind vt3 = dlv ? dlv->type : TY_POLY;
+        emit_indent(b, indent + 2);
+        if (vt3 == TY_INT || vt3 == TY_UNKNOWN)
+          buf_printf(b, "lv_%s = sp_unbox_int(sp_poly_massign_get(_t%d, %d));\n", lnm, tv, i);
+        else if (vt3 == TY_FLOAT)
+          buf_printf(b, "lv_%s = sp_unbox_float(sp_poly_massign_get(_t%d, %d));\n", lnm, tv, i);
+        else if (vt3 == TY_STRING)
+          buf_printf(b, "lv_%s = sp_unbox_str(sp_poly_massign_get(_t%d, %d));\n", lnm, tv, i);
+        else
+          buf_printf(b, "lv_%s = sp_poly_massign_get(_t%d, %d);\n", lnm, tv, i);
+      }
+    }
+    else if (vn) {
+      LocalVar *ilv = scope_local(comp_scope_of(c, idx), vn);
+      TyKind ivt = ilv ? ilv->type : TY_POLY;
+      char el[64]; snprintf(el, sizeof el, "sp_PolyArray_get(_t%d, _t%d)", ta, ti);
+      emit_indent(b, indent + 2);
+      buf_printf(b, "lv_%s = ", vn);
+      if (ivt == TY_POLY || ivt == TY_UNKNOWN) buf_puts(b, el);
+      else emit_unbox_text(c, ivt, el, b);
+      buf_puts(b, ";\n");
+    }
+    emit_loop_body(c, body, b, indent + 2);
+    emit_indent(b, indent + 1); buf_puts(b, "}\n");
+    emit_indent(b, indent); buf_puts(b, "}\n");
+    return;
+  }
   if (ty_is_hash(ct)) {
     const char *hn2 = ty_hash_cname(ct);
     if (hn2) {
@@ -4835,7 +4889,10 @@ void emit_for(Compiler *c, int id, Buf *b, int indent) {
       return;
     }
   }
-  emit_indent(b, indent); buf_puts(b, "/* unsupported for-loop collection */\n");
+  /* Nothing above could iterate it. A comment here ran the loop zero times
+     and said nothing, which is the worst answer available: say so instead
+     (#4184). */
+  unsupported(c, id, "for-loop over this collection");
 }
 
 /* Emit `node` (statically poly) coerced to the non-poly return/slot type `t`.
