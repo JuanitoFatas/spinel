@@ -461,7 +461,11 @@ def native_objs_for(name, dir, version)
         # spliced into the flags the caller passes to the compiler (#4105).
         # In --verbose the run_command echo already shows the full command,
         # so the short status line is redundant there.
-        $stderr.puts "cc #{name}/#{rel}#{suffix}" unless $spin_verbose
+        # the suffix names the VARIANT, so it goes after the file name rather
+        # than onto it: "nat/nat.c_mt" is not a path anyone can look for
+        line = "cc #{name}/#{rel}"
+        line += " (threaded)" if suffix != ""
+        $stderr.puts line unless $spin_verbose
       end
       # Only the plain .o goes on the --link list; spinel computes the
       # _mt variant from it. Including _mt.o here would have the linker
