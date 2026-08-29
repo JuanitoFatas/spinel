@@ -106,6 +106,10 @@ const char *sp_crypto_pbkdf2_sha256_b64url_len(const char *password, const char 
  * /dev/urandom. RAISES when no secure source is available -- a caller
  * asking for random bytes is minting a token, and there is no answer
  * to give. The bundled `securerandom` package binds this. */
+/* Fill `out` with `nbytes` of kernel-sourced entropy. 1 on success, 0 when
+   there is no secure source -- callers fail closed rather than fall back to
+   weak randomness. The one place that decides what counts as secure. */
+int sp_crypto_entropy(unsigned char *out, int nbytes);
 const char *sp_crypto_random_bin(int nbytes);
 
 /* CSPRNG: nbytes random bytes (clamped to [1, 64]) as unpadded

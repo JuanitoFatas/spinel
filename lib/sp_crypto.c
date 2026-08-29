@@ -672,7 +672,7 @@ static char sp_crypto_random_b64url_buf[90];
    source is available -- the ONE place the entropy decision is made, so the
    raw-bytes and base64url entry points below cannot drift apart about what
    counts as secure. */
-static int sp_crypto_entropy(uint8_t *out, int nbytes) {
+int sp_crypto_entropy(uint8_t *out, int nbytes) {
 #if defined(__APPLE__) || defined(__FreeBSD__) || defined(__OpenBSD__) || defined(__NetBSD__)
     arc4random_buf(out, nbytes);
     return 1;

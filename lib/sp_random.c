@@ -3,6 +3,7 @@
 #include <time.h>
 #include <string.h>
 #include "sp_random.h"
+#include "sp_crypto.h"   /* sp_crypto_entropy: the one secure source */
 #include "sp_alloc.h"
 #include <math.h>    /* isnan/isinf for the EDOM domain checks */   /* sp_str_alloc / sp_str_set_len / sp_float_to_s / sp_raise_cls / sp_gc_alloc */
 #include "sp_format.h"  /* sp_Range_inspect */
@@ -187,21 +188,20 @@ sp_int sp_Random_new_seed(void) {
    source wired up, so this draws from a freshly time-seeded stream). */
 const char *sp_Random_urandom(sp_int n) {
   if (n < 0) sp_raise_cls("ArgumentError", "negative string size");
-  /* A persistent stream seeded once, ADVANCED per draw -- re-seeding from
-     time() on every call gave the same bytes within a second (never varying,
-     so a zero byte never appeared over many calls). Per-worker in the threaded
-     build. spinel has no real OS entropy; this is a deterministic-per-run
-     stand-in. */
-  static SP_TLS uint64_t sp_urandom_state;
-  static SP_TLS int sp_urandom_seeded;
-  if (!sp_urandom_seeded) {
-    sp_pcg_seed(&sp_urandom_state,
-                ((uint64_t)time(NULL) << 20) ^ ((uint64_t)clock() << 8) ^
-                (uint64_t)(uintptr_t)&sp_urandom_state ^ 0x9E3779B97F4A7C15ULL);
-    sp_urandom_seeded = 1;
-  }
+  /* CRuby's Random.urandom IS the OS entropy source, and this was a PCG seeded
+     from time()/clock() -- a deterministic-per-run stand-in, from before the
+     tree had a real source. It does now: sp_crypto_entropy is the one place
+     that decides what counts as secure, and it fails closed. A caller of this
+     name is minting something that has to be unguessable. */
   char *b = sp_str_alloc((size_t)n);
-  for (sp_int i = 0; i < n; i++) b[i] = (char)(sp_pcg32_adv(&sp_urandom_state) & 0xff);
+  { sp_int off = 0;
+    while (off < n) {
+      int chunk = (int)((n - off) > SPC_RANDOM_MAX ? SPC_RANDOM_MAX : (n - off));
+      if (!sp_crypto_entropy((unsigned char *)b + off, chunk))
+        sp_raise_cls("RuntimeError", "Random.urandom: no secure random source available");
+      off += chunk;
+    }
+  }
   b[n] = 0;
   sp_str_set_len(b, (size_t)n);
   /* CRuby hands back ASCII-8BIT, so #length is the byte count. Without the
