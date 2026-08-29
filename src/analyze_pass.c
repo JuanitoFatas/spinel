@@ -3843,7 +3843,14 @@ int infer_param_types(Compiler *c) {
       if (rty && sp_streq(rty, "ConstantPathNode")) {
         const char *cn = nt_str(nt, recv, "name");
         int ci = cn ? comp_class_index(c, cn) : -1;
-        if (ci >= 0 && sp_streq(name, "new")) {
+        /* A Struct or Data is constructed, not called: its arguments type the
+           MEMBERS, and that is done once for every receiver spelling by the
+           branch below. Binding ctor params here instead left every member of
+           a struct only ever built through its qualified name untyped, so a
+           method reading one answered untyped too (#4185). */
+        int cpath_struct = ci >= 0 && sp_streq(name, "new") && c->classes[ci].is_struct;
+        if (cpath_struct) { /* handled below, with the short-name spelling */ }
+        else if (ci >= 0 && sp_streq(name, "new")) {
           int ucnew = comp_cmethod_in_chain(c, ci, "new", NULL);
           if (ucnew >= 0)
             changed |= bind_call_params(c, id, ucnew);
@@ -3861,7 +3868,8 @@ int infer_param_types(Compiler *c) {
       int lci = (rty && sp_streq(rty, "LocalVariableReadNode") && sp_streq(name, "new"))
                 ? class_var_static_ci(c, recv) : -1;
       if (lci >= 0 && !c->classes[lci].is_struct) lci = -1;
-      if ((rty && sp_streq(rty, "ConstantReadNode")) || lci >= 0) {
+      if ((rty && (sp_streq(rty, "ConstantReadNode") ||
+                   sp_streq(rty, "ConstantPathNode"))) || lci >= 0) {
         int ci = lci >= 0 ? lci : comp_class_index(c, nt_str(nt, recv, "name"));
         if (ci >= 0) {
           if (sp_streq(name, "new") && c->classes[ci].is_struct) {
