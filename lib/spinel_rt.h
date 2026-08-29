@@ -3505,7 +3505,7 @@ static sp_PolyArray *sp_poly_set_operand(sp_RbVal v) {
   if (v.tag == SP_TAG_OBJ && sp_poly_is_array_kind(v.cls_id))
     return sp_poly_to_poly_array(v);
   sp_raise_cls("TypeError", sp_sprintf("no implicit conversion of %s into Array",
-                                       sp_poly_class_name(v)));
+                                       sp_convert_src_name(v)));
   return NULL;  /* unreachable: sp_raise_cls is noreturn */
 }
 /* Coerce a poly value that a container-read Array method (find/reject/sort/
@@ -5691,6 +5691,26 @@ static sp_RbVal sp_poly_str_become(sp_RbVal v, const char *s) {
   if (sp_poly_is_strbuf(v)) { sp_String_set_bin((sp_String *)v.v.p, s); return v; }
   sp_str_check_mutable(v.v.s);
   return sp_box_str(s);
+}
+/* The same through a receiver that is no variable -- an element read, a Hash
+   value: a shared handle absorbs the new contents and every alias observes
+   the change; a plain string box has nowhere to send them, and the call
+   raises the NoMethodError it raised before the row existed, rather than a
+   mutation that silently goes nowhere. */
+static sp_RbVal sp_poly_str_become_handle(sp_RbVal v, const char *s, const char *name) {
+  if (sp_poly_is_strbuf(v)) { sp_String_set_bin((sp_String *)v.v.p, s); return v; }
+  sp_raise_nomethod(sp_nomethod_msg(name, v));
+  return v;
+}
+/* Are the contents a mutator answered the receiver's own? Then it changed
+   nothing, and a mutator that writes only when it changed something (scrub!)
+   writes nothing -- and raises no FrozenError for a write that never happens,
+   as CRuby does not. Only such a row asks: sub! with no match answers its
+   receiver's own contents too, and CRuby raises for it. */
+static int sp_poly_str_is_own(sp_RbVal v, const char *s) {
+  if (v.tag == SP_TAG_STR) return v.v.s == s;
+  if (sp_poly_is_strbuf(v)) return ((sp_String *)v.v.p)->data == s;
+  return 0;
 }
 static sp_RbVal sp_poly_insert(sp_RbVal v, sp_int i, sp_RbVal x) {
   /* String#insert on a boxed receiver: splice at a character index, where a

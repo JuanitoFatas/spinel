@@ -1902,8 +1902,9 @@ int emit_array_call(Compiler *c, int id, Buf *b) {
         if (from) { buf_printf(b, "%s(", from); emit_expr(c, argv[ai], b); buf_puts(b, ")"); }
         else if (at == TY_POLY || at == TY_UNKNOWN) {
           /* a boxed argument (a rest param widened to poly): unbox to the
-             working array through the runtime kind dispatch (#3317) */
-          buf_puts(b, "sp_poly_to_poly_array("); emit_boxed(c, argv[ai], b); buf_puts(b, ")");
+             working array through the runtime kind dispatch (#3317); one
+             that is no Array is CRuby's TypeError, not an empty list */
+          buf_puts(b, "sp_poly_set_operand("); emit_boxed(c, argv[ai], b); buf_puts(b, ")");
         }
         else emit_expr(c, argv[ai], b);   /* already a poly array */
         buf_printf(b, "; SP_GC_ROOT(_t%d);", base + ai);
@@ -11207,6 +11208,15 @@ static int splice_recv_index_slot(Compiler *c, int recv, int *outer, int *oidx) 
   return 1;
 }
 
+/* Is the receiver a variable? A String mutator's new contents go back into
+   one; a receiver that is no variable -- an element read, a Hash value -- can
+   take them only through a shared handle, and only from a mutator whose value
+   is those contents (PF_VAL_SELF): the typed emitter leaves them in the
+   receiver's temp for a variable alone. */
+static int face_str_var_recv(const NodeTable *nt, int recv) {
+  const char *rvt = nt_type(nt, recv);
+  return rvt && (sp_streq(rvt, "LocalVariableReadNode") || sp_streq(rvt, "InstanceVariableReadNode"));
+}
 /* One owner's arm: unbox `box` (a temp holding the boxed receiver, or 0 to
    unbox the receiver expression itself) to `kind`'s representation in the
    statement prelude, override the receiver node with the temp, retype and
@@ -11286,13 +11296,37 @@ static TyKind emit_face_arm(Compiler *c, int id, unsigned kind, unsigned flags, 
     free(cb.p);
     return slot;
   }
-  /* A mutator worked on the poly copy a typed array was normalized to, and
-     the original has to take the result back once the value is taken. */
-  if ((flags & PF_MUT) && box && (kind == PF_ARRAY)) {
+  /* A mutator worked on the unboxed representation -- the poly copy a typed
+     array was normalized to, the text a string box stands for -- and the
+     original has to take the result back once the value is taken. */
+  if ((flags & PF_MUT) && box && (kind == PF_ARRAY || kind == PF_STRING)) {
     Buf wb; memset(&wb, 0, sizeof wb);
     int tr = ++g_tmp;
     int has_val = nat != TY_VOID && nat != TY_UNKNOWN;
-    buf_printf(&wb, "sp_poly_arr_writeback(_t%d, _t%d)", box, t);
+    if (kind == PF_ARRAY) buf_printf(&wb, "sp_poly_arr_writeback(_t%d, _t%d)", box, t);
+    else {
+      /* The new contents -- the value itself when the mutator answers self,
+         else the temp the typed emitter took the receiver's variable from and
+         wrote to -- go back into the receiver's variable: a shared handle
+         absorbs them, so a container the value came from observes the change;
+         a plain string box is replaced, the way the typed path replaces its
+         own. A receiver that is no variable (face_str_var_recv) has a handle
+         to absorb them or nowhere to send them, and then raises what the call
+         raised before the row existed, rather than a mutation that silently
+         goes nowhere. Contents that are the receiver's own mean no write at
+         all when the row says so (scrub!). */
+      int var = face_str_var_recv(nt, recv);
+      int nv = ((flags & PF_VAL_SELF) && has_val) ? tr : t;
+      if (var) {
+        emit_expr(c, recv, &wb); buf_puts(&wb, " = ");
+        if (flags & PF_SAME_OK) buf_printf(&wb, "sp_poly_str_is_own(_t%d, _t%d) ? _t%d : ", box, nv, box);
+        buf_printf(&wb, "sp_poly_str_become(_t%d, _t%d)", box, nv);
+      }
+      else {
+        if (flags & PF_SAME_OK) buf_printf(&wb, "if (!sp_poly_str_is_own(_t%d, _t%d)) ", box, nv);
+        buf_printf(&wb, "sp_poly_str_become_handle(_t%d, _t%d, \"%s\")", box, nv, name);
+      }
+    }
     if (!has_val) buf_printf(val, "({ (void)(%s); %s; })", call, wb.p);
     else buf_printf(val, "({ %s _t%d = %s; %s; _t%d; })", c_type_name(nat), tr, call, wb.p, tr);
     free(wb.p);
@@ -11359,7 +11393,8 @@ static int emit_face_reentry(Compiler *c, int id, unsigned kind, unsigned flags,
   int box = 0;
   Buf pre = {0, 0, 0}, val = {0, 0, 0};
   TyKind nat = TY_UNKNOWN;
-  if ((flags & PF_MUT) && (kind == PF_ARRAY)) box = ++g_tmp;
+  if ((flags & PF_MUT) && kind == PF_STRING && !(flags & PF_VAL_SELF) && !face_str_var_recv(nt, recv)) return 0;
+  if ((flags & PF_MUT) && (kind == PF_ARRAY || kind == PF_STRING)) box = ++g_tmp;
   if (!face_probe_arm(c, id, kind, flags, box, &pre, &val, &nat)) {
     free(pre.p); free(val.p);
     return 0;
@@ -11373,6 +11408,112 @@ static int emit_face_reentry(Compiler *c, int id, unsigned kind, unsigned flags,
   if (pre.p) buf_puts(g_pre, pre.p);
   emit_face_value(c, comp_ntype(c, id), nat, val.p ? val.p : "0", b);
   free(pre.p); free(val.p);
+  return 1;
+}
+
+/* The run-time test that the boxed value in temp `t` is of an owner's kind. */
+static void emit_face_kind_test(unsigned kind, int t, Buf *b) {
+  switch (kind) {
+    case PF_STRING: buf_printf(b, "(_t%d.tag == SP_TAG_STR || sp_poly_is_strbuf(_t%d))", t, t); break;
+    case PF_INT:    buf_printf(b, "(_t%d.tag == SP_TAG_INT)", t); break;
+    case PF_ARRAY:  buf_printf(b, "(_t%d.tag == SP_TAG_OBJ && sp_poly_is_array_kind(_t%d.cls_id))", t, t); break;
+    case PF_HASH:   buf_printf(b, "(_t%d.tag == SP_TAG_OBJ && sp_poly_is_hash_kind(_t%d.cls_id))", t, t); break;
+    case PF_ENUM:   buf_printf(b, "(_t%d.tag == SP_TAG_OBJ && (sp_poly_is_array_kind(_t%d.cls_id) || sp_poly_is_hash_kind(_t%d.cls_id)))", t, t, t); break;
+    default:        buf_puts(b, "(0)"); break;
+  }
+}
+
+/* Has the inference typed the argument as some other kind than the owner's
+   own? A poly or unknown one may still be of the owner's kind at run time;
+   any other kind cannot be, whether or not it has a class name of its own (a
+   Boolean is true or false only at run time), so the noun CRuby's TypeError
+   names is spelled from the value when the arm runs. */
+static int face_arg_misfit(Compiler *c, unsigned kind, int arg) {
+  TyKind at = comp_ntype(c, arg);
+  if (at == TY_POLY || at == TY_UNKNOWN) return 0;
+  if (kind == PF_STRING && (at == TY_STRING || at == TY_STRBUF || at == TY_INT)) return 0;  /* a codepoint concatenates too */
+  if (kind == PF_ARRAY && (ty_is_array(at) || at == TY_POLY_ARRAY)) return 0;
+  return 1;
+}
+
+/* Several owners: bind the box once and dispatch on its run-time kind, one
+   re-entry per owner, each with its own coercion and prelude inside its own
+   branch. An arm whose typed emitter declines the call is dropped, under the
+   silent probe the dynamic-send dispatch uses; an arm ruled out by an
+   argument's type raises CRuby's TypeError; a receiver of no owner's kind
+   raises the NoMethodError the call raised before. Answers 0 when no arm
+   survives, and the call falls through to the arms after this one. */
+static int emit_face_switch(Compiler *c, int id, unsigned own, Buf *b) {
+  const NodeTable *nt = c->nt;
+  char name[128];   /* kept, not borrowed: an arm's re-entry may rename the node (see emit_face_arm) */
+  snprintf(name, sizeof name, "%s", nt_str(nt, id, "name"));
+  int recv = nt_ref(nt, id, "receiver");
+  int argc;
+  const int *argv = call_args(nt, id, &argc);
+  int has_blk = nt_ref(nt, id, "block") >= 0;
+  TyKind slot = comp_ntype(c, id);
+  if (slot == TY_UNKNOWN || slot == TY_VOID) slot = TY_POLY;
+  int plain = nt_call_args_plain(nt, id);
+  Buf arms; memset(&arms, 0, sizeof arms);
+  int narm = 0;
+  int box = ++g_tmp, tr = ++g_tmp;
+  for (unsigned kind = 1; kind & PF_OWNERS; kind <<= 1) {
+    if (!(own & kind)) continue;
+    unsigned fl = ty_poly_face_owner_flags(name, argc, has_blk, plain, kind);
+    if ((fl & PF_MUT) && kind == PF_STRING && !(fl & PF_VAL_SELF) && !face_str_var_recv(nt, recv)) continue;
+    int misfit = -1;
+    if ((fl & PF_ARGS_OWN) && plain)
+      for (int i = 0; i < argc && misfit < 0; i++) if (face_arg_misfit(c, kind, argv[i])) misfit = i;
+    Buf pre = {0, 0, 0}, val = {0, 0, 0};
+    TyKind nat = TY_UNKNOWN;
+    int ok = 1;
+    if (misfit >= 0) {
+      /* the arguments are evaluated for their effects and in order, as the
+         typed arm would, and under the arm's own prelude, so an argument
+         that needs one runs it in this branch alone; the one that cannot
+         convert is kept to name itself (nil, true and false spell themselves,
+         an object its class) */
+      Buf *sv_pre = g_pre; g_pre = &pre;
+      int tm = ++g_tmp;
+      buf_printf(&val, "sp_RbVal _t%d = sp_box_nil(); SP_GC_ROOT_RBVAL(_t%d); (void)(", tm, tm);
+      for (int i = 0; i < argc; i++) {
+        if (i) buf_puts(&val, ", ");
+        if (i == misfit) buf_printf(&val, "(_t%d = ", tm);
+        emit_boxed(c, argv[i], &val);
+        if (i == misfit) buf_puts(&val, ")");
+      }
+      buf_printf(&val, "); sp_raise_cls(\"TypeError\", sp_sprintf(\"no implicit conversion of %%s into %s\", sp_convert_src_name(_t%d)))",
+                 kind == PF_STRING ? "String" : "Array", tm);
+      g_pre = sv_pre;
+    }
+    else ok = face_probe_arm(c, id, kind, fl, box, &pre, &val, &nat);
+    if (!ok) { free(pre.p); free(val.p); continue; }
+    if (narm) buf_puts(&arms, "}\nelse ");
+    buf_puts(&arms, "if ");
+    emit_face_kind_test(kind, box, &arms);
+    buf_puts(&arms, " { ");
+    if (pre.p) buf_puts(&arms, pre.p);
+    if (misfit >= 0) buf_printf(&arms, "%s;", val.p);
+    else {
+      buf_printf(&arms, "_t%d = ", tr);
+      emit_face_value(c, slot, nat, val.p ? val.p : "0", &arms);
+      buf_puts(&arms, ";");
+    }
+    buf_puts(&arms, " ");
+    narm++;
+    free(pre.p); free(val.p);
+  }
+  if (!narm) { free(arms.p); return 0; }
+  /* The box's declaration goes to the prelude only now: the arms name it,
+     but whether any survived to need it is known only after they are built. */
+  Buf rb; memset(&rb, 0, sizeof rb); emit_boxed(c, recv, &rb);
+  emit_indent(g_pre, g_indent);
+  buf_printf(g_pre, "sp_RbVal _t%d = %s; SP_GC_ROOT_RBVAL(_t%d);\n", box, rb.p ? rb.p : "sp_box_nil()", box);
+  free(rb.p);
+  buf_printf(b, "({ %s _t%d = %s; ", c_type_name(slot), tr, default_value(slot));
+  buf_puts(b, arms.p);
+  buf_printf(b, "}\nelse sp_raise_nomethod(sp_nomethod_msg(\"%s\", _t%d)); _t%d; })", name, box, tr);
+  free(arms.p);
   return 1;
 }
 
@@ -11523,10 +11664,9 @@ int emit_poly_call(Compiler *c, int id, Buf *b) {
   /* The face table (types.h): unbox the receiver to the kind that owns the
      name, retype the receiver node and re-enter the same call, so the typed
      emitter IS the implementation and the inference, which answered under
-     the same pin, has already sized the result slot to it. The Hash face is
-     not taken here: it is the last resort, in emit_unresolved_call, so that
-     a poly-receiver emitter of its own claims the name first. A name several
-     kinds own is left to the arms after this one for now. */
+     the same pin, has already sized the result slot to it. The last-resort
+     rows are not taken here: the Hash face answers in emit_unresolved_call,
+     once every poly-receiver emitter of its own has declined the name. */
   if (recv >= 0 && rt == TY_POLY && !user_defines_or_reads(c, name) &&
       g_n_argov < MAX_ARG_OVERRIDE) {
     int has_blk = nt_ref(nt, id, "block") >= 0;
@@ -11534,6 +11674,7 @@ int emit_poly_call(Compiler *c, int id, Buf *b) {
     unsigned kinds = own & PF_OWNERS;
     if (own & PF_STR_BANG) { emit_face_str_bang(c, id, own, b); return 1; }
     if (kinds && !(kinds & (kinds - 1)) && emit_face_reentry(c, id, kinds, own, b)) return 1;
+    if (kinds && (kinds & (kinds - 1)) && emit_face_switch(c, id, kinds, b)) return 1;
     /* a declined re-entry may have renamed the node and restored it into
        fresh storage (see emit_face_arm): the name is read again */
     name = nt_str(nt, id, "name");

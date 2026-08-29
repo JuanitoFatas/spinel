@@ -52,6 +52,17 @@ static const PolyFace ty_poly_face_tbl[] = {
   {"to_ary", PF_ARRAY, 0, 0, 0}, {"transpose", PF_ARRAY, 0, 0, 0},
   /* and the Enumerable names that had no arm at all */
   {"grep", PF_ENUM, 1, 1, -1}, {"minmax_by", PF_ENUM, 0, 0, 1},
+  /* The String mutators String alone owns. */
+  {"setbyte", PF_STRING | PF_MUT, 2, 2, 0}, {"scrub!", PF_STRING | PF_MUT | PF_VAL_SELF | PF_SAME_OK, 0, 1, -1},
+  {"bytesplice", PF_STRING | PF_MUT | PF_VAL_SELF, 2, 5, 0}, {"append_as_bytes", PF_STRING | PF_MUT | PF_VAL_SELF, 0, -1, 0},
+  /* The names String and Array share: the receiver's run-time kind picks
+     the arm. concat's arguments are of the receiver's own kind in CRuby
+     (a String concatenates Strings, an Array Arrays), so an argument the
+     inference has typed as the other kind rules that arm out. */
+  {"concat", PF_STRING | PF_MUT | PF_ARGS_OWN | PF_VAL_SELF, 0, -1, 0}, {"concat", PF_ARRAY | PF_MUT | PF_ARGS_OWN, 0, -1, 0},
+  {"prepend", PF_STRING | PF_MUT | PF_ARGS_OWN | PF_VAL_SELF, 0, -1, 0}, {"prepend", PF_ARRAY | PF_MUT, 0, -1, 0},
+  {"reverse!", PF_STRING | PF_MUT | PF_VAL_SELF, 0, 0, 0}, {"reverse!", PF_ARRAY | PF_MUT, 0, 0, 0},
+  {"slice!", PF_STRING | PF_MUT, 1, 2, 0}, {"slice!", PF_ARRAY | PF_MUT, 1, 2, 0},
   /* The read-only Hash/Enumerable face. */
   {"dig", PF_HASH | PF_LAST, 0, -1, -1}, {"value?", PF_HASH | PF_LAST, 0, -1, -1}, {"has_value?", PF_HASH | PF_LAST, 0, -1, -1},
   {"invert", PF_HASH | PF_LAST, 0, -1, -1}, {"assoc", PF_HASH | PF_LAST, 0, -1, -1}, {"rassoc", PF_HASH | PF_LAST, 0, -1, -1}, {"key", PF_HASH | PF_LAST, 0, -1, -1},
@@ -85,6 +96,16 @@ unsigned ty_poly_face_owners(const char *name, int argc, int has_blk, int plain,
     own |= r->flags;
   }
   return own;
+}
+unsigned ty_poly_face_owner_flags(const char *name, int argc, int has_blk, int plain, unsigned owner) {
+  unsigned fl = 0;
+  if (!name) return 0;
+  for (const PolyFace *r = ty_poly_face_tbl; r->name; r++) {
+    if (!(r->flags & owner) || !sp_streq(name, r->name)) continue;
+    if (!face_row_matches(r, argc, has_blk, plain)) continue;
+    fl |= r->flags;
+  }
+  return fl;
 }
 int ty_poly_hash_face_name(const char *nm) {
   if (!nm) return 0;

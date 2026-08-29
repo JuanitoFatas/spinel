@@ -4083,7 +4083,7 @@ static int emit_poly_builtin_method(Compiler *c, int id, Buf *b) {
       {"capitalize!","capitalize",0,1},{"swapcase!","swapcase",0,1},
       {"strip!","strip",0,1},{"lstrip!","lstrip",0,1},{"rstrip!","rstrip",0,1},
       {"chomp!","chomp",0,1},{"chop!","chop",0,1},{"squeeze!","squeeze",0,1},
-      {"reverse!","reverse",0,0},{"succ!","succ",0,0},{"next!","succ",0,0},
+      {"succ!","succ",0,0},{"next!","succ",0,0},
       {"delete_prefix!","delete_prefix",1,1},{"delete_suffix!","delete_suffix",1,1},
       {"delete!","delete",1,1},
       {"gsub!","gsub",2,1},{"sub!","sub",2,1},{"tr!","tr",2,1},{"tr_s!","tr_s",2,1},
