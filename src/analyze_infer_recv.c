@@ -1454,7 +1454,7 @@ int infer_poly_call(Compiler *c, int id, TyKind rt, TyKind *out) {
      Symbol) for a boxed Method, so where the program builds Method objects at
      all the static result is poly (#3692) */
   if (recv >= 0 && rt == TY_POLY && argc == 0 && sp_streq(name, "name") &&
-      !sp_feature_required("ostruct") && !an_user_defines_method(c, name)) {
+      !sp_feature_required("ostruct") && !an_user_defines_or_reads(c, name)) {
     if (an_program_builds_methods(c)) { *out = TY_POLY; return 1; }
     { *out = TY_STRING; return 1; }
   }
