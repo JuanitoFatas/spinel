@@ -94,6 +94,20 @@ const char *sp_crypto_pbkdf2_sha256_b64url(const char *password, const char *sal
 const char *sp_crypto_pbkdf2_sha256_b64url_len(const char *password, const char *salt,
                                                int iters, int dklen);
 
+/* Largest single draw the raw-bytes entry point below serves. Covers
+ * every SecureRandom shape a program reaches for (a v4 uuid is 16, a
+ * session token 24, a 256-bit key 32); a larger request is an
+ * ArgumentError rather than a silently short answer. */
+#define SPC_RANDOM_MAX 256
+
+/* nbytes raw CSPRNG bytes, with the count published in sp_ffi_bin_len
+ * for the `:cbinstr` return mode (random bytes contain NULs). Uses
+ * arc4random_buf on BSD/macOS; on Linux/POSIX getrandom(2), then
+ * /dev/urandom. RAISES when no secure source is available -- a caller
+ * asking for random bytes is minting a token, and there is no answer
+ * to give. The bundled `securerandom` package binds this. */
+const char *sp_crypto_random_bin(int nbytes);
+
 /* CSPRNG: nbytes random bytes (clamped to [1, 64]) as unpadded
  * base64url. Uses arc4random_buf on BSD/macOS; on Linux/POSIX
  * getrandom(2), then /dev/urandom. Returns NULL when no secure source
