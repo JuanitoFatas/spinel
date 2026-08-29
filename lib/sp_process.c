@@ -61,16 +61,31 @@ static const char *sp_errf_errno(const char *prefix, int err) {
 }
 
 /* Apply the redirect in the child: dup2 src_fd onto target_fd, close src.
-   If src_fd is -1 (false), redirect to /dev/null. */
+   src_fd < 0 means the caller did not pass that slot in the opts hash
+   (the codegen initialises every slot to -1 and overwrites only the ones
+   the user set); in that case the fd is left inherited from the parent.
+   CRuby semantics: an unset :in/:out/:err slot is inherit, not /dev/null.
+   The previous /dev/null behaviour silently swallowed the child's stderr
+   and made `Process.spawn("cc -c foo.c")` in verbose mode look like it
+   produced no output. */
 static void apply_redirect(int target_fd, int src_fd) {
-  int fd = src_fd;
-  if (fd < 0) {
-    fd = open("/dev/null", target_fd == 1 ? O_WRONLY : O_RDONLY);
-    if (fd < 0) return;
-  }
-  if (fd != target_fd) {
-    dup2(fd, target_fd);
-    if (fd > 2) close(fd);
+  if (src_fd < 0) return;
+  if (src_fd != target_fd) dup2(src_fd, target_fd);
+}
+
+/* Close the source descriptors, once every dup2 above has been made. Not
+   inside apply_redirect: `out: f, err: f` names one descriptor twice, and
+   closing it after the first redirect left the second dup2 working on a
+   closed fd -- silently, so the child's stderr went nowhere (#4176). */
+static void close_redirect_srcs(int in_fd, int out_fd, int err_fd) {
+  int fds[3]; int n = 0;
+  if (in_fd  > 2) fds[n++] = in_fd;
+  if (out_fd > 2) fds[n++] = out_fd;
+  if (err_fd > 2) fds[n++] = err_fd;
+  for (int i = 0; i < n; i++) {
+    int dup = 0;
+    for (int j = 0; j < i; j++) if (fds[j] == fds[i]) dup = 1;
+    if (!dup) close(fds[i]);
   }
 }
 
@@ -230,6 +245,7 @@ sp_int sp_process_spawn(sp_RbVal cmd, sp_RbVal args_box,
     apply_redirect(0, in_fd);
     apply_redirect(1, out_fd);
     apply_redirect(2, err_fd);
+    close_redirect_srcs(in_fd, out_fd, err_fd);
     execvp(prog, argv);
     /* exec returned: failure. Send the errno to the parent. */
     int e = errno;
