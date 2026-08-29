@@ -5248,8 +5248,15 @@ else {
         buf_printf(b, " sp_%sHash_clear(_t%d); _t%d; })", hn, t, t);
         return 1;
       }
+      /* a key changed since it was stored is under the hash it was stored
+         with; the general hash keeps each key's hash, so rehash asks every
+         key again */
+      if (sp_streq(name, "rehash") && argc == 0 && rt == TY_POLY_POLY_HASH) {
+        buf_puts(b, "sp_PolyPolyHash_rehash("); emit_expr(c, recv, b); buf_puts(b, ")");
+        return 1;
+      }
       /* no-arg merge -> a copy; no-arg slice -> an empty hash of the same
-         variant; to_hash / rehash -> self (#2340/#2349) */
+         variant; to_hash / rehash -> a copy of self (#2340/#2349) */
       if ((sp_streq(name, "merge") || sp_streq(name, "to_hash") ||
            sp_streq(name, "rehash")) && argc == 0) {
         buf_printf(b, "sp_%sHash_dup(", hn); emit_expr(c, recv, b); buf_puts(b, ")");
