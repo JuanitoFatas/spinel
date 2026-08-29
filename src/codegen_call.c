@@ -18547,12 +18547,29 @@ else { memcpy(dir, sf, n); dir[n] = 0; } }
           snprintf(objptr, sizeof objptr, "_t%d", ot);
         }
         if (nimpl <= 1) {
-          /* single implementation: call directly */
-          emit_method_cname(c, &c->scopes[defmi], b);
-          buf_puts(b, "(");
-          { const char *ld = emit_cmethod_self_cls_arg(c, defmi, cid, b);
-            emit_args_filled(c, defmi, nt_ref(nt, id, "arguments"), ld, b); }
-          buf_puts(b, ")");
+          /* single implementation: call directly. The value still has to fit
+             the slot the INFERENCE gave this call: the many-implementation
+             branch below unifies the returns and boxes each arm, and this one
+             handed back whatever the one implementation returns. An interface
+             receiver whose call the inference typed poly, resolving to one
+             implementation that answers Integer, assigned a raw sp_int into an
+             sp_RbVal local (#4182). */
+          Buf dcb; memset(&dcb, 0, sizeof dcb);
+          emit_method_cname(c, &c->scopes[defmi], &dcb);
+          buf_puts(&dcb, "(");
+          { const char *ld = emit_cmethod_self_cls_arg(c, defmi, cid, &dcb);
+            emit_args_filled(c, defmi, nt_ref(nt, id, "arguments"), ld, &dcb); }
+          buf_puts(&dcb, ")");
+          TyKind want = comp_ntype(c, id);
+          const char *dc = dcb.p ? dcb.p : "";
+          if (want == TY_POLY && cret != TY_POLY && cret != TY_UNKNOWN &&
+              cret != TY_VOID && cret != TY_NIL)
+            emit_boxed_text(c, cret, dc, b);
+          else if (cret == TY_POLY && want != TY_POLY && want != TY_UNKNOWN &&
+                   is_scalar_ret(want) && want != TY_VOID && want != TY_NIL)
+            emit_unbox_text(c, want, dc, b);
+          else buf_puts(b, dc);
+          free(dcb.p);
         }
         else {
           /* Check if all descendants agree on return type */
