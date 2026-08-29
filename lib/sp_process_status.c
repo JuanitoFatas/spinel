@@ -156,7 +156,7 @@ static const char *sp_signal_name(int sig) {
   }
 }
 
-static char sp_status_buf[96];
+static SP_TLS char sp_status_buf[96];
 
 const char *sp_process_status_to_s(sp_int s, int is_inspect) {
   const char *prefix = is_inspect ? "#<Process::Status: " : "";
