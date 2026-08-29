@@ -7243,6 +7243,12 @@ static sp_RbVal sp_poly_min(sp_RbVal v) {
     case SP_BUILTIN_STR_ARRAY:  { const char *m = sp_StrArray_min((sp_StrArray *)v.v.p); return m ? sp_box_str(m) : sp_box_nil(); }
     case SP_BUILTIN_SYM_ARRAY:  return sp_PolyArray_min(sp_poly_to_poly_array(v));
     case SP_BUILTIN_POLY_ARRAY: return sp_PolyArray_min((sp_PolyArray *)v.v.p);
+    /* Time#min is the MINUTE, not an enumerable minimum. A boxed Time has no
+       user elements, so it fell to the default and answered nil -- silently,
+       and only for `min`: every sibling accessor (hour, sec, ...) reaches its
+       own arm in emit_poly_builtin_method, which `min` never gets to because
+       the enumerable fast path claims the name first (#4192). */
+    case SP_BUILTIN_TIME:       return sp_box_int(sp_time_min(*(sp_Time *)v.v.p));
     default: { sp_PolyArray *ue = sp_poly_user_elems(v);
                return ue ? sp_PolyArray_min(ue) : sp_box_nil(); }
   }
