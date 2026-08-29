@@ -24,6 +24,13 @@ One health report for a program. Independent legs:
 - **unsupported** — codegen gaps that degrade to a stub.
 - **unresolved** — calls that silently degrade to `nil`/`0` where CRuby
   would raise (via `SPINEL_WARN_UNRESOLVED`).
+- **inference** — methods spinel widened to `untyped` (the boxed poly
+  slow path).
+- **advice** — where the boxed slow path will cost: boxed operations in
+  the generated C, ranked by loop depth and mapped back to source lines.
+  Static, so it ranks by *expected* cost — a deep loop that runs once at
+  startup outranks a shallow one that runs per frame; confirm with a
+  profiler before optimizing.
 - **requires** — non-relative `require`s spinel treats as native / no-op.
 - **behavior** — optional: compiled output vs CRuby; needs `ruby` on
   `PATH` and skips cleanly otherwise.
