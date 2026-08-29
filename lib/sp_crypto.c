@@ -707,8 +707,18 @@ static int sp_crypto_entropy(uint8_t *out, int nbytes) {
    caller reaching for random BYTES is minting a token or a key -- there is
    no answer to give, and a nil flowing into a token is the failure nothing
    notices. Length rides sp_ffi_bin_len for the `:cbinstr` return mode:
-   random bytes contain NULs about one time in 256. */
-static char sp_crypto_random_bin_buf[SPC_RANDOM_MAX];
+   random bytes contain NULs about one time in 256.
+
+   SP_TLS, unlike its siblings in this file. The `:cbinstr` call site copies
+   the returned pointer AFTER the call, so under -DSP_THREADS a second worker
+   drawing in that window would overwrite the first one's bytes -- and here
+   that means two sessions handed the same token, which is the one failure
+   mode that never shows up as a crash. sp_ffi_bin_len, which carries this
+   buffer's length, is already SP_TLS: a value and its length in different
+   storage classes cannot both be right. sp_random.c keeps its generator
+   state per-worker for the same reason. Costs SPC_RANDOM_MAX bytes per
+   thread. */
+static SP_TLS char sp_crypto_random_bin_buf[SPC_RANDOM_MAX];
 
 const char *sp_crypto_random_bin(int nbytes) {
     if (nbytes < 0) sp_raise_cls("ArgumentError", "negative string size");
