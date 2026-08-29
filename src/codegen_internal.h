@@ -774,6 +774,8 @@ void emit_iter_param_assign(Compiler *c, int block, const char *p0_orig, const c
 int subtree_has_own_redo(const NodeTable *nt, int id);
 void emit_loop_body(Compiler *c, int body, Buf *b, int indent);
 int emit_iteration_stmt(Compiler *c, int id, Buf *b, int indent);
+int emit_array_filter_loop(Compiler *c, int recv, int block, TyKind rt, const char *name,
+                           Buf *b, int indent, int *tr, int *torig, int *twp);
 void emit_interp(Compiler *c, int id, Buf *b);
 void emit_puts_one(Compiler *c, int arg, Buf *b, int indent);
 void emit_print_one(Compiler *c, int arg, Buf *b, int indent);

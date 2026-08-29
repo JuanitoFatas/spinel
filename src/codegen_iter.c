@@ -2053,6 +2053,202 @@ int emit_hash_filter_loop(Compiler *c, int recv, int block, TyKind rt, const cha
   return 1;
 }
 
+/* The in-place filter loop of select! / filter! / reject! / keep_if /
+   delete_if on an array of any kind, into `b` at `indent`: the array in
+   `_t<tr>`, its length before the loop in `_t<torig>` and after it in
+   `_t<twp>`, for the caller to answer from. The block's parameter takes the
+   element type, and the predicate is read by Ruby truthiness.
+
+   The kept elements are written down over the dropped ones as the loop
+   goes, and the length is cut once at the end. The advance and the keep are
+   the for's own third clause, not the end of the body: `next` in the block
+   is a C `continue`, which runs the third clause and skips whatever the
+   body ends with -- as a trailing statement the keep was skipped, and a
+   `next` dropped the element whatever value it carried. The verdict is the
+   predicate's, or the value a `next` left, or nil for a bare one.
+
+   The loop runs inside an ensure region, the protocol of emit_begin's ensure
+   clause with an ensure body that is C alone: whatever leaves the loop
+   early -- a `break`, a `raise`, a `return`, a `throw` -- lands here, the
+   elements the block never saw are moved down behind the kept ones, the
+   one it was given among them, and the length is cut, as CRuby's
+   select_bang_ensure does; then the exit goes on its way. Without it the
+   array was left as the compaction had it, the kept elements over the
+   first slots and the old length in force. At the ensure stack's limit the
+   loop goes without the region, as emit_begin's clause does, and an early
+   exit leaves the array as before. The ensure body can raise only for an
+   array the block froze under it, and then the FrozenError goes out in
+   place of whatever was on its way, with no cause. The verdict slot, -1
+   until the predicate or a `next` sets it, is what lets the keep sit in
+   the third clause; emit_block_value_into's do-while cannot give that.
+   Answers 0 for a block with no body to read, or an array of no typed
+   kind, having emitted nothing. */
+int emit_array_filter_loop(Compiler *c, int recv, int block, TyKind rt, const char *name,
+                           Buf *b, int indent, int *tr, int *torig, int *twp) {
+  const NodeTable *nt = c->nt;
+  const char *kk = (rt == TY_POLY_ARRAY) ? "Poly" : array_kind(rt);
+  int is_rej = sp_streq(name, "reject!") || sp_streq(name, "delete_if");
+  const char *bp0 = block_param_name(c, block, 0);
+  const char *bp = bp0 ? rename_local(bp0) : NULL;
+  int body = nt_ref(nt, block, "body");
+  int bn = 0; const int *bb = body >= 0 ? nt_arr(nt, body, "body", &bn) : NULL;
+  if (!kk || bn < 1) return 0;
+  int region = g_ensure_depth < MAX_ENSURE_DEPTH;
+  TyKind et = ty_array_elem(rt);
+  Scope *fs = comp_scope_of(c, block);
+  LocalVar *flv = (fs && bp0) ? scope_local(fs, bp0) : NULL;
+  TyKind fsaved = flv ? flv->type : TY_UNKNOWN;
+  if (flv) { flv->type = et; for (int j = 0; j < bn; j++) infer_subtree(c, bb[j]); }
+  int t = ++g_tmp, ti = ++g_tmp, to = ++g_tmp, tw = ++g_tmp, tk = ++g_tmp, tnv = ++g_tmp, te = ++g_tmp;
+  int eid = ++g_tmp, tj = ++g_tmp;
+  int has_retval = (g_ret_type != TY_VOID && g_ret_type != TY_UNKNOWN);
+  Buf rb = expr_buf(c, recv);
+  /* rooted: a receiver that is a temporary has no other holder once its own
+     expression is done, and the block body may collect before the loop is
+     through; so are the element, which the block can drop from the array,
+     and the value a `next` leaves. The indexes are volatile: an early exit
+     lands past the setjmp and reads them. */
+  emit_indent(b, indent); emit_ctype(c, rt, b);
+  buf_printf(b, " _t%d = %s; ", t, rb.p ? rb.p : ""); emit_gc_root_tmp(c, rt, t, b); buf_puts(b, "\n");
+  free(rb.p);
+  /* a frozen receiver is refused before the block runs, as CRuby's
+     modify check refuses it; the first kept element's write did, after */
+  emit_indent(b, indent);
+  buf_printf(b, "if (_t%d && _t%d->frozen) sp_raise_frozen_array_at(_t%d, %s);\n", t, t, t,
+             sp_streq(kk, "Poly") ? "SP_BUILTIN_POLY_ARRAY" : sp_streq(kk, "Str") ? "SP_BUILTIN_STR_ARRAY"
+             : sp_streq(kk, "Float") ? "SP_BUILTIN_FLT_ARRAY" : "SP_BUILTIN_INT_ARRAY");
+  emit_indent(b, indent);
+  buf_printf(b, "sp_int _t%d = sp_%sArray_length(_t%d); volatile sp_int _t%d = 0, _t%d = 0; sp_int _t%d = 0;", to, kk, t, ti, tw, tk);
+  buf_printf(b, " sp_RbVal _t%d = sp_box_nil(); SP_GC_ROOT_RBVAL(_t%d);\n", tnv, tnv);
+  emit_indent(b, indent); emit_ctype(c, et, b);
+  if (et == TY_POLY) buf_printf(b, " _t%d = sp_box_nil(); SP_GC_ROOT_RBVAL(_t%d);\n", te, te);
+  else if (et == TY_STRING) buf_printf(b, " _t%d = NULL; SP_GC_ROOT_STR(_t%d);\n", te, te);
+  else buf_printf(b, " _t%d = 0;\n", te);
+  /* the region: emit_begin's ensure protocol, less the deferred-next flag
+     no inner region chains to (a `next` in the block targets this loop,
+     which the region encloses) */
+  if (region) {
+    emit_indent(b, indent); buf_printf(b, "int _retf%d = 0;\n", eid);
+    emit_indent(b, indent); buf_printf(b, "int _excf%d = 0;\n", eid);
+    emit_indent(b, indent); buf_printf(b, "const char *_excmsg%d = NULL;\n", eid);
+    emit_indent(b, indent); buf_printf(b, "const char *_exccls%d = NULL;\n", eid);
+    emit_indent(b, indent); buf_printf(b, "void *_excobj%d = NULL;\n", eid);
+    if (has_retval) {
+      emit_indent(b, indent); emit_ctype(c, g_ret_type, b);
+      buf_printf(b, " _retv%d = %s;\n", eid, default_value(g_ret_type));
+    }
+    g_ensure_stack[g_ensure_depth++] = (EnsureCtx){ eid, has_retval, g_exc_frame_depth };
+    emit_indent(b, indent); buf_puts(b, "sp_exc_rootmark[sp_exc_top] = sp_gc_nroots; sp_rescue_mark[sp_exc_top] = sp_rescue_sp;\n");
+    emit_indent(b, indent); buf_puts(b, "sp_exc_msg[sp_exc_top] = 0; sp_exc_obj[sp_exc_top] = 0; sp_exc_top++;\n");
+    emit_indent(b, indent); buf_puts(b, "if (setjmp(sp_exc_stack[sp_exc_top-1]) == 0) {\n");
+    g_exc_frame_depth++;
+  }
+  int li = indent + region;   /* the loop's own indent */
+  emit_indent(b, li);
+  buf_printf(b, "for (; _t%d < sp_%sArray_length(_t%d); ({", ti, kk, t);
+  buf_printf(b, " if (_t%d < 0) _t%d = %ssp_poly_truthy(_t%d);", tk, tk, is_rej ? "!" : "", tnv);
+  /* a kept element is written down only when it moves, as CRuby's is: a
+     block that wrote to its receiver at this index keeps what it wrote */
+  buf_printf(b, " if (_t%d) { if (_t%d != _t%d) sp_%sArray_set(_t%d, _t%d, _t%d); _t%d++; } _t%d++; })) {\n",
+             tk, tw, ti, kk, t, tw, te, tw, ti);
+  emit_indent(b, li + 1);
+  buf_printf(b, "_t%d = -1; _t%d = sp_box_nil(); _t%d = sp_%sArray_get(_t%d, _t%d);\n", tk, tnv, te, kk, t, ti);
+  if (bp) {
+    /* a poly parameter is the hoisted local, rooted where it is declared; a
+       typed one shadows it at the element type, and a String is rooted */
+    emit_indent(b, li + 1);
+    if (et != TY_POLY) { emit_ctype(c, et, b); buf_puts(b, " "); }
+    buf_printf(b, "lv_%s = _t%d;", bp, te);
+    if (et == TY_STRING) buf_printf(b, " SP_GC_ROOT_STR(lv_%s);", bp);
+    buf_puts(b, "\n");
+  }
+  const char *sv_nx = g_ie_next_var; int sv_poly = g_ie_res_poly; TyKind sv_nty = g_ie_next_ty;
+  int sv_lexc = g_loop_exc_base, sv_lens = g_loop_ensure_base;
+  char nxbuf[32]; snprintf(nxbuf, sizeof nxbuf, "_t%d", tnv);
+  g_ie_next_var = nxbuf; g_ie_res_poly = 1; g_ie_next_ty = TY_UNKNOWN;
+  g_loop_exc_base = g_exc_frame_depth; g_loop_ensure_base = g_ensure_depth;
+  g_c_loop_depth++;
+  for (int j = 0; j < bn - 1; j++) emit_stmt(c, bb[j], b, li + 1);
+  if (sp_streq(nt_type(nt, bb[bn - 1]), "NextNode")) emit_stmt(c, bb[bn - 1], b, li + 1);
+  else {
+    /* the predicate in its own buffer: a multi-statement terminal (a block
+       ending in an if/else expression) lowers its statements through g_pre,
+       and they belong inside the loop body, before the verdict */
+    Buf *sp_save = g_pre; int gi_save = g_indent;
+    Buf cpre; memset(&cpre, 0, sizeof cpre); g_pre = &cpre; g_indent = li + 1;
+    Buf cexpr; memset(&cexpr, 0, sizeof cexpr);
+    emit_cond(c, bb[bn - 1], &cexpr);
+    g_pre = sp_save; g_indent = gi_save;
+    if (cpre.p) { buf_puts(b, cpre.p); free(cpre.p); }
+    emit_indent(b, li + 1);
+    buf_printf(b, "_t%d = %s(%s);\n", tk, is_rej ? "!" : "", cexpr.p ? cexpr.p : "0");
+    free(cexpr.p);
+  }
+  g_c_loop_depth--;
+  g_loop_exc_base = sv_lexc; g_loop_ensure_base = sv_lens;
+  g_ie_next_var = sv_nx; g_ie_res_poly = sv_poly; g_ie_next_ty = sv_nty;
+  emit_indent(b, li); buf_puts(b, "}\n");
+  if (!region) {
+    emit_indent(b, indent); buf_printf(b, "if (_t%d) _t%d->len = _t%d;\n", t, t, tw);
+    if (flv) flv->type = fsaved;
+    *tr = t; *torig = to; *twp = tw;
+    return 1;
+  }
+  g_exc_frame_depth--;
+  emit_indent(b, indent + 1); buf_puts(b, "sp_exc_top--;\n");
+  emit_indent(b, indent); buf_puts(b, "}\n");
+  emit_indent(b, indent); buf_puts(b, "else {\n");
+  emit_indent(b, indent + 1); buf_puts(b, "sp_exc_top--;\n");
+  emit_indent(b, indent + 1); buf_puts(b, "sp_gc_nroots = sp_exc_rootmark[sp_exc_top]; sp_rescue_sp = sp_rescue_mark[sp_exc_top];\n");
+  emit_indent(b, indent + 1); buf_puts(b, "if (sp_unwind_kind == SP_UNWIND_NONE) {\n");
+  emit_indent(b, indent + 2); buf_puts(b, "sp_proc_homes_unwind();\n");
+  emit_indent(b, indent + 2);
+  buf_printf(b, "_excf%d = 1; _excmsg%d = sp_exc_msg[sp_exc_top]; _exccls%d = sp_exc_cls[sp_exc_top]; _excobj%d = sp_exc_obj[sp_exc_top];\n",
+             eid, eid, eid, eid);
+  emit_indent(b, indent + 1); buf_puts(b, "}\n");
+  emit_indent(b, indent); buf_puts(b, "}\n");
+  g_ensure_depth--;
+  buf_printf(b, "_ensure%d: ;\n", eid);
+  /* the ensure body: the elements from the one the block was given on are
+     moved down behind the kept ones, and the length is cut */
+  emit_indent(b, indent);
+  buf_printf(b, "if (_t%d) { for (sp_int _t%d = _t%d; _t%d < sp_%sArray_length(_t%d); _t%d++, _t%d++)", t, tj, ti, tj, kk, t, tj, tw);
+  buf_printf(b, " if (_t%d != _t%d) sp_%sArray_set(_t%d, _t%d, sp_%sArray_get(_t%d, _t%d)); _t%d->len = _t%d; }\n",
+             tw, tj, kk, t, tw, kk, t, tj, t, tw);
+  emit_indent(b, indent); buf_puts(b, "if (sp_unwind_kind != SP_UNWIND_NONE) sp_unwind_resume();\n");
+  emit_indent(b, indent);
+  if (g_ensure_depth > 0) {
+    EnsureCtx *outer = &g_ensure_stack[g_ensure_depth - 1];
+    if (has_retval && outer->has_retval)
+      buf_printf(b, "if (_retf%d) { _retv%d = _retv%d; _retf%d = 1; sp_exc_top--; goto _ensure%d; }\n",
+                 eid, outer->lid, eid, outer->lid, outer->lid);
+    else
+      buf_printf(b, "if (_retf%d) { _retf%d = 1; sp_exc_top--; goto _ensure%d; }\n", eid, outer->lid, outer->lid);
+    emit_indent(b, indent);
+    buf_printf(b, "if (_excf%d) { _excf%d = 1; _excmsg%d = _excmsg%d; _exccls%d = _exccls%d; _excobj%d = _excobj%d; sp_exc_top--; goto _ensure%d; }\n",
+               eid, outer->lid, outer->lid, eid, outer->lid, eid, outer->lid, eid, outer->lid);
+  }
+  else {
+    {
+      char g[24]; snprintf(g, sizeof g, "_retf%d", eid);
+      if (emit_frame_unwind(b, 0, g)) { buf_puts(b, "\n"); emit_indent(b, indent); }
+    }
+    if (has_retval && g_in_proc_body && g_result_var && g_result_poly)
+      buf_printf(b, "if (_retf%d) { %s = _retv%d; return 0; }\n", eid, g_result_var, eid);
+    else if (has_retval) buf_printf(b, "if (_retf%d) return _retv%d;\n", eid, eid);
+    else if (g_in_proc_body && g_result_var && g_result_poly)
+      buf_printf(b, "if (_retf%d) { %s = sp_box_nil(); return 0; }\n", eid, g_result_var);
+    else if (g_ret_type == TY_POLY) buf_printf(b, "if (_retf%d) return sp_box_nil();\n", eid);
+    else if (g_ret_type == TY_UNKNOWN) buf_printf(b, "if (_retf%d) return 0;\n", eid);
+    else buf_printf(b, "if (_retf%d) return;\n", eid);
+    emit_indent(b, indent);
+    buf_printf(b, "if (_excf%d) { sp_pending_exc_obj = _excobj%d; sp_raise_cls(_exccls%d, _excmsg%d); }\n", eid, eid, eid, eid);
+  }
+  if (flv) flv->type = fsaved;
+  *tr = t; *torig = to; *twp = tw;
+  return 1;
+}
+
 int emit_iteration_stmt(Compiler *c, int id, Buf *b, int indent) {
   const NodeTable *nt = c->nt;
   int block = nt_ref(nt, id, "block");
