@@ -347,6 +347,10 @@ extern sp_RbVal (*sp_obj_to_h_fn)(sp_RbVal);
 /* user-object #to_a for container-read poly receivers (#3234): installed by
    the generated prologue when any instantiated class defines a no-arg to_a */
 extern sp_RbVal (*sp_obj_to_a_fn)(sp_RbVal);
+/* #to_ary, the CONVERSION protocol -- distinct from to_a, the enumeration
+   one: Kernel#Array asks to_ary first, and only a class that defines it
+   answers here (#4187). */
+extern sp_RbVal (*sp_obj_to_ary_fn)(sp_RbVal);
 /* The array a `case/in` array pattern matches a user object against. Separate
    from #to_a: a Data answers #deconstruct but has no #to_a at all. */
 extern sp_RbVal (*sp_obj_deconstruct_fn)(sp_RbVal);

@@ -6156,6 +6156,46 @@ static void emit_obj_to_a_dispatch(Compiler *c, Buf *b) {
   buf_puts(b, "    default: return sp_box_nil();\n  }\n}\n");
 }
 
+/* User-object #to_ary, installed as sp_obj_to_ary_fn: the CONVERSION protocol
+   Kernel#Array asks first, distinct from to_a (enumeration). Only classes that
+   define a no-arg to_ary get a case; sp_kernel_array falls to the to_a hook
+   and then to wrapping, so an absent dispatch costs nothing (#4187). */
+static int obj_to_ary_method(Compiler *c, int cid, int *defc) {
+  int mi = comp_method_in_chain(c, cid, "to_ary", defc);
+  if (mi >= 0 && c->scopes[mi].nparams == 0 && scope_has_callable_symbol(c, mi)) return mi;
+  return -1;
+}
+static int obj_to_ary_any(Compiler *c) {
+  for (int i = 0; i < c->nclasses; i++) {
+    ClassInfo *ci = &c->classes[i];
+    if (ci->is_native_class || !ci->instantiated) continue;
+    if (obj_to_ary_method(c, i, NULL) >= 0) return 1;
+  }
+  return 0;
+}
+static void emit_obj_to_ary_dispatch(Compiler *c, Buf *b) {
+  if (!obj_to_ary_any(c)) return;
+  buf_puts(b, "static sp_RbVal sp_obj_to_ary(sp_RbVal v) {\n");
+  buf_puts(b, "  switch (v.cls_id) {\n");
+  for (int i = 0; i < c->nclasses; i++) {
+    ClassInfo *ci = &c->classes[i];
+    if (ci->is_native_class || !ci->instantiated) continue;
+    int defc = -1;
+    int mi = obj_to_ary_method(c, i, &defc);
+    if (mi < 0) continue;
+    TyKind mret = (TyKind)c->scopes[mi].ret;
+    buf_printf(b, "    case %d: return ", i);
+    char callx[256];
+    int vobj = comp_ty_value_obj(c, ty_object(defc));
+    snprintf(callx, sizeof callx, vobj ? "sp_%s_%s(*(sp_%s *)v.v.p)" : "sp_%s_%s((sp_%s *)v.v.p)",
+             c->classes[defc].c_name, mc(c->scopes[mi].name), c->classes[defc].c_name);
+    if (mret == TY_POLY) buf_puts(b, callx);
+    else { Buf bx; memset(&bx, 0, sizeof bx); emit_boxed_text(c, mret, callx, &bx);
+           buf_puts(b, bx.p ? bx.p : "sp_box_nil()"); free(bx.p); }
+    buf_puts(b, ";\n");
+  }
+  buf_puts(b, "    default: return sp_box_nil();\n  }\n}\n");
+}
 /* Data#with copy-update, installed as sp_obj_with_fn. cls_id switch over every
    instantiated Data: construct a fresh instance whose members come from the
    symbol-keyed override hash `ov` where present, else copied from the receiver.
@@ -7354,6 +7394,8 @@ void emit_regex_section(Compiler *c, Buf *b) {
     buf_puts(b, "static sp_RbVal sp_obj_to_h(sp_RbVal v);\n");
   if (obj_to_a_any(c))
     buf_puts(b, "static sp_RbVal sp_obj_to_a(sp_RbVal v);\n");
+  if (obj_to_ary_any(c))
+    buf_puts(b, "static sp_RbVal sp_obj_to_ary(sp_RbVal v);\n");
   if (obj_deconstruct_any(c)) {
     buf_puts(b, "static sp_RbVal sp_obj_deconstruct(sp_RbVal v);\n");
     buf_puts(b, "static int sp_obj_is_data(int cls_id);\n");
@@ -7452,6 +7494,8 @@ void emit_regex_section(Compiler *c, Buf *b) {
     buf_puts(b, "  sp_obj_to_h_fn = sp_obj_to_h;\n");
   if (obj_to_a_any(c))
     buf_puts(b, "  sp_obj_to_a_fn = sp_obj_to_a;\n");
+  if (obj_to_ary_any(c))
+    buf_puts(b, "  sp_obj_to_ary_fn = sp_obj_to_ary;\n");
   if (obj_deconstruct_any(c)) {
     buf_puts(b, "  sp_obj_deconstruct_fn = sp_obj_deconstruct;\n");
     buf_puts(b, "  sp_obj_is_data_fn = sp_obj_is_data;\n");
@@ -9566,6 +9610,7 @@ char *codegen_program(const NodeTable *nt) {
   emit_obj_deconstruct_dispatch(c, body);
   emit_obj_is_data(c, body);
   emit_obj_to_a_dispatch(c, body);
+  emit_obj_to_ary_dispatch(c, body);
   emit_obj_with_dispatch(c, body);
   for (int s = 1; s < c->nscopes; s++) {
     if (c->scopes[s].yields || (!c->scopes[s].reachable && !c->scopes[s].is_proc_form) || scope_is_shadowed(c, s) || (c->scopes[s].is_transplanted_source && !scope_toplevel_included(c, s))) continue; EMIT_COLLECT_UNIT(emit_method(c, &c->scopes[s], body));

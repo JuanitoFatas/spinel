@@ -3696,6 +3696,27 @@ static sp_PolyArray *sp_kernel_array(sp_RbVal x) {
       for (sp_int i = 0; i < n; i++) sp_PolyArray_push(r, sp_poly_arr_get(x, i));
       return r;
     }
+    /* Array(hash) is the pair list and Array(range) enumerates -- the answers
+       the statically-typed arm gives; through an untyped parameter the hash
+       was wrapped whole instead (#4187). */
+    if (sp_poly_is_hash_kind(x.cls_id) ||
+        x.cls_id == SP_BUILTIN_RANGE || x.cls_id == SP_BUILTIN_STR_RANGE)
+      return sp_enum_items_from(x);
+  }
+  /* A USER object is asked for #to_ary, then #to_a, before being wrapped --
+     the same order the statically-typed arm uses (#3721). The static arm only
+     runs when the call site can see the class; an argument arriving through
+     an untyped parameter reached here and was silently wrapped instead, so
+     one object answered two different arrays depending on the route (#4187).
+     A poly-array answer is returned as itself (identity, as CRuby returns
+     to_ary's array); a typed one materializes, as the array cases above do. */
+  if (x.tag == SP_TAG_OBJ && x.cls_id >= 0) {
+    sp_RbVal a = sp_box_nil();
+    if (sp_obj_to_ary_fn) a = sp_obj_to_ary_fn(x);
+    if (!(a.tag == SP_TAG_OBJ && sp_poly_is_array_kind(a.cls_id)) && sp_obj_to_a_fn)
+      a = sp_obj_to_a_fn(x);
+    if (a.tag == SP_TAG_OBJ && sp_poly_is_array_kind(a.cls_id))
+      return sp_poly_to_poly_array(a);
   }
   sp_PolyArray *r = sp_PolyArray_new(); SP_GC_ROOT(r);
   sp_PolyArray_push(r, x);
