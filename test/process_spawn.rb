@@ -100,3 +100,22 @@ p ks.exitstatus
 p ks.exitstatus.nil?
 p ks.success?
 p ks.coredump?
+
+# 7) An UNSET :in/:out/:err slot is inherit, not /dev/null. The child's stderr
+#    reaching this process's stderr is the observable part; it is redirected to
+#    the captured pipe here so the test can assert on it (#4176).
+r, w = IO.pipe
+pid = Process.spawn("/bin/sh", "-c", "echo to_out; echo to_err 1>&2", out: w, err: w)
+w.close
+p r.read.split("\n").sort
+_, st = Process.waitpid2(pid)
+p st.success?
+
+# with err unset, the child's stderr is the parent's: the exit status still
+# reports honestly rather than the child failing on a closed descriptor
+r2, w2 = IO.pipe
+pid2 = Process.spawn("/bin/sh", "-c", "echo only_out", out: w2)
+w2.close
+p r2.read.strip
+_, st2 = Process.waitpid2(pid2)
+p st2.success?

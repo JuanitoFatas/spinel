@@ -17,3 +17,7 @@ nil
 true
 nil
 false
+["to_err", "to_out"]
+true
+"only_out"
+true

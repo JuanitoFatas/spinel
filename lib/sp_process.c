@@ -70,9 +70,22 @@ static const char *sp_errf_errno(const char *prefix, int err) {
    produced no output. */
 static void apply_redirect(int target_fd, int src_fd) {
   if (src_fd < 0) return;
-  if (src_fd != target_fd) {
-    dup2(src_fd, target_fd);
-    if (src_fd > 2) close(src_fd);
+  if (src_fd != target_fd) dup2(src_fd, target_fd);
+}
+
+/* Close the source descriptors, once every dup2 above has been made. Not
+   inside apply_redirect: `out: f, err: f` names one descriptor twice, and
+   closing it after the first redirect left the second dup2 working on a
+   closed fd -- silently, so the child's stderr went nowhere (#4176). */
+static void close_redirect_srcs(int in_fd, int out_fd, int err_fd) {
+  int fds[3]; int n = 0;
+  if (in_fd  > 2) fds[n++] = in_fd;
+  if (out_fd > 2) fds[n++] = out_fd;
+  if (err_fd > 2) fds[n++] = err_fd;
+  for (int i = 0; i < n; i++) {
+    int dup = 0;
+    for (int j = 0; j < i; j++) if (fds[j] == fds[i]) dup = 1;
+    if (!dup) close(fds[i]);
   }
 }
 
@@ -232,6 +245,7 @@ sp_int sp_process_spawn(sp_RbVal cmd, sp_RbVal args_box,
     apply_redirect(0, in_fd);
     apply_redirect(1, out_fd);
     apply_redirect(2, err_fd);
+    close_redirect_srcs(in_fd, out_fd, err_fd);
     execvp(prog, argv);
     /* exec returned: failure. Send the errno to the parent. */
     int e = errno;
