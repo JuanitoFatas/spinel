@@ -814,6 +814,10 @@ int needs_root(TyKind t);
 /* Root a temp of an inferred type, picking the rbval macro for boxed poly. */
 void emit_gc_root_tmp(Compiler *c, TyKind t, int tmp, Buf *b);
 const char *hash_box_cls(TyKind t);
+const char *hash_order_key(TyKind t, int tr, int ti);
+const char *hash_order_val(TyKind t, int tr, int ti);
+int emit_hash_filter_loop(Compiler *c, int recv, int block, TyKind rt, const char *name,
+                          const char *rs, Buf *b, int indent, int *tr, int *torig, int *twp);
 void emit_unbox_text(Compiler *c, TyKind t, const char *expr, Buf *b);
 TyKind yield_site_type(Compiler *c, int node);
 void emit_int_expr(Compiler *c, int node, Buf *b);

@@ -4860,68 +4860,19 @@ int emit_hash_call(Compiler *c, int id, Buf *b) {
     const char *hn = ty_hash_cname(rt);
     if (hn) {
       /* select! / filter! / reject! / keep_if / delete_if { |k, v| cond } in
-         expression position (the statement form lives in emit_iteration_stmt).
-         Mutates in place; `!` forms yield nil when nothing was removed else self,
-         keep_if/delete_if always yield self. */
+         expression position (the statement form lives in emit_iteration_stmt;
+         the loop is emit_hash_filter_loop's). Mutates in place; `!` forms
+         yield nil when nothing was removed else self, keep_if/delete_if
+         always yield self. */
       if ((sp_streq(name, "delete_if") || sp_streq(name, "reject!") || sp_streq(name, "select!") ||
            sp_streq(name, "filter!") || sp_streq(name, "keep_if")) &&
-          nt_ref(nt, id, "block") >= 0 && rt != TY_POLY_POLY_HASH) {
+          nt_ref(nt, id, "block") >= 0) {
         int block = nt_ref(nt, id, "block");
-        int is_rej = sp_streq(name, "delete_if") || sp_streq(name, "reject!");
-        const char *p0_raw = block_param_name(c, block, 0);
-        const char *p1_raw = block_param_name(c, block, 1);
-        const char *kp = p0_raw ? rename_local(p0_raw) : NULL;
-        const char *vp = p1_raw ? rename_local(p1_raw) : NULL;
-        int body = nt_ref(nt, block, "body");
-        int bn = 0; const int *bb = body >= 0 ? nt_arr(nt, body, "body", &bn) : NULL;
-        if (bn >= 1) {
-          Scope *hs = comp_scope_of(c, block);
-          TyKind hkt = ty_hash_key(rt), hvt = ty_hash_val(rt);
-          LocalVar *klv = (kp && hs) ? scope_local(hs, p0_raw) : NULL;
-          LocalVar *vlv = (vp && hs) ? scope_local(hs, p1_raw) : NULL;
-          TyKind ksaved = klv ? klv->type : TY_UNKNOWN;
-          TyKind vsaved = vlv ? vlv->type : TY_UNKNOWN;
-          if (klv) klv->type = hkt;
-          if (vlv) vlv->type = hvt;
-          for (int j = 0; j < bn; j++) infer_subtree(c, bb[j]);
-          int tr = ++g_tmp, ti = ++g_tmp, torig = ++g_tmp, twp = ++g_tmp;
-          Buf rb = expr_buf(c, recv);
-          emit_indent(g_pre, g_indent); emit_ctype(c, rt, g_pre);
-          buf_printf(g_pre, " _t%d = %s;\n", tr, rb.p ? rb.p : "NULL"); free(rb.p);
-          emit_indent(g_pre, g_indent);
-          buf_printf(g_pre, "if (sp_gc_is_frozen(_t%d)) sp_raise_frozen_hash_at(_t%d, %s);\n", tr, tr, hash_box_cls(rt));
-          emit_indent(g_pre, g_indent);
-          buf_printf(g_pre, "sp_int _t%d = _t%d ? _t%d->len : 0;\n", torig, tr, tr);
-          emit_indent(g_pre, g_indent);
-          buf_printf(g_pre, "for (sp_int _t%d = 0; _t%d && _t%d < _t%d->len; ) {\n", ti, tr, ti, tr);
-          if (kp) {
-            emit_indent(g_pre, g_indent + 1); emit_ctype(c, hkt, g_pre);
-            buf_printf(g_pre, " lv_%s = _t%d->order[_t%d];\n", kp, tr, ti);
-          }
-          if (vp) {
-            emit_indent(g_pre, g_indent + 1); emit_ctype(c, hvt, g_pre);
-            buf_printf(g_pre, " lv_%s = sp_%sHash_get(_t%d, _t%d->order[_t%d]);\n", vp, hn, tr, tr, ti);
-          }
-          for (int j = 0; j < bn - 1; j++) emit_stmt(c, bb[j], g_pre, g_indent + 1);
-          Buf *sp_save = g_pre; int gi_save = g_indent;
-          Buf cpre; memset(&cpre, 0, sizeof cpre); g_pre = &cpre; g_indent = gi_save + 1;
-          Buf cexpr = expr_buf(c, bb[bn - 1]);
-          g_pre = sp_save; g_indent = gi_save;
-          if (cpre.p) { buf_puts(g_pre, cpre.p); free(cpre.p); }
-          emit_indent(g_pre, g_indent + 1);
-          if (is_rej) buf_printf(g_pre, "if (%s) {\n", cexpr.p ? cexpr.p : "0");
-          else        buf_printf(g_pre, "if (!(%s)) {\n", cexpr.p ? cexpr.p : "0");
-          free(cexpr.p);
-          emit_indent(g_pre, g_indent + 2);
-          buf_printf(g_pre, "sp_%sHash_delete(_t%d, _t%d->order[_t%d]);\n", hn, tr, tr, ti);
-          emit_indent(g_pre, g_indent + 1); buf_puts(g_pre, "}\nelse {\n");
-          emit_indent(g_pre, g_indent + 2); buf_printf(g_pre, "_t%d++;\n", ti);
-          emit_indent(g_pre, g_indent + 1); buf_puts(g_pre, "}\n");
-          emit_indent(g_pre, g_indent); buf_puts(g_pre, "}\n");
-          emit_indent(g_pre, g_indent);
-          buf_printf(g_pre, "sp_int _t%d = _t%d ? _t%d->len : 0;\n", twp, tr, tr);
-          if (klv) klv->type = ksaved;
-          if (vlv) vlv->type = vsaved;
+        Buf rb = expr_buf(c, recv);
+        int tr, torig, twp;
+        int ok = emit_hash_filter_loop(c, recv, block, rt, name, rb.p ? rb.p : "NULL", g_pre, g_indent, &tr, &torig, &twp);
+        free(rb.p);
+        if (ok) {
           char box[96]; snprintf(box, sizeof box, "sp_box_obj(_t%d, %s)", tr, hash_box_cls(rt));
           emit_filter_bang_result(name, tr, torig, twp, box, b);
           return 1;
