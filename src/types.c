@@ -63,6 +63,18 @@ static const PolyFace ty_poly_face_tbl[] = {
   {"prepend", PF_STRING | PF_MUT | PF_ARGS_OWN | PF_VAL_SELF, 0, -1, 0}, {"prepend", PF_ARRAY | PF_MUT, 0, -1, 0},
   {"reverse!", PF_STRING | PF_MUT | PF_VAL_SELF, 0, 0, 0}, {"reverse!", PF_ARRAY | PF_MUT, 0, 0, 0},
   {"slice!", PF_STRING | PF_MUT, 1, 2, 0}, {"slice!", PF_ARRAY | PF_MUT, 1, 2, 0},
+  /* The Hash mutators, on a Hash at run time; a typed variant takes the
+     result back from the general copy it was normalized to, and the value is
+     the box, since the copy is detached once written back. */
+  {"merge!", PF_HASH | PF_MUT | PF_VAL_SELF, 1, -1, 0}, {"update", PF_HASH | PF_MUT | PF_VAL_SELF, 1, -1, 0},
+  /* The names Array and Hash share, blockless: the receiver's run-time kind
+     picks the arm. assoc, rassoc and fetch_values keep their last-resort Hash
+     rows below, so a splat or a block still reaches the read-only face;
+     compact! never had one. */
+  {"compact!", PF_ARRAY | PF_MUT, 0, 0, 0}, {"compact!", PF_HASH | PF_MUT | PF_VAL_SELF, 0, 0, 0},
+  {"assoc", PF_ARRAY, 1, 1, 0}, {"assoc", PF_HASH, 1, 1, 0},
+  {"rassoc", PF_ARRAY, 1, 1, 0}, {"rassoc", PF_HASH, 1, 1, 0},
+  {"fetch_values", PF_ARRAY, 1, -1, 0}, {"fetch_values", PF_HASH, 1, -1, 0},
   /* The read-only Hash/Enumerable face. */
   {"dig", PF_HASH | PF_LAST, 0, -1, -1}, {"value?", PF_HASH | PF_LAST, 0, -1, -1}, {"has_value?", PF_HASH | PF_LAST, 0, -1, -1},
   {"invert", PF_HASH | PF_LAST, 0, -1, -1}, {"assoc", PF_HASH | PF_LAST, 0, -1, -1}, {"rassoc", PF_HASH | PF_LAST, 0, -1, -1}, {"key", PF_HASH | PF_LAST, 0, -1, -1},

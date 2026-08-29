@@ -8979,6 +8979,116 @@ static void *sp_poly_as_handle(sp_RbVal v, int cls_id, const char *nm) {
   sp_raise_nomethod(sp_nomethod_msg(nm, v));
   return NULL;
 }
+/* The receiver of a Hash method reached through a boxed value, as the
+   general hash (sp_poly_as_pp_hash); a mutator (`mut`) refuses a frozen
+   original here, before the typed emitter works on the copy. */
+static sp_PolyPolyHash *sp_poly_hash_recv(sp_RbVal v, const char *m, int mut) {
+  if (mut && v.tag == SP_TAG_OBJ && sp_poly_is_hash_kind(v.cls_id) && sp_gc_is_frozen(v.v.p))
+    sp_raise_frozen_hash_at(v.v.p, v.cls_id);
+  return sp_poly_as_pp_hash(v, m);
+}
+/* A key or value the typed original has no representation for: the
+   sibling of sp_raise_writeback_kind for a hash. */
+SP_NORETURN SP_COLD static void sp_raise_hash_writeback_kind(sp_RbVal v, const char *what, const char *into) {
+  sp_raise_cls("TypeError", sp_sprintf("can't store %s as a %s in a Hash of %s through a boxed receiver",
+                                       v.tag == SP_TAG_BIGINT ? "a bignum" : sp_poly_class_name(v), what, into));
+}
+/* A String- or Integer-valued variant holds nil natively (a NULL, the int
+   nil sentinel), so a nil the original already held is its own to keep. A
+   shared-mutable handle is a String too -- the value a local stored here and
+   appended to afterwards -- and goes in by its contents, as it does through
+   sp_poly_arr_writeback. */
+static void sp_hash_wb_want(sp_RbVal v, int tag, int nil_ok, const char *what, const char *into) {
+  if (v.tag == tag || (nil_ok && v.tag == SP_TAG_NIL)) return;
+  if (tag == SP_TAG_STR && sp_poly_is_strbuf(v)) return;
+  sp_raise_hash_writeback_kind(v, what, into);
+}
+/* A mutator's write-back through a boxed hash: sp_poly_as_pp_hash gives a
+   typed variant as a general COPY, so a merge! or compact! that ran on the
+   copy never reached the original. Replace the original's entries with the
+   copy's, in its own representation; a general hash shares storage and needs
+   nothing. An entry the variant cannot hold -- a String key merged into a
+   Symbol-keyed hash, a String value into an Integer-valued one -- is refused
+   rather than coerced into a key or value it was not. Frozenness was refused
+   at the coercion, before the mutator ran, and is refused again here for an
+   original frozen since -- by its own argument, say. */
+static void sp_poly_hash_writeback(sp_RbVal orig, sp_PolyPolyHash *work) {
+  if (orig.tag != SP_TAG_OBJ || !work || !orig.v.p) return;
+  if (orig.cls_id == SP_BUILTIN_POLY_POLY_HASH) return;
+  if (!sp_poly_is_hash_kind(orig.cls_id)) return;
+  if (sp_gc_is_frozen(orig.v.p)) sp_raise_frozen_hash_at(orig.v.p, orig.cls_id);
+  SP_GC_ROOT_RBVAL(orig); SP_GC_ROOT(work);
+  for (sp_int i = 0; i < work->len; i++) {
+    sp_int j = work->order[i];
+    sp_RbVal k = work->keys[j], v = work->vals[j];
+    switch (orig.cls_id) {
+      case SP_BUILTIN_STR_INT_HASH: sp_hash_wb_want(k, SP_TAG_STR, 0, "key", "String keys"); sp_hash_wb_want(v, SP_TAG_INT, 1, "value", "Integer values"); break;
+      case SP_BUILTIN_STR_STR_HASH: sp_hash_wb_want(k, SP_TAG_STR, 0, "key", "String keys"); sp_hash_wb_want(v, SP_TAG_STR, 1, "value", "String values"); break;
+      case SP_BUILTIN_INT_STR_HASH: sp_hash_wb_want(k, SP_TAG_INT, 0, "key", "Integer keys"); sp_hash_wb_want(v, SP_TAG_STR, 1, "value", "String values"); break;
+      case SP_BUILTIN_INT_INT_HASH: sp_hash_wb_want(k, SP_TAG_INT, 0, "key", "Integer keys"); sp_hash_wb_want(v, SP_TAG_INT, 1, "value", "Integer values"); break;
+      case SP_BUILTIN_STR_POLY_HASH: sp_hash_wb_want(k, SP_TAG_STR, 0, "key", "String keys"); break;
+      case SP_BUILTIN_SYM_POLY_HASH: sp_hash_wb_want(k, SP_TAG_SYM, 0, "key", "Symbol keys"); break;
+      default: return;
+    }
+  }
+  switch (orig.cls_id) {
+    case SP_BUILTIN_STR_INT_HASH: {
+      sp_StrIntHash *h = (sp_StrIntHash *)orig.v.p;
+      sp_StrIntHash_clear(h);
+      for (sp_int i = 0; i < work->len; i++) {
+        sp_int j = work->order[i];
+        sp_StrIntHash_set(h, sp_poly_to_s(work->keys[j]), sp_poly_to_i_or_nil(work->vals[j]));
+      }
+      return;
+    }
+    case SP_BUILTIN_STR_STR_HASH: {
+      sp_StrStrHash *h = (sp_StrStrHash *)orig.v.p;
+      sp_StrStrHash_clear(h);
+      for (sp_int i = 0; i < work->len; i++) {
+        sp_int j = work->order[i];
+        sp_StrStrHash_set(h, sp_poly_to_s(work->keys[j]), sp_poly_to_s_or_nil(work->vals[j]));
+      }
+      return;
+    }
+    case SP_BUILTIN_INT_STR_HASH: {
+      sp_IntStrHash *h = (sp_IntStrHash *)orig.v.p;
+      sp_IntStrHash_clear(h);
+      for (sp_int i = 0; i < work->len; i++) {
+        sp_int j = work->order[i];
+        sp_IntStrHash_set(h, sp_poly_to_i(work->keys[j]), sp_poly_to_s_or_nil(work->vals[j]));
+      }
+      return;
+    }
+    case SP_BUILTIN_INT_INT_HASH: {
+      sp_IntIntHash *h = (sp_IntIntHash *)orig.v.p;
+      sp_IntIntHash_clear(h);
+      for (sp_int i = 0; i < work->len; i++) {
+        sp_int j = work->order[i];
+        sp_IntIntHash_set(h, sp_poly_to_i(work->keys[j]), sp_poly_to_i_or_nil(work->vals[j]));
+      }
+      return;
+    }
+    case SP_BUILTIN_STR_POLY_HASH: {
+      sp_StrPolyHash *h = (sp_StrPolyHash *)orig.v.p;
+      sp_StrPolyHash_clear(h);
+      for (sp_int i = 0; i < work->len; i++) {
+        sp_int j = work->order[i];
+        sp_StrPolyHash_set(h, sp_poly_to_s(work->keys[j]), work->vals[j]);
+      }
+      return;
+    }
+    case SP_BUILTIN_SYM_POLY_HASH: {
+      sp_SymPolyHash *h = (sp_SymPolyHash *)orig.v.p;
+      sp_SymPolyHash_clear(h);
+      for (sp_int i = 0; i < work->len; i++) {
+        sp_int j = work->order[i];
+        sp_SymPolyHash_set(h, (sp_sym)work->keys[j].v.i, work->vals[j]);
+      }
+      return;
+    }
+    default: return;
+  }
+}
 /* OpenStruct.new(hash) where hash is a runtime value (not a literal): seed the
    member table from the hash's entries, keys coerced to symbols. Copies, so
    mutating the OpenStruct does not alter the source hash (#3194). */
