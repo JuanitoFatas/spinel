@@ -78,7 +78,13 @@ def spinel_bin
   # macOS) instead of falling through to the installed binary (#3407).
   me = File.expand_path($0)
   cand = File.join(File.expand_path("..", me), "spinel")
-  return cand if File.file?(cand) && File.executable?(cand)
+  if File.file?(cand) && File.executable?(cand)
+    # Realpath: a symlinked install (e.g. /home/user/bin/spin ->
+    # /home/user/spinel/bin/spin) has $0 resolve to the symlink path; without
+    # realpath, spinel_hdr_dir's <bin>/../lib probe walks from the symlink's
+    # parent and misses the install tree's lib/.
+    return File.symlink?(cand) ? File.realpath(cand) : cand
+  end
   "spinel"  # PATH fallback
 end
 
