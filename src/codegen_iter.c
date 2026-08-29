@@ -1930,6 +1930,129 @@ int emit_iter_value_expr(Compiler *c, int id, Buf *b) {
   return 1;
 }
 
+/* The in-place filter loop of select! / filter! / reject! / keep_if /
+   delete_if on a hash of any variant, into `b` at `indent`, over the receiver
+   text `rs`: the hash in `_t<tr>`, its pair count before the loop in
+   `_t<torig>` and after it in `_t<twp>`, for the caller to answer from.
+   The block's parameters take the variant's key and value types, so a
+   general hash's block sees sp_RbVals; a one-parameter block takes the key
+   alone. The predicate is read by Ruby truthiness.
+
+   The loop's state lives outside it, and the advance or the delete is the
+   for's own third clause, not a statement at the end of the body: `next` in
+   the block is a C `continue`, which runs the third clause and skips whatever
+   the body ends with -- as a trailing statement it was skipped and the same
+   pair ran forever (the each loop's #3782). The verdict is the predicate's,
+   or the value a `next` left, or nil for a bare one. CRuby refuses a new key
+   during the iteration, and permits deleting one: a pair the block deleted
+   slides the next pair into its slot, so the index advances only while the
+   slot still holds the key the block was given (#3569), and a drop deletes
+   by that key, which a block that deleted it already made a no-op.
+   Answers 0 for a block with no body to read. */
+int emit_hash_filter_loop(Compiler *c, int recv, int block, TyKind rt, const char *name,
+                          const char *rs, Buf *b, int indent, int *tr, int *torig, int *twp) {
+  const NodeTable *nt = c->nt;
+  const char *hn = ty_hash_cname(rt);
+  int is_rej = sp_streq(name, "delete_if") || sp_streq(name, "reject!");
+  const char *p0_raw = block_param_name(c, block, 0);
+  const char *p1_raw = block_param_name(c, block, 1);
+  const char *kp = p0_raw ? rename_local(p0_raw) : NULL;
+  const char *vp = p1_raw ? rename_local(p1_raw) : NULL;
+  int body = nt_ref(nt, block, "body");
+  int bn = 0; const int *bb = body >= 0 ? nt_arr(nt, body, "body", &bn) : NULL;
+  if (!hn || bn < 1) return 0;
+  (void)recv;
+  Scope *hs = comp_scope_of(c, block);
+  TyKind hkt = ty_hash_key(rt), hvt = ty_hash_val(rt);
+  LocalVar *klv = (kp && hs) ? scope_local(hs, p0_raw) : NULL;
+  LocalVar *vlv = (vp && hs) ? scope_local(hs, p1_raw) : NULL;
+  TyKind ksaved = klv ? klv->type : TY_UNKNOWN;
+  TyKind vsaved = vlv ? vlv->type : TY_UNKNOWN;
+  if (klv) klv->type = hkt;
+  if (vlv) vlv->type = hvt;
+  for (int j = 0; j < bn; j++) infer_subtree(c, bb[j]);
+  int t = ++g_tmp, ti = ++g_tmp, to = ++g_tmp, tw = ++g_tmp;
+  int tn = ++g_tmp, tk = ++g_tmp, tkey = ++g_tmp, tnv = ++g_tmp;
+  /* rooted: a receiver that is a temporary has no other holder once its own
+     expression is done, and the block body, or the general hash's delete,
+     may collect before the loop is through */
+  emit_indent(b, indent); emit_ctype(c, rt, b);
+  buf_printf(b, " _t%d = %s; ", t, rs); emit_gc_root_tmp(c, rt, t, b); buf_puts(b, "\n");
+  emit_indent(b, indent);
+  buf_printf(b, "if (sp_gc_is_frozen(_t%d)) sp_raise_frozen_hash_at(_t%d, %s);\n", t, t, hash_box_cls(rt));
+  emit_indent(b, indent);
+  buf_printf(b, "sp_int _t%d = _t%d ? _t%d->len : 0;\n", to, t, t);
+  emit_indent(b, indent);
+  buf_printf(b, "sp_int _t%d = 0, _t%d = 0; sp_RbVal _t%d = sp_box_nil();\n", tn, tk, tnv);
+  emit_indent(b, indent); emit_ctype(c, hkt, b);
+  if (hkt == TY_POLY) buf_printf(b, " _t%d = sp_box_nil(); SP_GC_ROOT_RBVAL(_t%d);\n", tkey, tkey);
+  else if (hkt == TY_STRING) buf_printf(b, " _t%d = NULL; SP_GC_ROOT_STR(_t%d);\n", tkey, tkey);
+  else buf_printf(b, " _t%d = 0;\n", tkey);
+  emit_indent(b, indent);
+  buf_printf(b, "for (sp_int _t%d = 0; _t%d && _t%d < _t%d->len; ({", ti, t, ti, t);
+  buf_printf(b, " if (_t%d->len > _t%d) sp_raise_cls(\"RuntimeError\","
+                " \"can't add a new key into hash during iteration\");", t, tn);
+  buf_printf(b, " if (_t%d < 0) _t%d = %ssp_poly_truthy(_t%d);", tk, tk, is_rej ? "!" : "", tnv);
+  buf_printf(b, " if (!_t%d) sp_%sHash_delete(_t%d, _t%d);", tk, hn, t, tkey);
+  buf_printf(b, " else if (_t%d < _t%d->len && ", ti, t);
+  if (hkt == TY_POLY) buf_printf(b, "sp_rbval_eql_key(_t%d->keys[_t%d->order[_t%d]], _t%d)", t, t, ti, tkey);
+  else if (hkt == TY_STRING) buf_printf(b, "sp_str_eq(_t%d->order[_t%d], _t%d)", t, ti, tkey);
+  else buf_printf(b, "_t%d->order[_t%d] == _t%d", t, ti, tkey);
+  buf_printf(b, ") _t%d++; })) {\n", ti);
+  emit_indent(b, indent + 1);
+  buf_printf(b, "_t%d = _t%d->len; _t%d = -1; _t%d = sp_box_nil(); _t%d = %s;\n",
+             tn, t, tk, tnv, tkey, hash_order_key(rt, t, ti));
+  /* a key or a value the block holds outlives its pair when the block drops
+     the pair itself, or is reassigned, and then allocates, so a collectable
+     one is rooted, as the each loop's are */
+  if (kp) {
+    emit_indent(b, indent + 1); emit_ctype(c, hkt, b);
+    buf_printf(b, " lv_%s = _t%d;", kp, tkey);
+    if (hkt == TY_POLY) buf_printf(b, " SP_GC_ROOT_RBVAL(lv_%s);", kp);
+    else if (hkt == TY_STRING) buf_printf(b, " SP_GC_ROOT_STR(lv_%s);", kp);
+    buf_puts(b, "\n");
+  }
+  if (vp) {
+    emit_indent(b, indent + 1); emit_ctype(c, hvt, b);
+    buf_printf(b, " lv_%s = %s;", vp, hash_order_val(rt, t, ti));
+    if (hvt == TY_POLY) buf_printf(b, " SP_GC_ROOT_RBVAL(lv_%s);", vp);
+    else if (hvt == TY_STRING) buf_printf(b, " SP_GC_ROOT_STR(lv_%s);", vp);
+    buf_puts(b, "\n");
+  }
+  const char *sv_nx = g_ie_next_var; int sv_poly = g_ie_res_poly; TyKind sv_nty = g_ie_next_ty;
+  int sv_lexc = g_loop_exc_base, sv_lens = g_loop_ensure_base;
+  char nxbuf[32]; snprintf(nxbuf, sizeof nxbuf, "_t%d", tnv);
+  g_ie_next_var = nxbuf; g_ie_res_poly = 1; g_ie_next_ty = TY_UNKNOWN;
+  g_loop_exc_base = g_exc_frame_depth; g_loop_ensure_base = g_ensure_depth;
+  g_c_loop_depth++;
+  for (int j = 0; j < bn - 1; j++) emit_stmt(c, bb[j], b, indent + 1);
+  if (sp_streq(nt_type(nt, bb[bn - 1]), "NextNode")) emit_stmt(c, bb[bn - 1], b, indent + 1);
+  else {
+    /* the predicate in its own buffer: a multi-statement terminal (a block
+       ending in an if/else expression) lowers its statements through g_pre,
+       and they belong inside the loop body, before the verdict */
+    Buf *sp_save = g_pre; int gi_save = g_indent;
+    Buf cpre; memset(&cpre, 0, sizeof cpre); g_pre = &cpre; g_indent = indent + 1;
+    Buf cexpr; memset(&cexpr, 0, sizeof cexpr);
+    emit_cond(c, bb[bn - 1], &cexpr);
+    g_pre = sp_save; g_indent = gi_save;
+    if (cpre.p) { buf_puts(b, cpre.p); free(cpre.p); }
+    emit_indent(b, indent + 1);
+    buf_printf(b, "_t%d = %s(%s);\n", tk, is_rej ? "!" : "", cexpr.p ? cexpr.p : "0");
+    free(cexpr.p);
+  }
+  g_c_loop_depth--;
+  g_loop_exc_base = sv_lexc; g_loop_ensure_base = sv_lens;
+  g_ie_next_var = sv_nx; g_ie_res_poly = sv_poly; g_ie_next_ty = sv_nty;
+  emit_indent(b, indent); buf_puts(b, "}\n");
+  emit_indent(b, indent);
+  buf_printf(b, "sp_int _t%d = _t%d ? _t%d->len : 0;\n", tw, t, t);
+  if (klv) klv->type = ksaved;
+  if (vlv) vlv->type = vsaved;
+  *tr = t; *torig = to; *twp = tw;
+  return 1;
+}
+
 int emit_iteration_stmt(Compiler *c, int id, Buf *b, int indent) {
   const NodeTable *nt = c->nt;
   int block = nt_ref(nt, id, "block");
@@ -2434,76 +2557,16 @@ int emit_iteration_stmt(Compiler *c, int id, Buf *b, int indent) {
     return 1;
   }
 
-  /* hash.delete_if / reject! / select! / filter! / keep_if { |k, v| cond } */
+  /* hash.delete_if / reject! / select! / filter! / keep_if { |k, v| cond }
+     as a statement: the loop alone, its value unread (the expression form
+     lives in emit_hash_call) */
   if ((sp_streq(name, "delete_if") || sp_streq(name, "reject!") || sp_streq(name, "select!") ||
        sp_streq(name, "filter!") || sp_streq(name, "keep_if")) && ty_is_hash(rt) && block >= 0) {
-    const char *hn = ty_hash_cname(rt);
-    if (hn && rt != TY_POLY_POLY_HASH) {
-      int is_rej = (sp_streq(name, "delete_if") || sp_streq(name, "reject!"));
-      const char *p0_raw = block_param_name(c, block, 0);
-      const char *p1_raw = block_param_name(c, block, 1);
-      const char *kp = p0_raw ? rename_local(p0_raw) : NULL;
-      const char *vp = p1_raw ? rename_local(p1_raw) : NULL;
-      int body2 = nt_ref(nt, block, "body");
-      int bn2 = 0; const int *bb2 = body2 >= 0 ? nt_arr(nt, body2, "body", &bn2) : NULL;
-      if (bn2 >= 1) {
-        Scope *hs2 = comp_scope_of(c, block);
-        TyKind hkt = ty_hash_key(rt), hvt = ty_hash_val(rt);
-        /* Temporarily set block param types to hash key/value types so
-           the block body is emitted with the right concrete types.
-           Refresh the ntype cache with the new types. */
-        LocalVar *klv = (kp && hs2) ? scope_local(hs2, p0_raw) : NULL;
-        LocalVar *vlv = (vp && hs2) ? scope_local(hs2, p1_raw) : NULL;
-        TyKind ksaved = klv ? klv->type : TY_UNKNOWN;
-        TyKind vsaved = vlv ? vlv->type : TY_UNKNOWN;
-        if (klv) klv->type = hkt;
-        if (vlv) vlv->type = hvt;
-        for (int j = 0; j < bn2; j++) infer_subtree(c, bb2[j]);
-        int tr2 = ++g_tmp, ti2 = ++g_tmp;
-        Buf rb2; memset(&rb2, 0, sizeof rb2); emit_expr(c, recv, &rb2);
-        emit_indent(b, indent); emit_ctype(c, rt, b);
-        buf_printf(b, "_t%d = %s;\n", tr2, rb2.p ? rb2.p : "NULL"); free(rb2.p);
-        emit_indent(b, indent);
-        buf_printf(b, "if (sp_gc_is_frozen(_t%d)) sp_raise_frozen_hash_at(_t%d, %s);\n", tr2, tr2, hash_box_cls(rt));
-        emit_indent(b, indent);
-        buf_printf(b, "for (sp_int _t%d = 0; _t%d && _t%d < _t%d->len; ) {\n",
-                   ti2, tr2, ti2, tr2);
-        /* declare + assign key param with hash key type (shadows outer lv_k) */
-        if (kp) {
-          emit_indent(b, indent + 1); emit_ctype(c, hkt, b);
-          buf_printf(b, " lv_%s = _t%d->order[_t%d];\n", kp, tr2, ti2);
-        }
-        /* declare + assign value param with hash value type (shadows outer lv_v) */
-        if (vp) {
-          emit_indent(b, indent + 1); emit_ctype(c, hvt, b);
-          buf_printf(b, " lv_%s = sp_%sHash_get(_t%d, _t%d->order[_t%d]);\n",
-                     vp, hn, tr2, tr2, ti2);
-        }
-        /* block body stmts except last */
-        for (int j = 0; j < bn2 - 1; j++) emit_stmt(c, bb2[j], b, indent + 1);
-        /* condition: save g_pre so pre-effects land inside the loop body */
-        Buf *sp2 = g_pre; int si2 = g_indent;
-        Buf cpre2; memset(&cpre2, 0, sizeof cpre2); g_pre = &cpre2; g_indent = indent + 1;
-        Buf cexpr2; memset(&cexpr2, 0, sizeof cexpr2);
-        emit_expr(c, bb2[bn2 - 1], &cexpr2);
-        g_pre = sp2; g_indent = si2;
-        if (cpre2.p) { buf_puts(b, cpre2.p); free(cpre2.p); }
-        emit_indent(b, indent + 1);
-        if (is_rej) buf_printf(b, "if (%s) {\n", cexpr2.p ? cexpr2.p : "0");
-        else        buf_printf(b, "if (!(%s)) {\n", cexpr2.p ? cexpr2.p : "0");
-        free(cexpr2.p);
-        emit_indent(b, indent + 2);
-        buf_printf(b, "sp_%sHash_delete(_t%d, _t%d->order[_t%d]);\n", hn, tr2, tr2, ti2);
-        emit_indent(b, indent + 1); buf_puts(b, "}\nelse {\n");
-        emit_indent(b, indent + 2); buf_printf(b, "_t%d++;\n", ti2);
-        emit_indent(b, indent + 1); buf_puts(b, "}\n");
-        emit_indent(b, indent); buf_puts(b, "}\n");
-        /* restore block param types */
-        if (klv) klv->type = ksaved;
-        if (vlv) vlv->type = vsaved;
-        return 1;
-      }
-    }
+    Buf rb2; memset(&rb2, 0, sizeof rb2); emit_expr(c, recv, &rb2);
+    int tr2, to2, tw2;
+    int ok = emit_hash_filter_loop(c, recv, block, rt, name, rb2.p ? rb2.p : "NULL", b, indent, &tr2, &to2, &tw2);
+    free(rb2.p);
+    if (ok) return 1;
   }
 
   /* array.each_with_index { |x, i| ... } */

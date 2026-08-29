@@ -1496,7 +1496,7 @@ void emit_cond(Compiler *c, int id, Buf *b) {
   if (t == TY_STRING || ty_is_array(t) || ty_is_hash(t) || ty_is_object(t) ||
       t == TY_PROC || t == TY_MATCHDATA || t == TY_EXCEPTION ||
       t == TY_BIGINT || t == TY_REGEX || t == TY_CURRY || t == TY_FIBER || t == TY_THREAD || t == TY_QUEUE || t == TY_MUTEX || t == TY_CONDVAR || t == TY_RANDOM || t == TY_DIR || t == TY_ADDRINFO || t == TY_SOCKOPT ||
-      t == TY_METHOD || t == TY_IO || t == TY_ARGF) {
+      t == TY_METHOD || t == TY_IO || t == TY_ARGF || t == TY_ENUMERATOR || t == TY_OPENSTRUCT) {
     buf_puts(b, "(("); emit_expr(c, id, b); buf_puts(b, ") != 0)"); return;
   }
   if (t == TY_INT)   { buf_puts(b, "(("); emit_expr(c, id, b); buf_puts(b, ") != SP_INT_NIL)"); return; }
@@ -9751,13 +9751,18 @@ void emit_stmt_tail_inner(Compiler *c, int id, Buf *b, int indent) {
                      nt_ref(nt, id, "block") >= 0;
   /* tap / then / yield_self at tail position carry a value (the receiver /
      the block's value) that IS the method's return -- the statement form
-     would drop it and return nil. Route them to the value path below. */
+     would drop it and return nil. Route them to the value path below. The
+     in-place filters answer nil or the receiver by what they removed, which
+     only their value form knows. */
   const char *tv_name = nt_str(nt, id, "name");
   int is_tail_valued = sp_streq(ty, "CallNode") && tv_name &&
                        nt_ref(nt, id, "block") >= 0 &&
                        (sp_streq(tv_name, "tap") ||
                         sp_streq(tv_name, "then") ||
-                        sp_streq(tv_name, "yield_self"));
+                        sp_streq(tv_name, "yield_self") ||
+                        sp_streq(tv_name, "select!") || sp_streq(tv_name, "filter!") ||
+                        sp_streq(tv_name, "reject!") || sp_streq(tv_name, "keep_if") ||
+                        sp_streq(tv_name, "delete_if"));
   /* An iterator whose value is its receiver, called on something that is NOT
      a plain read (`s.keys.each { }`, `s.dup.each { }`): the statement form
      below produces the tail value by RE-READING the receiver, which it cannot
@@ -9977,6 +9982,26 @@ const char *hash_box_cls(TyKind t) {
     case TY_POLY_POLY_HASH: return "SP_BUILTIN_POLY_POLY_HASH";
     default:                return NULL;
   }
+}
+
+/* The key and the value at position `_t<ti>` of the iteration order of the
+   hash `_t<tr>`, as C text: a typed variant keeps the key itself in order[],
+   the general hash a slot index into its keys[] and vals[]. Four rotating
+   buffers, so a key and a value can meet on one buf_printf line. */
+const char *hash_order_key(TyKind t, int tr, int ti) {
+  static char bufs[4][96]; static int n = 0;
+  char *o = bufs[n++ & 3];
+  if (t == TY_POLY_POLY_HASH) snprintf(o, sizeof bufs[0], "_t%d->keys[_t%d->order[_t%d]]", tr, tr, ti);
+  else snprintf(o, sizeof bufs[0], "_t%d->order[_t%d]", tr, ti);
+  return o;
+}
+
+const char *hash_order_val(TyKind t, int tr, int ti) {
+  static char bufs[4][96]; static int n = 0;
+  char *o = bufs[n++ & 3];
+  if (t == TY_POLY_POLY_HASH) snprintf(o, sizeof bufs[0], "_t%d->vals[_t%d->order[_t%d]]", tr, tr, ti);
+  else snprintf(o, sizeof bufs[0], "sp_%sHash_get(_t%d, _t%d->order[_t%d])", ty_hash_cname(t), tr, tr, ti);
+  return o;
 }
 
 

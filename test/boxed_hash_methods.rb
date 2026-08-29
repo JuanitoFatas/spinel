@@ -1,14 +1,14 @@
 # Hash methods on a receiver whose class is only known at run time, and the
-# names Array and Hash share. Covers merge! and compact! writing back into
-# a typed hash of each layout (Symbol keys, String keys with Integer
-# values, String values, and the general hash); assoc, rassoc,
-# fetch_values and compact! on a parameter that is an Array at one call
-# site and a Hash at another; the value being the receiver, so a write
-# through it and a second merge! argument reach the original; an argument
-# that is a Hash at run time only; a nil a String-valued hash already held;
-# the result flowing into a slot the inference widened to poly; the frozen
-# original a mutator refuses before it runs; and the NoMethodError a
-# receiver of neither kind raises.
+# names Array and Hash share. Covers merge!, compact! and the in-place
+# filters writing back into a typed hash of each layout (Symbol keys,
+# String keys with Integer values, String values, and the general hash);
+# assoc, rassoc, fetch_values, compact! and the filters on a parameter that
+# is an Array at one call site and a Hash at another; the value being the
+# receiver, so a write through it and a second merge! argument reach the
+# original; an argument that is a Hash at run time only; a nil a
+# String-valued hash already held; the result flowing into a slot the
+# inference widened to poly; the frozen original a mutator refuses before
+# it runs; and the NoMethodError a receiver of neither kind raises.
 cells = [{a: 1, b: nil}, 0]
 h = cells[0]
 p h.merge!({c: 3})
@@ -130,3 +130,55 @@ n = [{1 => "v"}, 0][0]
 n.update({2 => sh})
 p n
 p keep
+
+# the in-place filters write back into a typed hash of each layout and into
+# the general hash; the value is the receiver, or nil when a ! form removed
+# nothing, so a write through it reaches the original
+fa = [{a: 1, b: 2, c: nil}, 0]
+p fa[0].select! { |k, v| v }
+p fa[0].reject! { |k, v| false }
+p fa[0].keep_if { |k, v| k == :a }
+p fa[0]
+fb = [{"x" => 1, "y" => 2}, "s"]
+p fb[0].delete_if { |k, v| v > 1 }
+p fb[0]
+fc = [{"k" => "v", "k2" => "w"}, 1.5]
+p fc[0].filter! { |k, v| v == "w" }
+p fc[0]
+fd = [{1 => "one", "two" => 2, :three => 3.0}, :s]
+p fd[0].reject! { |k, v| k.is_a?(String) }
+p fd[0].select! { |k| k == 1 }
+p fd[0]
+fe = [{a: 1, b: 2}, 0]
+fe[0].delete_if { |k, v| v == 2 }[:z] = 9
+p fe[0]
+p fe[0].keep_if { |k, v| true }.equal?(fe[0])
+
+def keep(x)
+  x.select! { |e| e.to_s.size > 1 }
+end
+def drop(x)
+  x.delete_if { |e| e == 1 }
+end
+p keep([10, 2, 300])
+p keep({a: 1, bb: 2})
+p drop([1, 2, 3])
+p drop({1 => :a, 2 => :b})
+
+# a slot that held a typed value on an early pass and the box on the last
+w = {z: 0}
+w = [{y: 1, x: nil}, 5][0]
+p w.reject! { |k, v| v.nil? }
+
+f = [{a: 1, b: nil}.freeze, 0]
+begin
+  f[0].select! { |k, v| puts "ran"; v }
+rescue FrozenError => e
+  p e.class
+end
+p f[0]
+begin
+  drop(7)
+rescue NoMethodError => e
+  puts e.message
+end

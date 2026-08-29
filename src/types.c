@@ -36,19 +36,10 @@ static const PolyFace ty_poly_face_tbl[] = {
   {"each_with_object", PF_ENUM, 0, -1, 1}, {"chunk_while", PF_ENUM, 0, -1, 1},
   {"slice_when", PF_ENUM, 0, -1, 1},
   /* Names served by unboxing to an Array, on an Array at run time; a mutator
-     writes its result back into a typed original. Array is the only OWNER
-     here, but four of them are not Array's alone: Hash defines select!,
-     reject!, keep_if and delete_if too. That costs nothing today because
-     sp_poly_array_recv admits only an Array and raises NoMethodError for a
-     Hash -- the same answer as before the rows existed -- but it is the reason
-     these four cannot simply be read as "Array's". They belong with concat and
-     the rest of the shared names, in the run-time kind switch. */
+     writes its result back into a typed original. */
   {"sort!", PF_ARRAY | PF_MUT, 0, 0, -1}, {"sort_by!", PF_ARRAY | PF_MUT, 0, 0, 1},
   {"rotate!", PF_ARRAY | PF_MUT, 0, 1, 0}, {"uniq!", PF_ARRAY | PF_MUT, 0, 0, -1},
   {"flatten!", PF_ARRAY | PF_MUT, 0, 1, 0}, {"fill", PF_ARRAY | PF_MUT, 1, 3, 0},
-  {"select!", PF_ARRAY | PF_MUT, 0, 0, 1}, {"filter!", PF_ARRAY | PF_MUT, 0, 0, 1},
-  {"reject!", PF_ARRAY | PF_MUT, 0, 0, 1}, {"keep_if", PF_ARRAY | PF_MUT, 0, 0, 1},
-  {"delete_if", PF_ARRAY | PF_MUT, 0, 0, 1},
   {"to_ary", PF_ARRAY, 0, 0, 0}, {"transpose", PF_ARRAY, 0, 0, 0},
   /* and the Enumerable names that had no arm at all */
   {"grep", PF_ENUM, 1, 1, -1}, {"minmax_by", PF_ENUM, 0, 0, 1},
@@ -67,10 +58,16 @@ static const PolyFace ty_poly_face_tbl[] = {
      result back from the general copy it was normalized to, and the value is
      the box, since the copy is detached once written back. */
   {"merge!", PF_HASH | PF_MUT | PF_VAL_SELF, 1, -1, 0}, {"update", PF_HASH | PF_MUT | PF_VAL_SELF, 1, -1, 0},
-  /* The names Array and Hash share, blockless: the receiver's run-time kind
-     picks the arm. assoc, rassoc and fetch_values keep their last-resort Hash
-     rows below, so a splat or a block still reaches the read-only face;
-     compact! never had one. */
+  /* The names Array and Hash share: the receiver's run-time kind picks the
+     arm. The in-place filters take their block; of the blockless names,
+     assoc, rassoc and fetch_values keep their last-resort Hash rows below, so
+     a splat or a block still reaches the read-only face; compact! never had
+     one. */
+  {"select!", PF_ARRAY | PF_MUT, 0, 0, 1}, {"select!", PF_HASH | PF_MUT | PF_VAL_SELF, 0, 0, 1},
+  {"filter!", PF_ARRAY | PF_MUT, 0, 0, 1}, {"filter!", PF_HASH | PF_MUT | PF_VAL_SELF, 0, 0, 1},
+  {"reject!", PF_ARRAY | PF_MUT, 0, 0, 1}, {"reject!", PF_HASH | PF_MUT | PF_VAL_SELF, 0, 0, 1},
+  {"keep_if", PF_ARRAY | PF_MUT, 0, 0, 1}, {"keep_if", PF_HASH | PF_MUT | PF_VAL_SELF, 0, 0, 1},
+  {"delete_if", PF_ARRAY | PF_MUT, 0, 0, 1}, {"delete_if", PF_HASH | PF_MUT | PF_VAL_SELF, 0, 0, 1},
   {"compact!", PF_ARRAY | PF_MUT, 0, 0, 0}, {"compact!", PF_HASH | PF_MUT | PF_VAL_SELF, 0, 0, 0},
   {"assoc", PF_ARRAY, 1, 1, 0}, {"assoc", PF_HASH, 1, 1, 0},
   {"rassoc", PF_ARRAY, 1, 1, 0}, {"rassoc", PF_HASH, 1, 1, 0},

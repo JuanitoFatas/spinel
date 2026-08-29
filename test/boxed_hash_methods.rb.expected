@@ -39,3 +39,24 @@ FrozenError
 {"k" => "v", "b" => "xy", "xy" => "w"}
 {1 => "v", 2 => "xy"}
 ["xy"]
+{a: 1, b: 2}
+nil
+{a: 1}
+{a: 1}
+{"x" => 1}
+{"x" => 1}
+{"k2" => "w"}
+{"k2" => "w"}
+{1 => "one", three: 3.0}
+{1 => "one"}
+{1 => "one"}
+{a: 1, z: 9}
+true
+[10, 300]
+{bb: 2}
+[2, 3]
+{2 => :b}
+{y: 1}
+FrozenError
+{a: 1, b: nil}
+undefined method 'delete_if' for an instance of Integer
