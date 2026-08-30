@@ -12,6 +12,14 @@
 # All three ingredients are load-bearing: the nilable return seed on
 # find_by, the subclass override of instantiate, and the unresolved
 # (poly-dispatch) receiver at the call site.
+#
+# The two signatures must agree on the hash's KEY kind, which is not one of
+# those ingredients. find_by hands its own parameter straight to instantiate,
+# and a Symbol-keyed and a String-keyed hash are different C structs with no
+# conversion between them, so declaring different kinds emitted a call that
+# only a compiler tolerating incompatible pointer types would accept. The
+# contradiction check does not catch it here -- it leaves override families
+# alone (see seed_hash_key_kind_self.rb).
 class OfrBase
   def self.instantiate(_row)
   end

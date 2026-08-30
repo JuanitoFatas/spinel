@@ -1,4 +1,4 @@
 class OfrBase
-  def self.instantiate: (Hash[String, untyped] _row) -> OfrBase
+  def self.instantiate: (Hash[Symbol, untyped] _row) -> OfrBase
   def self.find_by: (Hash[Symbol, untyped] conditions) -> OfrBase?
 end

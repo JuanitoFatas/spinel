@@ -1,0 +1,4 @@
+class P
+  def self.takes_str: (Hash[String, untyped] h) -> void
+  def self.takes_sym: (Hash[Symbol, untyped] h) -> void
+end

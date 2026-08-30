@@ -10519,7 +10519,24 @@ static void check_seed_contradictions(Compiler *c) {
     if (!name) continue;
     int recv = nt_ref(nt, id, "receiver");
     int mi = -1;
-    if (recv < 0) mi = comp_method_index(c, name);
+    if (recv < 0) {
+      mi = comp_method_index(c, name);
+      /* That table holds free functions only, so a bare `name(...)` between
+         two methods of the SAME class resolved to nothing and its arguments
+         went unjudged -- the shape seed_hash_key_kind_self.rb pins. Resolve it
+         against the enclosing class, on the side (singleton or instance) the
+         caller sits on. An override family is left alone: the call may reach a
+         member whose own parameter is seeded differently, and a false error
+         here breaks a working build. */
+      if (mi < 0) {
+        Scope *encl = comp_scope_of(c, id);
+        if (encl && encl->class_id >= 0 &&
+            !method_in_override_family(c, encl->class_id, name, encl->is_cmethod))
+          mi = encl->is_cmethod
+                 ? comp_cmethod_in_chain(c, encl->class_id, name, NULL)
+                 : comp_method_in_chain(c, encl->class_id, name, NULL);
+      }
+    }
     else if (nt_kind(nt, recv) == NK_ConstantReadNode) {
       const char *cn = nt_str(nt, recv, "name");
       int rc = cn ? comp_class_index(c, cn) : -1;
