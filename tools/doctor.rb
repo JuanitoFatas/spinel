@@ -1,7 +1,7 @@
 # spinel-doctor: one health report for a spinel program. Each leg is
 # independent; the behavior leg is skipped cleanly when CRuby is absent.
 #
-# Usage: spinel-doctor [--only a,b] [--skip a,b] [--behavior] [--quiet] app.rb
+# Usage: spinel-doctor [--only a,b] [--skip a,b] [--behavior] [--quiet] app.rb [-- <compiler flags>]
 #
 # Legs:
 #   build       compile to a binary; report compile / codegen / C-build failure
@@ -98,10 +98,21 @@ def main
   want_behavior = false
   quiet = false
   src = ""
+  extra = ""
   i = 0
   while i < ARGV.length
     a = ARGV[i]
-    if a == "--only"
+    if a == "--"
+      # Everything after -- goes to the compiler verbatim, so the legs report
+      # on the program that is actually built (--rbs seeds change how boxed
+      # the program is, which is exactly what the perf legs measure) (#4198).
+      j = i + 1
+      while j < ARGV.length
+        extra = extra + " " + ARGV[j]
+        j = j + 1
+      end
+      i = ARGV.length
+    elsif a == "--only"
       i = i + 1
       only = ARGV[i].split(",") if i < ARGV.length
     elsif a == "--skip"
@@ -112,8 +123,9 @@ def main
     elsif a == "--quiet"
       quiet = true
     elsif a == "-h" || a == "--help"
-      puts "usage: spinel-doctor [--only a,b] [--skip a,b] [--behavior] [--quiet] app.rb"
+      puts "usage: spinel-doctor [--only a,b] [--skip a,b] [--behavior] [--quiet] app.rb [-- <compiler flags>]"
       puts "  legs: build unsupported unresolved inference advice requires behavior"
+      puts "  everything after -- is passed to the compiler verbatim (e.g. -- --rbs .)"
       exit(0)
     else
       src = a
@@ -131,7 +143,7 @@ def main
   puts "spinel-doctor: " + src
 
   # One codegen-only run with unresolved warnings on feeds three legs.
-  diag = sh("SPINEL_WARN_UNRESOLVED=1 " + sp + " " + src + " -c -o " + cobj)
+  diag = sh("SPINEL_WARN_UNRESOLVED=1 " + sp + " " + src + extra + " -c -o " + cobj)
   cg_ok = $sh_status == 0
 
   if leg_on("unsupported", only, skip)
@@ -148,7 +160,7 @@ def main
   widened = []
   if leg_on("inference", only, skip) || leg_on("advice", only, skip)
     rbs = tmp_path("doctor", src, ".rbs")
-    sh(sp + " " + src + " --emit-rbs -o " + rbs)
+    sh(sp + " " + src + extra + " --emit-rbs -o " + rbs)
     if File.exist?(rbs)
       File.read(rbs).split("\n").each { |l|
         widened.push(l.strip) if l.include?("# spinel: widened")
@@ -279,7 +291,7 @@ def main
   end
 
   if leg_on("build", only, skip)
-    out = sh(sp + " " + src + " -o " + bin + " --line-map")
+    out = sh(sp + " " + src + extra + " -o " + bin + " --line-map")
     if $sh_status == 0
       report("build", "error", [], quiet)
     else
