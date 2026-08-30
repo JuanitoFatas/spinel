@@ -1122,7 +1122,7 @@ def compile(prj, entry, out, extra)
   # accumulating it. `text` is then used below for the "cannot load such
   # file" hint. The verbose branch keeps the existing live-streaming
   # behaviour (#4136 in spirit) and the hint check still works.
-  text = ""
+  text = String.new   # appended below; a "" literal is frozen under spinel
   if $spin_verbose
     # run_command echoes the cmd, streams stderr live, and (with text:)
     # captures the same stderr for the "cannot load such file" hint

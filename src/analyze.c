@@ -13747,11 +13747,6 @@ void analyze_program(Compiler *c) {
     Scope *s = vn ? comp_scope_of(c, recv) : NULL;
     LocalVar *lv = s ? scope_local(s, vn) : NULL;
     if (!lv || lv->is_param || lv->type != TY_STRING) continue;
-    /* A captured-and-celled string stays TY_STRING so it rides a typed-pointer
-       cell: `<<` then reassigns through the cell (*_cell = concat(...)), which
-       propagates to the enclosing scope. A STRBUF's in-place buffer + read-time
-       demotion don't fit the cell's stable-pointer model. */
-    if (lv->is_cell) continue;
     /* Only promote when every write to this local is a bare string literal:
        such a value is a fresh mutable string. A `.freeze`/`.dup`/method-result
        write may carry runtime frozen state that sp_String_new would discard,
@@ -13771,9 +13766,52 @@ void analyze_program(Compiler *c) {
       int wv = nt_ref(c->nt, w, "value");
       const char *wvty = wv >= 0 ? nt_type(c->nt, wv) : NULL;
       if (!wvty || !sp_streq(wvty, "StringNode")) { all_literal_writes = 0; break; }
-      if (nt_int(c->nt, wv, "fzl", 0)) { frozen_literal_write = 1; break; }
+      if (nt_int(c->nt, wv, "fzl", 0)) frozen_literal_write = 1;
     }
-    if (!saw_write || !all_literal_writes || frozen_literal_write) continue;
+    if (!saw_write || !all_literal_writes) continue;
+    if (frozen_literal_write) {
+      /* Every value this local can hold is a frozen literal, and this `<<`
+         will raise FrozenError on every execution -- at run time, deep in
+         whatever the program was doing. `text = ""; text << line` is the
+         most common accumulator idiom in Ruby, and spinel's
+         frozen-by-default literals (docs/limitations.md) are exactly the
+         wall it walks into -- so say so at compile time, once per local,
+         with the escape hatch named (#4207). */
+      int first_shl = 1;
+      for (int p2 = 0; p2 < id && first_shl; p2++) {
+        if (nt_kind(c->nt, p2) != NK_CallNode) continue;
+        const char *pn2 = nt_str(c->nt, p2, "name");
+        int pr2 = nt_ref(c->nt, p2, "receiver");
+        if (pn2 && sp_streq(pn2, "<<") && pr2 >= 0 &&
+            nt_type(c->nt, pr2) && sp_streq(nt_type(c->nt, pr2), "LocalVariableReadNode") &&
+            nt_str(c->nt, pr2, "name") && sp_streq(nt_str(c->nt, pr2, "name"), vn) &&
+            comp_scope_of(c, pr2) == s) first_shl = 0;
+      }
+      if (first_shl) {
+        int wl = (int)nt_int(c->nt, id, "node_line", 0);
+        int wf = (int)nt_int(c->nt, id, "node_file", 0);
+        const char *wpath = nt_file_path(c->nt, wf);
+        if (!wpath || !*wpath) wpath = c->nt->source_file;
+        char wpos[1200];
+        if (wpath && *wpath && wl > 0) snprintf(wpos, sizeof wpos, "%s:%d: ", wpath, wl);
+        else if (wpath && *wpath) snprintf(wpos, sizeof wpos, "%s: ", wpath);
+        else wpos[0] = 0;
+        fprintf(stderr,
+                "%swarning: `%s` only ever holds frozen string literals, so this "
+                "`<<` raises FrozenError at run time (string literals are frozen in "
+                "spinel; build a mutable string with +\"...\", String.new, or "
+                "interpolation -- see docs/limitations.md)\n",
+                wpos, vn);
+      }
+      continue;
+    }
+    /* A captured-and-celled string stays TY_STRING so it rides a typed-pointer
+       cell: `<<` then reassigns through the cell (*_cell = concat(...)), which
+       propagates to the enclosing scope. A STRBUF's in-place buffer + read-time
+       demotion don't fit the cell's stable-pointer model. (After the warning
+       above: a celled accumulator raises the same FrozenError, #4207's own
+       repro appends from inside a Thread block.) */
+    if (lv->is_cell) continue;
     /* Exclude vars used with a reassigning string mutator (replace/prepend/
        insert/clear or a bang method): codegen emits those as `recv = ...`,
        which needs a plain lvalue, not the copy a STRBUF read produces. */
