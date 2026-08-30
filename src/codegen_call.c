@@ -21057,7 +21057,15 @@ else { memcpy(dir, sf, n); dir[n] = 0; } }
         buf_puts(b, "sp_io_for_fd(");
         emit_int_expr(c, argv[0], b);
         buf_puts(b, ", ");
-        if (argc >= 2 && comp_ntype(c, argv[1]) == TY_STRING) emit_expr(c, argv[1], b);
+        /* the positional mode rides through whatever its inferred type: a
+           STRING as-is, a widened (poly) one unboxed -- the TY_STRING-only
+           guard dropped a mode variable that widened in a larger program
+           (PR #4209's observation). argv[1] may also BE the keyword hash. */
+        if (argc >= 2 && argv[1] != kwh && comp_ntype(c, argv[1]) == TY_STRING)
+          emit_expr(c, argv[1], b);
+        else if (argc >= 2 && argv[1] != kwh && comp_ntype(c, argv[1]) == TY_POLY) {
+          buf_puts(b, "sp_poly_to_s("); emit_expr(c, argv[1], b); buf_puts(b, ")");
+        }
         /* no mode: the runtime derives it from the fd's own access mode
            (a fixed "r" made fdopen fail on a write-only fd, #4208) */
         else buf_puts(b, "\"\"");
