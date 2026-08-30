@@ -4075,10 +4075,14 @@ void specialize_inherited_cls_new(Compiler *c) {
 /* For each class, find `prepend M` declarations and transplant M's instance
    methods into the class with shadow-chain renaming so `super` can route
    from M's body to the original (now renamed) class body. */
-void register_prepends(Compiler *c) {
+/* Process `prepend M` calls in a single class body. Split out of
+   register_prepends so a REOPEN's body is scanned too: only the def_node's
+   was, and a `prepend` in `class B ... end; class B; prepend Guard; end`
+   compiled and did nothing -- while being the very form the explicit-receiver
+   diagnostic recommends (#4200). */
+static void process_prepend_body(Compiler *c, int ci, int body) {
   const NodeTable *nt = c->nt;
-  for (int ci = 0; ci < c->nclasses; ci++) {
-    int body = nt_ref(nt, c->classes[ci].def_node, "body");
+  {
     int n = 0;
     const int *stmts = body >= 0 ? nt_arr(nt, body, "body", &n) : NULL;
     for (int k = 0; k < n; k++) {
@@ -4193,6 +4197,25 @@ void register_prepends(Compiler *c) {
         }
       }
     }
+  }
+}
+
+/* For each class, find `prepend M` in ALL class bodies, the reopenings
+   included, the same two passes register_includes makes (#4200). */
+void register_prepends(Compiler *c) {
+  const NodeTable *nt = c->nt;
+  for (int ci = 0; ci < c->nclasses; ci++)
+    process_prepend_body(c, ci, nt_ref(nt, c->classes[ci].def_node, "body"));
+  for (int id = 0; id < nt->count; id++) {
+    const char *ty = nt_type(nt, id);
+    if (!ty || (!sp_streq(ty, "ClassNode") && !sp_streq(ty, "ModuleNode"))) continue;
+    int cp = nt_ref(nt, id, "constant_path");
+    const char *cname = cp >= 0 ? nt_str(nt, cp, "name") : NULL;
+    if (!cname) continue;
+    int ci = comp_class_index(c, cname);
+    if (ci < 0) continue;
+    if (id == c->classes[ci].def_node) continue;
+    process_prepend_body(c, ci, nt_ref(nt, id, "body"));
   }
 }
 
