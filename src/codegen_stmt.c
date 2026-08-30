@@ -7029,6 +7029,18 @@ else {
       /* a poly ivar slot needs a boxed RHS */
       emit_boxed(c, v, b);
     }
+    else if (ivt == TY_POLY_ARRAY && ty_is_array(comp_ntype(c, v)) &&
+             comp_ntype(c, v) != TY_POLY_ARRAY) {
+      /* a typed array RHS into a poly-array ivar slot is rebuilt with its
+         elements boxed, the same conversion the local write makes -- the
+         slot widened on element evidence (a push of another type, #4196)
+         that the RHS's own node never saw */
+      TyKind vt2 = comp_ntype(c, v);
+      if (vt2 == TY_INT_ARRAY) { buf_puts(b, "sp_PolyArray_from_int_array("); emit_expr(c, v, b); buf_puts(b, ")"); }
+      else if (vt2 == TY_STR_ARRAY) { buf_puts(b, "sp_PolyArray_from_str_array("); emit_expr(c, v, b); buf_puts(b, ")"); }
+      else if (vt2 == TY_FLOAT_ARRAY) { buf_puts(b, "sp_PolyArray_from_float_array("); emit_expr(c, v, b); buf_puts(b, ")"); }
+      else emit_expr(c, v, b);
+    }
     /* An int RHS into a bigint ivar is promoted at the boundary, the same way
        the local assignment and the argument binding do it. Without it `@n = 0`
        on an ivar that elsewhere sees a Bignum wrote the integer 0 into an

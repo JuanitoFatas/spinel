@@ -4561,6 +4561,16 @@ int infer_ivar_types(Compiler *c) {
          good (parameters only widen). */
       if (!class_ivar_pinned(ci, nm) && !ci->ivar_int_table[iv]) {
         TyKind merged = ty_unify(ci->ivar_types[iv], vt);
+        /* A poly-ARRAY slot stays one under a typed-array write: the
+           push-widening pass (or the element-write arm) chose the poly ARRAY
+           on element evidence, and ty_unify would answer the plain poly
+           SCALAR -- which boxed the slot and sent every push through
+           sp_poly_shl, where a foreign element was silently coerced to the
+           typed array's own kind (`[0, 0]` for a pushed "one", #4196). Two
+           typed kinds still box: their readers were typed from the writes,
+           and the box is what keeps them consistent. */
+        if (merged == TY_POLY && ci->ivar_types[iv] == TY_POLY_ARRAY && ty_is_array(vt))
+          merged = TY_POLY_ARRAY;
         sp_ivwatch(nm, "ivar_write_merge", ci->ivar_types[iv], merged);
         if (merged != ci->ivar_types[iv]) { ci->ivar_types[iv] = merged; changed = 1; }
       }
