@@ -2981,8 +2981,31 @@ sp_PolyArray *sp_io_pipe(void) {
 sp_File *sp_io_for_fd(sp_int fd, const char *mode, sp_bool autoclose) {SP_GC_ROOT_STR(mode);
   if (fd < 0 || fcntl((int)fd, F_GETFD) < 0)
     sp_raise_cls("Errno::EBADF", "Bad file descriptor");
+  /* No mode given: derive it from the descriptor's own access mode, as
+     CRuby does -- the old fixed "r" default made fdopen fail outright on a
+     write-only fd (a sysopen'd O_WRONLY FIFO, #4208). */
+  char dmode[4];
+  if (!mode || !*mode) {
+    int fl = fcntl((int)fd, F_GETFL);
+    int acc = fl >= 0 ? (fl & O_ACCMODE) : O_RDONLY;
+    if (acc == O_WRONLY) strcpy(dmode, (fl & O_APPEND) ? "a" : "w");
+    else if (acc == O_RDWR) strcpy(dmode, "r+");
+    else strcpy(dmode, "r");
+    mode = dmode;
+  }
+  /* autoclose:false wraps a dup(2) of the fd: close/fin then flush and
+     close only the dup, and the caller's descriptor stays open -- the
+     no_autoclose flag alone was set and never read, so io.close closed the
+     fd anyway (#4208). #fileno still answers the caller's own fd. The dup
+     shares the file description, so offset and status flags stay one. */
+  if (!autoclose) {
+    int d = dup((int)fd);
+    if (d < 0) sp_raise_cls("SystemCallError", sp_sprintf("dup(2) failed for fd %d", (int)fd));
+    sp_File *f = sp_io_fdopen_ex(d, mode && *mode ? mode : "r", 0);
+    if (f) { f->no_autoclose = 1; f->fno_plus1 = (int)fd + 1; }
+    return f;
+  }
   sp_File *f = sp_io_fdopen_ex((int)fd, mode && *mode ? mode : "r", 0);
-  if (f && !autoclose) f->no_autoclose = 1;
   return f;
 }
 

@@ -21058,7 +21058,9 @@ else { memcpy(dir, sf, n); dir[n] = 0; } }
         emit_int_expr(c, argv[0], b);
         buf_puts(b, ", ");
         if (argc >= 2 && comp_ntype(c, argv[1]) == TY_STRING) emit_expr(c, argv[1], b);
-        else buf_puts(b, "\"r\"");
+        /* no mode: the runtime derives it from the fd's own access mode
+           (a fixed "r" made fdopen fail on a write-only fd, #4208) */
+        else buf_puts(b, "\"\"");
         buf_puts(b, ", ");
         if (ac >= 0) { buf_puts(b, "("); emit_expr(c, ac, b); buf_puts(b, ")"); }
         else buf_puts(b, "1");

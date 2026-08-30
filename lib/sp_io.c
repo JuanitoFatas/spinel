@@ -31,7 +31,17 @@ extern void *sp_gc_alloc(size_t sz, void (*fin)(void *), void (*scn)(void *));
 extern SP_NORETURN void sp_raise_cls(const char *cls, const char *msg);
 extern const char *sp_sprintf(const char *fmt, ...);
 
-static void sp_File_fin(void *p) { sp_File *f = (sp_File *)p; if (f->fp) { fclose(f->fp); f->fp = NULL; } }
+/* The finalizer honors autoclose: an IO whose fd the program disowned
+   (io.autoclose = false after wrapping the fd itself) flushes and abandons
+   the FILE rather than closing the caller's descriptor -- the FILE structure
+   leaks, which is the price of libc having no fdclose(3); the for_fd
+   autoclose:false path wraps a dup(2) instead and never pays it (#4208). */
+static void sp_File_fin(void *p) {
+  sp_File *f = (sp_File *)p;
+  if (!f->fp) return;
+  if (f->no_autoclose && !f->fno_plus1) { fflush(f->fp); f->fp = NULL; return; }
+  fclose(f->fp); f->fp = NULL;
+}
 static void sp_File_scan(void *p) { sp_File *f = (sp_File *)p; if (f->path) sp_mark_string(f->path); if (f->mode) sp_mark_string(f->mode); }
 
 /* The two-argument form is the permission form with CRuby's default bits:
@@ -171,6 +181,7 @@ sp_bool sp_File_tty_p(sp_File *f) {
 }
 
 sp_int sp_File_fileno(sp_File *f) {
+  if (f && f->fno_plus1) return (sp_int)(f->fno_plus1 - 1);
   return (f && f->fp) ? (sp_int)fileno(f->fp) : -1;
 }
 
@@ -231,7 +242,13 @@ sp_int sp_File_close(sp_File *f) {
   /* never fclose the shared stdout/stderr handles (sp_io_stdout/sp_io_stderr):
      closing the process's standard streams would corrupt the singleton and any
      later write through it. Closing them is a no-op. */
-  if (f && f->fp && f->fp != stdout && f->fp != stderr && f->fp != stdin) { fclose(f->fp); f->fp = NULL; }
+  if (f && f->fp && f->fp != stdout && f->fp != stderr && f->fp != stdin) {
+    /* autoclose=false on an IO that wraps the fd itself: flush and abandon
+       the FILE (see sp_File_fin); a for_fd wrapper holds a dup, so its
+       fclose never reaches the caller's descriptor (#4208) */
+    if (f->no_autoclose && !f->fno_plus1) { fflush(f->fp); f->fp = NULL; return 0; }
+    fclose(f->fp); f->fp = NULL;
+  }
   return 0;
 }
 

@@ -21,6 +21,10 @@ typedef struct {
   unsigned char frozen;        /* Object#freeze; kept here, not in the GC header,
                                   because the standard streams are static storage
                                   with no header to flip (sp_io_stdout) */
+  int fno_plus1;               /* IO.for_fd(fd, autoclose: false) wraps a dup(2)
+                                  of fd so close/fin never touch the caller's
+                                  descriptor; this carries the ORIGINAL fd (+1,
+                                  0 = unset) so #fileno answers it (#4208) */
 } sp_File;
 
 /* Object#frozen? / #freeze on a handle. A nil slot is nil's answer: frozen. */
