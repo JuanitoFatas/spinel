@@ -9,10 +9,17 @@
 #   .buildkite/run-tests --slice                   # this parallel job's slice
 #
 # --slice reads Buildkite's BUILDKITE_PARALLEL_JOB / _JOB_COUNT and takes a
-# stable modulo slice of `test/*.rb`, so each parallel job runs a disjoint
+# stable modulo slice of the fixture list, so each parallel job runs a disjoint
 # share. The split is deterministic (sorted filenames), which is enough for
 # spinel's roughly-uniform fixtures — the heavy/uneven targets (bench,
-# optcarrot) live outside test/*.rb.
+# optcarrot) are separate pipeline steps.
+#
+# The list comes from `make print-tests`, NOT from a glob: which fixtures the
+# build gates on is config-dependent (test/promote_* only has defined output
+# under --int-overflow=promote, the unicode fixtures need tables a stripped
+# regexp build omits, packages/openssl needs the system headers). Globbing
+# test/*.rb hands a shard fixtures this build is expected to fail. The list
+# also covers packages/*/test/*.rb, which `make test` gates on too.
 #
 # It does NOT build the compiler: it expects bin/spinel and lib/libspinel_rt.a
 # to already exist (from `make all`, or downloaded as a build artifact). The
@@ -35,6 +42,30 @@ def die(msg)
   exit 2
 end
 
+# test/foo.rb               -> build/test-results/foo.ok
+# packages/json/test/foo.rb -> build/test-results/pkg.json.foo.ok
+# nil for anything else, which the caller reports as a skipped argument.
+# Mirrors TEST_TARGETS / PKG_TEST_TARGETS in the Makefile.
+def ok_target(path)
+  if (m = %r{\Apackages/([^/]+)/test/([^/]+)\.rb\z}.match(path))
+    "build/test-results/pkg.#{m[1]}.#{m[2]}.ok"
+  elsif (m = %r{\Atest/([^/]+)\.rb\z}.match(path))
+    "build/test-results/#{m[1]}.ok"
+  end
+end
+
+# Ask make which fixtures this build gates on. Parsing the makefile is all
+# `print-tests` needs, so this never descends into the toolchain build.
+def gated_fixtures
+  out = IO.popen(["make", "-s", "print-tests"], &:read)
+  die("`make -s print-tests` failed — is this a spinel checkout?") unless $?.success?
+  # Sort here rather than trusting make's order: Ruby's bytewise sort keeps the
+  # partition identical on macOS and Linux, so shards stay disjoint across agents.
+  list = out.split("\n").map(&:strip).reject(&:empty?).sort
+  die("`make -s print-tests` listed no fixtures") if list.empty?
+  list
+end
+
 die("usage: #{File.basename($PROGRAM_NAME)} (--slice | test/a.rb [test/b.rb ...])") if ARGV.empty?
 
 # Resolve --slice into an explicit fixture list before anything else.
@@ -47,7 +78,7 @@ if ARGV[0] == "--slice"
   index = index.to_i
   # BUILDKITE_PARALLEL_JOB is 0-indexed; position % count == index gives a
   # stable, disjoint partition covering every file exactly once across all jobs.
-  fixtures = Dir.glob("test/*.rb").sort
+  fixtures = gated_fixtures
   ARGV.replace(fixtures.select.with_index { |_, pos| pos % count == index })
   puts "run-tests: shard #{index + 1}/#{count} — #{ARGV.size} fixtures"
 end
@@ -62,12 +93,11 @@ end
 targets = []
 n_in = 0
 ARGV.each do |f|
-  unless File.fnmatch?("test/*.rb", f, File::FNM_PATHNAME)
+  unless (ok = ok_target(f))
     warn "run-tests: skipping non-fixture arg '#{f}'"
     next
   end
   n_in += 1
-  ok = "build/test-results/#{f.delete_prefix("test/").delete_suffix(".rb")}.ok"
   File.delete(ok) if File.exist?(ok)
   File.delete("#{ok}.diff") if File.exist?("#{ok}.diff")
   targets << ok

@@ -1,0 +1,39 @@
+#!/usr/bin/env -S ruby --disable-gems
+# frozen_string_literal: true
+#
+# Ensure a timeout command exists on the macOS agents. common.mk derives
+# TIMEOUT10/TIMEOUT60 from `command -v timeout || command -v gtimeout` and
+# silently drops the limit when neither is on PATH, so a hanging fixture holds
+# the job until Buildkite's own timeout instead of failing in ten seconds —
+# the same trap ci.yml hit on the GitHub macOS runners.
+#
+# Homebrew puts `gtimeout` in a directory already on PATH, and common.mk
+# accepts the g-prefixed name, so nothing has to be exported back to the
+# caller — which a child process could not do anyway.
+#
+# See ensure-clang for why the shebang needs `-S`.
+
+# What `command -v <bare name>` resolves to: the first executable of that name
+# on PATH. Done in-process so the probe costs no subprocess.
+def which(bin)
+  ENV.fetch("PATH", "").split(File::PATH_SEPARATOR).each do |dir|
+    next if dir.empty?
+    path = File.join(dir, bin)
+    return path if File.file?(path) && File.executable?(path)
+  end
+  nil
+end
+
+# The names common.mk probes for, in the same order.
+NAMES = %w[timeout gtimeout].freeze
+
+if (found = NAMES.filter_map { |n| which(n) }.first)
+  puts "ensure-coreutils: #{found}"
+  exit 0
+end
+
+system("brew", "install", "coreutils") or
+  abort("ensure-coreutils: brew install coreutils failed")
+
+puts(NAMES.filter_map { |n| which(n) }.first ||
+     abort("ensure-coreutils: no timeout/gtimeout on PATH after install"))

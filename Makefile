@@ -43,7 +43,7 @@ RBS_OBJ      = $(patsubst $(RBS_DIR)/src/%.c,build/rbs/%.o,$(RBS_SRC))
 RBS_LIB      = build/librbs.a
 
 .PHONY: all regexp rbs_extract rbs-test rbs-seed-test re-lit-test reject-test alloc-report-test rubyspec rubyspec-gate spin-check \
-        test test-run clean-test-results regen-rbs-expected \
+        test test-run print-tests clean-test-results regen-rbs-expected \
         regen-expected regen-expected-err bench optcarrot gate check gate-legs gate-test gate-bench \
         gate-optcarrot clean install uninstall deps tools
 
@@ -464,6 +464,15 @@ PKG_TESTS := $(filter-out packages/openssl/test/%.rb,$(PKG_TESTS))
 endif
 pkg_of = $(word 2,$(subst /, ,$(1)))
 PKG_TEST_TARGETS := $(foreach t,$(PKG_TESTS),build/test-results/pkg.$(call pkg_of,$(t)).$(notdir $(t:.rb=)).ok)
+
+# The fixtures this build actually gates on, one path per line. The CI shard
+# splitter reads this rather than globbing test/*.rb, so the exclusions above
+# stay the single source of truth: promote_* only has defined output under
+# --int-overflow=promote, the unicode fixtures need tables a stripped regexp
+# build omits, and the openssl package tests need the system headers. A glob
+# hands a shard fixtures the build is expected to fail.
+print-tests:
+	@printf '%s\n' $(TESTS) $(PKG_TESTS)
 
 # Warnings the generated-C -Werror check should not gate on. clang enables
 # -Wunused-value by default (gcc only under -Wall, which the build disables),
