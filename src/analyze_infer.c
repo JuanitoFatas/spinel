@@ -4161,6 +4161,34 @@ else {
       if (sp_streq(name, "to_s") || sp_streq(name, "inspect")) return an_poly_concrete(c, name, TY_STRING);
       if ((sp_streq(name, "gsub") || sp_streq(name, "sub")) && argc == 2) return an_poly_concrete(c, name, TY_STRING);
       if (sp_streq(name, "join")) return an_poly_concrete(c, name, TY_STRING);
+      /* The multi-set forms of String#count/#delete/#squeeze, and
+         Hash#store, on a boxed value: the runtime helper answers the
+         string's (or the hash's) own result, and raises NoMethodError for
+         anything else, so the type is the string form's (#4195). delete's
+         single-set form has its own rules. */
+      if (argc >= 1 && nt_ref(nt, id, "block") < 0) {
+        if (argc >= 2 && sp_streq(name, "count")) return an_poly_concrete(c, name, TY_INT);
+        if ((argc >= 2 && sp_streq(name, "delete")) || sp_streq(name, "squeeze"))
+          return an_poly_concrete(c, name, TY_STRING);
+        if (argc == 2 && sp_streq(name, "store")) return an_poly_concrete(c, name, TY_POLY);
+        /* count(v): the value-equality count (sp_poly_count_val). A user
+           definition blocks it only when it can TAKE one positional
+           argument -- the same judgement codegen's arm makes; an
+           arity-incompatible `count(a, b)` cannot answer this call, and
+           counting it left the two halves naming different methods. */
+        if (sp_streq(name, "count")) {
+          int can1 = 0;
+          for (int k2 = 0; k2 < c->nclasses && !can1; k2++) {
+            int mi2 = comp_method_in_chain(c, k2, "count", NULL);
+            if (mi2 >= 0 && mi2 < c->nscopes) {
+              Scope *cs2 = &c->scopes[mi2];
+              if (cs2->rest_idx >= 0 || (1 >= cs2->nrequired && 1 <= cs2->nparams))
+                can1 = 1;
+            }
+          }
+          if (!can1) return TY_INT;
+        }
+      }
       /* A length-like read answers an Integer -- unless a user class owns the
          name and answers something else, in which case the call's value is
          that union. The dispatch ALWAYS emits the builtin length arms (a

@@ -5159,6 +5159,23 @@ static int emit_poly_method_dispatch(Compiler *c, int id, Buf *b) {
        `data[offset, 8].delete("\x00").upcase` WAD name fields). */
     int is_strdel = sp_streq(name, "delete") && argc == 1 &&
                     infer_type(c, argv[0]) == TY_STRING;
+    /* The multi-set forms of count/delete/squeeze (String's alone) when a
+       user class also owns the name: the switch needs a TAG_STR pre-arm or
+       a genuine String receiver falls to its NoMethodError default, the
+       same hole the single-set delete had (#4195). String-typed sets only:
+       the temps below carry them as const char *. */
+    int is_strsetop_n = ((sp_streq(name, "count") || sp_streq(name, "squeeze"))
+                           ? argc >= 1     /* their 1-set form has no other pre-arm */
+                           : sp_streq(name, "delete") && argc >= 2) &&
+                        argc <= 8 && !has_splat_arg &&
+                        nt_ref(nt, id, "block") < 0;
+    if (is_strsetop_n)
+      for (int a = 0; a < argc; a++)
+        if (infer_type(c, argv[a]) != TY_STRING) { is_strsetop_n = 0; break; }
+    /* Hash#store when a user class also owns the name: a boxed hash takes
+       the runtime store, anything else its own arm or the default (#4195). */
+    int is_pstore = sp_streq(name, "store") && argc == 2 && !has_splat_arg &&
+                    nt_ref(nt, id, "block") < 0;
     /* split(sep) on a TAG_STR receiver, when a user class also owns `split`
        (the bundled Pathname does) and the dispatch therefore lost the String
        arm. Same hole #3394 closed for the zero-arg form (#3401). */
@@ -5352,6 +5369,37 @@ static int emit_poly_method_dispatch(Compiler *c, int id, Buf *b) {
         if (ret == TY_POLY) buf_printf(b, "sp_box_str(sp_str_delete(_t%d.v.s, _t%d))", tv, atmp[0]);
         else buf_printf(b, "sp_str_delete(_t%d.v.s, _t%d)", tv, atmp[0]);
         buf_puts(b, "; }\nelse ");
+      }
+      /* the multi-set forms on a TAG_STR receiver (#4195) */
+      if (is_strsetop_n) {
+        int is_cnt = sp_streq(name, "count");
+        if ((is_cnt && (ret == TY_POLY || ret == TY_INT)) ||
+            (!is_cnt && (ret == TY_POLY || ret == TY_STRING))) {
+          char sets[256]; int sl;
+          sl = snprintf(sets, sizeof sets, "(const char *[]){");
+          for (int a = 0; a < argc && sl < (int)sizeof sets - 16; a++)
+            sl += snprintf(sets + sl, sizeof sets - (size_t)sl, "%s_t%d", a ? ", " : "", atmp[a]);
+          snprintf(sets + sl, sizeof sets - (size_t)sl, "}, %d", argc);
+          char call[384];
+          snprintf(call, sizeof call, "sp_str_%s_n(_t%d.v.s ? _t%d.v.s : \"\", %s)",
+                   is_cnt ? "count" : sp_streq(name, "delete") ? "delete" : "squeeze",
+                   tv, tv, sets);
+          buf_printf(b, "if (_t%d.tag == SP_TAG_STR) { _t%d = ", tv, tr);
+          if (ret == TY_POLY) buf_printf(b, "%s(%s)", is_cnt ? "sp_box_int" : "sp_box_str", call);
+          else buf_puts(b, call);
+          buf_puts(b, "; }\nelse ");
+        }
+      }
+      /* Hash#store on a boxed hash receiver (#4195) */
+      if (is_pstore && ret == TY_POLY) {
+        buf_printf(b, "if (_t%d.tag == SP_TAG_OBJ && sp_poly_is_hash_kind(_t%d.cls_id)) { _t%d = sp_poly_store(_t%d, ", tv, tv, tr, tv);
+        char a0[32], a1[32];
+        snprintf(a0, sizeof a0, "_t%d", atmp[0]);
+        snprintf(a1, sizeof a1, "_t%d", atmp[1]);
+        if (atmp_ty[0] == TY_POLY) buf_puts(b, a0); else emit_boxed_text(c, atmp_ty[0], a0, b);
+        buf_puts(b, ", ");
+        if (atmp_ty[1] == TY_POLY) buf_puts(b, a1); else emit_boxed_text(c, atmp_ty[1], a1, b);
+        buf_puts(b, "); }\nelse ");
       }
       /* split(sep) on a TAG_STR receiver. A nil separator splits on
          whitespace, as CRuby's does. */
@@ -12067,6 +12115,54 @@ int emit_unresolved_call(Compiler *c, int id, Buf *b) {
           g_subdispatch_id = svid;
           c->ntype[recv] = svsd;
           g_n_argov--;
+          return 1;
+        }
+      }
+      /* The multi-set forms of String#count/#delete/#squeeze, and Hash#store:
+         the rows of #4149's table with a second argument (#4195). No user
+         class owns the name here (the dispatch above would have taken it), so
+         a boxed receiver goes to the runtime helper, which answers for a
+         string (or a hash) and raises this site's NoMethodError for anything
+         else. Every operand is held in a rooted temp: they are siblings in
+         one call, and an unrooted first is swept while the second builds. */
+      if (nm && recv >= 0 && grt == TY_POLY && nt_ref(nt, id, "block") < 0) {
+        int an5 = 0; const int *av5 = call_args(nt, id, &an5);
+        int splat5 = 0;
+        for (int a2 = 0; a2 < an5; a2++) {
+          const char *t5 = av5 ? nt_type(nt, av5[a2]) : NULL;
+          if (t5 && sp_streq(t5, "SplatNode")) splat5 = 1;
+        }
+        int op5 = sp_streq(nm, "count") ? 0 : sp_streq(nm, "delete") ? 1
+                : sp_streq(nm, "squeeze") ? 2 : -1;
+        /* squeeze's 1-set form has no other unresolved arm; count's goes to
+           sp_poly_count_val and delete's to the hash/string delete arms */
+        if (!splat5 && av5 && an5 <= 8 &&
+            ((op5 >= 0 && an5 >= 2) || (op5 == 2 && an5 == 1) ||
+             (sp_streq(nm, "store") && an5 == 2))) {
+          Buf hb; memset(&hb, 0, sizeof hb);
+          int tr5 = ++g_tmp;
+          buf_printf(&hb, "({ sp_RbVal _t%d = ", tr5);
+          emit_boxed(c, recv, &hb);
+          buf_printf(&hb, "; SP_GC_ROOT_RBVAL(_t%d);", tr5);
+          int at5[8];
+          for (int a2 = 0; a2 < an5; a2++) {
+            at5[a2] = ++g_tmp;
+            buf_printf(&hb, " sp_RbVal _t%d = ", at5[a2]);
+            emit_boxed(c, av5[a2], &hb);
+            buf_printf(&hb, "; SP_GC_ROOT_RBVAL(_t%d);", at5[a2]);
+          }
+          if (op5 >= 0) {
+            buf_printf(&hb, " sp_poly_str_setop_n(_t%d, %d, %d, (sp_RbVal[]){", tr5, op5, an5);
+            for (int a2 = 0; a2 < an5; a2++) buf_printf(&hb, "%s_t%d", a2 ? ", " : "", at5[a2]);
+            buf_puts(&hb, "}); })");
+          }
+          else
+            buf_printf(&hb, " sp_poly_store(_t%d, _t%d, _t%d); })", tr5, at5[0], at5[1]);
+          if (ret != TY_POLY && ret != TY_UNKNOWN &&
+              (is_scalar_ret(ret) || ret == TY_STRING))
+            emit_unbox_text(c, ret, hb.p ? hb.p : "sp_box_nil()", b);
+          else buf_puts(b, hb.p ? hb.p : "sp_box_nil()");
+          free(hb.p);
           return 1;
         }
       }

@@ -6892,6 +6892,52 @@ static sp_RbVal sp_poly_set_poly(sp_RbVal v, sp_RbVal key, sp_RbVal val) {
   }
   return val;
 }
+
+/* The multi-set forms of String#count/#delete/#squeeze, through a value only
+   known at run time: the typed receiver resolves to sp_str_*_n, and a boxed
+   String answers the same. Anything that is not a string raises the
+   NoMethodError the unresolved-call gate raised, receiver named (#4195, the
+   multi-argument rows of #4149's table). op: 0 count, 1 delete, 2 squeeze. */
+static sp_RbVal sp_poly_str_setop_n(sp_RbVal v, sp_int op, sp_int n, sp_RbVal *args) {
+  const char *nm = op == 0 ? "count" : op == 1 ? "delete" : "squeeze";
+  if (v.tag == SP_TAG_STR || sp_poly_is_strbuf(v)) {
+    /* the operands arrive in the call site's rooted temps; only the
+       receiver needs a root of its own across the helper's allocations */
+    SP_GC_ROOT_RBVAL(v);
+    sp_RbVal sv = sp_poly_is_strbuf(v) ? sp_poly_strbuf_deref(v) : v;
+    const char *s = sv.v.s ? sv.v.s : sp_str_empty;
+    const char **sets = (const char **)malloc(sizeof(char *) * (size_t)(n > 0 ? n : 1));
+    for (sp_int i = 0; i < n; i++) {
+      sp_RbVal a = sp_poly_is_strbuf(args[i]) ? sp_poly_strbuf_deref(args[i]) : args[i];
+      if (a.tag != SP_TAG_STR) {
+        free(sets);
+        sp_raise_cls("TypeError", sp_sprintf("no implicit conversion of %s into String",
+                                             sp_poly_class_name(args[i])));
+      }
+      sets[i] = a.v.s ? a.v.s : sp_str_empty;
+    }
+    sp_RbVal r;
+    if (op == 0) r = sp_box_int(sp_str_count_n(s, sets, n));
+    else if (op == 1) r = sp_box_str(sp_str_delete_n(s, sets, n));
+    else r = sp_box_str(sp_str_squeeze_n(s, sets, n));
+    free(sets);
+    return r;
+  }
+  sp_raise_nomethod(sp_nomethod_msg_args(nm, v, n, args));
+  return sp_box_nil();
+}
+/* Hash#store, the method form of []=, through a value only known at run
+   time (#4195). Answers the value, as CRuby does. */
+static sp_RbVal sp_poly_store(sp_RbVal v, sp_RbVal k, sp_RbVal val) {
+  if (v.tag == SP_TAG_OBJ && sp_poly_is_hash_kind(v.cls_id)) {
+    if (sp_gc_is_frozen(v.v.p)) sp_raise_frozen_hash_at(v.v.p, v.cls_id);
+    SP_GC_ROOT_RBVAL(v); SP_GC_ROOT_RBVAL(k); SP_GC_ROOT_RBVAL(val);
+    sp_poly_set_poly(v, k, val);
+    return val;
+  }
+  sp_raise_nomethod(sp_nomethod_msg_args("store", v, 2, (sp_RbVal[]){k, val}));
+  return sp_box_nil();
+}
 /* `outer[oidx][start,len] = src` where the splice receiver is itself an index
    expression: read the inner array, promoting-splice it, and store the possibly
    promoted result back into outer's slot so a typed->poly promotion survives.

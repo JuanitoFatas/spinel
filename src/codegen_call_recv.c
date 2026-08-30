@@ -11824,11 +11824,21 @@ int emit_poly_call(Compiler *c, int id, Buf *b) {
   /* poly receiver count(v): value-equality element count over a boxed array */
   if (recv >= 0 && rt == TY_POLY && argc == 1 && sp_streq(name, "count") &&
       nt_ref(nt, id, "block") < 0) {
+    /* Only a user definition that can TAKE one positional argument blocks
+       this arm: a `count(a, b)` or a reader cannot answer the call, and
+       counting it steered a genuine String or Array receiver into the
+       dispatch, whose arity filter then dropped every arm and raised
+       (#4195). Same judgement as the dispatch's own candidate filter. */
     int has_user_cnt = 0;
     if (!g_poly_builtin_arm)
-    for (int kk = 0; kk < c->nclasses && !has_user_cnt; kk++)
-      if (comp_method_in_chain(c, kk, "count", NULL) >= 0 ||
-          comp_reader_in_chain(c, kk, "count", NULL)) has_user_cnt = 1;
+    for (int kk = 0; kk < c->nclasses && !has_user_cnt; kk++) {
+      int mi_k = comp_method_in_chain(c, kk, "count", NULL);
+      if (mi_k >= 0) {
+        Scope *cs_k = &c->scopes[mi_k];
+        if (cs_k->rest_idx >= 0 || (1 >= cs_k->nrequired && 1 <= cs_k->nparams))
+          has_user_cnt = 1;
+      }
+    }
     if (!has_user_cnt) {
       buf_puts(b, "sp_poly_count_val("); emit_expr(c, recv, b);
       buf_puts(b, ", "); emit_boxed(c, argv[0], b); buf_puts(b, ")");
