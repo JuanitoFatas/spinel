@@ -994,12 +994,17 @@ endef
 # Per-package test rules (one pattern rule per bundled package: GNU Make
 # patterns allow a single %, so the package name is fixed per rule).
 define PKG_TEST_RULE
-build/test-results/pkg.$(1).%.ok: packages/$(1)/test/%.rb $$(SP_RT_LIB) $$(SP_RT_MT_LIB) $$(BUNDLED_NATIVE_OBJS) $$(PCH_PLAIN) $$(PCH_NOPOLY) | $$(SPINEL)
+build/test-results/pkg.$(1).%.ok: packages/$(1)/test/%.rb $$(SP_RT_LIB) $$(SP_RT_MT_LIB) $$(BUNDLED_NATIVE_OBJS) $$(BUNDLED_NATIVE_MT_OBJS) $$(PCH_PLAIN) $$(PCH_NOPOLY) | $$(SPINEL)
 	$$(RUN_ONE_TEST)
 endef
 $(foreach d,$(wildcard packages/*/test),$(eval $(call PKG_TEST_RULE,$(patsubst packages/%/test,%,$(d)))))
 
-build/test-results/%.ok: test/%.rb $(SP_RT_LIB) $(SP_RT_MT_LIB) $(BUNDLED_NATIVE_OBJS) $(PCH_PLAIN) $(PCH_NOPOLY) | $(SPINEL)
+# BUNDLED_NATIVE_MT_OBJS belongs here for the same reason as the ST objects: a
+# TU that uses Thread links the -DSP_THREADS variants. `make all` happens to
+# build them first, which hid the missing prerequisite -- but a tree that runs
+# only these targets (CI ships a prebuilt compiler to the test shards) linked
+# _mt objects nothing had built, and every threaded fixture failed to link.
+build/test-results/%.ok: test/%.rb $(SP_RT_LIB) $(SP_RT_MT_LIB) $(BUNDLED_NATIVE_OBJS) $(BUNDLED_NATIVE_MT_OBJS) $(PCH_PLAIN) $(PCH_NOPOLY) | $(SPINEL)
 	$(RUN_ONE_TEST)
 
 clean-test-results:
