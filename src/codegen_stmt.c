@@ -7262,13 +7262,18 @@ else {
         int iatmp = ++g_tmp;
         int ival = nt_ref(nt, id, "value");
         TyKind ipt = ip ? ip->type : comp_ntype(c, ival);
+        /* render the value into a side buffer FIRST: an RHS that is itself a
+           call hoists its own argument temps through g_pre, and emitting it
+           while this declaration line is half-written spliced those
+           statements into the initializer (#4204) */
+        Buf irv; memset(&irv, 0, sizeof irv);
+        /* box the rhs when the operator's param widened to poly (promote mode) */
+        if (ipt == TY_POLY && comp_ntype(c, ival) != TY_POLY) emit_boxed(c, ival, &irv);
+        else emit_expr(c, ival, &irv);
         emit_indent(g_pre, g_indent);
         emit_ctype(c, ipt, g_pre);
-        buf_printf(g_pre, " _t%d = ", iatmp);
-        /* box the rhs when the operator's param widened to poly (promote mode) */
-        if (ipt == TY_POLY && comp_ntype(c, ival) != TY_POLY) emit_boxed(c, ival, g_pre);
-        else emit_expr(c, ival, g_pre);
-        buf_puts(g_pre, ";\n");
+        buf_printf(g_pre, " _t%d = %s;\n", iatmp, irv.p ? irv.p : "");
+        free(irv.p);
         buf_printf(b, "%s = sp_%s_%s((sp_%s *)%s, _t%d);\n",
                    ref, c->classes[idefcls].c_name, mc(ims->name),
                    c->classes[idefcls].c_name, ref, iatmp);
@@ -7295,20 +7300,30 @@ else {
         TyKind paramt = (pp && pp->type != TY_UNKNOWN) ? pp->type : rhst;
         if (paramt == TY_UNKNOWN) paramt = TY_INT;
         int iatmp = ++g_tmp;
-        emit_indent(g_pre, g_indent);
-        emit_ctype(c, paramt, g_pre);
-        buf_printf(g_pre, " _t%d = ", iatmp);
+        /* render the value into a side buffer FIRST: an RHS that is itself a
+           call hoists its own argument temps through g_pre, and emitting it
+           while this declaration line is half-written spliced those
+           statements into the initializer -- `@result += sum(0)` with a
+           widened sum came out as a declaration inside a declaration (#4204) */
+        Buf irv; memset(&irv, 0, sizeof irv);
         /* the temp is declared with the OPERATOR's parameter type, so the
            call-site value has to be converted into it (a raw sp_int landed
            in an sp_RbVal slot, #3733) */
-        if (paramt == TY_POLY && rhst != TY_POLY) emit_boxed(c, ival, g_pre);
+        if (paramt == TY_POLY && rhst != TY_POLY) emit_boxed(c, ival, &irv);
         else if (paramt != TY_POLY && rhst == TY_POLY) {
           Buf rvb; memset(&rvb, 0, sizeof rvb); emit_expr(c, ival, &rvb);
-          emit_unbox_text(c, paramt, rvb.p ? rvb.p : "sp_box_nil()", g_pre);
+          emit_unbox_text(c, paramt, rvb.p ? rvb.p : "sp_box_nil()", &irv);
           free(rvb.p);
         }
-        else emit_expr(c, ival, g_pre);
-        buf_puts(g_pre, ";\n");
+        else emit_expr(c, ival, &irv);
+        emit_indent(g_pre, g_indent);
+        emit_ctype(c, paramt, g_pre);
+        buf_printf(g_pre, " _t%d = %s;\n", iatmp, irv.p ? irv.p : "");
+        free(irv.p);
+        if (paramt == TY_POLY) {
+          emit_indent(g_pre, g_indent);
+          buf_printf(g_pre, "SP_GC_ROOT_RBVAL(_t%d);\n", iatmp);
+        }
         /* The operator method can `return nil` (a NULL reference); box a
            reference-type result via sp_box_nullable_obj so NULL becomes nil, not
            a truthy wrapper. A value-type class is never NULL, so keep sp_box_obj. */
@@ -7330,8 +7345,12 @@ else {
                    c->classes[poly_defcls].c_name, ref, iatmp);
         buf_printf(b, pboxc, poly_defcls);
         if (pnum) {
+          /* the OTHER runtime kind folds the SAME evaluated value: re-emitting
+             the RHS ran its side effects twice (#4204) */
           buf_printf(b, " : %s(%s, ", pnum, ref);
-          emit_boxed(c, ival, b);
+          if (paramt == TY_POLY) buf_printf(b, "_t%d", iatmp);
+          else { char itn[24]; snprintf(itn, sizeof itn, "_t%d", iatmp);
+                 emit_boxed_text(c, paramt, itn, b); }
           buf_puts(b, ")");
         }
         buf_puts(b, ";\n");
@@ -8915,7 +8934,9 @@ else {
           if (!k) k = "Int";
           buf_printf(b, "sp_%sArray_set(", k);
           emit_expr(c, recv_id, b); buf_puts(b, ", ");
-          emit_expr(c, idx_argv[0], b); buf_puts(b, ", ");
+          /* the index slot is an sp_int; a POLY index (a widened local, #4204)
+             unboxes here, as the boxed-receiver branch below always has */
+          emit_int_expr(c, idx_argv[0], b); buf_puts(b, ", ");
           if (recv_t == TY_POLY_ARRAY) {
             TyKind valt = tmpts ? tmpts[i] : comp_ntype(c, els[i]);
             char tmp_expr[32]; snprintf(tmp_expr, sizeof tmp_expr, "_t%d", tmps[i]);
