@@ -34,6 +34,13 @@
 SPINEL = "bin/spinel"
 RT_LIB = "lib/libspinel_rt.a"
 
+# Everything `make all` produces that the test rule links against, beyond the
+# two required above: the -DSP_THREADS runtime a threaded fixture links, and
+# the bundled package objects in both variants. Whichever of these the build
+# step published is marked assume-old, so a shard links what it downloaded
+# instead of recompiling the MT runtime (~30 TUs) on every job.
+PREBUILT = [SPINEL, RT_LIB, "lib/libspinel_rt_mt.a", *Dir.glob("packages/*/*.o")].freeze
+
 # -O1 compiles each generated test ~3x faster than -O0; see Makefile.
 OPT = (opt = ENV["OPT"]).nil? || opt.empty? ? "-O1" : opt
 
@@ -111,7 +118,8 @@ die("no fixtures to run (matched #{n_in} args)") if targets.empty?
 # relying on make's exit code; surface a hard make failure separately.
 make = ["make"]
 make << "-j#{ENV["JOBS"]}" unless (jobs = ENV["JOBS"]).nil? || jobs.empty?
-make.push("-o", RT_LIB, "-o", SPINEL, "OPT=#{OPT}", *targets)
+PREBUILT.select { |f| File.exist?(f) }.each { |f| make.push("-o", f) }
+make.push("OPT=#{OPT}", *targets)
 warn "run-tests: make exited non-zero (see output above)" unless system(*make)
 
 pass = fail = err = 0

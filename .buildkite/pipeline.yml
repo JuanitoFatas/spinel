@@ -59,6 +59,10 @@ steps:
     artifact_paths:
       - "bin/spinel"
       - "lib/libspinel_rt.a"
+      # A threaded fixture links the -DSP_THREADS runtime and the _mt package
+      # objects; shipping them keeps the shards from rebuilding the MT runtime.
+      - "lib/libspinel_rt_mt.a"
+      - "packages/*/*.o"
 
   - label: ":mac: tests %n"
     key: "tests-macos"
@@ -71,6 +75,8 @@ steps:
       - ".buildkite/ensure-coreutils"
       - "buildkite-agent artifact download bin/spinel . --step build-macos"
       - "buildkite-agent artifact download lib/libspinel_rt.a . --step build-macos"
+      - "buildkite-agent artifact download lib/libspinel_rt_mt.a . --step build-macos"
+      - "buildkite-agent artifact download 'packages/*/*.o' . --step build-macos"
       - "chmod +x bin/spinel"
       - ".buildkite/run-tests --slice"
 
@@ -89,6 +95,10 @@ steps:
     artifact_paths:
       - "bin/spinel"
       - "lib/libspinel_rt.a"
+      # A threaded fixture links the -DSP_THREADS runtime and the _mt package
+      # objects; shipping them keeps the shards from rebuilding the MT runtime.
+      - "lib/libspinel_rt_mt.a"
+      - "packages/*/*.o"
       # spin-check runs bin/spin, which resolves --rbs seeds through
       # spinel_rbs_extract staged beside it; without that copy it loses them.
       - "bin/spin"
@@ -109,6 +119,8 @@ steps:
     command:
       - "buildkite-agent artifact download bin/spinel . --step build-linux-gcc"
       - "buildkite-agent artifact download lib/libspinel_rt.a . --step build-linux-gcc"
+      - "buildkite-agent artifact download lib/libspinel_rt_mt.a . --step build-linux-gcc"
+      - "buildkite-agent artifact download 'packages/*/*.o' . --step build-linux-gcc"
       - "chmod +x bin/spinel"
       - ".buildkite/run-tests --slice"
 
@@ -128,6 +140,8 @@ steps:
     command:
       - "buildkite-agent artifact download bin/spinel . --step build-linux-gcc"
       - "buildkite-agent artifact download lib/libspinel_rt.a . --step build-linux-gcc"
+      - "buildkite-agent artifact download lib/libspinel_rt_mt.a . --step build-linux-gcc"
+      - "buildkite-agent artifact download 'packages/*/*.o' . --step build-linux-gcc"
       - "buildkite-agent artifact download bin/spin . --step build-linux-gcc"
       - "buildkite-agent artifact download bin/spinel_rbs_extract . --step build-linux-gcc"
       - "chmod +x bin/spinel bin/spin bin/spinel_rbs_extract"
@@ -147,6 +161,8 @@ steps:
     command:
       - "buildkite-agent artifact download bin/spinel . --step build-linux-gcc"
       - "buildkite-agent artifact download lib/libspinel_rt.a . --step build-linux-gcc"
+      - "buildkite-agent artifact download lib/libspinel_rt_mt.a . --step build-linux-gcc"
+      - "buildkite-agent artifact download 'packages/*/*.o' . --step build-linux-gcc"
       - "chmod +x bin/spinel"
       - ".buildkite/run-bench --slice"
 
@@ -166,6 +182,10 @@ steps:
     artifact_paths:
       - "bin/spinel"
       - "lib/libspinel_rt.a"
+      # A threaded fixture links the -DSP_THREADS runtime and the _mt package
+      # objects; shipping them keeps the shards from rebuilding the MT runtime.
+      - "lib/libspinel_rt_mt.a"
+      - "packages/*/*.o"
 
   - label: ":linux: tests clang %n"
     key: "tests-linux-clang"
@@ -183,6 +203,8 @@ steps:
     command:
       - "buildkite-agent artifact download bin/spinel . --step build-linux-clang"
       - "buildkite-agent artifact download lib/libspinel_rt.a . --step build-linux-clang"
+      - "buildkite-agent artifact download lib/libspinel_rt_mt.a . --step build-linux-clang"
+      - "buildkite-agent artifact download 'packages/*/*.o' . --step build-linux-clang"
       - "chmod +x bin/spinel"
       - ".buildkite/ensure-clang"
       - ".buildkite/run-tests --slice"
