@@ -248,6 +248,7 @@ const char *g_ie_next_var = NULL;
    is the proc's own return (Ruby block semantics), not a loop control. */
 int g_c_loop_depth = 0;
 int g_in_proc_body = 0;
+int g_in_fiber_body = 0;
 /* Set while emitting an instance_exec/eval splice whose result temp is poly:
    a `break <v>` / `next <v>` carrying a scalar value must box it to match. */
 int g_ie_res_poly = 0;

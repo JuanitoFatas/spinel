@@ -154,6 +154,10 @@ extern const char *g_ie_next_var;
 extern TyKind g_ie_next_ty;
 extern int g_c_loop_depth;   /* C-loop nesting inside the current fn body */
 extern int g_in_proc_body;   /* emitting a _proc_N function body */
+/* Emitting a _fiber_body_N function body. It returns void and delivers the
+   block's value through _fb->yielded_value, while g_ret_type reads TY_POLY --
+   so a site that returns a value must store it there instead. */
+extern int g_in_fiber_body;
 /* Set while the wrapped splice's result temp is poly, so a value-carrying
    break/next boxes a scalar value to match. */
 extern int g_ie_res_poly;

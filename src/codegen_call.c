@@ -26973,6 +26973,10 @@ else {
            emitted it (#3383). */
         if (has_retval && g_in_proc_body && g_result_var && g_result_poly)
           buf_printf(b, "if (_retf%d) { %s = _retv%d; return 0; } ", eid, g_result_var, eid);
+        /* Same funnel, one scope out: a fiber body returns void and carries
+           its value in _fb->yielded_value (see codegen_iter.c). */
+        else if (has_retval && g_in_fiber_body)
+          buf_printf(b, "if (_retf%d) { _fb->yielded_value = _retv%d; return; } ", eid, eid);
         else if (has_retval) buf_printf(b, "if (_retf%d) return _retv%d; ", eid, eid);
         else if (g_in_proc_body && g_result_var && g_result_poly)
           buf_printf(b, "if (_retf%d) { %s = sp_box_nil(); return 0; } ", eid, g_result_var);

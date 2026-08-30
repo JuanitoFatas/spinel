@@ -3784,6 +3784,7 @@ void emit_fiber_new(Compiler *c, int id, Buf *b, int as_gen, int size_node) {
   g_block_param_name = bp0; g_self = sv_self;
   g_yielder_name = as_gen ? bp0 : NULL;   /* `y << v` -> Fiber.yield in the body */
   g_ret_type = TY_POLY; g_result_poly = 0; g_result_var = NULL;
+  int sv_infib = g_in_fiber_body; g_in_fiber_body = 1;
   /* Value-type self is captured by value (sp_X self), so ivar access in the
      body uses `.`; a pointer self uses `->`. Override the global for the body
      (restored below). */
@@ -3971,6 +3972,7 @@ void emit_fiber_new(Compiler *c, int id, Buf *b, int as_gen, int size_node) {
   g_block_param_name = sv_bpn; g_self = sv_self; g_ret_type = sv_rt;
   g_self_deref = sv_fbderef;
   g_result_poly = sv_rp; g_result_var = sv_rv; g_yielder_name = sv_yld;
+  g_in_fiber_body = sv_infib;
   g_fn_pr_label = sv_fn_prl2; g_fn_pr_var = sv_fn_prv2; g_fn_ret_type = sv_fn_rt2;
   g_brk_ser_var = sv_fbser; g_brk_skip_id = sv_fbskip;
   g_exc_frame_depth = sv_fbexcd; g_method_pr_exc_depth = sv_fbprexcd;

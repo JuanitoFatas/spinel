@@ -2235,6 +2235,15 @@ int emit_array_filter_loop(Compiler *c, int recv, int block, TyKind rt, const ch
     }
     if (has_retval && g_in_proc_body && g_result_var && g_result_poly)
       buf_printf(b, "if (_retf%d) { %s = _retv%d; return 0; }\n", eid, g_result_var, eid);
+    /* A fiber body is `static void _fiber_body_N(sp_Fiber *)` -- it hands the
+       block's value back through _fb->yielded_value. g_ret_type reads TY_POLY
+       there (the block's value IS poly), so has_retval is set and this used to
+       emit `return _retv;` from a void function: a warning under clang, an
+       error under gcc 14's -Wreturn-mismatch. Nothing in the source has to
+       say `return` -- Mutex#synchronize lowers to an ensure, and the ensure
+       epilogue emits this unconditionally. */
+    else if (has_retval && g_in_fiber_body)
+      buf_printf(b, "if (_retf%d) { _fb->yielded_value = _retv%d; return; }\n", eid, eid);
     else if (has_retval) buf_printf(b, "if (_retf%d) return _retv%d;\n", eid, eid);
     else if (g_in_proc_body && g_result_var && g_result_poly)
       buf_printf(b, "if (_retf%d) { %s = sp_box_nil(); return 0; }\n", eid, g_result_var);
