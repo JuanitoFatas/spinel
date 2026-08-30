@@ -21135,7 +21135,12 @@ else { memcpy(dir, sf, n); dir[n] = 0; } }
         emit_path_expr(c, argv[1], b); buf_puts(b, ")"); return;
       }
       if (sp_streq(name, "sysopen") && argc >= 1) {
-        buf_puts(b, "sp_io_sysopen("); emit_path_expr(c, argv[0], b); buf_puts(b, ")"); return;
+        buf_puts(b, "sp_io_sysopen("); emit_path_expr(c, argv[0], b);
+        buf_puts(b, ", ");
+        if (argc >= 2) emit_int_expr(c, argv[1], b); else buf_puts(b, "0");
+        buf_puts(b, ", ");
+        if (argc >= 3) emit_int_expr(c, argv[2], b); else buf_puts(b, "0");
+        buf_puts(b, ")"); return;
       }
     }
     /* Signal module queries (#2735) */

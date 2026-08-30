@@ -3070,11 +3070,19 @@ sp_RbVal sp_io_select(sp_PolyArray *rd, sp_PolyArray *wr, sp_PolyArray *er, doub
   return sp_box_poly_array(out);
 }
 
-sp_int sp_io_sysopen(const char *path) {SP_GC_ROOT_STR(path);
-  int fd = open(path ? path : "", O_RDONLY);
-  if (fd < 0)
-    sp_raise_cls("Errno::ENOENT",
-                 sp_sprintf("No such file or directory @ rb_sysopen - %s", path ? path : ""));
+sp_int sp_io_sysopen(const char *path, sp_int flags, sp_int perm) {SP_GC_ROOT_STR(path);
+  /* flags are CRuby's File::Constants (O_* on this platform); 0 is O_RDONLY.
+     They were dropped at codegen and every sysopen was O_RDONLY -- a FIFO
+     opened for writing hung waiting for a writer of its own (#4206). */
+  int fd = open(path ? path : "", (int)flags, (mode_t)(perm ? perm : 0666));
+  if (fd < 0) {
+    const char *cls = errno == ENOENT ? "Errno::ENOENT"
+                    : errno == ENXIO  ? "Errno::ENXIO"
+                    : errno == EACCES ? "Errno::EACCES"
+                    : errno == EEXIST ? "Errno::EEXIST"
+                    : errno == EINVAL ? "Errno::EINVAL" : "SystemCallError";
+    sp_raise_cls(cls, sp_sprintf("%s @ rb_sysopen - %s", strerror(errno), path ? path : ""));
+  }
   return (sp_int)fd;
 }
 

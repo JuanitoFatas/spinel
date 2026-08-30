@@ -147,7 +147,7 @@ typedef struct { DIR *dp; const char *path; } sp_Dir;
 
 /* ---- sp_io_pipe/sysopen relocated from spinel_rt.h (0 optcarrot uses). ---- */
 sp_PolyArray *sp_io_pipe(void);
-sp_int sp_io_sysopen(const char *path);
+sp_int sp_io_sysopen(const char *path, sp_int flags, sp_int perm);
 
 /* IO.select accepts anything that answers #to_io, which is how CRuby lets a
    wrapper -- a protocol object holding a socket -- be waited on. The runtime
