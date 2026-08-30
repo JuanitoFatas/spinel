@@ -1,0 +1,91 @@
+# A literal port of .github/workflows/ci.yml to Buildkite.
+#
+# One GitHub job becomes one Buildkite step, running that job's steps in the
+# same order, with the same commands and the same per-compiler conditions. The
+# suite is NOT sharded here: this pipeline exists to run what master's CI runs,
+# so it stays comparable to it. (The sharded pipeline lives on
+# buildkite-parallel-tests.)
+#
+# ci.yml's matrix, unchanged:
+#   ubuntu-latest / gcc     — build + suite + property gates + bench + optcarrot
+#   ubuntu-latest / clang   — build + suite
+#   macos-latest  / clang   — build + suite
+#
+# Three things cannot be carried over literally, and nothing else changes:
+#
+# 1. sccache is dropped. ci.yml wraps CC in it with SCCACHE_GHA_ENABLED, whose
+#    storage backend IS the GitHub Actions cache; there is no Buildkite
+#    equivalent to point it at. It is a compile cache, so it moves build time
+#    and never the result. The "sccache stats" step goes with it.
+#
+# 2. `runs-on` becomes an image plus a queue. The Linux jobs run in ruby:3.4 --
+#    ci.yml pins Ruby 3.4 through ruby/setup-ruby, and the image is the cheapest
+#    way to hold that. The image is Debian, whose default gcc is 14, so gcc-13
+#    is installed and named explicitly: ubuntu-latest ships gcc 13, and 14 turns
+#    -Wincompatible-pointer-types and -Wreturn-mismatch into errors. Matching
+#    the compiler is what keeps this a clone rather than a stricter build.
+#    clang likewise comes from apt (ubuntu-latest has it preinstalled).
+#
+# 3. The macOS agent's own Ruby is used, where ci.yml calls ruby/setup-ruby.
+#
+# `$$` escapes a `$` for Buildkite's own interpolation; the shell sees `$`.
+
+steps:
+  # ===================== macos-latest / clang ==============================
+  - label: ":mac: macos-latest / clang"
+    key: "macos-clang"
+    agents:
+      queue: "macos"
+    env:
+      CC: "clang"
+    command:
+      # coreutils is NOT preinstalled on the macOS runners, so `timeout` and
+      # `gtimeout` were both absent and the whole suite ran with no time limit.
+      # (ci.yml: "Install GNU coreutils" + "Expose GNU coreutils on PATH")
+      - "brew install coreutils"
+      - "export PATH=\"/opt/homebrew/opt/coreutils/libexec/gnubin:$$PATH\""
+      - "make deps"
+      - "make -j\"$$(getconf _NPROCESSORS_ONLN)\" all"
+      # clang runs the full optimizer over every emitted inline static, so -O1
+      # is ~2.5x SLOWER than -O0 on the per-test TUs. See ci.yml's "Run tests".
+      - "make -j\"$$(getconf _NPROCESSORS_ONLN)\" test OPT=-O0 CC=clang"
+
+  # ===================== ubuntu-latest / gcc ===============================
+  # The job ci.yml loads: it alone carries the property gates, bench and
+  # optcarrot, because its test leg is the cheaper of the two.
+  - label: ":linux: ubuntu-latest / gcc"
+    key: "linux-gcc"
+    image: "ruby:3.4"
+    agents:
+      queue: "linux"
+    env:
+      CC: "gcc-13"
+    command:
+      - "apt-get update -qq"
+      - "apt-get install -y -qq gcc-13"
+      - "make deps"
+      - "make -j\"$$(getconf _NPROCESSORS_ONLN)\" all"
+      # gcc prunes unreferenced statics before codegen, so -O1 compiles the
+      # spinel_rt.h-heavy per-test TUs far faster than -O0 -- the opposite of
+      # clang. See ci.yml's "Run tests".
+      - "make -j\"$$(getconf _NPROCESSORS_ONLN)\" test OPT=-O1"
+      # Inference/allocation property gates: they assert the SHAPE of the
+      # generated C, which the output diffs cannot see.
+      - "make alloc-report-test infer-test spin-check"
+      - "make bench"
+      - "make optcarrot"
+
+  # ===================== ubuntu-latest / clang =============================
+  - label: ":linux: ubuntu-latest / clang"
+    key: "linux-clang"
+    image: "ruby:3.4"
+    agents:
+      queue: "linux"
+    env:
+      CC: "clang"
+    command:
+      - "apt-get update -qq"
+      - "apt-get install -y -qq clang"
+      - "make deps"
+      - "make -j\"$$(getconf _NPROCESSORS_ONLN)\" all"
+      - "make -j\"$$(getconf _NPROCESSORS_ONLN)\" test OPT=-O0 CC=clang"
