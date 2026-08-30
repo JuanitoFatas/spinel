@@ -28,9 +28,12 @@ One health report for a program. Independent legs:
   slow path).
 - **advice** — where the boxed slow path will cost: boxed operations in
   the generated C, ranked by loop depth and mapped back to source lines.
-  Static, so it ranks by *expected* cost — a deep loop that runs once at
-  startup outranks a shallow one that runs per frame; confirm with a
-  profiler before optimizing ([`docs/profiling.md`](../docs/profiling.md)).
+  Depth propagates across the static call graph — a method reached only
+  from a deep nest ranks at its callers' depth, not at zero. Still
+  static, so it ranks by *expected* cost with no time axis — a deep
+  startup nest can outrank per-frame work of the same depth; confirm
+  with a profiler before optimizing
+  ([`docs/profiling.md`](../docs/profiling.md)).
 - **requires** — non-relative `require`s spinel treats as native / no-op.
 - **behavior** — optional: compiled output vs CRuby; needs `ruby` on
   `PATH` and skips cleanly otherwise.

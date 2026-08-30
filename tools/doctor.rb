@@ -92,6 +92,26 @@ def ends_with(s, sfx)
   s[s.length - sfx.length, sfx.length] == sfx
 end
 
+# Every `sp_...(` call name on a C line: the raw candidates for call-graph
+# edges. Runtime helpers resolve to no known function and drop out later.
+def scan_calls(line)
+  out = []
+  i = 0
+  while i < line.length - 3
+    if line[i, 3] == "sp_" && (i == 0 || !ident_char(line[i - 1, 1]))
+      j = i
+      while j < line.length && ident_char(line[j, 1])
+        j = j + 1
+      end
+      out.push(line[i, j - i]) if j < line.length && line[j, 1] == "("
+      i = j
+    else
+      i = i + 1
+    end
+  end
+  out
+end
+
 def main
   only = []
   skip = []
@@ -194,16 +214,20 @@ def main
       end
     }
     keys = []
-    scores = []
     counts = []
     depths = []
-    fns = []
+    rfns = []
     slot = {}
+    fnames = []
+    fix = {}
+    efrom = []
+    eto = []
+    edep = []
     cur_line = 0
     cur_file = ""
     bd = 0
     loop_at = []
-    fn = ""
+    fn = -1
     File.read(cobj).split("\n").each { |cl|
       if cl.start_with?("#line ")
         parts = cl.split(" ")
@@ -213,32 +237,44 @@ def main
           cur_file = f[1, f.length - 2].to_s if f.length > 2
         end
       else
-        nm = ""
         if bd == 0 && cl.include?("(") && cl.include?("{")
           nm = c_fn_name(cl)
           nm = "main" if nm.length == 0 && cl.include?("int main(")
+          if nm.length > 0
+            ix0 = fix[nm]
+            if ix0.nil?
+              ix0 = fnames.length
+              fix[nm] = ix0
+              fnames.push(nm)
+            end
+            fn = ix0
+          end
         end
-        fn = nm if nm.length > 0
+        # Call-graph edges: a call inside a function body, with the loop
+        # depth of its own site. Lexical depth stops at the call boundary,
+        # so a method reached only from a deep nest scored as if it ran
+        # once; the depths propagate over these edges below (#4199).
+        if bd >= 1 && fn >= 0
+          scan_calls(cl).each { |cn|
+            efrom.push(fn)
+            eto.push(cn)
+            edep.push(loop_at.length)
+          }
+        end
         n = count_in(cl, "sp_poly_")
         n = 0 if cur_file == "<spinel-synthesized>"
         if n > 0 && cur_line > 0
           d = loop_at.length
-          w = 1
-          w = 8 if d == 1
-          w = 64 if d == 2
-          w = 512 if d > 2
           key = cur_file + ":" + cur_line.to_s
           ix = slot[key]
           if ix.nil?
             ix = keys.length
             slot[key] = ix
             keys.push(key)
-            scores.push(0)
             counts.push(0)
             depths.push(0)
-            fns.push(fn)
+            rfns.push(fn)
           end
-          scores[ix] = scores[ix] + n * w
           counts[ix] = counts[ix] + n
           depths[ix] = d if d > depths[ix]
         end
@@ -251,6 +287,44 @@ def main
         end
       end
     }
+    # Effective extra depth per function: the max over call sites of the
+    # caller's own effective depth plus the site's loop depth. Iterated to a
+    # fixpoint; recursion converges because the value is capped where the
+    # weights cap anyway.
+    eff = []
+    fnames.each { |_| eff.push(0) }
+    rounds = 0
+    changed = true
+    while changed && rounds < 8
+      changed = false
+      k = 0
+      while k < efrom.length
+        ti = fix[eto[k]]
+        if !ti.nil?
+          v = eff[efrom[k]] + edep[k]
+          v = 3 if v > 3
+          if v > eff[ti]
+            eff[ti] = v
+            changed = true
+          end
+        end
+        k = k + 1
+      end
+      rounds = rounds + 1
+    end
+    scores = []
+    j = 0
+    while j < keys.length
+      ed = depths[j]
+      ed = ed + eff[rfns[j]] if rfns[j] >= 0
+      ed = 3 if ed > 3
+      w = 1
+      w = 8 if ed == 1
+      w = 64 if ed == 2
+      w = 512 if ed > 2
+      scores.push(counts[j] * w)
+      j = j + 1
+    end
     lines = []
     k = 0
     while k < 8 && k < keys.length
@@ -266,14 +340,19 @@ def main
       end
       break if best < 0
       scores[best] = -1
+      via = 0
+      via = eff[rfns[best]] if rfns[best] >= 0
       where = "outside any loop"
       where = "in a depth-" + depths[best].to_s + " loop" if depths[best] > 0
+      where = where + " (+" + via.to_s + " via callers)" if via > 0
+      fname = ""
+      fname = fnames[rfns[best]] if rfns[best] >= 0
       tag = ""
       wnames.each { |wn|
-        tag = ", widened to untyped" if tag.length == 0 && ends_with(fns[best], "_" + wn)
+        tag = ", widened to untyped" if tag.length == 0 && ends_with(fname, "_" + wn)
       }
       lines.push(keys[best] + ": " + counts[best].to_s + " boxed op(s) " +
-                 where + " (" + fns[best] + tag + ")")
+                 where + " (" + fname + tag + ")")
       k = k + 1
     end
     lines.push("deepest loops first: steadying a slot's type there removes the boxed dispatch") if lines.length > 0
