@@ -20586,7 +20586,14 @@ else { memcpy(dir, sf, n); dir[n] = 0; } }
      whose constructor takes exactly these positional args, each argument
      hoisted once and coerced per arm. */
   if (recv >= 0 && sp_streq(name, "new") && comp_ntype(c, recv) == TY_CLASS &&
-      argc > 0 && nt_ref(nt, id, "block") < 0 && class_recv_is_dynamic(c, recv) &&
+      argc > 0 && nt_ref(nt, id, "block") < 0 &&
+      (class_recv_is_dynamic(c, recv) ||
+       /* `self.new(args)` in a class method: self is the RECEIVING class (a
+          subclass inherits the method with self = itself), so the receiver
+          is exactly as dynamic as a class-valued variable. The zero-arg arm
+          below has dispatched it all along; the argument-taking form was
+          refused as an unsupported node shape (#4202). */
+       (nt_type(nt, recv) && sp_streq(nt_type(nt, recv), "SelfNode"))) &&
       comp_ntype(c, id) == TY_POLY) {
     int kt = ++g_tmp, rt2 = ++g_tmp;
     int *atmp = calloc((size_t)argc, sizeof(int));
