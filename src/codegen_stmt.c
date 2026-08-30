@@ -10019,6 +10019,25 @@ const char *hash_order_val(TyKind t, int tr, int ti) {
 
 /* ---- Index / element-assignment statements (a[i]=x, a[i] op= x, a[i]&&=/||=,
    and receiver-mutating array calls) moved from codegen_call.c. ---- */
+/* The key of a hash store, as the kind's set takes it. Shared with the
+   expression form in codegen_call.c. */
+void emit_hash_store_key(Compiler *c, int key, TyKind rt, Buf *b) {
+  if (rt == TY_POLY_POLY_HASH) emit_boxed(c, key, b);
+  else emit_hash_key(c, key, ty_hash_key(rt), b);
+}
+/* The value of a hash store, as the kind's set takes it. */
+static void emit_hash_store_val(Compiler *c, int val, TyKind rt, Buf *b) {
+  if (ty_hash_val(rt) == TY_POLY) { emit_boxed(c, val, b); return; }
+  /* A poly value (holds the hash's value type at runtime, e.g. a String?
+     guarded non-nil) into a typed-value hash: coerce to its element
+     representation, as the typed-array `[]=` path does. */
+  TyKind hvt = ty_hash_val(rt), vt = comp_ntype(c, val);
+  if (vt == TY_POLY && hvt == TY_STRING) { buf_puts(b, "sp_poly_to_s("); emit_expr(c, val, b); buf_puts(b, ")"); }
+  else if (vt == TY_POLY && hvt == TY_INT) { buf_puts(b, "sp_poly_to_i("); emit_expr(c, val, b); buf_puts(b, ")"); }
+  else if (vt == TY_POLY && hvt == TY_FLOAT) { buf_puts(b, "sp_poly_to_f("); emit_expr(c, val, b); buf_puts(b, ")"); }
+  else emit_expr(c, val, b);
+}
+
 int emit_array_mutate_stmt(Compiler *c, int id, Buf *b, int indent) {
   const NodeTable *nt = c->nt;
   const char *name = nt_str(nt, id, "name");
@@ -10595,25 +10614,39 @@ int emit_array_mutate_stmt(Compiler *c, int id, Buf *b, int indent) {
     const char *hn = ty_hash_cname(rt);
     /* Hash#store is the method form of []= */
     if (hn && (sp_streq(name, "[]=") || sp_streq(name, "store")) && argc == 2) {
+      /* The key and the value are sibling arguments of the set: C picks their
+         order and roots neither, so a fresh key has no root while the value
+         beside it allocates. A receiver or a key that can allocate takes the
+         store through a block that evaluates receiver, key and value into
+         temps, in Ruby's order, and holds the key across the value's build.
+         The receiver's temp is rooted when the key or the value can drop the
+         hash -- a call, a write -- since it is then the only holder while
+         they build; a receiver that is a call is rooted outright, since a
+         fresh one has no other holder. The value needs no root: the
+         typed kinds' sets run no hook and grow through libc, and the general
+         hash's set roots what it is handed across the key's hook (#4201).
+         The receiver's temp spares the frozen check a second evaluation, and
+         lets the check follow the operands, as CRuby's does. A store whose
+         receiver and key are both reads or plain literals keeps the bare
+         call: the key is held by its slot. */
       emit_indent(b, indent);
-      buf_puts(b, "if (sp_gc_is_frozen("); emit_expr(c, recv, b); { buf_puts(b, ")) sp_raise_frozen_hash_at("); emit_expr(c, recv, b); buf_printf(b, ", %s);\n", hash_box_cls(rt)); }
-      emit_indent(b, indent);
-      buf_printf(b, "sp_%sHash_set(", hn);
-      emit_expr(c, recv, b); buf_puts(b, ", ");
-      if (rt == TY_POLY_POLY_HASH) emit_boxed(c, argv[0], b); else emit_hash_key(c, argv[0], ty_hash_key(rt), b);
-      buf_puts(b, ", ");
-      if (rt == TY_SYM_POLY_HASH || rt == TY_STR_POLY_HASH || rt == TY_POLY_POLY_HASH) emit_boxed(c, argv[1], b);
-      else {
-        /* A poly value (holds the hash's value type at runtime, e.g. a String?
-           guarded non-nil) into a typed-value hash: coerce to its element
-           representation, as the typed-array `[]=` path does. */
-        TyKind hvt = ty_hash_val(rt), vt = comp_ntype(c, argv[1]);
-        if (vt == TY_POLY && hvt == TY_STRING) { buf_puts(b, "sp_poly_to_s("); emit_expr(c, argv[1], b); buf_puts(b, ")"); }
-        else if (vt == TY_POLY && hvt == TY_INT) { buf_puts(b, "sp_poly_to_i("); emit_expr(c, argv[1], b); buf_puts(b, ")"); }
-        else if (vt == TY_POLY && hvt == TY_FLOAT) { buf_puts(b, "sp_poly_to_f("); emit_expr(c, argv[1], b); buf_puts(b, ")"); }
-        else emit_expr(c, argv[1], b);
+      if (subtree_may_allocate(nt, recv) || subtree_may_allocate(nt, argv[0])) {
+        TyKind kt = ty_hash_key(rt);
+        int tr = ++g_tmp, tk = ++g_tmp, tv = ++g_tmp;
+        buf_printf(b, "{ %s _t%d = ", c_type_name(rt), tr); emit_expr(c, recv, b); buf_puts(b, "; ");
+        if (subtree_may_allocate(nt, recv) || subtree_has_side_effect(c, argv[0]) || subtree_has_side_effect(c, argv[1])) { emit_gc_root_tmp(c, rt, tr, b); buf_puts(b, " "); }
+        buf_printf(b, "%s _t%d = ", c_type_name(kt), tk); emit_hash_store_key(c, argv[0], rt, b); buf_puts(b, "; ");
+        if (subtree_may_allocate(nt, argv[0]) && needs_root(kt)) { emit_gc_root_tmp(c, kt, tk, b); buf_puts(b, " "); }
+        buf_printf(b, "%s _t%d = ", c_type_name(ty_hash_val(rt)), tv); emit_hash_store_val(c, argv[1], rt, b);
+        buf_printf(b, "; if (sp_gc_is_frozen(_t%d)) sp_raise_frozen_hash_at(_t%d, %s); ", tr, tr, hash_box_cls(rt));
+        buf_printf(b, "sp_%sHash_set(_t%d, _t%d, _t%d); }\n", hn, tr, tk, tv);
+        return 1;
       }
-      buf_puts(b, ");\n");
+      buf_puts(b, "if (sp_gc_is_frozen("); emit_expr(c, recv, b); buf_puts(b, ")) sp_raise_frozen_hash_at("); emit_expr(c, recv, b); buf_printf(b, ", %s);\n", hash_box_cls(rt));
+      emit_indent(b, indent);
+      buf_printf(b, "sp_%sHash_set(", hn); emit_expr(c, recv, b); buf_puts(b, ", ");
+      emit_hash_store_key(c, argv[0], rt, b); buf_puts(b, ", ");
+      emit_hash_store_val(c, argv[1], rt, b); buf_puts(b, ");\n");
       return 1;
     }
     return 0;
@@ -10989,10 +11022,20 @@ void emit_index_op_write(Compiler *c, int id, Buf *b, int indent) {
     const char *hn = ty_hash_cname(rt);
     TyKind vt = ty_hash_val(rt);
     if (!hn) unsupported(c, id, "index operator assignment (hash)");
+    TyKind kt = ty_hash_key(rt);
     emit_indent(b, indent);
+    /* The receiver's temp is the hash's only holder once the key or the RHS
+       drops it, and a key that can allocate has no holder at all: root the
+       receiver when either can -- a call, a write, or the fold on a poly
+       slot, which is a call -- and the key when it can allocate. Temps the
+       value form hoisted (g_iow_*) carry the root they were declared with. */
+    int drops = subtree_has_side_effect(c, argv[0]) || subtree_has_side_effect(c, v) || vt == TY_POLY;
     buf_printf(b, "{ %s _t%d = ", c_type_name(rt), ta); iow_emit_recv(c, recv, b);
-    buf_printf(b, "; %s _t%d = ", c_type_name(ty_hash_key(rt)), tb); iow_emit_key(c, argv[0], b, IOW_KEY_HASH, ty_hash_key(rt));
     buf_puts(b, "; ");
+    if (!g_iow_recv_ref && (subtree_may_allocate(nt, recv) || drops)) { emit_gc_root_tmp(c, rt, ta, b); buf_puts(b, " "); }
+    buf_printf(b, "%s _t%d = ", c_type_name(kt), tb); iow_emit_key(c, argv[0], b, IOW_KEY_HASH, kt);
+    buf_puts(b, "; ");
+    if (!g_iow_key_ref && subtree_may_allocate(nt, argv[0]) && needs_root(kt)) { emit_gc_root_tmp(c, kt, tb, b); buf_puts(b, " "); }
     /* Build the new value (which reads the slot and evaluates the RHS) BEFORE
        the frozen check: Ruby desugars `h[k] += v` to `h[k] = h[k] + v`, so the
        read and the RHS run before []= raises on a frozen hash. */
@@ -11169,9 +11212,17 @@ void emit_index_and_or_write(Compiler *c, int id, Buf *b, int indent, int is_or)
     TyKind kt = ty_hash_key(rt);
     TyKind vt = ty_hash_val(rt);
     emit_indent(b, indent);
+    /* The receiver's temp is the hash's only holder once the key or the
+       value drops it, and a key that can allocate has no holder at all: root
+       the receiver when either can -- a call, a write -- and the key when it
+       can allocate, as the op-assign form above does. */
+    int drops = subtree_has_side_effect(c, argv[0]) || subtree_has_side_effect(c, v);
     buf_printf(b, "{ %s _t%d = ", c_type_name(rt), ta); emit_expr(c, recv, b);
-    buf_printf(b, "; %s _t%d = ", c_type_name(kt), tb); emit_hash_key(c, argv[0], kt, b);
     buf_puts(b, "; ");
+    if (subtree_may_allocate(nt, recv) || drops) { emit_gc_root_tmp(c, rt, ta, b); buf_puts(b, " "); }
+    buf_printf(b, "%s _t%d = ", c_type_name(kt), tb); emit_hash_key(c, argv[0], kt, b);
+    buf_puts(b, "; ");
+    if (subtree_may_allocate(nt, argv[0]) && needs_root(kt)) { emit_gc_root_tmp(c, kt, tb, b); buf_puts(b, " "); }
     if (vt == TY_POLY) {
       buf_printf(b, "if (%ssp_poly_truthy(sp_%sHash_get(_t%d, _t%d))) sp_%sHash_set(_t%d, _t%d, ",
                  is_or ? "!" : "", hn, ta, tb, hn, ta, tb);

@@ -815,6 +815,10 @@ void emit_stmts_tail(Compiler *c, int id, Buf *b, int indent);
 int needs_root(TyKind t);
 /* Root a temp of an inferred type, picking the rbval macro for boxed poly. */
 void emit_gc_root_tmp(Compiler *c, TyKind t, int tmp, Buf *b);
+/* `_t<tmp>` when the node was already evaluated into that temp, else the node */
+void emit_node_or_tmp(Compiler *c, int node, int tmp, Buf *b);
+/* the key of a hash store, as the kind's set takes it (codegen_stmt.c) */
+void emit_hash_store_key(Compiler *c, int key, TyKind rt, Buf *b);
 const char *hash_box_cls(TyKind t);
 const char *hash_order_key(TyKind t, int tr, int ti);
 const char *hash_order_val(TyKind t, int tr, int ti);
