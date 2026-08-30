@@ -4310,6 +4310,25 @@ static int kwh_fills_slot(Compiler *c, Scope *m, int kwh, int pos_argc) {
   return (m && kwh_positional_slot(c, m, kwh, pos_argc) >= 0) ? 1 : 0;
 }
 
+/* How many of `m`'s DECLARED keyword parameters the call's keyword hash
+   names. A method taking only required keywords has nrequired counting
+   them, and the candidate filter compared that against pos_argc alone --
+   so `resume(user_agent:, ip_address:)` looked arity-impossible for
+   `s.resume(user_agent: ..., ip_address: ...)`, every arm dropped, and the
+   call lowered to the unresolved raise (#4205). */
+static int kwh_named_kwarg_fills(Compiler *c, Scope *m, int kwh) {
+  if (!m || kwh < 0) return 0;
+  const NodeTable *nt = c->nt;
+  int en = 0; const int *els = nt_arr(nt, kwh, "elements", &en);
+  int n = 0;
+  for (int e = 0; e < en; e++) {
+    int key = nt_ref(nt, els[e], "key");
+    const char *kn = key >= 0 ? nt_str(nt, key, "value") : NULL;
+    if (kn && callee_param_is_declared_kwarg(c, m, kn)) n++;
+  }
+  return n;
+}
+
 static int emit_poly_method_dispatch(Compiler *c, int id, Buf *b) {
   /* Re-entered from this very dispatch's builtin-container arm: decline, so
      the call falls through to the builtin emitters the arm is there to
@@ -5211,8 +5230,11 @@ static int emit_poly_method_dispatch(Compiler *c, int id, Buf *b) {
          it, `r.where(cond: 1)` reaching `def where(condition)` looked like an
          arity mismatch, every arm was dropped, and the call lowered to the
          unresolved-method raise (#4030). */
-      if (mi >= 0 && pos_argc + kwh_fills_slot(c, mi >= 0 ? &c->scopes[mi] : NULL, kwh, pos_argc)
-                     >= c->scopes[mi].nrequired) ncand++;
+      if (mi < 0) continue;
+      { Scope *cm = &c->scopes[mi];
+        int fills = kwh_fills_slot(c, cm, kwh, pos_argc);
+        if (fills == 0) fills = kwh_named_kwarg_fills(c, cm, kwh);
+        if (pos_argc + fills >= cm->nrequired) ncand++; }
     }
     /* strftime on a poly value that is really a Time: a nilable Time
        (`created_at : Time?`) is held as a poly sp_RbVal, so `t.strftime(fmt)`
@@ -5463,17 +5485,26 @@ static int emit_poly_method_dispatch(Compiler *c, int id, Buf *b) {
           }
         } }
       int cls0_mi2 = c->nclasses > 0 ? comp_method_in_chain(c, 0, name, NULL) : -1;
-      int cls0_cand2 = cls0_mi2 >= 0 && argc >= c->scopes[cls0_mi2].nrequired &&
-                       c->classes[0].instantiated;
+      int cls0_cand2 = cls0_mi2 >= 0 && c->classes[0].instantiated;
+      if (cls0_cand2) {
+        /* the same widened arity as the candidate count: a keyword hash
+           funds the declared keyword params it names (#4205) */
+        int fills0 = kwh_fills_slot(c, &c->scopes[cls0_mi2], kwh, pos_argc);
+        if (fills0 == 0) fills0 = kwh_named_kwarg_fills(c, &c->scopes[cls0_mi2], kwh);
+        cls0_cand2 = pos_argc + fills0 >= c->scopes[cls0_mi2].nrequired;
+      }
       buf_puts(b, "switch (");
       emit_poly_dispatch_key(c, tv, cls0_cand2, b);
       buf_puts(b, ") {");
       for (int k = 0; k < c->nclasses; k++) {
         int defcls = -1;
         int mi = comp_method_in_chain(c, k, name, &defcls);
-        if (mi < 0 ||
-            pos_argc + kwh_fills_slot(c, &c->scopes[mi], kwh, pos_argc) <
-              c->scopes[mi].nrequired) continue;
+        if (mi < 0) continue;
+        /* the same widened arity a candidate was counted with above: a
+           keyword hash funds the DECLARED keyword params it names (#4205) */
+        { int fills2 = kwh_fills_slot(c, &c->scopes[mi], kwh, pos_argc);
+          if (fills2 == 0) fills2 = kwh_named_kwarg_fills(c, &c->scopes[mi], kwh);
+          if (pos_argc + fills2 < c->scopes[mi].nrequired) continue; }
         /* A class no value can ever be (never `.new`/`.allocate`/`raise`d, no
            Struct, no Marshal escape) cannot be this poly value's receiver, so
            its arm is dead. Dropping it makes sp_<Class>_<name> an unreferenced
