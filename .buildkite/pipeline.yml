@@ -40,8 +40,9 @@
 # spinel_rt.h-heavy per-test TUs: gcc prunes unreferenced statics before codegen
 # so -O1 is far faster than -O0, while clang runs the full optimizer over every
 # emitted inline static so -O1 is ~2.5x SLOWER. gcc tests therefore run at -O1
-# (run-tests' default) and clang tests at -O0. bench/optcarrot take the Makefile
-# default -O2, exactly like ci.yml, which sets OPT only on the test step.
+# (run-tests' default) and clang tests at -O0 -- BOTH clang tracks, macOS
+# included. bench/optcarrot take the Makefile default -O2, exactly like ci.yml,
+# which sets OPT only on the test step.
 
 steps:
   # ===================== macOS / clang (native Ruby) =======================
@@ -69,6 +70,15 @@ steps:
     depends_on: "build-macos"
     agents:
       queue: "macos"
+    env:
+      # macOS is a CLANG track, so it takes ci.yml's clang opt level like the
+      # Linux clang shards do. This step ran at run-tests' -O1 default, which
+      # is a clang+-O1 pairing ci.yml never exercises: on the agent's Apple
+      # clang 15, subclass_inherits_module_parent and bundle_classd_46 build a
+      # binary that reads an inherited ivar as nil. Same agent, same artifacts,
+      # -O0 vs -O1: 2 pass vs 2 fail (build #43). The generated C is
+      # byte-identical to a local build's, so this is the C compiler, not spinel.
+      OPT: "-O0"
     # macos queue serves ~4 at once (builds #14-15 each stranded one shard at 5).
     parallelism: 4
     command:
