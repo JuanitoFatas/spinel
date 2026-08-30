@@ -220,6 +220,7 @@ def main
         end
         fn = nm if nm.length > 0
         n = count_in(cl, "sp_poly_")
+        n = 0 if cur_file == "<spinel-synthesized>"
         if n > 0 && cur_line > 0
           d = loop_at.length
           w = 1

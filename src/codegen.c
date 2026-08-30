@@ -9621,6 +9621,7 @@ char *codegen_program(const NodeTable *nt) {
      g_proc_protos; we splice those in ahead of these bodies, since a proc
      function must be declared before the body that references it. */
   Buf *body = (Buf *)calloc(1, sizeof *body);  /* heap: must survive a collect-mode longjmp (see EMIT_COLLECT_UNIT) */
+  emit_synth_line_marker(body);
   for (int i = 0; i < c->nclasses; i++)
     if (!is_builtin_reopen(c->classes[i].name))
       EMIT_COLLECT_UNIT(emit_class_new(c, &c->classes[i], body));
@@ -9639,6 +9640,7 @@ char *codegen_program(const NodeTable *nt) {
     if (c->scopes[s].yields || (!c->scopes[s].reachable && !c->scopes[s].is_proc_form) || scope_is_shadowed(c, s) || (c->scopes[s].is_transplanted_source && !scope_toplevel_included(c, s))) continue; EMIT_COLLECT_UNIT(emit_method(c, &c->scopes[s], body));
   }
   /* Comparable cmp-hook dispatcher (after the user `<=>` definitions it calls). */
+  emit_synth_line_marker(body);
   if (g_has_user_cmp) emit_obj_cmp_dispatch(c, body);
   if (g_has_user_binop) emit_user_binop_dispatch(c, body);
   if (g_has_user_coerce) emit_user_coerce_dispatch(c, body);

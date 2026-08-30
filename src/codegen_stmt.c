@@ -6120,6 +6120,22 @@ void emit_line_directive(Compiler *c, int id, Buf *b) {
   buf_printf(b, "#line %d \"%s\"\n", ln, path);
 }
 
+/* Mark the start of a SYNTHESIZED region: code generated whole from the
+   class table -- the runtime dispatch switches, the generated constructors --
+   is lowered from no node, so no #line is ever emitted inside it, and
+   whatever directive was last in effect claimed the whole region for an
+   unrelated user line (#4197: a Rails-shaped app pinned 239 boxed calls of
+   its inspect switch on `main.rb:102`). The pseudo-file names the region for
+   a reader and for spinel-doctor's advice leg; the duplicate-suppression
+   state is reset so the next real statement re-asserts its own position. */
+void emit_synth_line_marker(Buf *b) {
+  if (!g_line_map) return;
+  if (b->len > 0 && b->p[b->len - 1] != '\n') buf_puts(b, "\n");
+  buf_puts(b, "#line 1 \"<spinel-synthesized>\"\n");
+  g_lm_last_line = 0;
+  g_lm_last_fid = -1;
+}
+
 void emit_stmt(Compiler *c, int id, Buf *b, int indent) {
   emit_line_directive(c, id, b);
   /* saved and restored like the other re-entry markers: a block body inlined
