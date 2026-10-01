@@ -130,8 +130,8 @@ steps:
     command:
       - ".buildkite/ensure-sccache"
       - "export SCCACHE_DIR=\"$$PWD/.sccache\" SCCACHE_CACHE_SIZE=15G SCCACHE_IDLE_TIMEOUT=0"
-      - "make deps"
-      - "make -j\"$$(getconf _NPROCESSORS_ONLN)\" all"
+      - ".buildkite/as-user make deps"
+      - ".buildkite/as-user make -j\"$$(getconf _NPROCESSORS_ONLN)\" all"
       - ".buildkite/as-user make -j\"$$(getconf _NPROCESSORS_ONLN)\" test-run TESTS= PKG_TESTS= OPT=-O1"
       - ".buildkite/as-user make alloc-report-test infer-test spin-check"
       - ".buildkite/as-user make -j\"$$(getconf _NPROCESSORS_ONLN)\" build/spinel-work"
@@ -261,8 +261,8 @@ steps:
       CC: "clang"
     command:
       - ".buildkite/ensure-clang"
-      - "make deps"
-      - "make -j\"$$(getconf _NPROCESSORS_ONLN)\" all"
+      - ".buildkite/as-user make deps"
+      - ".buildkite/as-user make -j\"$$(getconf _NPROCESSORS_ONLN)\" all"
       - ".buildkite/as-user make -j\"$$(getconf _NPROCESSORS_ONLN)\" test-run TESTS= PKG_TESTS= OPT=-O0"
 
   - label: ":linux: tests clang %n"
