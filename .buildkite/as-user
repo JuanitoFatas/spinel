@@ -1,0 +1,19 @@
+#!/usr/bin/env -S ruby --disable-gems
+# frozen_string_literal: true
+#
+# as-user CMD... — run CMD as an unprivileged user when the step runs as root.
+#
+# The Linux steps run in the `ruby` container as root, and root ignores file
+# permissions: a fixture that drops a directory to 0500 and expects it to be
+# unwritable (packages/tmpdir's tmpdir_expand_usable) then sees it writable.
+# ci.yml's runners run as an ordinary user, so the tests do too. Elsewhere
+# (macOS) this only execs CMD. See ensure-clang for why the shebang needs `-S`.
+
+exec(*ARGV) unless Process.uid.zero?
+
+USER = "ci"
+unless system("id", USER, out: File::NULL, err: File::NULL)
+  system("useradd", "--create-home", USER) or abort("as-user: useradd failed")
+end
+system("chown", "-R", "#{USER}:#{USER}", Dir.pwd) or abort("as-user: chown failed")
+exec("runuser", "-u", USER, "--", *ARGV)

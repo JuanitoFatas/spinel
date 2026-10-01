@@ -61,7 +61,11 @@ steps:
       - ".buildkite/ensure-coreutils"
       - "make deps"
       - "make -j\"$$(getconf _NPROCESSORS_ONLN)\" all"
-      - "make -j\"$$(getconf _NPROCESSORS_ONLN)\" test-run TESTS= PKG_TESTS= OPT=-O0"
+      # -o skips backtrace-test. The hosted image is macOS 14, where a rescued
+      # backtrace comes out with no frames (with Xcode 15.4 and 16.3 alike);
+      # ci.yml's macos-latest is macOS 26, where it passes. Drop the -o once the
+      # queue runs a newer macOS.
+      - "make -j\"$$(getconf _NPROCESSORS_ONLN)\" -o backtrace-test test-run TESTS= PKG_TESTS= OPT=-O0"
 
   - label: ":mac: tests %n"
     key: "tests-macos"
@@ -115,11 +119,11 @@ steps:
     command:
       - "make deps"
       - "make -j\"$$(getconf _NPROCESSORS_ONLN)\" all"
-      - "make -j\"$$(getconf _NPROCESSORS_ONLN)\" test-run TESTS= PKG_TESTS= OPT=-O1"
-      - "make alloc-report-test infer-test spin-check"
-      - "make -j\"$$(getconf _NPROCESSORS_ONLN)\" build/spinel-work"
-      - "make scale-test"
-      - "make optcarrot"
+      - ".buildkite/as-user make -j\"$$(getconf _NPROCESSORS_ONLN)\" test-run TESTS= PKG_TESTS= OPT=-O1"
+      - ".buildkite/as-user make alloc-report-test infer-test spin-check"
+      - ".buildkite/as-user make -j\"$$(getconf _NPROCESSORS_ONLN)\" build/spinel-work"
+      - ".buildkite/as-user make scale-test"
+      - ".buildkite/as-user make optcarrot"
 
   - label: ":linux: tests gcc %n"
     key: "tests-linux-gcc"
@@ -137,7 +141,7 @@ steps:
       - "buildkite-agent artifact download lib/libspinel_rt_mt.a . --step build-linux-gcc"
       - "buildkite-agent artifact download 'packages/*/*.o' . --step build-linux-gcc"
       - "chmod +x bin/spinel"
-      - ".buildkite/run-tests --slice"
+      - ".buildkite/as-user .buildkite/run-tests --slice"
 
   - label: ":linux: bench (gcc) %n"
     key: "bench"
@@ -154,7 +158,7 @@ steps:
       - "buildkite-agent artifact download lib/libspinel_rt_mt.a . --step build-linux-gcc"
       - "buildkite-agent artifact download 'packages/*/*.o' . --step build-linux-gcc"
       - "chmod +x bin/spinel"
-      - ".buildkite/run-bench --slice"
+      - ".buildkite/as-user .buildkite/run-bench --slice"
 
   # ===================== Linux / clang (ruby:4.0 + clang) ==================
   - label: ":linux: build (clang)"
@@ -185,7 +189,7 @@ steps:
       - ".buildkite/ensure-clang"
       - "make deps"
       - "make -j\"$$(getconf _NPROCESSORS_ONLN)\" all"
-      - "make -j\"$$(getconf _NPROCESSORS_ONLN)\" test-run TESTS= PKG_TESTS= OPT=-O0"
+      - ".buildkite/as-user make -j\"$$(getconf _NPROCESSORS_ONLN)\" test-run TESTS= PKG_TESTS= OPT=-O0"
 
   - label: ":linux: tests clang %n"
     key: "tests-linux-clang"
@@ -204,7 +208,7 @@ steps:
       - "buildkite-agent artifact download 'packages/*/*.o' . --step build-linux-clang"
       - "chmod +x bin/spinel"
       - ".buildkite/ensure-clang"
-      - ".buildkite/run-tests --slice"
+      - ".buildkite/as-user .buildkite/run-tests --slice"
 
   # ===================== Linux / gcc -m32 (ruby:4.0 + multilib) ============
   # sp_int is the pointer width, so -m32 is where the runtime's and emitters'
@@ -246,7 +250,7 @@ steps:
       - "buildkite-agent artifact download lib/libspinel_rt_mt.a . --step build-linux-m32"
       - "buildkite-agent artifact download 'packages/*/*.o' . --step build-linux-m32"
       - "chmod +x bin/spinel"
-      - ".buildkite/run-tests --slice"
+      - ".buildkite/as-user .buildkite/run-tests --slice"
 
   # ===================== wasm32-wasi (ruby:4.0 + wasi-sdk + wasmtime) ======
   # Builds a few corpus programs for wasm32-wasi and runs them under wasmtime;
