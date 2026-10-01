@@ -1,0 +1,13 @@
+#!/usr/bin/env -S ruby --disable-gems
+# frozen_string_literal: true
+#
+# Install the 32-bit toolchain inside the `ruby` container for the -m32 track,
+# the packages ci.yml's linux32 job installs: gcc-multilib brings the 32-bit
+# libc and libgcc, and every generated program links -lcrypt, hence the i386
+# libcrypt. The container runs as root, so apt needs no sudo. See ensure-clang
+# for why the shebang needs `-S`.
+
+system("dpkg", "--add-architecture", "i386") or abort("ensure-m32: dpkg --add-architecture failed")
+system("apt-get", "update", "-qq") or abort("ensure-m32: apt-get update failed")
+system("apt-get", "install", "-y", "-qq", "gcc-multilib", "libc6-dev-i386", "libcrypt-dev:i386") or
+  abort("ensure-m32: apt-get install failed")

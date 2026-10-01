@@ -1,156 +1,52 @@
 #!/usr/bin/env -S ruby --disable-gems
 # frozen_string_literal: true
 #
-# run-tests — run a subset of the test/*.rb golden-diff fixtures against an
-# already-built compiler, then tally just that subset.
+# run-tests --slice — run this parallel job's slice of the test corpus
+# (test/*.rb and packages/*/test/*.rb) against an already-built compiler.
 #
-# Two ways to call it:
-#   .buildkite/run-tests test/a.rb test/b.rb ...   # explicit fixtures
-#   .buildkite/run-tests --slice                   # this parallel job's slice
+# The slice is the Makefile's own TEST_SHARD=k/n, the same pick ci.yml uses,
+# so which fixtures the build gates on (promote_*, int64-only fixtures on a
+# 32-bit target, packages whose system headers are missing) and how they are
+# split stay in one place. test-corpus-summary tallies the slice and exits
+# non-zero on any FAIL or ERR.
 #
-# --slice reads Buildkite's BUILDKITE_PARALLEL_JOB / _JOB_COUNT and takes a
-# stable modulo slice of the fixture list, so each parallel job runs a disjoint
-# share. The split is deterministic (sorted filenames), which is enough for
-# spinel's roughly-uniform fixtures — the heavy/uneven targets (bench,
-# optcarrot) are separate pipeline steps.
+# It does NOT build the compiler: bin/spinel and lib/libspinel_rt.a come from
+# the build step's artifacts. `make -o` marks every prebuilt file assume-old,
+# so make links what was downloaded and never descends into the toolchain
+# build — a shard needs no vendored prism/rbs sources. That is also why this
+# calls test-corpus-summary directly rather than test-corpus: -o is not
+# passed down to the sub-make test-corpus starts.
 #
-# The list comes from `make print-tests`, NOT from a glob: which fixtures the
-# build gates on is config-dependent (test/promote_* only has defined output
-# under --int-overflow=promote, the unicode fixtures need tables a stripped
-# regexp build omits, packages/openssl needs the system headers). Globbing
-# test/*.rb hands a shard fixtures this build is expected to fail. The list
-# also covers packages/*/test/*.rb, which `make test` gates on too.
-#
-# It does NOT build the compiler: it expects bin/spinel and lib/libspinel_rt.a
-# to already exist (from `make all`, or downloaded as a build artifact). The
-# `make -o` flags below mark those two as assume-old so make uses them as-is
-# and never descends into the toolchain build — a test node therefore needs no
-# vendored prism/rbs sources, only the checkout + the two artifacts + cc + ruby.
-#
-# Ruby (not bash) so the slice/tally runs in-process: no ls|sort|awk, no
-# per-target basename/cat/rm/head subprocesses — just the one `make`. See
-# ensure-clang for why the shebang needs `-S`.
+# See ensure-clang for why the shebang needs `-S`.
 
-SPINEL = "bin/spinel"
-RT_LIB = "lib/libspinel_rt.a"
-
-# Everything `make all` produces that the test rule links against, beyond the
-# two required above: the -DSP_THREADS runtime a threaded fixture links, and
-# the bundled package objects in both variants. Whichever of these the build
-# step published is marked assume-old, so a shard links what it downloaded
-# instead of recompiling the MT runtime (~30 TUs) on every job.
-PREBUILT = [SPINEL, RT_LIB, "lib/libspinel_rt_mt.a", *Dir.glob("packages/*/*.o")].freeze
-
-# -O1 compiles each generated test ~3x faster than -O0; see Makefile.
-OPT = (opt = ENV["OPT"]).nil? || opt.empty? ? "-O1" : opt
+require "etc"
+require "fileutils"
 
 def die(msg)
   warn "run-tests: #{msg}"
   exit 2
 end
 
-# test/foo.rb               -> build/test-results/foo.ok
-# packages/json/test/foo.rb -> build/test-results/pkg.json.foo.ok
-# nil for anything else, which the caller reports as a skipped argument.
-# Mirrors TEST_TARGETS / PKG_TEST_TARGETS in the Makefile.
-def ok_target(path)
-  if (m = %r{\Apackages/([^/]+)/test/([^/]+)\.rb\z}.match(path))
-    "build/test-results/pkg.#{m[1]}.#{m[2]}.ok"
-  elsif (m = %r{\Atest/([^/]+)\.rb\z}.match(path))
-    "build/test-results/#{m[1]}.ok"
-  end
-end
+die("usage: #{File.basename($PROGRAM_NAME)} --slice") unless ARGV == ["--slice"]
 
-# Ask make which fixtures this build gates on. Parsing the makefile is all
-# `print-tests` needs, so this never descends into the toolchain build.
-def gated_fixtures
-  out = IO.popen(["make", "-s", "print-tests"], &:read)
-  die("`make -s print-tests` failed — is this a spinel checkout?") unless $?.success?
-  # Sort here rather than trusting make's order: Ruby's bytewise sort keeps the
-  # partition identical on macOS and Linux, so shards stay disjoint across agents.
-  list = out.split("\n").map(&:strip).reject(&:empty?).sort
-  die("`make -s print-tests` listed no fixtures") if list.empty?
-  list
-end
+count = ENV["BUILDKITE_PARALLEL_JOB_COUNT"].to_s
+index = ENV["BUILDKITE_PARALLEL_JOB"].to_s
+die("--slice needs BUILDKITE_PARALLEL_JOB(_COUNT) (set parallelism: N on the step)") if count.empty? || index.empty?
 
-die("usage: #{File.basename($PROGRAM_NAME)} (--slice | test/a.rb [test/b.rb ...])") if ARGV.empty?
+# Everything the test rules link against: the compiler, both runtimes, and the
+# bundled package objects in both variants.
+prebuilt = ["bin/spinel", "lib/libspinel_rt.a", "lib/libspinel_rt_mt.a", *Dir.glob("packages/*/*.o")]
+prebuilt.first(2).each { |f| die("missing prebuilt #{f} — download the build artifact first") unless File.exist?(f) }
 
-# Resolve --slice into an explicit fixture list before anything else.
-if ARGV[0] == "--slice"
-  count = ENV["BUILDKITE_PARALLEL_JOB_COUNT"]
-  index = ENV["BUILDKITE_PARALLEL_JOB"]
-  die("--slice needs BUILDKITE_PARALLEL_JOB_COUNT (set parallelism: N on the step)") if count.nil? || count.empty?
-  die("--slice needs BUILDKITE_PARALLEL_JOB (set parallelism: N on the step)") if index.nil? || index.empty?
-  count = count.to_i
-  index = index.to_i
-  # BUILDKITE_PARALLEL_JOB is 0-indexed; position % count == index gives a
-  # stable, disjoint partition covering every file exactly once across all jobs.
-  fixtures = gated_fixtures
-  ARGV.replace(fixtures.select.with_index { |_, pos| pos % count == index })
-  puts "run-tests: shard #{index + 1}/#{count} — #{ARGV.size} fixtures"
-end
+# The tally reads every stamp in the directory, so start from an empty one.
+FileUtils.rm_rf("build/test-results")
 
-[SPINEL, RT_LIB].each do |f|
-  die("missing prebuilt #{f} — run 'make all' or download the build artifact first") unless File.exist?(f)
-end
+# -O1 compiles each generated gcc test far faster than -O0; clang steps set
+# OPT=-O0 (see pipeline.yml).
+opt = ENV["OPT"].to_s.empty? ? "-O1" : ENV["OPT"]
+shard = "#{index.to_i + 1}/#{count}"
+puts "run-tests: shard #{shard}"
 
-# Map each test/X.rb -> build/test-results/X.ok, wiping any stale stamp so the
-# tally only reflects this run. (`make test` always runs fresh for the same
-# reason — a stale PASS stamp was a known foot-gun; see Makefile.)
-targets = []
-n_in = 0
-ARGV.each do |f|
-  unless (ok = ok_target(f))
-    warn "run-tests: skipping non-fixture arg '#{f}'"
-    next
-  end
-  n_in += 1
-  File.delete(ok) if File.exist?(ok)
-  File.delete("#{ok}.diff") if File.exist?("#{ok}.diff")
-  targets << ok
-end
-
-die("no fixtures to run (matched #{n_in} args)") if targets.empty?
-
-# Build only the requested .ok targets. -o on the two prebuilt artifacts keeps
-# make from rebuilding the toolchain. Each recipe returns 0 even on a failing
-# fixture (status goes into the .ok file), so we tally afterward rather than
-# relying on make's exit code; surface a hard make failure separately.
-make = ["make"]
-make << "-j#{ENV["JOBS"]}" unless (jobs = ENV["JOBS"]).nil? || jobs.empty?
-PREBUILT.select { |f| File.exist?(f) }.each { |f| make.push("-o", f) }
-make.push("OPT=#{OPT}", *targets)
-warn "run-tests: make exited non-zero (see output above)" unless system(*make)
-
-pass = fail = err = 0
-rc = 0
-targets.each do |ok|
-  bn = File.basename(ok, ".ok")
-  unless File.file?(ok)
-    puts "ERR:  #{bn} (no result stamp — make did not build it)"
-    err += 1
-    rc = 1
-    next
-  end
-  case (status = File.read(ok).strip)
-  when "PASS"
-    pass += 1
-  when "FAIL"
-    puts "FAIL: #{bn}"
-    # head -40 of the diff, read lazily so a huge diff isn't slurped whole.
-    File.foreach("#{ok}.diff").first(40).each { |l| print l } if File.file?("#{ok}.diff")
-    fail += 1
-    rc = 1
-  when "ERR"
-    puts "ERR:  #{bn} (compile/link failed)"
-    err += 1
-    rc = 1
-  else
-    puts "ERR:  #{bn} (unrecognized status '#{status}')"
-    err += 1
-    rc = 1
-  end
-end
-
-puts "Tests: #{pass} pass, #{fail} fail, #{err} error (of #{targets.size})"
-exit rc
+make = ["make", "-j#{Etc.nprocessors}"]
+prebuilt.select { |f| File.exist?(f) }.each { |f| make.push("-o", f) }
+exec(*make, "OPT=#{opt}", "TEST_SHARD=#{shard}", "test-corpus-summary")

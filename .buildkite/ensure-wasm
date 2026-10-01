@@ -1,0 +1,19 @@
+#!/usr/bin/env -S ruby --disable-gems
+# frozen_string_literal: true
+#
+# Install the wasi-sdk (into $WASI_SDK_PATH) and wasmtime (onto /usr/local/bin)
+# for the wasm32-wasi track, at the versions ci.yml's wasm job pins. See
+# ensure-clang for why the shebang needs `-S`.
+
+sdk = ENV.fetch("WASI_SDK_VERSION")
+wasmtime = ENV.fetch("WASMTIME_VERSION")
+sdk_path = ENV.fetch("WASI_SDK_PATH")
+
+def run(*cmd) = system(*cmd) || abort("ensure-wasm: #{cmd.join(" ")} failed")
+
+Dir.mkdir(sdk_path) unless Dir.exist?(sdk_path)
+run("sh", "-c", "curl -fsSL https://github.com/WebAssembly/wasi-sdk/releases/download/wasi-sdk-#{sdk}/wasi-sdk-#{sdk}.0-x86_64-linux.tar.gz " \
+                "| tar -xz -C '#{sdk_path}' --strip-components=1")
+run("sh", "-c", "curl -fsSL https://github.com/bytecodealliance/wasmtime/releases/download/v#{wasmtime}/wasmtime-v#{wasmtime}-x86_64-linux.tar.xz " \
+                "| tar -xJ -C /usr/local/bin --strip-components=1 --wildcards '*/wasmtime'")
+run("wasmtime", "--version")

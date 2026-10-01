@@ -1,22 +1,25 @@
 # Buildkite pipeline for spinel — https://buildkite.com/kyoto/spinel
 #
-# Mirrors .github/workflows/ci.yml on Buildkite hosted agents, fanning the
-# ~3340-fixture suite across parallel shards so it finishes faster than GHA:
-#   • macOS / clang  — build + suite                      (queue=macos, native)
-#   • Linux / gcc    — build + suite + gates + bench      (queue=linux, image: ruby)
-#   • Linux / clang  — build + suite                      (queue=linux, image: ruby)
-# Running the suite under gcc and clang is real coverage — clang -Werror trips on
-# discarded statement-exprs gcc ignores (Makefile's TEST_WARN_SUPPRESS).
-# The gcc track carries bench, optcarrot and the property gates, matching
-# ci.yml: its test leg is the cheaper of the two, so loading it there keeps the
-# clang suite the only thing setting the wall time.
+# Mirrors the push lanes of .github/workflows/ci.yml on Buildkite hosted
+# agents, fanning the ~4500-fixture corpus across parallel shards:
+#   • macOS / clang       — make test                       (queue=macos, native)
+#   • Linux / gcc         — make test + gates + scale-test + bench + optcarrot
+#   • Linux / clang       — make test
+#   • Linux / gcc -m32    — make test-corpus at -Og
+#   • wasm32-wasi         — make wasm-test
+# Linux steps run in the public `ruby:4.0` image (ci.yml's Ruby; Debian with
+# gcc + make + curl). The image has no clang or 32-bit toolchain, so those
+# tracks install them via .buildkite/ensure-clang / ensure-m32 — cheap because
+# the container runs as root. macOS runs natively; .buildkite/ensure-coreutils
+# guarantees a `timeout`, without which every fixture runs with no time limit.
 #
-# Linux steps run inside the public `ruby` container image (buildpack-deps-based:
-# Ruby + gcc + make + curl). The ruby image has no clang, so the clang track
-# `apt-get install`s it via .buildkite/ensure-clang — cheap because the container
-# runs as root (no sudo). macOS runs natively (its hosted image ships Ruby+clang),
-# but not necessarily coreutils: .buildkite/ensure-coreutils guarantees a
-# `timeout`, without which every fixture would run with no time limit.
+# `make test` is the corpus plus the C-side legs test-run lists (rbs, rejection,
+# GC, threading, extension tests). Each track splits it in two:
+#   • a build step that publishes the compiler + runtimes, and shards that run
+#     the corpus against them with make's own TEST_SHARD=k/n (.buildkite/run-tests);
+#   • a legs step that builds its own tree and runs test-run with the corpus
+#     emptied (TESTS= PKG_TESTS=), so the legs track whatever test-run lists.
+# The legs step does not wait on the build, so the legs never delay the shards.
 #
 # Explicit keyed builds (not a build matrix): a matrix can't set per-combo keys,
 # so downstream steps could only depend on the whole matrix — in build #9 one
@@ -24,25 +27,13 @@
 # each track's tests depend on just their own build and scope the artifact
 # download with --step (all builds publish the same filenames).
 #
-# Tracks run concurrently on separate queues, so wall-clock ≈ the slowest track.
-# The binding constraint is hosted agent CONCURRENCY: builds #13-15 showed the
-# linux queue serving ~10 jobs at once and macos ~4, the rest queuing 25-50s.
-# Past that cap, more shards only add waves — so parallelism is right-sized to
-# land every shard in ONE wave (linux test phase: 3 gcc + 4 clang + 2 bench +
-# gates = 10; macos: 4).
+# Hosted agent CONCURRENCY is the binding constraint: builds #13-15 showed the
+# linux queue serving ~10 jobs at once and macos ~4. The shard counts are a
+# first cut for the ~4500-fixture corpus and want a re-tune from real timings.
 #
-# Those shard counts were last tuned when the suite was 950 fixtures; it is now
-# ~3340, so bench (61 programs, ~64s serial) gave up a slot to the test shards
-# that now set the wall time. The split is still due a re-tune against real
-# timings from the first green build on this suite.
-#
-# OPT mirrors ci.yml, which learned the two compilers behave oppositely on the
-# spinel_rt.h-heavy per-test TUs: gcc prunes unreferenced statics before codegen
-# so -O1 is far faster than -O0, while clang runs the full optimizer over every
-# emitted inline static so -O1 is ~2.5x SLOWER. gcc tests therefore run at -O1
-# (run-tests' default) and clang tests at -O0 -- BOTH clang tracks, macOS
-# included. bench/optcarrot take the Makefile default -O2, exactly like ci.yml,
-# which sets OPT only on the test step.
+# OPT mirrors ci.yml: gcc tests run at -O1 (run-tests' default), clang at -O0
+# (-O1 is ~2.5x SLOWER for clang on the spinel_rt.h-heavy TUs), -m32 at -Og.
+# bench/optcarrot take the Makefile default -O2, as in ci.yml.
 
 steps:
   # ===================== macOS / clang (native Ruby) =======================
@@ -54,9 +45,6 @@ steps:
       - ".buildkite/ensure-coreutils"
       - "make deps"
       - "make -j\"$$(getconf _NPROCESSORS_ONLN)\" all"
-      # The sub-gates `make test` runs alongside the fixtures. run-tests builds
-      # the .ok targets directly, so it bypasses them; run them once per track.
-      - "make rbs-test rbs-seed-test re-lit-test reject-test"
     artifact_paths:
       - "bin/spinel"
       - "lib/libspinel_rt.a"
@@ -65,22 +53,27 @@ steps:
       - "lib/libspinel_rt_mt.a"
       - "packages/*/*.o"
 
+  - label: ":mac: legs"
+    key: "legs-macos"
+    agents:
+      queue: "macos"
+    command:
+      - ".buildkite/ensure-coreutils"
+      - "make deps"
+      - "make -j\"$$(getconf _NPROCESSORS_ONLN)\" all"
+      - "make -j\"$$(getconf _NPROCESSORS_ONLN)\" test-run TESTS= PKG_TESTS= OPT=-O0"
+
   - label: ":mac: tests %n"
     key: "tests-macos"
     depends_on: "build-macos"
     agents:
       queue: "macos"
     env:
-      # macOS is a CLANG track, so it takes ci.yml's clang opt level like the
-      # Linux clang shards do. This step ran at run-tests' -O1 default, which
-      # is a clang+-O1 pairing ci.yml never exercises: on the agent's Apple
-      # clang 15, subclass_inherits_module_parent and bundle_classd_46 build a
-      # binary that reads an inherited ivar as nil. Same agent, same artifacts,
-      # -O0 vs -O1: 2 pass vs 2 fail (build #43). The generated C is
-      # byte-identical to a local build's, so this is the C compiler, not spinel.
+      # ci.yml sets -O0 for every clang lane, macOS included. Apple clang 15 at
+      # -O1 miscompiles subclass_inherits_module_parent and bundle_classd_46.
       OPT: "-O0"
-    # macos queue serves ~4 at once (builds #14-15 each stranded one shard at 5).
-    parallelism: 4
+    # The legs step holds one of the ~4 macos slots.
+    parallelism: 3
     command:
       - ".buildkite/ensure-coreutils"
       - "buildkite-agent artifact download bin/spinel . --step build-macos"
@@ -90,10 +83,10 @@ steps:
       - "chmod +x bin/spinel"
       - ".buildkite/run-tests --slice"
 
-  # ============ Linux / gcc (image: ruby) — carries bench + gates ==========
+  # ============ Linux / gcc — carries the gates, bench and optcarrot =========
   - label: ":linux: build (gcc)"
     key: "build-linux-gcc"
-    image: "ruby"
+    image: "ruby:4.0"
     agents:
       queue: "linux"
     env:
@@ -101,30 +94,42 @@ steps:
     command:
       - "make deps"
       - "make -j\"$$(getconf _NPROCESSORS_ONLN)\" all"
-      - "make rbs-test rbs-seed-test re-lit-test reject-test"
     artifact_paths:
       - "bin/spinel"
       - "lib/libspinel_rt.a"
-      # A threaded fixture links the -DSP_THREADS runtime and the _mt package
-      # objects; shipping them keeps the shards from rebuilding the MT runtime.
       - "lib/libspinel_rt_mt.a"
       - "packages/*/*.o"
-      # spin-check runs bin/spin, which resolves --rbs seeds through
-      # spinel_rbs_extract staged beside it; without that copy it loses them.
-      - "bin/spin"
-      - "bin/spinel_rbs_extract"
 
-  - label: ":linux: tests gcc %n"
-    key: "tests-linux-gcc"
-    depends_on: "build-linux-gcc"
-    image: "ruby"
+  # The gates assert the SHAPE of the generated C — that a slot keeps its typed
+  # representation, that the alloc report keeps its format — which the output
+  # diffs cannot see. scale-test is the front end's work ratio between a program
+  # and one four times its size. Both, like optcarrot, are Linux/gcc singles in
+  # ci.yml, so they ride this track's legs step.
+  - label: ":linux: legs + gates (gcc)"
+    key: "legs-linux-gcc"
+    image: "ruby:4.0"
     agents:
       queue: "linux"
     env:
       CC: "gcc"
-    # Right-sized so gcc + clang + bench + gates fit one linux wave (~10).
-    # gcc gets one shard fewer than clang: it compiles the per-test TUs faster,
-    # so an even split would leave the gcc shards idle waiting on clang.
+    command:
+      - "make deps"
+      - "make -j\"$$(getconf _NPROCESSORS_ONLN)\" all"
+      - "make -j\"$$(getconf _NPROCESSORS_ONLN)\" test-run TESTS= PKG_TESTS= OPT=-O1"
+      - "make alloc-report-test infer-test spin-check"
+      - "make -j\"$$(getconf _NPROCESSORS_ONLN)\" build/spinel-work"
+      - "make scale-test"
+      - "make optcarrot"
+
+  - label: ":linux: tests gcc %n"
+    key: "tests-linux-gcc"
+    depends_on: "build-linux-gcc"
+    image: "ruby:4.0"
+    agents:
+      queue: "linux"
+    env:
+      CC: "gcc"
+    # gcc compiles the per-test TUs faster than clang, so it gets fewer shards.
     parallelism: 3
     command:
       - "buildkite-agent artifact download bin/spinel . --step build-linux-gcc"
@@ -134,39 +139,14 @@ steps:
       - "chmod +x bin/spinel"
       - ".buildkite/run-tests --slice"
 
-  # optcarrot and the property gates share a step: both are Linux/gcc singles
-  # off the same build, and one step keeps the linux test phase at 10 jobs.
-  # The gates assert the SHAPE of the generated C — that a slot keeps its typed
-  # representation, that the alloc report keeps its format — which the output
-  # diffs cannot see, since a boxed hash still prints the right answer.
-  - label: ":linux: gates (gcc)"
-    key: "gates"
-    depends_on: "build-linux-gcc"
-    image: "ruby"
-    agents:
-      queue: "linux"
-    env:
-      CC: "gcc"
-    command:
-      - "buildkite-agent artifact download bin/spinel . --step build-linux-gcc"
-      - "buildkite-agent artifact download lib/libspinel_rt.a . --step build-linux-gcc"
-      - "buildkite-agent artifact download lib/libspinel_rt_mt.a . --step build-linux-gcc"
-      - "buildkite-agent artifact download 'packages/*/*.o' . --step build-linux-gcc"
-      - "buildkite-agent artifact download bin/spin . --step build-linux-gcc"
-      - "buildkite-agent artifact download bin/spinel_rbs_extract . --step build-linux-gcc"
-      - "chmod +x bin/spinel bin/spin bin/spinel_rbs_extract"
-      - "make -o bin/spinel -o lib/libspinel_rt.a -o bin/spin optcarrot alloc-report-test infer-test spin-check"
-
   - label: ":linux: bench (gcc) %n"
     key: "bench"
     depends_on: "build-linux-gcc"
-    image: "ruby"
+    image: "ruby:4.0"
     agents:
       queue: "linux"
     env:
       CC: "gcc"
-    # 61 benchmarks, ~64s serial. Two shards put it well under the test shards,
-    # which is all that is needed now that they, not bench, set the wall time.
     parallelism: 2
     command:
       - "buildkite-agent artifact download bin/spinel . --step build-linux-gcc"
@@ -176,10 +156,10 @@ steps:
       - "chmod +x bin/spinel"
       - ".buildkite/run-bench --slice"
 
-  # ===================== Linux / clang (image: ruby + clang) ===============
+  # ===================== Linux / clang (ruby:4.0 + clang) ==================
   - label: ":linux: build (clang)"
     key: "build-linux-clang"
-    image: "ruby"
+    image: "ruby:4.0"
     agents:
       queue: "linux"
     env:
@@ -188,27 +168,34 @@ steps:
       - ".buildkite/ensure-clang"
       - "make deps"
       - "make -j\"$$(getconf _NPROCESSORS_ONLN)\" all"
-      - "make rbs-test rbs-seed-test re-lit-test reject-test"
     artifact_paths:
       - "bin/spinel"
       - "lib/libspinel_rt.a"
-      # A threaded fixture links the -DSP_THREADS runtime and the _mt package
-      # objects; shipping them keeps the shards from rebuilding the MT runtime.
       - "lib/libspinel_rt_mt.a"
       - "packages/*/*.o"
 
-  - label: ":linux: tests clang %n"
-    key: "tests-linux-clang"
-    depends_on: "build-linux-clang"
-    image: "ruby"
+  - label: ":linux: legs (clang)"
+    key: "legs-linux-clang"
+    image: "ruby:4.0"
     agents:
       queue: "linux"
     env:
       CC: "clang"
-      # clang keeps the full optimizer on every emitted inline static, so -O1
-      # compiles the per-test TUs ~2.5x slower than -O0 (ci.yml's measurement).
+    command:
+      - ".buildkite/ensure-clang"
+      - "make deps"
+      - "make -j\"$$(getconf _NPROCESSORS_ONLN)\" all"
+      - "make -j\"$$(getconf _NPROCESSORS_ONLN)\" test-run TESTS= PKG_TESTS= OPT=-O0"
+
+  - label: ":linux: tests clang %n"
+    key: "tests-linux-clang"
+    depends_on: "build-linux-clang"
+    image: "ruby:4.0"
+    agents:
+      queue: "linux"
+    env:
+      CC: "clang"
       OPT: "-O0"
-    # Right-sized so gcc + clang + bench + gates fit one linux wave (~10).
     parallelism: 4
     command:
       - "buildkite-agent artifact download bin/spinel . --step build-linux-clang"
@@ -218,3 +205,65 @@ steps:
       - "chmod +x bin/spinel"
       - ".buildkite/ensure-clang"
       - ".buildkite/run-tests --slice"
+
+  # ===================== Linux / gcc -m32 (ruby:4.0 + multilib) ============
+  # sp_int is the pointer width, so -m32 is where the runtime's and emitters'
+  # word-size assumptions are exercised. Corpus only, as in ci.yml: the C-side
+  # legs have no 32-bit toolchain to build against, and an `# spinel: int64`
+  # fixture drops out on its own (SPINEL_INT_BITS, probed from CC).
+  - label: ":linux: build (gcc -m32)"
+    key: "build-linux-m32"
+    image: "ruby:4.0"
+    agents:
+      queue: "linux"
+    env:
+      CC: "gcc -m32"
+    command:
+      - ".buildkite/ensure-m32"
+      - "make deps"
+      - "make -j\"$$(getconf _NPROCESSORS_ONLN)\" all"
+    artifact_paths:
+      - "bin/spinel"
+      - "lib/libspinel_rt.a"
+      - "lib/libspinel_rt_mt.a"
+      - "packages/*/*.o"
+
+  - label: ":linux: tests gcc -m32 %n"
+    key: "tests-linux-m32"
+    depends_on: "build-linux-m32"
+    image: "ruby:4.0"
+    agents:
+      queue: "linux"
+    env:
+      CC: "gcc -m32"
+      # ci.yml: -Og ran the 32-bit corpus in 164 s where -O1 took 246 s.
+      OPT: "-Og"
+    parallelism: 3
+    command:
+      - ".buildkite/ensure-m32"
+      - "buildkite-agent artifact download bin/spinel . --step build-linux-m32"
+      - "buildkite-agent artifact download lib/libspinel_rt.a . --step build-linux-m32"
+      - "buildkite-agent artifact download lib/libspinel_rt_mt.a . --step build-linux-m32"
+      - "buildkite-agent artifact download 'packages/*/*.o' . --step build-linux-m32"
+      - "chmod +x bin/spinel"
+      - ".buildkite/run-tests --slice"
+
+  # ===================== wasm32-wasi (ruby:4.0 + wasi-sdk + wasmtime) ======
+  # Builds a few corpus programs for wasm32-wasi and runs them under wasmtime;
+  # a POSIX function lib/wasi declares but sp_wasi.c never defines shows up here
+  # as a link error. WASM_ENGINE_REQUIRED makes a missing engine fail, not skip.
+  - label: ":linux: wasm32-wasi"
+    key: "wasm"
+    image: "ruby:4.0"
+    agents:
+      queue: "linux"
+    env:
+      # The versions ci.yml pins (docs/wasm.md).
+      WASI_SDK_VERSION: "34"
+      WASMTIME_VERSION: "49.0.0"
+      WASI_SDK_PATH: "/opt/wasi-sdk"
+    command:
+      - ".buildkite/ensure-wasm"
+      - "make deps"
+      - "make -j\"$$(getconf _NPROCESSORS_ONLN)\" all"
+      - "make -j\"$$(getconf _NPROCESSORS_ONLN)\" wasm-test WASM_ENGINE_REQUIRED=1"
