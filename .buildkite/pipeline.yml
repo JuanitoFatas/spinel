@@ -111,12 +111,7 @@ steps:
       - "lib/libspinel_rt_mt.a"
       - "packages/*/*.o"
 
-  # The gates assert the SHAPE of the generated C — that a slot keeps its typed
-  # representation, that the alloc report keeps its format — which the output
-  # diffs cannot see. scale-test is the front end's work ratio between a program
-  # and one four times its size. Both, like optcarrot, are Linux/gcc singles in
-  # ci.yml, so they ride this track's legs step.
-  - label: ":linux: legs + gates (gcc)"
+  - label: ":linux: legs (gcc)"
     key: "legs-linux-gcc"
     image: "ruby:4.0"
     agents:
@@ -133,8 +128,31 @@ steps:
       - ".buildkite/as-user make deps"
       - ".buildkite/as-user make -j\"$$(getconf _NPROCESSORS_ONLN)\" all"
       - ".buildkite/as-user make -j\"$$(getconf _NPROCESSORS_ONLN)\" test-run TESTS= PKG_TESTS= OPT=-O1"
-      - ".buildkite/as-user make alloc-report-test infer-test spin-check"
-      - ".buildkite/as-user make -j\"$$(getconf _NPROCESSORS_ONLN)\" build/spinel-work"
+      - "sccache --show-stats"
+
+  # The gates assert the SHAPE of the generated C — that a slot keeps its typed
+  # representation, that the alloc report keeps its format — which the output
+  # diffs cannot see. scale-test is the front end's work ratio between a program
+  # and one four times its size. Both, like optcarrot, are Linux/gcc singles in
+  # ci.yml. They run beside the legs, not after them: in one step the two set
+  # the wall time (5m34s in build #54).
+  - label: ":linux: gates + scale-test + optcarrot (gcc)"
+    key: "gates-linux-gcc"
+    image: "ruby:4.0"
+    agents:
+      queue: "linux"
+    env:
+      CC: "gcc"
+    cache:
+      name: "sccache-gates-linux-gcc"
+      paths:
+        - ".sccache"
+    command:
+      - ".buildkite/ensure-sccache"
+      - "export SCCACHE_DIR=\"$$PWD/.sccache\" SCCACHE_CACHE_SIZE=15G SCCACHE_IDLE_TIMEOUT=0"
+      - ".buildkite/as-user make deps"
+      - ".buildkite/as-user make -j\"$$(getconf _NPROCESSORS_ONLN)\" all build/spinel-work"
+      - ".buildkite/as-user make -j\"$$(getconf _NPROCESSORS_ONLN)\" alloc-report-test infer-test spin-check"
       - ".buildkite/as-user make scale-test"
       - ".buildkite/as-user make optcarrot"
       - "sccache --show-stats"
