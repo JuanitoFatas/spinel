@@ -29,9 +29,15 @@ end
 
 die("usage: #{File.basename($PROGRAM_NAME)} --slice") unless ARGV == ["--slice"]
 
-count = ENV["BUILDKITE_PARALLEL_JOB_COUNT"].to_s
-index = ENV["BUILDKITE_PARALLEL_JOB"].to_s
-die("--slice needs BUILDKITE_PARALLEL_JOB(_COUNT) (set parallelism: N on the step)") if count.empty? || index.empty?
+# SHARD=k/n names the slice outright: a step that keeps a cache volume per
+# slice is one step per slice, not a `parallelism:` step.
+shard = ENV["SHARD"].to_s
+if shard.empty?
+  count = ENV["BUILDKITE_PARALLEL_JOB_COUNT"].to_s
+  index = ENV["BUILDKITE_PARALLEL_JOB"].to_s
+  die("--slice needs SHARD=k/n or BUILDKITE_PARALLEL_JOB(_COUNT) (parallelism: N)") if count.empty? || index.empty?
+  shard = "#{index.to_i + 1}/#{count}"
+end
 
 # Everything the test rules link against: the compiler, both runtimes, and the
 # bundled package objects in both variants.
@@ -44,7 +50,6 @@ FileUtils.rm_rf("build/test-results")
 # -O1 compiles each generated gcc test far faster than -O0; clang steps set
 # OPT=-O0 (see pipeline.yml).
 opt = ENV["OPT"].to_s.empty? ? "-O1" : ENV["OPT"]
-shard = "#{index.to_i + 1}/#{count}"
 puts "run-tests: shard #{shard}"
 
 make = ["make", "-j#{Etc.nprocessors}"]
