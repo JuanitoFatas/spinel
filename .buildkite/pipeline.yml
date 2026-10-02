@@ -95,16 +95,9 @@ steps:
       queue: "linux"
     env:
       CC: "gcc"
-    cache:
-      name: "sccache-build-linux-gcc"
-      paths:
-        - ".sccache"
     command:
-      - ".buildkite/ensure-sccache"
-      - "export SCCACHE_DIR=\"$$PWD/.sccache\" SCCACHE_CACHE_SIZE=15G SCCACHE_IDLE_TIMEOUT=0"
       - "make deps"
       - "make -j\"$$(getconf _NPROCESSORS_ONLN)\" all"
-      - "sccache --show-stats"
     artifact_paths:
       - "bin/spinel"
       - "lib/libspinel_rt.a"
@@ -118,24 +111,17 @@ steps:
       queue: "linux"
     env:
       CC: "gcc"
-    cache:
-      name: "sccache-legs-linux-gcc"
-      paths:
-        - ".sccache"
     command:
-      - ".buildkite/ensure-sccache"
-      - "export SCCACHE_DIR=\"$$PWD/.sccache\" SCCACHE_CACHE_SIZE=15G SCCACHE_IDLE_TIMEOUT=0"
       - ".buildkite/as-user make deps"
       - ".buildkite/as-user make -j\"$$(getconf _NPROCESSORS_ONLN)\" all"
       - ".buildkite/as-user make -j\"$$(getconf _NPROCESSORS_ONLN)\" test-run TESTS= PKG_TESTS= OPT=-O1"
-      - "sccache --show-stats"
 
   # The gates assert the SHAPE of the generated C — that a slot keeps its typed
   # representation, that the alloc report keeps its format — which the output
   # diffs cannot see. scale-test is the front end's work ratio between a program
   # and one four times its size. Both, like optcarrot, are Linux/gcc singles in
-  # ci.yml. They run beside the legs, not after them: in one step the two set
-  # the wall time (5m34s in build #54).
+  # ci.yml. They run beside the legs, not after them: in one step the two took
+  # 5m34s (build #54).
   - label: ":linux: gates + scale-test + optcarrot (gcc)"
     key: "gates-linux-gcc"
     image: "ruby:4.0"
@@ -143,97 +129,30 @@ steps:
       queue: "linux"
     env:
       CC: "gcc"
-    cache:
-      name: "sccache-gates-linux-gcc"
-      paths:
-        - ".sccache"
     command:
-      - ".buildkite/ensure-sccache"
-      - "export SCCACHE_DIR=\"$$PWD/.sccache\" SCCACHE_CACHE_SIZE=15G SCCACHE_IDLE_TIMEOUT=0"
       - ".buildkite/as-user make deps"
       - ".buildkite/as-user make -j\"$$(getconf _NPROCESSORS_ONLN)\" all build/spinel-work"
       - ".buildkite/as-user make -j\"$$(getconf _NPROCESSORS_ONLN)\" alloc-report-test infer-test spin-check"
       - ".buildkite/as-user make scale-test"
       - ".buildkite/as-user make optcarrot"
-      - "sccache --show-stats"
 
-  # One step per slice, not `parallelism:`: each slice keeps its own sccache
-  # store on a cache volume. A job gets a private copy of the volume's last
-  # saved version, so slices sharing one volume would each save over the
-  # others' entries. sccache, not ccache: the gcc test compiles load spinel_rt.h
-  # as an implicit precompiled header, and sccache hashes the preprocessed
-  # source, as in ci.yml.
-  - label: ":linux: tests gcc 1/3"
-    key: "tests-linux-gcc-1"
+  - label: ":linux: tests gcc %n"
+    key: "tests-linux-gcc"
     depends_on: "build-linux-gcc"
     image: "ruby:4.0"
     agents:
       queue: "linux"
     env:
       CC: "gcc"
-      SHARD: "1/3"
-    cache:
-      name: "sccache-tests-linux-gcc-1"
-      paths:
-        - ".sccache"
+    # gcc compiles the per-test TUs faster than clang, so it gets fewer shards.
+    parallelism: 3
     command:
-      - ".buildkite/ensure-sccache"
-      - "export SCCACHE_DIR=\"$$PWD/.sccache\" SCCACHE_CACHE_SIZE=15G SCCACHE_IDLE_TIMEOUT=0"
       - "buildkite-agent artifact download bin/spinel . --step build-linux-gcc"
       - "buildkite-agent artifact download lib/libspinel_rt.a . --step build-linux-gcc"
       - "buildkite-agent artifact download lib/libspinel_rt_mt.a . --step build-linux-gcc"
       - "buildkite-agent artifact download 'packages/*/*.o' . --step build-linux-gcc"
       - "chmod +x bin/spinel"
       - ".buildkite/as-user .buildkite/run-tests --slice"
-      - "sccache --show-stats"
-
-  - label: ":linux: tests gcc 2/3"
-    key: "tests-linux-gcc-2"
-    depends_on: "build-linux-gcc"
-    image: "ruby:4.0"
-    agents:
-      queue: "linux"
-    env:
-      CC: "gcc"
-      SHARD: "2/3"
-    cache:
-      name: "sccache-tests-linux-gcc-2"
-      paths:
-        - ".sccache"
-    command:
-      - ".buildkite/ensure-sccache"
-      - "export SCCACHE_DIR=\"$$PWD/.sccache\" SCCACHE_CACHE_SIZE=15G SCCACHE_IDLE_TIMEOUT=0"
-      - "buildkite-agent artifact download bin/spinel . --step build-linux-gcc"
-      - "buildkite-agent artifact download lib/libspinel_rt.a . --step build-linux-gcc"
-      - "buildkite-agent artifact download lib/libspinel_rt_mt.a . --step build-linux-gcc"
-      - "buildkite-agent artifact download 'packages/*/*.o' . --step build-linux-gcc"
-      - "chmod +x bin/spinel"
-      - ".buildkite/as-user .buildkite/run-tests --slice"
-      - "sccache --show-stats"
-
-  - label: ":linux: tests gcc 3/3"
-    key: "tests-linux-gcc-3"
-    depends_on: "build-linux-gcc"
-    image: "ruby:4.0"
-    agents:
-      queue: "linux"
-    env:
-      CC: "gcc"
-      SHARD: "3/3"
-    cache:
-      name: "sccache-tests-linux-gcc-3"
-      paths:
-        - ".sccache"
-    command:
-      - ".buildkite/ensure-sccache"
-      - "export SCCACHE_DIR=\"$$PWD/.sccache\" SCCACHE_CACHE_SIZE=15G SCCACHE_IDLE_TIMEOUT=0"
-      - "buildkite-agent artifact download bin/spinel . --step build-linux-gcc"
-      - "buildkite-agent artifact download lib/libspinel_rt.a . --step build-linux-gcc"
-      - "buildkite-agent artifact download lib/libspinel_rt_mt.a . --step build-linux-gcc"
-      - "buildkite-agent artifact download 'packages/*/*.o' . --step build-linux-gcc"
-      - "chmod +x bin/spinel"
-      - ".buildkite/as-user .buildkite/run-tests --slice"
-      - "sccache --show-stats"
 
   - label: ":linux: bench (gcc) %n"
     key: "bench"
@@ -314,26 +233,18 @@ steps:
       queue: "linux"
     env:
       CC: "gcc -m32"
-    cache:
-      name: "sccache-build-linux-m32"
-      paths:
-        - ".sccache"
     command:
       - ".buildkite/ensure-m32"
-      - ".buildkite/ensure-sccache"
-      - "export SCCACHE_DIR=\"$$PWD/.sccache\" SCCACHE_CACHE_SIZE=15G SCCACHE_IDLE_TIMEOUT=0"
       - "make deps"
       - "make -j\"$$(getconf _NPROCESSORS_ONLN)\" all"
-      - "sccache --show-stats"
     artifact_paths:
       - "bin/spinel"
       - "lib/libspinel_rt.a"
       - "lib/libspinel_rt_mt.a"
       - "packages/*/*.o"
 
-  # One step per slice, each with its own sccache volume, as for the gcc slices.
-  - label: ":linux: tests gcc -m32 1/3"
-    key: "tests-linux-m32-1"
+  - label: ":linux: tests gcc -m32 %n"
+    key: "tests-linux-m32"
     depends_on: "build-linux-m32"
     image: "ruby:4.0"
     agents:
@@ -342,74 +253,15 @@ steps:
       CC: "gcc -m32"
       # ci.yml: -Og ran the 32-bit corpus in 164 s where -O1 took 246 s.
       OPT: "-Og"
-      SHARD: "1/3"
-    cache:
-      name: "sccache-tests-linux-m32-1"
-      paths:
-        - ".sccache"
+    parallelism: 3
     command:
       - ".buildkite/ensure-m32"
-      - ".buildkite/ensure-sccache"
-      - "export SCCACHE_DIR=\"$$PWD/.sccache\" SCCACHE_CACHE_SIZE=15G SCCACHE_IDLE_TIMEOUT=0"
       - "buildkite-agent artifact download bin/spinel . --step build-linux-m32"
       - "buildkite-agent artifact download lib/libspinel_rt.a . --step build-linux-m32"
       - "buildkite-agent artifact download lib/libspinel_rt_mt.a . --step build-linux-m32"
       - "buildkite-agent artifact download 'packages/*/*.o' . --step build-linux-m32"
       - "chmod +x bin/spinel"
       - ".buildkite/as-user .buildkite/run-tests --slice"
-      - "sccache --show-stats"
-
-  - label: ":linux: tests gcc -m32 2/3"
-    key: "tests-linux-m32-2"
-    depends_on: "build-linux-m32"
-    image: "ruby:4.0"
-    agents:
-      queue: "linux"
-    env:
-      CC: "gcc -m32"
-      OPT: "-Og"
-      SHARD: "2/3"
-    cache:
-      name: "sccache-tests-linux-m32-2"
-      paths:
-        - ".sccache"
-    command:
-      - ".buildkite/ensure-m32"
-      - ".buildkite/ensure-sccache"
-      - "export SCCACHE_DIR=\"$$PWD/.sccache\" SCCACHE_CACHE_SIZE=15G SCCACHE_IDLE_TIMEOUT=0"
-      - "buildkite-agent artifact download bin/spinel . --step build-linux-m32"
-      - "buildkite-agent artifact download lib/libspinel_rt.a . --step build-linux-m32"
-      - "buildkite-agent artifact download lib/libspinel_rt_mt.a . --step build-linux-m32"
-      - "buildkite-agent artifact download 'packages/*/*.o' . --step build-linux-m32"
-      - "chmod +x bin/spinel"
-      - ".buildkite/as-user .buildkite/run-tests --slice"
-      - "sccache --show-stats"
-
-  - label: ":linux: tests gcc -m32 3/3"
-    key: "tests-linux-m32-3"
-    depends_on: "build-linux-m32"
-    image: "ruby:4.0"
-    agents:
-      queue: "linux"
-    env:
-      CC: "gcc -m32"
-      OPT: "-Og"
-      SHARD: "3/3"
-    cache:
-      name: "sccache-tests-linux-m32-3"
-      paths:
-        - ".sccache"
-    command:
-      - ".buildkite/ensure-m32"
-      - ".buildkite/ensure-sccache"
-      - "export SCCACHE_DIR=\"$$PWD/.sccache\" SCCACHE_CACHE_SIZE=15G SCCACHE_IDLE_TIMEOUT=0"
-      - "buildkite-agent artifact download bin/spinel . --step build-linux-m32"
-      - "buildkite-agent artifact download lib/libspinel_rt.a . --step build-linux-m32"
-      - "buildkite-agent artifact download lib/libspinel_rt_mt.a . --step build-linux-m32"
-      - "buildkite-agent artifact download 'packages/*/*.o' . --step build-linux-m32"
-      - "chmod +x bin/spinel"
-      - ".buildkite/as-user .buildkite/run-tests --slice"
-      - "sccache --show-stats"
 
   # ===================== wasm32-wasi (ruby:4.0 + wasi-sdk + wasmtime) ======
   # Builds a few corpus programs for wasm32-wasi and runs them under wasmtime;
